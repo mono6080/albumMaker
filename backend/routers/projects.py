@@ -315,7 +315,6 @@ def get_photo(
 ):
     """回傳學生指定欄位的照片檔案。"""
     project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = json.loads(student.pages_data_json)
