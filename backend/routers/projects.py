@@ -312,7 +312,6 @@ def get_photo(
     page_index: int,
     slot_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """回傳學生指定欄位的照片檔案。"""
     project = get_project_or_404(project_id, db)
@@ -475,11 +474,9 @@ def preview_project_page(
     project_id: int,
     page_index: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """使用專案層級氣泡文字渲染頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
 
     page_layouts = get_template_page_layouts(project)
     if page_index >= len(page_layouts):
@@ -507,11 +504,9 @@ def preview_student_page(
     student_id: int,
     page_index: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """渲染學生個人頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     page_layouts = get_template_page_layouts(project)

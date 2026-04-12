@@ -207,7 +207,6 @@ def get_background(
     template_id: int,
     page_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
 ):
     """回傳模板頁面的背景圖檔案。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
@@ -245,7 +244,6 @@ async def upload_sticker(
 def get_sticker(
     template_id: int,
     filename: str,
-    _: User = Depends(get_current_user),
 ):
     """回傳指定貼圖素材檔案。"""
     sticker_file_path = UPLOADS_DIR / "stickers" / f"tmpl{template_id}" / filename
@@ -262,7 +260,6 @@ def preview_template_page(
     template_id: int,
     page_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
 ):
     """渲染模板頁面預覽圖（以「姓名」佔位符代替學生姓名），回傳 JPEG。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
