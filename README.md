@@ -10,10 +10,11 @@
 
 | 模組 | 功能 |
 |------|------|
+| **使用者系統** | JWT 登入、5 種角色（管理員/美學組/帶班主管/帶班老師/無權限）、角色型存取控制 |
 | **模板編輯器** | 建立多頁版型；拖曳擺放照片格、氣泡框、貼圖；上傳背景圖 |
 | **批次管理** | 貼上學生名單批次新增；全班統一編輯氣泡文字預設值 |
 | **個別編輯** | 單一學生照片上傳、位移縮放裁切、個人化氣泡文字覆蓋 |
-| **輸出審閱** | 頁面預覽、單一 PDF 下載、全班 ZIP 打包下載 |
+| **輸出審閱** | 頁面預覽、留言回饋、單一 PDF 下載（完整畫質僅限管理員）、全班 ZIP 打包 |
 
 ---
 
@@ -23,11 +24,11 @@
 album_maker/
 ├── backend/               # FastAPI + SQLAlchemy + Pillow
 │   ├── main.py            # 應用程式進入點、路由掛載
-│   ├── database.py        # SQLAlchemy ORM 模型（Template / Project / Student）
-│   ├── migrations.py      # Schema 遷移（啟動時自動執行）
-│   ├── crud/              # get_or_404 查詢輔助
-│   ├── routers/           # 薄路由層（templates.py / projects.py）
-│   ├── schemas/           # Pydantic response schemas
+│   ├── database.py        # ORM 模型（Template / Project / Student / User / ProjectComment）
+│   ├── migrations.py      # Schema 遷移（啟動時自動執行，冪等設計）
+│   ├── auth.py            # JWT 認證、bcrypt 密碼、get_current_user / require_role
+│   ├── crud/              # get_or_404 查詢輔助（含 user_crud.py）
+│   ├── routers/           # 薄路由層（auth / users / templates / projects）
 │   ├── services/
 │   │   ├── render_service.py   # PIL 頁面合成引擎
 │   │   ├── project_service.py  # PDF 輸出、ZIP 打包、氣泡文字合併
@@ -36,25 +37,28 @@ album_maker/
 │
 └── frontend/              # React + Vite + Tailwind CSS
     └── src/
-        ├── api/           # templateApi.js / projectApi.js / urls.js
-        ├── components/    # PhotoManager / AlbumPageNav / BubbleSVG …
+        ├── api/           # authApi.js（共用 apiClient）/ templateApi.js / projectApi.js / urls.js
+        ├── context/       # AuthContext.jsx（登入狀態全域管理）
+        ├── components/    # PrivateRoute / PhotoManager / AlbumPageNav / BubbleSVG …
         ├── constants/     # shapes.js / fonts.js
-        ├── hooks/         # useAutoSave.js（防抖自動儲存）
-        └── pages/         # TemplateEditor / ProjectBatch / StudentEdit / ProjectReview
+        ├── hooks/         # useAutoSave.js / usePermissions.js
+        └── pages/         # Login / UserManagement / TemplateEditor / ProjectBatch / StudentEdit / ProjectReview
 ```
 
 ### 後端
 
-- **FastAPI 0.135** — HTTP API（`/api/templates/`、`/api/projects/`）
+- **FastAPI 0.135** — HTTP API（`/api/auth/`、`/api/users/`、`/api/templates/`、`/api/projects/`）
 - **SQLAlchemy 2.0** — SQLite ORM（`album_maker.db`）
 - **Pillow 12** — 頁面 PNG 合成與 PDF 輸出
+- **python-jose** — JWT 簽發與驗證
+- **bcrypt** — 密碼雜湊（直接使用，不透過 passlib）
 - 後端同時提供前端靜態檔案（SPA catch-all）
 
 ### 前端
 
 - **React 19 + Vite 8** — SPA
 - **Tailwind CSS 4** — 樣式
-- **Axios** — API 請求（統一 `/api` base URL）
+- **Axios** — API 請求；共用 `apiClient` 自動附帶 Bearer token，401 自動跳登入頁
 - 拖曳畫布以 DOM 事件實作（不依賴 canvas 函式庫）
 
 ---
@@ -71,7 +75,7 @@ album_maker/
 ```bash
 # 後端
 cd backend
-pip install fastapi uvicorn sqlalchemy pillow python-multipart
+pip install fastapi uvicorn sqlalchemy pillow python-multipart python-jose[cryptography] bcrypt
 
 # 前端
 cd frontend
@@ -111,44 +115,65 @@ Windows 可直接雙擊：
 
 ## API 摘要
 
+> 標註 🔓 的端點不需要登入（圖片 serving）；其餘皆需 `Authorization: Bearer <token>`。
+
+### 認證 / 使用者
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| POST | `/api/auth/login` | 登入，回傳 JWT（form: username / password） |
+| GET | `/api/auth/me` | 取得當前使用者資訊 |
+| GET | `/api/users/` | 列出所有使用者（admin） |
+| POST | `/api/users/` | 建立使用者（admin） |
+| PATCH | `/api/users/{id}` | 更新角色/主管/密碼（admin） |
+| DELETE | `/api/users/{id}` | 刪除使用者（admin） |
+
 ### 模板
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/api/templates/` | 列出所有模板 |
-| POST | `/api/templates/` | 建立模板 |
-| PATCH | `/api/templates/{id}` | 改名 |
-| DELETE | `/api/templates/{id}` | 刪除 |
+| POST | `/api/templates/` | 建立模板（admin / art_team） |
+| PATCH | `/api/templates/{id}` | 改名（admin / art_team） |
+| DELETE | `/api/templates/{id}` | 刪除（admin / art_team） |
 | GET | `/api/templates/{id}` | 取得模板詳細（含所有頁面） |
-| POST | `/api/templates/{id}/pages` | 新增頁面 |
-| PUT | `/api/templates/{id}/pages/{page_id}` | 更新頁面版型 JSON |
-| DELETE | `/api/templates/{id}/pages/{page_id}` | 刪除頁面 |
-| POST | `/api/templates/{id}/pages/{page_id}/background` | 上傳背景圖 |
-| POST | `/api/templates/{id}/stickers` | 上傳貼圖素材 |
-| GET | `/api/templates/{id}/pages/{page_id}/preview` | 頁面預覽圖 |
+| POST | `/api/templates/{id}/pages` | 新增頁面（admin / art_team） |
+| PUT | `/api/templates/{id}/pages/{page_id}/layout` | 更新頁面版型 JSON（admin / art_team） |
+| DELETE | `/api/templates/{id}/pages/{page_id}` | 刪除頁面（admin / art_team） |
+| POST | `/api/templates/{id}/pages/{page_id}/background` | 上傳背景圖（admin / art_team） |
+| GET 🔓 | `/api/templates/{id}/pages/{page_id}/background` | 背景圖檔案 |
+| POST | `/api/templates/{id}/stickers` | 上傳貼圖素材（admin / art_team） |
+| GET 🔓 | `/api/templates/{id}/stickers/{filename}` | 貼圖檔案 |
+| GET 🔓 | `/api/templates/{id}/pages/{page_id}/preview` | 頁面預覽圖 |
 
 ### 專案 / 學生
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | `/api/projects/` | 列出所有專案 |
-| POST | `/api/projects/` | 建立專案 |
-| PATCH | `/api/projects/{id}` | 改名 |
-| DELETE | `/api/projects/{id}` | 刪除 |
+| GET | `/api/projects/` | 列出可存取的專案（依角色過濾） |
+| POST | `/api/projects/` | 建立專案（admin / teacher） |
+| PATCH | `/api/projects/{id}` | 改名（admin / 專案擁有者） |
+| DELETE | `/api/projects/{id}` | 刪除（admin / 專案擁有者） |
 | GET | `/api/projects/{id}` | 取得專案詳細（含所有學生） |
+| GET | `/api/projects/{id}/bubble_texts` | 取得全班氣泡文字預設值 |
 | PUT | `/api/projects/{id}/bubble_texts` | 更新全班氣泡文字預設值 |
+| GET | `/api/projects/{id}/comments` | 取得審閱留言 |
+| POST | `/api/projects/{id}/comments` | 新增留言（admin / art_team / supervisor） |
+| DELETE | `/api/projects/{id}/comments/{cid}` | 刪除留言（admin） |
 | POST | `/api/projects/{id}/students/batch` | 批次新增學生 |
 | PATCH | `/api/projects/{id}/students/{sid}` | 學生改名 |
 | DELETE | `/api/projects/{id}/students/{sid}` | 刪除學生 |
-| POST | `/api/projects/{id}/students/{sid}/photos` | 上傳照片 |
-| PUT | `/api/projects/{id}/students/{sid}/photos/{slot}` | 更新照片位移縮放 |
+| POST | `/api/projects/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳照片 |
+| GET 🔓 | `/api/projects/{id}/students/{sid}/pages/{page}/photos/{slot}` | 照片檔案 |
+| PUT | `/api/projects/{id}/students/{sid}/photos/mapping` | 更新照片位移縮放 |
+| PUT | `/api/projects/{id}/students/{sid}/pages/{page}/texts` | 更新個別學生氣泡文字 |
 | PUT | `/api/projects/{id}/batch/texts` | 批次更新學生氣泡文字 |
 | POST | `/api/projects/{id}/students/{sid}/render` | 產生單一學生 PDF |
 | POST | `/api/projects/{id}/render/all` | 產生全班 PDF |
-| GET | `/api/projects/{id}/students/{sid}/pdf` | 下載單一 PDF |
-| GET | `/api/projects/{id}/download/all` | 下載全班 ZIP |
-| GET | `/api/projects/{id}/students/{sid}/preview/{page}` | 學生頁面預覽圖 |
-| GET | `/api/projects/{id}/preview/{page}` | 專案頁面預覽圖（以預設值合成） |
+| GET | `/api/projects/{id}/students/{sid}/pdf?mode=print\|screen` | 下載單一 PDF（非 admin 強制 screen） |
+| GET | `/api/projects/{id}/download/all?mode=print\|screen` | 下載全班 ZIP |
+| GET 🔓 | `/api/projects/{id}/students/{sid}/preview/{page}` | 學生頁面預覽圖 |
+| GET 🔓 | `/api/projects/{id}/preview/{page}` | 專案頁面預覽圖（以預設值合成） |
 
 ---
 
@@ -185,9 +210,26 @@ Windows 可直接雙擊：
 
 ## 資料庫
 
-SQLite 單一檔案 `backend/album_maker.db`，包含四張資料表：
+SQLite 單一檔案 `backend/album_maker.db`，包含六張資料表：
 
-- `templates` — 模板基本資料
-- `template_pages` — 模板頁面版型 JSON
-- `projects` — 專案（綁定模板）
-- `students` — 學生（每人儲存照片映射與個別氣泡文字的 JSON）
+| 資料表 | 說明 |
+|--------|------|
+| `users` | 使用者帳號（角色、主管 FK、bcrypt 密碼） |
+| `templates` | 模板基本資料 |
+| `template_pages` | 模板頁面版型 JSON |
+| `projects` | 專案（綁定模板、owner_id FK 至 users） |
+| `students` | 學生（每人儲存照片映射與個別氣泡文字的 JSON） |
+| `project_comments` | 審閱留言（project_id / author_id / 內容 / 時間） |
+
+Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行（新欄位或新表只加一次）。  
+預設管理員帳號：**admin / admin**（首次啟動自動建立，請盡快更改密碼）。
+
+## 角色權限
+
+| 角色 | 模板 | 看專案 | 建立/編輯專案 | 留言 | 完整畫質 PDF | 使用者管理 |
+|------|------|--------|---------------|------|-------------|-----------|
+| admin | 完整 | 全部 | 全部 | ✓ | ✓ | ✓ |
+| art_team | 完整 | 全部（唯讀） | — | ✓ | — | — |
+| supervisor | 唯讀 | 管轄老師 | — | ✓ | — | — |
+| teacher | 唯讀 | 自己的 | 自己的 | — | — | — |
+| none | — | — | — | — | — | — |

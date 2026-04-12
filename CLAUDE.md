@@ -34,12 +34,16 @@ cd frontend && npm run build
 ```
 backend/
   main.py              # FastAPI app、路由掛載、SPA catch-all
-  database.py          # ORM 模型（Template / Project / Student）
-  migrations.py        # 啟動時自動執行的 schema 遷移
+  database.py          # ORM 模型（Template / Project / Student / User / ProjectComment）
+  migrations.py        # 啟動時自動執行的 schema 遷移（冪等）
+  auth.py              # JWT 產生/驗證、密碼雜湊、get_current_user / require_role
   crud/
     template_crud.py   # get_template_or_404, get_template_page_or_404
     project_crud.py    # get_project_or_404, get_student_or_404
+    user_crud.py       # get_user_or_404, get_user_by_username, get_subordinate_user_ids
   routers/
+    auth.py            # /api/auth/login, /api/auth/me
+    users.py           # /api/users/* （admin only）
     templates.py       # /api/templates/* 薄路由
     projects.py        # /api/projects/* 薄路由
   services/
@@ -49,11 +53,15 @@ backend/
 
 frontend/src/
   api/
+    authApi.js         # 登入、fetchMe、使用者管理；定義共用 apiClient（含 Bearer interceptor）
     templateApi.js     # 模板相關 API 函式
     projectApi.js      # 專案 / 學生 / 照片 / 渲染 API 函式
     urls.js            # URL 建構函式（preview / download / sticker）
   api.js               # 向後相容 barrel（舊頁面仍從此引入）
+  context/
+    AuthContext.jsx    # 登入狀態全域管理（currentUser / login / logout）
   components/
+    PrivateRoute.jsx       # 路由守衛（未登入 → /login，角色不符 → 無權限提示）
     canvas/BubbleSVG.jsx   # 純 SVG 氣泡框顯示元件
     PhotoManager.jsx        # 照片格管理（上傳 / 位移縮放）
     AlbumPageNav.jsx        # 頁面導覽列
@@ -63,13 +71,16 @@ frontend/src/
     fonts.js           # FONT_OPTIONS, getFontCss(), isFontBold()
   hooks/
     useAutoSave.js     # 通用防抖自動儲存 hook（scheduleSave / flushSave）
+    usePermissions.js  # 依角色回傳權限旗標（canCreateProject / canEditProject …）
   pages/
+    Login.jsx          # 登入頁（表單 + 角色導向）
+    UserManagement.jsx # 使用者管理（admin only）
     TemplateEditor.jsx # 模板版型編輯器（拖曳畫布）
     ProjectBatch.jsx   # 批次學生管理 + 全班氣泡文字
     StudentEdit.jsx    # 單一學生照片 + 個別氣泡文字
-    ProjectReview.jsx  # 輸出審閱 + PDF 下載
+    ProjectReview.jsx  # 輸出審閱 + PDF 下載 + 留言
     TemplateList.jsx   # 模板清單
-    ProjectList.jsx    # 專案清單
+    ProjectList.jsx    # 專案清單（依角色過濾操作按鈕）
 ```
 
 ---
@@ -148,10 +159,12 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 - **get_or_404**：所有 DB 查詢透過 `get_*_or_404()` 輔助函式，找不到自動回傳 HTTP 404
 - **Form 參數**：rename 端點使用 `Form(...)`（不是 JSON Body）
 - **Query 驗證**：使用 `pattern=` 而非棄用的 `regex=`
+- **認證**：資料操作端點加 `Depends(get_current_user)` 或 `Depends(require_role(...))`；圖片 / 預覽 serving 端點**不加 auth**（`<img>` 標籤不帶 Bearer header）
 
 ### 前端
 
 - **API 分層**：`templateApi.js` / `projectApi.js` / `urls.js` 分別管理，`api.js` 為向後相容層
+- **共用 apiClient**：所有 axios 請求從 `authApi.js` 的 `apiClient` 出發，interceptor 自動帶 Bearer token；401 自動跳登入頁
 - **自動儲存**：氣泡文字編輯使用 `useAutoSave` hook，防抖 500ms；渲染前呼叫 `flushSave()` 確保最新
 - **BubbleSVG**：純顯示元件，幾何計算與後端 PIL 渲染保持一致
 - **常數集中**：形狀清單、顏色預設、字型選項分別定義在 `constants/`
@@ -214,3 +227,6 @@ cd D:/projects/album_maker/frontend && npm run build
 - **Windows curl 中文輸入**：終端機為 cp950，直接輸入中文會產生亂碼。請使用 Unicode escape（`\u4e0a`）或透過瀏覽器 UI 操作
 - **SQLite text_factory**：`database.py` 不設定 `text_factory`，SQLAlchemy 以 UTF-8 存取；若用 raw sqlite3 讀取需自行處理 encoding
 - **PIL 字型**：render_service 使用系統 TrueType 字型；Windows 上路徑為 `C:/Windows/Fonts/`
+- **圖片端點不加 auth**：`<img src>` 是瀏覽器原生請求，不帶 Authorization header。preview / sticker / background / photo 六個 GET 端點不設 `get_current_user`，否則外網（ngrok 等）圖片全黑
+- **bcrypt 套件**：使用 `bcrypt` 直接呼叫（`bcrypt.hashpw` / `bcrypt.checkpw`），不透過 passlib（passlib 與 bcrypt 4.x+ 不相容）
+- **使用者管理 API body 格式**：`POST /api/users/` 與 `PATCH /api/users/{id}` 接收 JSON body（Pydantic model），前端用 `apiClient.post(url, params)`（axios 預設 JSON），不用 URLSearchParams
