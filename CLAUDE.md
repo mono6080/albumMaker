@@ -119,6 +119,29 @@ uploads/projects/{project_id}/output/{student_name}_{student_id}.pdf
 
 ---
 
+## 開發習慣（必須遵守）
+
+### 修改後一定要自己測試
+
+改完程式後**不能**直接回報「應該可以了」，必須自己先跑過一遍確認：
+
+- 後端邏輯：用 `curl` 或 Python 腳本實際呼叫 API，比對回應
+- 前端邏輯：用 Playwright 或開瀏覽器實際操作目標功能
+- 確認輸出符合預期後才回報結果
+
+### 修改前端後立即 build
+
+只要動到 `frontend/src/` 下的任何檔案（`.jsx`、`.js`、`.css`），
+修改完成後**立刻**執行，不等使用者說：
+
+```bash
+cd D:/projects/album_maker/frontend && npm run build
+```
+
+後端 serve 的是 `frontend/dist/`，不 build 使用者看不到新版。
+
+---
+
 ## 常見注意事項
 
 - **前端修改後必須 build**：後端直接 serve `frontend/dist/`，dev server 的改動不影響 port 8765
