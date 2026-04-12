@@ -74,13 +74,78 @@ frontend/src/
 
 ---
 
-## 架構慣例
+## 命名習慣
+
+### Python（後端）
+
+| 類型 | 規則 | 範例 |
+|------|------|------|
+| 變數 / 函式 | `snake_case`，語意完整，禁用單字母 | `project_output_dir`，`get_template_or_404` |
+| 類別 | `PascalCase` | `Template`，`RenderService` |
+| 常數 | `UPPER_SNAKE_CASE` | `UPLOADS_DIR`，`FRONTEND_DIST_DIR` |
+| 路由函式 | 動詞 + 名詞 | `create_template`，`rename_student`，`render_all_students` |
+| 服務函式 | 動詞 + 名詞，描述行為 | `build_combined_stem`，`merge_project_bubble_texts_into_pages` |
+| 注釋語言 | **中文** | `# 依頁碼升序排列` |
+
+禁止：`p`、`t`、`s`、`r` 等單字母縮寫當一般變數。
+
+### JavaScript / JSX（前端）
+
+| 類型 | 規則 | 範例 |
+|------|------|------|
+| 變數 / 函式 | `camelCase`，語意完整 | `previewTimestamp`，`activePageLayout` |
+| 布林 state | `is` 或 `has` 開頭 | `isRendering`，`isAddingStudents` |
+| 事件處理函式 | `handle` 開頭 | `handleRenderPdf`，`handlePhotoSaved` |
+| API 函式 | 動詞 + 名詞 | `fetchAllTemplates`，`batchUpdateStudentTexts` |
+| 元件 | `PascalCase` | `BubbleSVG`，`PhotoManager` |
+| 常數（模組級） | `UPPER_SNAKE_CASE` | `BUBBLE_SHAPES`，`CANVAS_DISPLAY_WIDTH` |
+| CSS class | Tailwind utility，不另建命名 | — |
+| 注釋語言 | **中文** | `// 防抖自動儲存，500ms 後觸發` |
+
+禁止：`ts`、`idx`、`w`、`h`、`cb` 等縮寫當 state 或 prop 名稱。
+
+---
+
+## 開發原則
+
+### 只做被要求的事
+
+- 不主動新增功能、重構周邊程式碼、加 docstring、加 type annotation
+- 不為「未來可能的需求」設計抽象層或 feature flag
+- bug fix 就只修 bug，不順手清理周圍
+
+### 不加多餘的防禦性程式碼
+
+- 不為「不可能發生」的情況加 try/catch 或 fallback
+- 信任框架保證（SQLAlchemy session、FastAPI validation）
+- 只在真正的系統邊界（使用者輸入、外部 API）做驗證
+
+### 薄路由原則（後端）
+
+```
+Router  →  只做 HTTP 解析與回應格式
+  ↓
+CRUD    →  只做資料庫查詢（get_or_404 / insert / update / delete）
+  ↓
+Service →  業務邏輯（合併、渲染、打包、路徑計算）
+```
+
+路由函式超過 10 行就要考慮是否該移進 service。
+
+### 元件職責分離（前端）
+
+- **頁面元件**（`pages/`）：組合子元件、管理 state、呼叫 API
+- **UI 元件**（`components/`）：純顯示或輕量互動，props 進來、事件出去
+- **Hook**（`hooks/`）：可重用的 state 邏輯，不含 JSX
+- **API 模組**（`api/`）：只做 HTTP，不含業務判斷
+- **常數**（`constants/`）：靜態資料，不含邏輯
+
+### 架構慣例
 
 ### 後端
 
 - **薄路由層**：routers 只負責 HTTP 接收/回應，業務邏輯委派給 `services/`，DB 查詢委派給 `crud/`
 - **get_or_404**：所有 DB 查詢透過 `get_*_or_404()` 輔助函式，找不到自動回傳 HTTP 404
-- **命名規則**：語意化變數名，禁用單字母縮寫；中文注釋
 - **Form 參數**：rename 端點使用 `Form(...)`（不是 JSON Body）
 - **Query 驗證**：使用 `pattern=` 而非棄用的 `regex=`
 
