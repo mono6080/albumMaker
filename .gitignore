@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Uploads & generated output
+backend/uploads/
+
+# DB
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+server.log
+
+# Claude / Playwright logs
+.claude/
+.playwright-mcp/
+
+# Test / dev artifacts
+ref_pages/
+backend/test_screenshots/
+backend/bg_*.png
+backend/color_test_*.jpg
+backend/final_preview_*.jpg
+backend/new_pdf_*.png
+backend/orig_pdf_*.png
+backend/render_*.jpg
+backend/rendered_*.png
+*.png
+*.jpg
+*.jpeg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

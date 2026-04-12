@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+  color: #1f2937;
+  background: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+}

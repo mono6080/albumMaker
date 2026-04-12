@@ -1,0 +1,858 @@
+import { useState, useRef, useEffect, useMemo } from "react";
+import { Upload, X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { uploadPhoto, updatePhotoMapping } from "../api";
+import toast from "react-hot-toast";
+
+const photoApiUrl = (projectId, studentId, pi, slotId) =>
+  `/api/projects/${projectId}/students/${studentId}/pages/${pi}/photos/${slotId}`;
+
+// Renders a scaled polaroid frame preview for empty slots
+function SlotFramePreview({ slotW, slotH, border, borderW, borderRadius = 0,
+  shadowEnabled, shadowOffsetX = 5, shadowOffsetY = 8, shadowBlur = 14, shadowOpacity = 120,
+  disabled }) {
+  const aspect = slotW / slotH;
+  const frameH = 126;
+  const frameW = Math.round(frameH * aspect);
+  const scale = frameH / slotH;
+  const shOn = shadowEnabled ?? border;
+  const shX = Math.round(shadowOffsetX * scale);
+  const shY = Math.round(shadowOffsetY * scale);
+  const shB = Math.round(shadowBlur * scale);
+  const shA = (shadowOpacity / 255).toFixed(2);
+  const boxShadow = shOn ? `${shX}px ${shY}px ${shB}px rgba(0,0,0,${shA})` : "none";
+
+  if (border) {
+    const bwPx = Math.max(3, Math.round(borderW * scale));
+    const rPx = Math.round(borderRadius * scale);
+    const innerR = Math.max(0, rPx - bwPx);
+    return (
+      <div style={{
+        width: frameW, height: frameH, flexShrink: 0,
+        background: "#fff",
+        boxShadow,
+        borderRadius: rPx,
+        position: "relative",
+        overflow: "hidden",
+      }}>
+        <div style={{
+          position: "absolute",
+          top: bwPx, left: bwPx, right: bwPx, bottom: bwPx * 2,
+          background: disabled ? "#f1f5f9" : "#EEEEEE",
+          borderRadius: innerR,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 3,
+        }}>
+          <Upload size={14} className={disabled ? "text-gray-300" : "text-gray-400"} />
+          {!disabled && <span style={{ fontSize: 9, color: "#999" }}>點此上傳</span>}
+        </div>
+      </div>
+    );
+  }
+  const rPx = Math.round(borderRadius * scale);
+  return (
+    <div style={{
+      width: frameW, height: frameH, flexShrink: 0,
+      background: "#EEEEEE",
+      border: "1px solid #CCCCCC",
+      borderRadius: rPx,
+      boxShadow,
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: 3,
+      overflow: "hidden",
+    }}>
+      <Upload size={14} className={disabled ? "text-gray-300" : "text-gray-400"} />
+      {!disabled && <span style={{ fontSize: 9, color: "#999" }}>點此上傳</span>}
+    </div>
+  );
+}
+
+// Pure display component — no interaction, no callbacks except image load tracking
+function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRefCallback }) {
+  const SHADOW_SCALE = 110 / it.slotH;
+  const shEnabled = it.shadowEnabled ?? it.border;
+  const shX = ((it.shadowOffsetX ?? 5) * SHADOW_SCALE).toFixed(1);
+  const shY = ((it.shadowOffsetY ?? 8) * SHADOW_SCALE).toFixed(1);
+  const shB = ((it.shadowBlur ?? 14) * SHADOW_SCALE).toFixed(1);
+  const shA = ((it.shadowOpacity ?? 120) / 255).toFixed(2);
+  const slotShadow = shEnabled ? `${shX}px ${shY}px ${shB}px rgba(0,0,0,${shA})` : null;
+
+  const outerRPct = `${((it.borderRadius || 0) / it.slotH * 100).toFixed(1)}%`;
+  const innerRPct = it.border
+    ? `${(Math.max(0, (it.borderRadius || 0) - it.borderW) / it.slotH * 100).toFixed(1)}%`
+    : undefined;
+
+  const bPctX = it.border ? (it.borderW / it.slotW) * 100 : 0;
+  const bPctY = it.border ? (it.borderW / it.slotH) * 100 : 0;
+
+  // PIL-accurate positioning: pixel-based (card fixed at 110px tall)
+  const physScale = 110 / it.slotH;
+  let imgStyle = null;
+  if (nat && url) {
+    const cropTW = it.border ? it.slotW - 2 * it.borderW : it.slotW;
+    const cropTH = it.border ? it.slotH - 3 * it.borderW : it.slotH;
+    const cropAspect = cropTW / cropTH;
+    let baseW, baseH;
+    if (nat > cropAspect) { baseH = cropTH; baseW = cropTH * nat; }
+    else                  { baseW = cropTW; baseH = cropTW / nat; }
+    const dW = baseW * it.transform.scale;
+    const dH = baseH * it.transform.scale;
+    const availX = Math.max(0, dW - cropTW);
+    const availY = Math.max(0, dH - cropTH);
+    const startX = availX / 2 + it.transform.offsetX * availX / 2;
+    const startY = availY / 2 + it.transform.offsetY * availY / 2;
+    imgStyle = {
+      position: "absolute",
+      width: Math.round(dW * physScale),
+      height: Math.round(dH * physScale),
+      left: Math.round(-startX * physScale),
+      top: Math.round(-startY * physScale),
+      userSelect: "none", pointerEvents: "none",
+      maxWidth: "none", maxHeight: "none",
+    };
+  }
+
+  return (
+    <div style={{
+      position: "relative",
+      flexShrink: 0,
+      height: 110,
+      width: Math.round(110 * it.slotW / it.slotH),
+      borderRadius: outerRPct,
+      overflow: "hidden",
+      background: it.border ? "#fff" : (url ? "#111" : "#EEEEEE"),
+      border: !url && !it.border ? "1px dashed #d1d5db" : undefined,
+      boxShadow: slotShadow ?? "none",
+    }}>
+      {/* Photo / empty area */}
+      <div style={{
+        position: "absolute",
+        top: `${bPctY}%`, left: `${bPctX}%`,
+        right: `${bPctX}%`,
+        bottom: it.border ? `${bPctY * 2}%` : "0%",
+        overflow: "hidden",
+        borderRadius: innerRPct,
+        background: url ? "transparent" : (disabled ? "#f1f5f9" : "#EEEEEE"),
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        {url ? (
+          <img
+            ref={imgRefCallback}
+            src={url} alt="" draggable={false}
+            style={imgStyle ?? {
+              width: "100%", height: "100%", objectFit: "cover",
+              objectPosition: `${50 + it.transform.offsetX * 50}% ${50 + it.transform.offsetY * 50}%`,
+              userSelect: "none", pointerEvents: "none",
+            }}
+            onLoad={onImgLoad}
+          />
+        ) : (
+          !disabled && <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none", pointerEvents: "none" }}>P{it.pi + 1}·{it.slotId}</span>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+function normalizePhotoData(raw) {
+  if (!raw) return null;
+  if (typeof raw === "string") return { path: raw, scale: 1.0, offsetX: 0, offsetY: 0 };
+  return { path: raw.path ?? null, scale: raw.scale ?? 1.0, offsetX: raw.offset_x ?? 0, offsetY: raw.offset_y ?? 0 };
+}
+
+function buildItems(allSlots, student) {
+  return allSlots.map(({ pi, slotId, slotW, slotH, border, borderW, borderRadius,
+    shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity }) => {
+    const raw = student?.pages_data?.[pi]?.photos?.[String(slotId)] ?? null;
+    const photo = normalizePhotoData(raw);
+    const transform = { scale: photo?.scale ?? 1.0, offsetX: photo?.offsetX ?? 0, offsetY: photo?.offsetY ?? 0 };
+    return {
+      pi, slotId, slotW: slotW ?? 400, slotH: slotH ?? 400,
+      border: border ?? false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,
+      shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity,
+      origPi: photo ? pi : null,
+      origSlotId: photo ? slotId : null,
+      serverPath: photo?.path ?? null,
+      origServerPath: photo?.path ?? null,
+      pendingFile: null,
+      previewUrl: null,
+      transform,
+      origTransform: { ...transform },
+    };
+  });
+}
+
+// Compute photo display dimensions (cover fill + user zoom)
+function photoDims(cropW, cropH, imgAspect, scale) {
+  const cropAspect = cropW / cropH;
+  let baseW, baseH;
+  if (imgAspect > cropAspect) { baseH = cropH; baseW = cropH * imgAspect; }
+  else                         { baseW = cropW; baseH = cropW / imgAspect; }
+  return { w: Math.max(cropW, baseW * scale), h: Math.max(cropH, baseH * scale) };
+}
+
+function clampPan(px, py, cropW, cropH, imgAspect, scale) {
+  const { w, h } = photoDims(cropW, cropH, imgAspect, scale);
+  const sx = Math.max(0, (w - cropW) / 2);
+  const sy = Math.max(0, (h - cropH) / 2);
+  return { panX: Math.max(-sx, Math.min(sx, px)), panY: Math.max(-sy, Math.min(sy, py)) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function PhotoManager({ projectId, studentId, pages, student, onSaved, onPhotoSaved, disabled = false }) {
+  const allSlots = useMemo(() =>
+    pages.flatMap((p, pi) =>
+      (p.layout?.photo_slots || []).map(s => ({
+        pi, slotId: s.id, slotW: s.width, slotH: s.height,
+        border: s.border ?? false, borderW: s.border_width ?? 8,
+        borderRadius: s.border_radius ?? 0,
+        shadowEnabled: s.shadow_enabled,
+        shadowOffsetX: s.shadow_offset_x, shadowOffsetY: s.shadow_offset_y,
+        shadowBlur: s.shadow_blur, shadowOpacity: s.shadow_opacity,
+      }))
+    )
+  , [pages]);
+
+  const [items, setItems] = useState(() => buildItems(allSlots, student));
+  // aspectMap[rk] = naturalW/naturalH — set on img onLoad or for cached images
+  const [aspectMap, setAspectMap] = useState({});
+  const thumbImgRefs = useRef({});
+  // editModal: null | { idx, scale, panX, panY, imgAspect, cropW, cropH }
+  const [editModal, setEditModal] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+  const dragIdxRef = useRef(null);
+  const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
+  const [isTouchDevice] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(hover: none)").matches
+  );
+
+  const multiRef = useRef(null);
+  const replaceRefs = useRef({});
+  const editDragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });
+  const editModalRef = useRef(null);
+  const cropElRef = useRef(null);
+
+  // Keep ref in sync for wheel handler
+  useEffect(() => { editModalRef.current = editModal; }, [editModal]);
+
+  // Refs for auto-save (avoid stale closures)
+  const itemsRef = useRef(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  const onSavedRef = useRef(onSaved);
+  useEffect(() => { onSavedRef.current = onSaved; }, [onSaved]);
+  const onPhotoSavedRef = useRef(onPhotoSaved);
+  useEffect(() => { onPhotoSavedRef.current = onPhotoSaved; }, [onPhotoSaved]);
+  const autoSaveTimerRef = useRef(null);
+
+  // Debounced auto-save: fires 300ms after last items change
+  useEffect(() => {
+    const hasDirty = items.some(it =>
+      it.pendingFile !== null || it.serverPath !== it.origServerPath ||
+      Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
+      Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
+      Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001
+    );
+    if (!hasDirty || !studentId) return;
+    clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const cur = itemsRef.current; // snapshot at fire time
+      try {
+        // Upload pending files, track returned server paths
+        const uploadedPaths = {};
+        for (let i = 0; i < cur.length; i++) {
+          if (cur[i].pendingFile) {
+            const res = await uploadPhoto(projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile);
+            uploadedPaths[i] = res.data.path;
+          }
+        }
+        // Save mapping for moved / transform-changed items (skip pending — just uploaded)
+        const pagesMap = {};
+        for (const it of cur) {
+          if (it.pendingFile) continue;
+          const dirty =
+            it.serverPath !== it.origServerPath ||
+            Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
+            Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
+            Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001;
+          if (!dirty) continue;
+          if (!pagesMap[it.pi]) pagesMap[it.pi] = {};
+          pagesMap[it.pi][String(it.slotId)] = it.serverPath === null ? null : {
+            path: it.serverPath, scale: it.transform.scale,
+            offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
+          };
+        }
+        if (Object.keys(pagesMap).length) await updatePhotoMapping(projectId, studentId, pagesMap);
+
+        // Sync orig values in-place so dirty flags clear without a full load().
+        // This prevents the parent's load() → buildItems() from reverting changes
+        // the user made between when the auto-save fired and when it completed.
+        setItems(prev => prev.map((it, i) => {
+          const snap = cur[i];
+          if (!snap) return it;
+          if (snap.pendingFile !== null && uploadedPaths[i] !== undefined) {
+            // Guard: ignore if the user already replaced the file mid-upload
+            if (it.pendingFile !== snap.pendingFile) return it;
+            return {
+              ...it,
+              pendingFile: null,
+              serverPath: uploadedPaths[i],
+              origServerPath: uploadedPaths[i],
+              origPi: snap.pi,
+              origSlotId: snap.slotId,
+              origTransform: { ...snap.transform },
+            };
+          }
+          if (snap.pendingFile !== null) return it; // upload was attempted but failed
+          // For moved/transform-changed items, sync orig to what we actually saved
+          return { ...it, origServerPath: snap.serverPath, origTransform: { ...snap.transform } };
+        }));
+
+        onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
+      } catch (_) { /* silent — manual save remains available */ }
+    }, 300);
+  }, [items, studentId, projectId]);
+
+  // Non-passive wheel on crop element (needed to prevent page scroll)
+  useEffect(() => {
+    const el = cropElRef.current;
+    if (!el) return;
+    const handler = (e) => {
+      e.preventDefault();
+      const m = editModalRef.current;
+      if (!m?.imgAspect) return;
+      const delta = e.deltaY > 0 ? -0.08 : 0.08;
+      const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
+      const ratio = newScale / m.scale;
+      const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
+      setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }); // run every render so ref stays current
+
+  // Global mouse move/up for drag
+  useEffect(() => {
+    if (!editModal) return;
+    const onMove = (e) => {
+      if (!editDragRef.current.dragging) return;
+      const m = editModalRef.current;
+      if (!m?.imgAspect) return;
+      const dx = e.clientX - editDragRef.current.startX;
+      const dy = e.clientY - editDragRef.current.startY;
+      const { panX, panY } = clampPan(
+        editDragRef.current.startPanX + dx,
+        editDragRef.current.startPanY + dy,
+        m.cropW, m.cropH, m.imgAspect, m.scale
+      );
+      setEditModal(prev => prev ? { ...prev, panX, panY } : prev);
+    };
+    const onUp = () => { editDragRef.current.dragging = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [!!editModal]);
+
+  // Re-init when student changes
+  useEffect(() => {
+    setItems(prev => {
+      prev.forEach(it => { if (it.previewUrl) URL.revokeObjectURL(it.previewUrl); });
+      return buildItems(allSlots, student);
+    });
+    setAspectMap({});
+    setEditModal(null);
+    setSelectedIdx(null);
+  }, [student, allSlots]);
+
+  // Handle cached images: onLoad won't fire if img is already complete
+  useEffect(() => {
+    const map = {};
+    Object.entries(thumbImgRefs.current).forEach(([rk, img]) => {
+      if (img && img.complete && img.naturalWidth > 0) {
+        map[rk] = img.naturalWidth / img.naturalHeight;
+      }
+    });
+    if (Object.keys(map).length > 0) {
+      setAspectMap(prev => ({ ...map, ...prev }));
+    }
+  }, [items]);
+
+  useEffect(() => () => {
+    setItems(prev => { prev.forEach(it => { if (it.previewUrl) URL.revokeObjectURL(it.previewUrl); }); return prev; });
+  }, []);
+
+  // ── Dirty detection ───────────────────────────────────────────────────────
+  const transformDirty = (it) =>
+    Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
+    Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
+    Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001;
+
+  const isDirty = (it) =>
+    it.pendingFile !== null || it.serverPath !== it.origServerPath || transformDirty(it);
+  const hasDirty = items.some(isDirty);
+
+  const displayUrl = (it) => {
+    if (it.previewUrl) return it.previewUrl;
+    if (it.serverPath !== null && it.origPi !== null)
+      return photoApiUrl(projectId, studentId, it.origPi, it.origSlotId);
+    return null;
+  };
+
+  // ── File helpers ──────────────────────────────────────────────────────────
+  function assignFile(arr, i, file) {
+    if (arr[i].previewUrl) URL.revokeObjectURL(arr[i].previewUrl);
+    arr[i] = { ...arr[i], pendingFile: file, previewUrl: URL.createObjectURL(file),
+      serverPath: null, origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+  }
+
+  const handleMultiUpload = (files) => {
+    const arr = Array.from(files);
+    setItems(prev => {
+      const next = prev.map(it => ({ ...it }));
+      let fi = 0;
+      for (let i = 0; i < next.length && fi < arr.length; i++)
+        if (!next[i].pendingFile && !next[i].serverPath) assignFile(next, i, arr[fi++]);
+      for (let i = 0; i < next.length && fi < arr.length; i++)
+        if (next[i].pendingFile || next[i].serverPath) assignFile(next, i, arr[fi++]);
+      return next;
+    });
+  };
+
+  const handleReplace = (idx, file) => {
+    setItems(prev => {
+      const next = [...prev];
+      const it = { ...next[idx] };
+      if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
+      next[idx] = { ...it, pendingFile: file, previewUrl: URL.createObjectURL(file),
+        serverPath: null, origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+      return next;
+    });
+    setEditModal(null);
+  };
+
+  const handleDelete = (idx) => {
+    setItems(prev => {
+      const next = [...prev];
+      const it = { ...next[idx] };
+      if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
+      next[idx] = { ...it, pendingFile: null, previewUrl: null, serverPath: null,
+        origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+      return next;
+    });
+    setEditModal(null);
+  };
+
+  const handleSwap = (i, j) => {
+    if (i === j || i == null || j == null) return;
+    setItems(prev => {
+      const next = [...prev];
+      const a = prev[i], b = prev[j];
+      next[i] = { ...a, origPi: b.origPi, origSlotId: b.origSlotId, serverPath: b.serverPath,
+        pendingFile: b.pendingFile, previewUrl: b.previewUrl, transform: { ...b.transform } };
+      next[j] = { ...b, origPi: a.origPi, origSlotId: a.origSlotId, serverPath: a.serverPath,
+        pendingFile: a.pendingFile, previewUrl: a.previewUrl, transform: { ...a.transform } };
+      return next;
+    });
+  };
+
+  // ── Drag-and-drop handlers ────────────────────────────────────────────────
+  const handleDragStart = (e, idx) => {
+    dragIdxRef.current = idx;
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const handleDragOver = (e, idx) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragIdxRef.current !== idx) setDragOverIdx(idx);
+  };
+  const handleDragLeave = (e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) setDragOverIdx(null);
+  };
+  const handleDrop = (e, idx) => {
+    e.preventDefault();
+    const from = dragIdxRef.current;
+    dragIdxRef.current = null;
+    setDragOverIdx(null);
+    if (from !== null && from !== idx) handleSwap(from, idx);
+  };
+  const handleDragEnd = () => {
+    dragIdxRef.current = null;
+    setDragOverIdx(null);
+  };
+
+  const updateTransform = (idx, t) =>
+    setItems(prev => { const n = [...prev]; n[idx] = { ...n[idx], transform: { ...n[idx].transform, ...t } }; return n; });
+
+
+  // ── Edit modal ────────────────────────────────────────────────────────────
+  const openEditModal = (idx) => {
+    const it = items[idx];
+    if (!displayUrl(it)) return;
+    // Responsive crop area: cap to viewport
+    const vw = Math.min(window.innerWidth - 32, 460);
+    const CROP_MAX_W = vw, CROP_MAX_H = Math.round(window.innerHeight * 0.55);
+    const bw = it.border ? it.borderW : 0;
+    const effectiveW = it.slotW - bw * 2;
+    const effectiveH = it.slotH - bw * 4;
+    const rawAspect = effectiveH / effectiveW;
+    const cropW = rawAspect > CROP_MAX_H / CROP_MAX_W
+      ? Math.round(CROP_MAX_H / rawAspect) : CROP_MAX_W;
+    const cropH = Math.round(cropW * rawAspect);
+    setEditModal({ idx, scale: it.transform.scale, panX: 0, panY: 0, imgAspect: null, cropW, cropH });
+  };
+
+  const onEditImgLoad = (e) => {
+    const imgAspect = e.target.naturalWidth / e.target.naturalHeight;
+    const m = editModalRef.current;
+    if (!m) return;
+    const it = items[m.idx];
+    const { w, h } = photoDims(m.cropW, m.cropH, imgAspect, m.scale);
+    const sx = (w - m.cropW) / 2, sy = (h - m.cropH) / 2;
+    setEditModal(prev => prev ? {
+      ...prev, imgAspect,
+      panX: -it.transform.offsetX * sx,
+      panY: -it.transform.offsetY * sy,
+    } : prev);
+  };
+
+  const onCropMouseDown = (e) => {
+    e.preventDefault();
+    const m = editModalRef.current;
+    if (!m) return;
+    editDragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY,
+      startPanX: m.panX, startPanY: m.panY };
+  };
+
+  const onCropTouchStart = (e) => {
+    const touch = e.touches[0];
+    const m = editModalRef.current;
+    if (!m) return;
+    editDragRef.current = { dragging: true, startX: touch.clientX, startY: touch.clientY,
+      startPanX: m.panX, startPanY: m.panY };
+  };
+
+  const onCropTouchMove = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const d = editDragRef.current;
+    const m = editModalRef.current;
+    if (!d?.dragging || !m?.imgAspect) return;
+    const dx = touch.clientX - d.startX;
+    const dy = touch.clientY - d.startY;
+    const { panX, panY } = clampPan(d.startPanX + dx, d.startPanY + dy, m.cropW, m.cropH, m.imgAspect, m.scale);
+    setEditModal(prev => prev ? { ...prev, panX, panY } : prev);
+  };
+
+  const applyEditModal = () => {
+    const m = editModalRef.current;
+    if (!m?.imgAspect) return;
+    const { idx, scale, panX, panY, imgAspect, cropW, cropH } = m;
+    const { w, h } = photoDims(cropW, cropH, imgAspect, scale);
+    const sx = (w - cropW) / 2, sy = (h - cropH) / 2;
+    updateTransform(idx, {
+      scale,
+      offsetX: Math.max(-1, Math.min(1, sx > 0 ? -panX / sx : 0)),
+      offsetY: Math.max(-1, Math.min(1, sy > 0 ? -panY / sy : 0)),
+    });
+    setEditModal(null);
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  const filledCount = items.filter(it => displayUrl(it)).length;
+
+
+  return (
+    <div className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden">
+      {/* Edit Modal */}
+      {editModal && (() => {
+        const it = items[editModal.idx];
+        const url = displayUrl(it);
+        const { cropW, cropH, scale, panX, panY, imgAspect } = editModal;
+        const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
+        const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
+        const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
+        return (
+          <div
+            className="fixed inset-0 bg-black/75 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm"
+            onMouseUp={() => { editDragRef.current.dragging = false; }}
+            onTouchEnd={() => { editDragRef.current.dragging = false; }}
+          >
+            <div
+              className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
+              style={{ maxHeight: "95dvh" }}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Modal header */}
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
+                <div>
+                  <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotId}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
+                </div>
+                <button
+                  onClick={() => setEditModal(null)}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Crop area */}
+              <div
+                ref={cropElRef}
+                onMouseDown={onCropMouseDown}
+                onTouchStart={onCropTouchStart}
+                onTouchMove={onCropTouchMove}
+                style={{
+                  width: cropW, height: cropH, flexShrink: 0,
+                  overflow: "hidden", position: "relative",
+                  background: "#1a1a1a",
+                  cursor: imgAspect ? "grab" : "default",
+                  touchAction: "none",
+                }}
+              >
+                {url && (
+                  <img
+                    src={url} alt="" draggable={false}
+                    onLoad={onEditImgLoad}
+                    style={{
+                      position: "absolute",
+                      width: dims?.w ?? "100%", height: dims?.h ?? "100%",
+                      maxWidth: "none", maxHeight: "none",
+                      left: photoLeft, top: photoTop,
+                      userSelect: "none", pointerEvents: "none",
+                      opacity: imgAspect ? 1 : 0,
+                      transition: "opacity 0.15s",
+                    }}
+                  />
+                )}
+                {!imgAspect && (
+                  <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
+                    載入中...
+                  </div>
+                )}
+              </div>
+
+              {/* Zoom control */}
+              <div className="px-5 py-3 bg-gray-50 border-t border-gray-100">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      const m = editModalRef.current;
+                      if (!m?.imgAspect) return;
+                      const ns = parseFloat(Math.max(1.0, m.scale - 0.1).toFixed(3));
+                      const ratio = ns / m.scale;
+                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
+                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
+                    }}
+                    className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5 text-gray-600" />
+                  </button>
+                  <input
+                    type="range" min="1.0" max="3.0" step="0.02"
+                    value={scale}
+                    onChange={e => {
+                      const m = editModalRef.current;
+                      const ns = parseFloat(e.target.value);
+                      if (!m?.imgAspect) { setEditModal(prev => prev ? { ...prev, scale: ns } : prev); return; }
+                      const ratio = ns / m.scale;
+                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
+                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
+                    }}
+                    className="flex-1 accent-violet-500"
+                  />
+                  <button
+                    onClick={() => {
+                      const m = editModalRef.current;
+                      if (!m?.imgAspect) return;
+                      const ns = parseFloat(Math.min(3.0, m.scale + 0.1).toFixed(3));
+                      const ratio = ns / m.scale;
+                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
+                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
+                    }}
+                    className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5 text-gray-600" />
+                  </button>
+                  <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
+                    {scale.toFixed(2)}×
+                  </span>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
+                <button
+                  onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0 } : prev)}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  重置
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditModal(null)}
+                    className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={applyEditModal}
+                    disabled={!imgAspect}
+                    className="px-4 py-2 text-sm bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                  >
+                    套用
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <Images className="w-4 h-4 text-amber-500" />
+        <h3 className="font-semibold text-gray-800 text-sm">照片管理</h3>
+        <span className="text-xs text-gray-400">
+          {filledCount} / {allSlots.length} 格
+          {hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>}
+        </span>
+        <div className="ml-auto flex gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
+          <button
+            onClick={() => multiRef.current?.click()}
+            className="flex items-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            多選上傳
+          </button>
+          <input ref={multiRef} type="file" accept="image/*" multiple className="hidden"
+            onChange={e => { if (e.target.files?.length) { handleMultiUpload(e.target.files); e.target.value = ""; } }} />
+        </div>
+      </div>
+
+      {/* Photo grid */}
+      <div
+        className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5 gap-3"
+        onClick={e => {
+          // Tap outside any cell deselects on touch
+          if (isTouchDevice && e.target === e.currentTarget) setSelectedIdx(null);
+        }}
+      >
+        {items.map((it, idx) => {
+          const url = displayUrl(it);
+          const dirty = isDirty(it);
+          const rk = `${it.pi}_${it.slotId}`;
+          const isDragOver = dragOverIdx === idx && dragIdxRef.current !== idx;
+          const nat = aspectMap[rk];
+          const isSelected = isTouchDevice && selectedIdx === idx;
+
+          const handleCellClick = () => {
+            if (disabled) return;
+            if (isTouchDevice) {
+              if (!url) { replaceRefs.current[rk]?.click(); return; }
+              setSelectedIdx(prev => prev === idx ? null : idx);
+            } else {
+              if (!url) replaceRefs.current[rk]?.click();
+            }
+          };
+
+          return (
+            <div
+              key={rk}
+              draggable={!!url && !disabled && !isTouchDevice}
+              onDragStart={e => handleDragStart(e, idx)}
+              onDragOver={e => handleDragOver(e, idx)}
+              onDragLeave={handleDragLeave}
+              onDrop={e => handleDrop(e, idx)}
+              onDragEnd={handleDragEnd}
+              onClick={handleCellClick}
+              className="group aspect-square relative flex items-center justify-center rounded-xl transition-all"
+              style={{
+                background: isSelected ? "rgba(99,102,241,0.1)" : isDragOver ? "rgba(99,102,241,0.08)" : dirty ? "rgba(251,191,36,0.08)" : "#f3f4f6",
+                outline: isSelected ? "2px solid #6366f1" : isDragOver ? "2px solid #6366f1" : dirty ? "2px solid #fbbf24" : "2px solid transparent",
+                cursor: url && !disabled && !isTouchDevice ? "grab" : (!disabled ? "pointer" : "default"),
+              }}
+            >
+              {/* Pure display */}
+              <PhotoSlotCard
+                it={it} url={url} nat={nat} disabled={disabled}
+                onImgLoad={e => setAspectMap(prev => ({ ...prev, [rk]: e.target.naturalWidth / e.target.naturalHeight }))}
+                imgRefCallback={el => { thumbImgRefs.current[rk] = el; }}
+              />
+
+              {/* Desktop hover overlay */}
+              {url && !disabled && !isTouchDevice && (
+                <div className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 pointer-events-none">
+                  <div className="pointer-events-auto flex gap-1.5">
+                    <button onClick={e => { e.stopPropagation(); openEditModal(idx); }} title="位移/縮放"
+                      className="w-7 h-7 bg-white/20 hover:bg-white/40 rounded-lg flex items-center justify-center transition-colors">
+                      <ZoomIn className="w-3 h-3 text-white" />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }} title="更換"
+                      className="w-7 h-7 bg-white/20 hover:bg-white/40 rounded-lg flex items-center justify-center transition-colors">
+                      <RefreshCw className="w-3 h-3 text-white" />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); handleDelete(idx); }} title="刪除"
+                      className="w-7 h-7 bg-red-500/70 hover:bg-red-600 rounded-lg flex items-center justify-center transition-colors">
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Mobile tap-selected overlay */}
+              {url && !disabled && isTouchDevice && isSelected && (
+                <div className="absolute inset-0 rounded-xl bg-black/55 flex flex-col items-center justify-center gap-2">
+                  {/* Top row: move left / move right */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={e => { e.stopPropagation(); if (idx > 0) { handleSwap(idx, idx - 1); setSelectedIdx(idx - 1); } }}
+                      disabled={idx === 0}
+                      className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
+                    >
+                      <ChevronLeft className="w-4 h-4 text-white" />
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); if (idx < items.length - 1) { handleSwap(idx, idx + 1); setSelectedIdx(idx + 1); } }}
+                      disabled={idx === items.length - 1}
+                      className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
+                    >
+                      <ChevronRight className="w-4 h-4 text-white" />
+                    </button>
+                  </div>
+                  {/* Bottom row: edit / replace / delete */}
+                  <div className="flex gap-2">
+                    <button onClick={e => { e.stopPropagation(); setSelectedIdx(null); openEditModal(idx); }}
+                      className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center transition-colors">
+                      <ZoomIn className="w-4 h-4 text-white" />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }}
+                      className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center transition-colors">
+                      <RefreshCw className="w-4 h-4 text-white" />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); handleDelete(idx); setSelectedIdx(null); }}
+                      className="w-9 h-9 bg-red-500/70 active:bg-red-600 rounded-xl flex items-center justify-center transition-colors">
+                      <X className="w-4 h-4 text-white" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Slot label */}
+              <div className="absolute bottom-1 left-0 right-0 text-center text-[10px] text-gray-400 pointer-events-none select-none">
+                P{it.pi + 1}·{it.slotId}
+              </div>
+
+              {/* File input lives in the cell, not the card */}
+              <input ref={el => { replaceRefs.current[rk] = el; }}
+                type="file" accept="image/*" className="hidden"
+                onChange={e => { if (e.target.files?.[0]) { handleReplace(idx, e.target.files[0]); e.target.value = ""; } }} />
+            </div>
+          );
+        })}
+      </div>
+
+    </div>
+  );
+}
