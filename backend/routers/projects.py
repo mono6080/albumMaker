@@ -4,6 +4,7 @@
 
 import io
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -176,11 +177,18 @@ def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """刪除指定專案及其所有學生資料。"""
+    """刪除指定專案及其所有學生資料與上傳檔案。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     db.delete(project)
     db.commit()
+    # 刪除專案的照片目錄與 PDF 輸出目錄
+    project_photo_dir = UPLOADS_DIR / "photos" / f"proj{project_id}"
+    if project_photo_dir.exists():
+        shutil.rmtree(project_photo_dir)
+    project_output_dir = UPLOADS_DIR / "output" / f"proj{project_id}"
+    if project_output_dir.exists():
+        shutil.rmtree(project_output_dir)
     return {"ok": True}
 
 
@@ -254,12 +262,16 @@ def delete_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """刪除指定學生及其所有資料。"""
+    """刪除指定學生及其所有資料與照片檔案。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     db.delete(student)
     db.commit()
+    # 刪除學生照片目錄（含所有頁面的照片）
+    student_photo_dir = UPLOADS_DIR / "photos" / f"proj{project_id}" / f"student{student_id}"
+    if student_photo_dir.exists():
+        shutil.rmtree(student_photo_dir)
     return {"ok": True}
 
 
@@ -280,11 +292,6 @@ async def upload_photo(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    destination_path = get_photo_destination_path(
-        project_id, student_id, page_index, slot_id, file.filename
-    )
-    await save_uploaded_file(file, destination_path)
-
     pages_data = json.loads(student.pages_data_json)
     while len(pages_data) <= page_index:
         pages_data.append({
@@ -292,6 +299,20 @@ async def upload_photo(
             "photos": {},
             "bubble_texts": {},
         })
+
+    # 若該 slot 已有舊照片，先刪除舊檔避免殘留
+    old_record = pages_data[page_index]["photos"].get(str(slot_id))
+    if old_record:
+        old_path_str = old_record if isinstance(old_record, str) else old_record.get("path", "")
+        if old_path_str:
+            old_file = Path(old_path_str)
+            if old_file.exists():
+                old_file.unlink()
+
+    destination_path = get_photo_destination_path(
+        project_id, student_id, page_index, slot_id, file.filename
+    )
+    await save_uploaded_file(file, destination_path)
 
     pages_data[page_index]["photos"][str(slot_id)] = {
         "path": str(destination_path),
@@ -364,6 +385,14 @@ def update_photo_mapping(
             })
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
+                # 清除 slot：刪除實際檔案
+                old_record = pages_data[page_index]["photos"].get(slot_id_str)
+                if old_record:
+                    old_path_str = old_record if isinstance(old_record, str) else old_record.get("path", "")
+                    if old_path_str:
+                        old_file = Path(old_path_str)
+                        if old_file.exists():
+                            old_file.unlink()
                 pages_data[page_index]["photos"].pop(slot_id_str, None)
             else:
                 pages_data[page_index]["photos"][slot_id_str] = photo_path
