@@ -4,9 +4,13 @@ import toast from "react-hot-toast";
 import { getProjects, createProject, deleteProject, getTemplates, renameProject } from "../api";
 import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, ChevronRight, Check, X } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
+import { useAuth } from "../context/AuthContext";
 
 export default function ProjectList() {
-  const { canCreateProject, canEditProject, isAdmin } = usePermissions();
+  const { canCreateProject, canEditProject } = usePermissions();
+  const { currentUser } = useAuth();
+  // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
+  const showOwner = currentUser?.role !== "teacher";
   const [projects, setProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [form, setForm] = useState({ customName: "", template_id: "" });
@@ -167,6 +171,12 @@ export default function ProjectList() {
                     <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
                       <Users className="w-3 h-3" />
                       {p.student_count} 位學生 · {new Date(p.created_at).toLocaleDateString("zh-TW")}
+                      {showOwner && p.owner_name && (
+                        <span className="text-gray-300">·</span>
+                      )}
+                      {showOwner && p.owner_name && (
+                        <span>{p.owner_name}</span>
+                      )}
                     </div>
                   </div>
                   {canEditProject(p.owner_id) && (
