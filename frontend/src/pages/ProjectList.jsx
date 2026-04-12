@@ -3,8 +3,10 @@ import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { getProjects, createProject, deleteProject, getTemplates, renameProject } from "../api";
 import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, ChevronRight, Check, X } from "lucide-react";
+import { usePermissions } from "../hooks/usePermissions";
 
 export default function ProjectList() {
+  const { canCreateProject, canEditProject, isAdmin } = usePermissions();
   const [projects, setProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [form, setForm] = useState({ customName: "", template_id: "" });
@@ -66,13 +68,15 @@ export default function ProjectList() {
             <p className="text-sm text-gray-500">每個班級每個月一個專案</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowForm(v => !v)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
-        >
-          <Plus className="w-4 h-4" />
-          新建專案
-        </button>
+        {canCreateProject && (
+          <button
+            onClick={() => setShowForm(v => !v)}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            <Plus className="w-4 h-4" />
+            新建專案
+          </button>
+        )}
       </div>
 
       {/* Create form */}
@@ -153,9 +157,11 @@ export default function ProjectList() {
                     ) : (
                       <div className="flex items-center gap-1 group/name">
                         <div className="font-semibold text-gray-900 text-lg">{p.name}</div>
-                        <button onClick={() => startEdit(p)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
+                        {canEditProject(p.owner_id) && (
+                          <button onClick={() => startEdit(p)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     )}
                     <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
@@ -163,22 +169,26 @@ export default function ProjectList() {
                       {p.student_count} 位學生 · {new Date(p.created_at).toLocaleDateString("zh-TW")}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDelete(p.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {canEditProject(p.owner_id) && (
+                    <button
+                      onClick={() => handleDelete(p.id)}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
-              <div className="border-t border-gray-100 grid grid-cols-2 divide-x divide-gray-100">
-                <Link
-                  to={`/projects/${p.id}/batch`}
-                  className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                  專案設定
-                </Link>
+              <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEditProject(p.owner_id) ? "grid-cols-2" : "grid-cols-1"}`}>
+                {canEditProject(p.owner_id) && (
+                  <Link
+                    to={`/projects/${p.id}/batch`}
+                    className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    專案設定
+                  </Link>
+                )}
                 <Link
                   to={`/projects/${p.id}/review`}
                   className="flex items-center justify-center gap-1.5 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"

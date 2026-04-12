@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from database import Template, TemplatePage, get_db
+from auth import get_current_user, require_role
+from database import Template, TemplatePage, User, get_db
 from crud.template_crud import get_template_or_404, get_template_page_or_404
 from services.file_service import (
     get_background_destination_path,
@@ -24,7 +25,10 @@ router = APIRouter(prefix="/api/templates", tags=["templates"])
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
 
 @router.get("/")
-def list_templates(db: Session = Depends(get_db)):
+def list_templates(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     """回傳所有模板的摘要清單（依建立時間降序）。"""
     all_templates = db.query(Template).order_by(Template.created_at.desc()).all()
     return [
@@ -39,7 +43,11 @@ def list_templates(db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_template(name: str = Form(...), db: Session = Depends(get_db)):
+def create_template(
+    name: str = Form(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
     """建立新模板。"""
     new_template = Template(name=name)
     db.add(new_template)
@@ -53,6 +61,7 @@ def rename_template(
     template_id: int,
     name: str = Form(...),
     db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
 ):
     """修改模板名稱（行內編輯）。"""
     template = get_template_or_404(template_id, db)
@@ -62,7 +71,11 @@ def rename_template(
 
 
 @router.get("/{template_id}")
-def get_template(template_id: int, db: Session = Depends(get_db)):
+def get_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     """回傳模板詳細資訊，包含所有頁面的佈局資料。"""
     template = get_template_or_404(template_id, db)
     return {
@@ -82,7 +95,11 @@ def get_template(template_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{template_id}")
-def delete_template(template_id: int, db: Session = Depends(get_db)):
+def delete_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
     """刪除指定模板及其所有頁面。"""
     template = get_template_or_404(template_id, db)
     db.delete(template)
@@ -93,7 +110,11 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
 # ── 模板頁面 CRUD ─────────────────────────────────────────────────────────────
 
 @router.post("/{template_id}/pages")
-def add_page(template_id: int, db: Session = Depends(get_db)):
+def add_page(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
     """在模板末尾新增一頁，並初始化空白佈局。"""
     template = get_template_or_404(template_id, db)
 
@@ -131,6 +152,7 @@ def update_page_layout(
     page_id: int,
     layout: dict,
     db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
 ):
     """更新模板頁面的佈局 JSON。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
@@ -140,7 +162,12 @@ def update_page_layout(
 
 
 @router.delete("/{template_id}/pages/{page_id}")
-def delete_page(template_id: int, page_id: int, db: Session = Depends(get_db)):
+def delete_page(
+    template_id: int,
+    page_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
     """刪除指定模板頁面。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
     db.delete(template_page)
@@ -156,6 +183,7 @@ async def upload_background(
     page_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
@@ -175,7 +203,12 @@ async def upload_background(
 
 
 @router.get("/{template_id}/pages/{page_id}/background")
-def get_background(template_id: int, page_id: int, db: Session = Depends(get_db)):
+def get_background(
+    template_id: int,
+    page_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     """回傳模板頁面的背景圖檔案。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
 
@@ -194,7 +227,11 @@ def get_background(template_id: int, page_id: int, db: Session = Depends(get_db)
 # ── 貼圖素材 ──────────────────────────────────────────────────────────────────
 
 @router.post("/{template_id}/stickers")
-async def upload_sticker(template_id: int, file: UploadFile = File(...)):
+async def upload_sticker(
+    template_id: int,
+    file: UploadFile = File(...),
+    _: User = Depends(require_role("admin", "art_team")),
+):
     """上傳貼圖素材至模板專屬目錄。"""
     destination_path = get_sticker_destination_path(template_id, file.filename)
     await save_uploaded_file(file, destination_path)
@@ -205,7 +242,11 @@ async def upload_sticker(template_id: int, file: UploadFile = File(...)):
 
 
 @router.get("/{template_id}/stickers/{filename}")
-def get_sticker(template_id: int, filename: str):
+def get_sticker(
+    template_id: int,
+    filename: str,
+    _: User = Depends(get_current_user),
+):
     """回傳指定貼圖素材檔案。"""
     sticker_file_path = UPLOADS_DIR / "stickers" / f"tmpl{template_id}" / filename
     if not sticker_file_path.exists():
@@ -217,7 +258,12 @@ def get_sticker(template_id: int, filename: str):
 # ── 頁面預覽 ──────────────────────────────────────────────────────────────────
 
 @router.get("/{template_id}/pages/{page_id}/preview")
-def preview_template_page(template_id: int, page_id: int, db: Session = Depends(get_db)):
+def preview_template_page(
+    template_id: int,
+    page_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     """渲染模板頁面預覽圖（以「姓名」佔位符代替學生姓名），回傳 JPEG。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
 

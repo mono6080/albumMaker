@@ -10,7 +10,7 @@ from pathlib import Path
 
 from database import init_db
 from migrations import run_migrations
-from routers import templates, projects
+from routers import templates, projects, auth, users
 
 # 前端編譯輸出目錄
 FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
@@ -25,6 +25,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(templates.router)
 app.include_router(projects.router)
 

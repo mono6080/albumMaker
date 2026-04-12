@@ -5,36 +5,60 @@ import {
   getProject, getTemplate, renderStudent, renderAll,
   downloadPdf, downloadAllZip, previewUrl
 } from "../api";
-import { ChevronRight, Download, Loader2, Eye, Pencil, Package, CheckCircle2, Clock, Printer, Monitor } from "lucide-react";
+import { apiClient } from "../api/authApi";
+import { usePermissions } from "../hooks/usePermissions";
+import {
+  ChevronRight, Download, Loader2, Eye, Pencil, Package,
+  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
+} from "lucide-react";
 
 export default function ProjectReview() {
   const { id } = useParams();
+  const { canDownloadPrint, canComment, isAdmin } = usePermissions();
+
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
   const [rendering, setRendering] = useState({});
   const [renderingAll, setRenderingAll] = useState(false);
-  const [preview, setPreview] = useState(null); // {studentId, pageIndex}
+  const [preview, setPreview] = useState(null);
   const [ts, setTs] = useState(Date.now());
-  const [outputMode, setOutputMode] = useState("print"); // "print" | "screen"
+  // 非 admin 固定使用 screen 模式
+  const [outputMode, setOutputMode] = useState("print");
 
-  const load = async () => {
-    const r = await getProject(id);
-    setProject(r.data);
-    const tr = await getTemplate(r.data.template_id);
-    setTemplate(tr.data);
+  // ── 留言 ──────────────────────────────────────────────────────────────────
+  const [comments, setComments] = useState([]);
+  const [newCommentText, setNewCommentText] = useState("");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+
+  const loadProject = async () => {
+    const projectResponse = await getProject(id);
+    setProject(projectResponse.data);
+    const templateResponse = await getTemplate(projectResponse.data.template_id);
+    setTemplate(templateResponse.data);
   };
 
-  useEffect(() => { load(); }, [id]);
+  const loadComments = async () => {
+    try {
+      const response = await apiClient.get(`/projects/${id}/comments`);
+      setComments(response.data);
+    } catch { /* 靜默，留言非關鍵功能 */ }
+  };
+
+  useEffect(() => {
+    loadProject();
+    loadComments();
+  }, [id]);
 
   const handleDownloadOne = async (studentId) => {
     setRendering(prev => ({ ...prev, [studentId]: true }));
     try {
       await renderStudent(id, studentId);
-      await load();
+      await loadProject();
       setTs(Date.now());
-      const a = document.createElement("a");
-      a.href = downloadPdf(id, studentId, outputMode);
-      a.click();
+      const anchor = document.createElement("a");
+      // 非 admin 強制 screen（後端也會強制，前端保持一致）
+      anchor.href = downloadPdf(id, studentId, canDownloadPrint ? outputMode : "screen");
+      anchor.click();
     } catch { toast.error("產生失敗"); }
     setRendering(prev => ({ ...prev, [studentId]: false }));
   };
@@ -43,13 +67,39 @@ export default function ProjectReview() {
     setRenderingAll(true);
     try {
       await renderAll(id);
-      await load();
+      await loadProject();
       setTs(Date.now());
-      const a = document.createElement("a");
-      a.href = downloadAllZip(id, outputMode);
-      a.click();
+      const anchor = document.createElement("a");
+      anchor.href = downloadAllZip(id, canDownloadPrint ? outputMode : "screen");
+      anchor.click();
     } catch { toast.error("批次產生失敗"); }
     setRenderingAll(false);
+  };
+
+  const handleSubmitComment = async () => {
+    if (!newCommentText.trim()) return;
+    setIsSubmittingComment(true);
+    try {
+      await apiClient.post(
+        `/projects/${id}/comments`,
+        new URLSearchParams({ content: newCommentText.trim() })
+      );
+      setNewCommentText("");
+      await loadComments();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "留言失敗");
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    try {
+      await apiClient.delete(`/projects/${id}/comments/${commentId}`);
+      await loadComments();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "刪除失敗");
+    }
   };
 
   if (!project || !template) return (
@@ -73,29 +123,29 @@ export default function ProjectReview() {
           <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex-shrink-0">輸出</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
-          {/* Output mode toggle */}
-          <div className="flex items-center bg-gray-100 rounded-xl p-0.5 text-xs font-medium flex-shrink-0">
-            <button
-              onClick={() => setOutputMode("print")}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
-                outputMode === "print" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">完整畫質</span>
-              <span className="sm:hidden">列印</span>
-            </button>
-            <button
-              onClick={() => setOutputMode("screen")}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
-                outputMode === "screen" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              <Monitor className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">螢幕顯示</span>
-              <span className="sm:hidden">螢幕</span>
-            </button>
-          </div>
+          {/* 完整畫質切換：僅 admin 可見 */}
+          {canDownloadPrint && (
+            <div className="flex items-center bg-gray-100 rounded-xl p-0.5 text-xs font-medium flex-shrink-0">
+              <button
+                onClick={() => setOutputMode("print")}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
+                  outputMode === "print" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">完整畫質</span>
+              </button>
+              <button
+                onClick={() => setOutputMode("screen")}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
+                  outputMode === "screen" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">螢幕顯示</span>
+              </button>
+            </div>
+          )}
           <button
             onClick={handleDownloadAll}
             disabled={renderingAll || project.students.length === 0}
@@ -182,14 +232,14 @@ export default function ProjectReview() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {project.students.map(s => {
-            const done = !!s.output_filename;
-            const isRendering = rendering[s.id];
+          {project.students.map(student => {
+            const isDone = !!student.output_filename;
+            const isStudentRendering = rendering[student.id];
             return (
               <div
-                key={s.id}
+                key={student.id}
                 className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all hover:shadow-md ${
-                  done ? "border-emerald-100" : "border-gray-200"
+                  isDone ? "border-emerald-100" : "border-gray-200"
                 }`}
               >
                 {/* Thumbnail strip */}
@@ -197,11 +247,11 @@ export default function ProjectReview() {
                   {Array.from({ length: pageCount }, (_, i) => (
                     <button
                       key={i}
-                      onClick={() => setPreview({ studentId: s.id, pageIndex: i })}
+                      onClick={() => setPreview({ studentId: student.id, pageIndex: i })}
                       className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
                     >
                       <img
-                        src={`${previewUrl(id, s.id, i)}?t=${ts}`}
+                        src={`${previewUrl(id, student.id, i)}?t=${ts}`}
                         alt={`p${i + 1}`}
                         className="w-full h-24 object-cover"
                         loading="lazy"
@@ -217,9 +267,9 @@ export default function ProjectReview() {
                 <div className="p-4">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <div className="font-semibold text-gray-900">{s.name}</div>
-                      <div className={`flex items-center gap-1 text-xs mt-0.5 ${done ? "text-emerald-600" : "text-gray-400"}`}>
-                        {done
+                      <div className="font-semibold text-gray-900">{student.name}</div>
+                      <div className={`flex items-center gap-1 text-xs mt-0.5 ${isDone ? "text-emerald-600" : "text-gray-400"}`}>
+                        {isDone
                           ? <><CheckCircle2 className="w-3 h-3" />已產生 PDF</>
                           : <><Clock className="w-3 h-3" />尚未產生</>
                         }
@@ -230,35 +280,108 @@ export default function ProjectReview() {
                   {/* Actions */}
                   <div className="flex gap-2">
                     <Link
-                      to={`/projects/${id}/students/${s.id}/edit`}
+                      to={`/projects/${id}/students/${student.id}/edit`}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
                     >
                       <Pencil className="w-3 h-3" />
                       編輯
                     </Link>
                     <button
-                      onClick={() => setPreview({ studentId: s.id, pageIndex: 0 })}
+                      onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
                     >
                       <Eye className="w-3 h-3" />
                       預覽
                     </button>
                     <button
-                      onClick={() => handleDownloadOne(s.id)}
-                      disabled={isRendering}
+                      onClick={() => handleDownloadOne(student.id)}
+                      disabled={isStudentRendering}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors ml-auto"
                     >
-                      {isRendering
+                      {isStudentRendering
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Download className="w-3 h-3" />
                       }
-                      {isRendering ? "產生中..." : "下載"}
+                      {isStudentRendering ? "產生中..." : "下載"}
                     </button>
                   </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* 審閱留言區（admin / 美學組 / 主管可見） */}
+      {canComment && (
+        <div className="mt-8 bg-white border border-gray-200 rounded-2xl shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <MessageCircle className="w-4 h-4 text-violet-500" />
+            <h3 className="font-semibold text-gray-800 text-sm">審閱意見</h3>
+            {comments.length > 0 && (
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{comments.length}</span>
+            )}
+          </div>
+
+          {/* 留言清單 */}
+          {comments.length === 0 ? (
+            <p className="text-sm text-gray-300 text-center py-4">尚無意見</p>
+          ) : (
+            <div className="space-y-3 mb-4">
+              {comments.map((comment) => (
+                <div key={comment.id} className="flex gap-3">
+                  <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center text-xs font-bold text-violet-600 flex-shrink-0">
+                    {comment.author_name?.[0] ?? "?"}
+                  </div>
+                  <div className="flex-1 bg-gray-50 rounded-xl px-3 py-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-gray-700">{comment.author_name}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-gray-300">
+                          {new Date(comment.created_at).toLocaleString("zh-TW", {
+                            month: "numeric", day: "numeric",
+                            hour: "2-digit", minute: "2-digit",
+                          })}
+                        </span>
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeleteComment(comment.id)}
+                            className="p-0.5 text-gray-200 hover:text-red-400 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 新增留言 */}
+          <div className="flex gap-2">
+            <textarea
+              rows={2}
+              value={newCommentText}
+              onChange={(e) => setNewCommentText(e.target.value)}
+              placeholder="輸入審閱意見..."
+              className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
+              }}
+            />
+            <button
+              onClick={handleSubmitComment}
+              disabled={isSubmittingComment || !newCommentText.trim()}
+              className="self-end flex items-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">送出</span>
+            </button>
+          </div>
+          <p className="text-xs text-gray-300 mt-1.5">Ctrl+Enter 快速送出</p>
         </div>
       )}
     </div>

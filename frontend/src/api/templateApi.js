@@ -1,9 +1,8 @@
 // 模板 API 模組
 // 封裝所有與模板（Template）及模板頁面（TemplatePage）相關的 API 呼叫
 
-import axios from "axios";
-
-const apiClient = axios.create({ baseURL: "/api" });
+// 使用統一含 Bearer token interceptor 的 apiClient
+import { apiClient } from "./authApi";
 
 // ── 模板 CRUD ─────────────────────────────────────────────────────────────────
 

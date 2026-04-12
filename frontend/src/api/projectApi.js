@@ -2,9 +2,8 @@
 // 封裝所有與專案（Project）、學生（Student）、
 // 照片、氣泡文字、渲染及下載相關的 API 呼叫
 
-import axios from "axios";
-
-const apiClient = axios.create({ baseURL: "/api" });
+// 使用統一含 Bearer token interceptor 的 apiClient
+import { apiClient } from "./authApi";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 

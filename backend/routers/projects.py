@@ -1,5 +1,5 @@
 # 專案路由模組
-# 處理專案、學生、照片、氣泡文字、渲染與下載的所有 HTTP 端點，
+# 處理專案、學生、照片、氣泡文字、渲染、下載與審閱留言的所有 HTTP 端點，
 # 路由層僅負責接收請求與組裝回應，所有業務邏輯委派給 crud / service 層
 
 import io
@@ -12,8 +12,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from database import Project, Student, Template, get_db
+from auth import get_current_user, require_role
+from database import Project, ProjectComment, Student, Template, User, get_db
 from crud.project_crud import get_project_or_404, get_student_or_404
+from crud.user_crud import get_subordinate_user_ids
 from services.file_service import get_photo_destination_path, save_uploaded_file
 from services.project_service import (
     build_combined_stem,
@@ -29,12 +31,68 @@ from services.render_service import UPLOADS_DIR, render_page
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+# ── 存取權限輔助 ──────────────────────────────────────────────────────────────
+
+def assert_project_readable(project: Project, current_user: User, db: Session):
+    """
+    確認目前使用者有權限讀取此專案，否則拋出 403。
+
+    - admin：可讀全部
+    - art_team：可讀全部（唯讀）
+    - supervisor：只能讀自己管轄老師的專案
+    - teacher：只能讀自己的專案
+    """
+    if current_user.role == "admin":
+        return
+    if current_user.role == "art_team":
+        return
+    if current_user.role == "supervisor":
+        subordinate_ids = get_subordinate_user_ids(current_user.id, db)
+        if project.owner_id in subordinate_ids:
+            return
+    if current_user.role == "teacher" and project.owner_id == current_user.id:
+        return
+    raise HTTPException(status_code=403, detail="無此專案的存取權限")
+
+
+def assert_project_writable(project: Project, current_user: User):
+    """
+    確認目前使用者有權限修改此專案，否則拋出 403。
+
+    - admin：可修改全部
+    - teacher：只能修改自己的專案
+    - 其他角色：禁止
+    """
+    if current_user.role == "admin":
+        return
+    if current_user.role == "teacher" and project.owner_id == current_user.id:
+        return
+    raise HTTPException(status_code=403, detail="無此專案的編輯權限")
+
+
 # ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 
 @router.get("/")
-def list_projects(db: Session = Depends(get_db)):
-    """回傳所有專案的摘要清單（依建立時間降序）。"""
-    all_projects = db.query(Project).order_by(Project.created_at.desc()).all()
+def list_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """依角色回傳可存取的專案摘要清單（依建立時間降序）。"""
+    query = db.query(Project)
+
+    if current_user.role == "admin":
+        pass  # 看全部
+    elif current_user.role in ("art_team",):
+        pass  # 看全部（唯讀）
+    elif current_user.role == "supervisor":
+        subordinate_ids = get_subordinate_user_ids(current_user.id, db)
+        query = query.filter(Project.owner_id.in_(subordinate_ids))
+    elif current_user.role == "teacher":
+        query = query.filter(Project.owner_id == current_user.id)
+    else:
+        return []
+
+    all_projects = query.order_by(Project.created_at.desc()).all()
     return [
         {
             "id": project.id,
@@ -42,6 +100,8 @@ def list_projects(db: Session = Depends(get_db)):
             "template_id": project.template_id,
             "created_at": project.created_at,
             "student_count": len(project.students),
+            "owner_id": project.owner_id,
+            "owner_name": project.owner.display_name if project.owner else None,
         }
         for project in all_projects
     ]
@@ -52,14 +112,14 @@ def create_project(
     name: str = Form(...),
     template_id: int = Form(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "teacher")),
 ):
-    """建立新專案，需指定使用的模板。"""
-    # 確認模板存在
+    """建立新專案，需指定使用的模板，自動設定所有者為當前使用者。"""
     template = db.query(Template).filter(Template.id == template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
 
-    new_project = Project(name=name, template_id=template_id)
+    new_project = Project(name=name, template_id=template_id, owner_id=current_user.id)
     db.add(new_project)
     db.commit()
     db.refresh(new_project)
@@ -67,14 +127,20 @@ def create_project(
 
 
 @router.get("/{project_id}")
-def get_project(project_id: int, db: Session = Depends(get_db)):
+def get_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """回傳專案詳細資訊，包含所有學生與其頁面資料。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     return {
         "id": project.id,
         "name": project.name,
         "template_id": project.template_id,
         "created_at": project.created_at,
+        "owner_id": project.owner_id,
         "bubble_texts": json.loads(project.bubble_texts_json or "{}"),
         "students": [
             {
@@ -94,18 +160,25 @@ def rename_project(
     project_id: int,
     name: str = Form(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """修改專案名稱（行內編輯）。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     project.name = name.strip()
     db.commit()
     return {"ok": True}
 
 
 @router.delete("/{project_id}")
-def delete_project(project_id: int, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """刪除指定專案及其所有學生資料。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     db.delete(project)
     db.commit()
     return {"ok": True}
@@ -118,11 +191,12 @@ def batch_add_students(
     project_id: int,
     names: list[str],
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """批次新增多位學生，自動跳過空白名稱與重複名稱。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
 
-    # 收集已存在的學生名稱，防止重複
     existing_names = {student.name for student in project.students}
     created_names = []
     skipped_names = []
@@ -161,8 +235,11 @@ def update_student(
     student_id: int,
     name: Optional[str] = Form(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """更新學生基本資料（目前支援修改姓名）。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     if name:
         student.name = name
@@ -175,8 +252,11 @@ def delete_student(
     project_id: int,
     student_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """刪除指定學生及其所有資料。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     db.delete(student)
     db.commit()
@@ -193,20 +273,19 @@ async def upload_photo(
     slot_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    # 計算儲存路徑並寫入檔案
     destination_path = get_photo_destination_path(
         project_id, student_id, page_index, slot_id, file.filename
     )
     await save_uploaded_file(file, destination_path)
 
-    # 更新學生的頁面照片資料
     pages_data = json.loads(student.pages_data_json)
-
-    # 確保頁面條目存在（不足時補齊空頁）
     while len(pages_data) <= page_index:
         pages_data.append({
             "page_index": len(pages_data),
@@ -233,8 +312,11 @@ def get_photo(
     page_index: int,
     slot_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """回傳學生指定欄位的照片檔案。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = json.loads(student.pages_data_json)
@@ -245,7 +327,6 @@ def get_photo(
     if not photo_record:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    # 相容舊格式（直接儲存路徑字串）與新格式（dict 含 path 鍵）
     photo_path_str = (
         photo_record
         if isinstance(photo_record, str)
@@ -261,38 +342,30 @@ def get_photo(
     return FileResponse(str(photo_file_path))
 
 
-# ── 照片對應更新（重新排列 / 刪除，不需重新上傳） ────────────────────────────
-
 @router.put("/{project_id}/students/{student_id}/photos/mapping")
 def update_photo_mapping(
     project_id: int,
     student_id: int,
     payload: dict,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    直接更新欄位→路徑的對應關係，支援重新排列與清除欄位。
-
-    payload 格式：{"pages": {"0": {"1": "/server/path", "2": null}, ...}}
-    null 值表示清除該欄位的照片。
-    """
+    """直接更新欄位→路徑的對應關係，支援重新排列與清除欄位。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     pages_data = json.loads(student.pages_data_json)
 
     for page_index_str, slot_updates in payload.get("pages", {}).items():
         page_index = int(page_index_str)
-
-        # 確保頁面條目存在
         while len(pages_data) <= page_index:
             pages_data.append({
                 "page_index": len(pages_data),
                 "photos": {},
                 "bubble_texts": {},
             })
-
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
-                # 清除欄位
                 pages_data[page_index]["photos"].pop(slot_id_str, None)
             else:
                 pages_data[page_index]["photos"][slot_id_str] = photo_path
@@ -305,9 +378,14 @@ def update_photo_mapping(
 # ── 專案層級氣泡文字 ──────────────────────────────────────────────────────────
 
 @router.get("/{project_id}/bubble_texts")
-def get_project_bubble_texts(project_id: int, db: Session = Depends(get_db)):
+def get_project_bubble_texts(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """取得專案層級的氣泡文字設定。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     return json.loads(project.bubble_texts_json or "{}")
 
 
@@ -316,13 +394,11 @@ def update_project_bubble_texts(
     project_id: int,
     payload: dict,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    更新專案層級的氣泡文字設定。
-
-    payload 格式：{"<page_index>": {"<bubble_id>": "text", ...}, ...}
-    """
+    """更新專案層級的氣泡文字設定。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     project.bubble_texts_json = json.dumps(payload)
     db.commit()
     return {"ok": True}
@@ -337,12 +413,11 @@ def update_student_bubble_texts(
     page_index: int,
     texts: dict,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    更新學生指定頁面的個人氣泡文字。
-
-    texts 格式：{"1": "文字內容...", "2": "..."}
-    """
+    """更新學生指定頁面的個人氣泡文字。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = json.loads(student.pages_data_json)
@@ -359,29 +434,16 @@ def update_student_bubble_texts(
     return {"ok": True}
 
 
-# ── 批次文字填入 ──────────────────────────────────────────────────────────────
-
 @router.put("/{project_id}/batch/texts")
 def batch_update_texts(
     project_id: int,
     payload: dict,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    批次更新多位學生的氣泡文字。
-
-    payload 格式：
-    {
-      "students": {
-        "<student_id>": {
-          "<page_index>": {"<bubble_id>": "text", ...},
-          ...
-        },
-        ...
-      }
-    }
-    """
+    """批次更新多位學生的氣泡文字。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     students_payload = payload.get("students", {})
 
     for student in project.students:
@@ -413,9 +475,11 @@ def preview_project_page(
     project_id: int,
     page_index: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """使用專案層級氣泡文字渲染頁面預覽（姓名以佔位符顯示），回傳 JPEG。"""
+    """使用專案層級氣泡文字渲染頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
 
     page_layouts = get_template_page_layouts(project)
     if page_index >= len(page_layouts):
@@ -443,23 +507,23 @@ def preview_student_page(
     student_id: int,
     page_index: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """渲染學生個人頁面預覽（含照片與個人氣泡文字），回傳 JPEG。"""
+    """渲染學生個人頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     page_layouts = get_template_page_layouts(project)
     if page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="Page index out of range")
 
-    # 合併專案與學生的氣泡文字
     project_bubble_texts = json.loads(project.bubble_texts_json or "{}")
     student_pages_data = merge_project_bubble_texts_into_pages(
         json.loads(student.pages_data_json),
         project_bubble_texts,
     )
 
-    # 依頁碼建立快速查表
     page_data_by_index = {
         page_data["page_index"]: page_data
         for page_data in student_pages_data
@@ -486,17 +550,24 @@ def render_student(
     project_id: int,
     student_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """渲染單一學生的相冊，儲存為列印用 PDF、螢幕用 PDF 與單頁圖片。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     return render_and_save_student_album(project, student, project_id, db)
 
 
 @router.post("/{project_id}/render/all")
-def render_all_students(project_id: int, db: Session = Depends(get_db)):
+def render_all_students(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """批次渲染專案中所有學生的相冊。"""
     project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
 
     render_results = []
     render_errors = []
@@ -511,7 +582,7 @@ def render_all_students(project_id: int, db: Session = Depends(get_db)):
     return {"rendered": render_results, "errors": render_errors}
 
 
-# ── 下載 ──────────────────────────────────────────────────────────────────────
+# ── 下載（非 admin 強制 screen 模式）────────────────────────────────────────
 
 @router.get("/{project_id}/students/{student_id}/pdf")
 def download_student_pdf(
@@ -519,10 +590,15 @@ def download_student_pdf(
     student_id: int,
     mode: str = Query("print", pattern="^(print|screen)$"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """下載學生個人相冊 PDF（支援列印與螢幕品質兩種模式）。"""
+    """下載學生個人相冊 PDF。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
+
+    # 非 admin 強制降為螢幕畫質
+    effective_mode = mode if current_user.role == "admin" else "screen"
 
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="PDF not generated yet")
@@ -530,7 +606,7 @@ def download_student_pdf(
     base_pdf_path = Path(student.output_filename)
     pdf_file_path = (
         base_pdf_path.parent / f"{base_pdf_path.stem}_screen.pdf"
-        if mode == "screen"
+        if effective_mode == "screen"
         else base_pdf_path
     )
 
@@ -540,9 +616,8 @@ def download_student_pdf(
             detail="PDF file missing — please render first"
         )
 
-    # 組合下載檔名（含螢幕版後綴）
     combined_stem = build_combined_stem(project.name, student.name)
-    screen_suffix = "_screen" if mode == "screen" else ""
+    screen_suffix = "_screen" if effective_mode == "screen" else ""
     download_filename = f"{combined_stem}{screen_suffix}.pdf"
 
     content_disposition = build_content_disposition_header(download_filename)
@@ -558,13 +633,16 @@ def download_all_pdfs_as_zip(
     project_id: int,
     mode: str = Query("print", pattern="^(print|screen)$"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """將專案中所有已渲染的學生 PDF 打包為 ZIP 並下載。"""
+    """將所有已渲染的學生 PDF 打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
 
-    zip_bytes = build_zip_of_all_student_pdfs(project, mode)
+    effective_mode = mode if current_user.role == "admin" else "screen"
 
-    # 組合 ZIP 下載檔名
+    zip_bytes = build_zip_of_all_student_pdfs(project, effective_mode)
+
     zip_filename = f"{project.name}.zip"
     content_disposition = build_content_disposition_header(zip_filename)
 
@@ -573,3 +651,80 @@ def download_all_pdfs_as_zip(
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )
+
+
+# ── 審閱留言 ──────────────────────────────────────────────────────────────────
+
+@router.get("/{project_id}/comments")
+def list_comments(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """取得專案的所有審閱留言（依時間升序）。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+
+    return [
+        {
+            "id": comment.id,
+            "author_id": comment.author_id,
+            "author_name": comment.author.display_name,
+            "content": comment.content,
+            "created_at": comment.created_at,
+        }
+        for comment in project.comments
+    ]
+
+
+@router.post("/{project_id}/comments", status_code=201)
+def add_comment(
+    project_id: int,
+    content: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "art_team", "supervisor")),
+):
+    """新增審閱意見（限 admin、美學組、主管）。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="留言內容不可為空")
+
+    new_comment = ProjectComment(
+        project_id=project_id,
+        author_id=current_user.id,
+        content=content.strip(),
+    )
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+
+    return {
+        "id": new_comment.id,
+        "author_id": new_comment.author_id,
+        "author_name": current_user.display_name,
+        "content": new_comment.content,
+        "created_at": new_comment.created_at,
+    }
+
+
+@router.delete("/{project_id}/comments/{comment_id}")
+def delete_comment(
+    project_id: int,
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """刪除留言（只能刪自己的留言，admin 可刪任何人的）。"""
+    comment = db.query(ProjectComment).filter(
+        ProjectComment.id == comment_id,
+        ProjectComment.project_id == project_id,
+    ).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="留言不存在")
+    if current_user.role != "admin" and comment.author_id != current_user.id:
+        raise HTTPException(status_code=403, detail="只能刪除自己的留言")
+    db.delete(comment)
+    db.commit()
+    return {"ok": True}
