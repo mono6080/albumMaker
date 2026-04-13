@@ -9,6 +9,7 @@ import toast from "react-hot-toast";
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
 import { buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
+import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
   ChevronRight, ChevronLeft, RefreshCw, Download,
@@ -174,9 +175,19 @@ export default function StudentEdit() {
     setIsRendering(true);
     try {
       await renderStudent(projectId, studentId);
-      toast.success("PDF 已產生");
       await loadStudentData();
       refreshPreview();
+      // 渲染完成後自動下載
+      const downloadPath = buildDownloadPdfUrl(projectId, studentId);
+      const apiPath = downloadPath.replace(/^\/api/, "");
+      const response = await apiClient.get(apiPath, { responseType: "blob" });
+      const blobUrl = URL.createObjectURL(response.data);
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${student.name}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(blobUrl);
+      toast.success("PDF 已下載");
     } catch {
       toast.error("產生失敗");
     }
@@ -352,20 +363,10 @@ export default function StudentEdit() {
           >
             {isRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
-              : <RefreshCw className="w-4 h-4" />}
-            <span className="hidden sm:inline">{isRendering ? "產生中..." : "產生 PDF"}</span>
-            <span className="sm:hidden">{isRendering ? "..." : "PDF"}</span>
+              : <Download className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isRendering ? "產生中..." : "產出並下載"}</span>
+            <span className="sm:hidden">{isRendering ? "..." : "下載"}</span>
           </button>
-
-          {student.output_filename && (
-            <a
-              href={buildDownloadPdfUrl(projectId, studentId)}
-              className="flex items-center gap-1.5 border border-gray-200 text-gray-700 px-3 py-2 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              <span className="hidden sm:inline">下載</span>
-            </a>
-          )}
         </div>
       </div>
 
