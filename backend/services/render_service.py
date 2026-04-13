@@ -463,7 +463,53 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         except Exception:
             continue
 
-    # 4. Text bubbles  (rotation supported via bubble.rotation field)
+    # 4. Plain text labels（無背景的純文字區塊）
+    for label in layout.get("text_labels", []):
+        label_text = label.get("text", "").replace("{name}", student_name)
+        if not label_text:
+            continue
+        font_size = label.get("font_size", 24)
+        font_color = label.get("font_color", "#333333")
+        font = _get_font(font_size, label.get("font_family"))
+        line_height_px = int(font_size * label.get("line_height", 1.4))
+        lw, lh = int(label["width"]), int(label["height"])
+        rotation = label.get("rotation", 0)
+        text_align = label.get("text_align", "center")
+
+        lines = _wrap_text(label_text, font, lw, draw)
+        total_h = len(lines) * line_height_px
+
+        if rotation:
+            diag = int(math.sqrt(lw**2 + lh**2)) + 4
+            pad = (diag - min(lw, lh)) // 2 + 2
+            tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
+            tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+            tmp_y = pad + (lh - total_h) // 2
+            for i, line in enumerate(lines):
+                ty = tmp_y + i * line_height_px
+                if text_align == "left":
+                    tmp_draw.text((pad, ty), line, fill=font_color, font=font, anchor="lt")
+                elif text_align == "right":
+                    tmp_draw.text((pad + lw, ty), line, fill=font_color, font=font, anchor="rt")
+                else:
+                    tmp_draw.text((pad + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+            cx = label["x"] + lw / 2
+            cy = label["y"] + lh / 2
+            _paste_rotated(canvas, tmp, cx, cy, rotation)
+            draw = ImageDraw.Draw(canvas, "RGBA")
+            continue
+
+        start_y = label["y"] + (lh - total_h) // 2
+        for i, line in enumerate(lines):
+            ty = start_y + i * line_height_px
+            if text_align == "left":
+                draw.text((label["x"], ty), line, fill=font_color, font=font, anchor="lt")
+            elif text_align == "right":
+                draw.text((label["x"] + lw, ty), line, fill=font_color, font=font, anchor="rt")
+            else:
+                draw.text((label["x"] + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+
+    # 5. Text bubbles  (rotation supported via bubble.rotation field)
     bubble_texts = page_data.get("bubble_texts", {})
     for bubble in layout.get("text_bubbles", []):
         bubble_id = str(bubble["id"])

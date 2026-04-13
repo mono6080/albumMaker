@@ -2,7 +2,7 @@
 // 提供視覺化拖曳介面讓使用者設計相冊模板，
 // 包含照片格、氣泡框、貼圖素材的新增、移動、縮放、旋轉與屬性編輯
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
@@ -68,6 +68,8 @@ export default function TemplateEditor() {
 
   const canvasRef = useRef(null);
   const stickerFileInputRef = useRef(null);
+  // 各頁未儲存的草稿佈局（key = page id），換頁時暫存，避免修改丟失
+  const draftLayouts = useRef({});
 
   // ── 載入與頁面切換 ────────────────────────────────────────────────────────
 
@@ -77,7 +79,8 @@ export default function TemplateEditor() {
       const pages = response.data.pages;
       if (pages.length > 0) {
         const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-        setPageLayout(safePage.layout);
+        // 初次載入時優先使用記憶體中的草稿（例如已切換頁再切回來）
+        setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
         setBackgroundUrl(
           safePage.background_filename
             ? `/api/templates/${templateId}/pages/${safePage.id}/background?t=${Date.now()}`
@@ -89,13 +92,14 @@ export default function TemplateEditor() {
 
   useEffect(() => { loadTemplate(); }, [loadTemplate]);
 
-  // 切換頁面時更新佈局與背景圖
+  // 切換頁面時更新佈局與背景圖（不自動儲存，改稿暫存在 draftLayouts）
   useEffect(() => {
     if (!template) return;
     const pages = template.pages;
     if (pages.length === 0) return;
     const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-    setPageLayout(safePage.layout);
+    // 優先讀取草稿，沒有草稿才回退到已儲存的佈局
+    setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
     setSelectedElement(null);
     setBackgroundUrl(
       safePage.background_filename
@@ -106,6 +110,13 @@ export default function TemplateEditor() {
 
   const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
 
+  // pageLayout 有任何變動時同步更新草稿，換頁時不會丟失
+  useEffect(() => {
+    if (currentPage && pageLayout) {
+      draftLayouts.current[currentPage.id] = pageLayout;
+    }
+  }, [pageLayout, currentPage]);
+
   // ── 頁面操作 ──────────────────────────────────────────────────────────────
 
   const handleSaveLayout = async () => {
@@ -113,6 +124,8 @@ export default function TemplateEditor() {
     setIsSaving(true);
     try {
       await updatePageLayout(templateId, currentPage.id, pageLayout);
+      // 儲存成功後清除草稿，下次切回此頁直接讀已存資料
+      delete draftLayouts.current[currentPage.id];
       toast.success("已儲存");
     } catch {
       toast.error("儲存失敗");
@@ -136,15 +149,22 @@ export default function TemplateEditor() {
     toast.success("已刪除頁面");
   };
 
-  const handleBackgroundUpload = async (event) => {
+  const [bgCropFile, setBgCropFile] = useState(null);
+
+  const handleBackgroundSelect = (event) => {
     const imageFile = event.target.files[0];
     if (!imageFile || !currentPage) return;
-    await uploadBackground(templateId, currentPage.id, imageFile);
+    setBgCropFile(imageFile);
+    event.target.value = "";
+  };
+
+  const handleBgCropConfirm = async (croppedFile) => {
+    setBgCropFile(null);
+    await uploadBackground(templateId, currentPage.id, croppedFile);
     setBackgroundUrl(
       `/api/templates/${templateId}/pages/${currentPage.id}/background?t=${Date.now()}`
     );
     toast.success("背景已上傳");
-    event.target.value = "";
   };
 
   const handleStickerUpload = async (stickerFile) => {
@@ -200,8 +220,22 @@ export default function TemplateEditor() {
       }
     }
 
+    // 純文字層
+    for (const textLabel of [...(pageLayout.text_labels || [])].reverse()) {
+      const displayX = toDisplayCoord(textLabel.x);
+      const displayY = toDisplayCoord(textLabel.y);
+      const displayW = toDisplayCoord(textLabel.width);
+      const displayH = toDisplayCoord(textLabel.height);
+      if (
+        canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
+        canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
+      ) {
+        return { type: "text", id: textLabel.id };
+      }
+    }
+
     // 氣泡框層
-    for (const bubble of [...pageLayout.text_bubbles].reverse()) {
+    for (const bubble of [...(pageLayout.text_bubbles || [])].reverse()) {
       const displayX = toDisplayCoord(bubble.x);
       const displayY = toDisplayCoord(bubble.y);
       const displayW = toDisplayCoord(bubble.width);
@@ -215,7 +249,7 @@ export default function TemplateEditor() {
     }
 
     // 照片格層（最底層）
-    for (const photoSlot of [...pageLayout.photo_slots].reverse()) {
+    for (const photoSlot of [...(pageLayout.photo_slots || [])].reverse()) {
       const displayX = toDisplayCoord(photoSlot.x);
       const displayY = toDisplayCoord(photoSlot.y);
       const displayW = toDisplayCoord(photoSlot.width);
@@ -236,6 +270,7 @@ export default function TemplateEditor() {
     if (!pageLayout) return null;
     if (type === "photo") return pageLayout.photo_slots.find(slot => slot.id === id);
     if (type === "bubble") return pageLayout.text_bubbles.find(bubble => bubble.id === id);
+    if (type === "text") return (pageLayout.text_labels || []).find(label => label.id === id);
     if (type === "sticker") return (pageLayout.stickers || []).find(sticker => sticker.id === id);
     return null;
   };
@@ -259,6 +294,14 @@ export default function TemplateEditor() {
           ),
         };
       }
+      if (elementType === "text") {
+        return {
+          ...currentLayout,
+          text_labels: (currentLayout.text_labels || []).map(label =>
+            label.id === elementId ? { ...label, ...propertyUpdates } : label
+          ),
+        };
+      }
       if (elementType === "sticker") {
         return {
           ...currentLayout,
@@ -272,7 +315,7 @@ export default function TemplateEditor() {
   };
 
   /** 刪除目前選取的元素 */
-  const deleteSelectedElement = () => {
+  const deleteSelectedElement = useCallback(() => {
     if (!selectedElement) return;
     if (selectedElement.type === "photo") {
       setPageLayout(currentLayout => ({
@@ -284,6 +327,11 @@ export default function TemplateEditor() {
         ...currentLayout,
         text_bubbles: currentLayout.text_bubbles.filter(bubble => bubble.id !== selectedElement.id),
       }));
+    } else if (selectedElement.type === "text") {
+      setPageLayout(currentLayout => ({
+        ...currentLayout,
+        text_labels: (currentLayout.text_labels || []).filter(label => label.id !== selectedElement.id),
+      }));
     } else if (selectedElement.type === "sticker") {
       setPageLayout(currentLayout => ({
         ...currentLayout,
@@ -291,7 +339,20 @@ export default function TemplateEditor() {
       }));
     }
     setSelectedElement(null);
-  };
+  }, [selectedElement]);
+
+  // Delete / Backspace 鍵盤快捷鍵刪除選取元素
+  useEffect(() => {
+    const handleKeyDown = (keyEvent) => {
+      if (keyEvent.key !== "Delete" && keyEvent.key !== "Backspace") return;
+      // 避免在輸入框打字時觸發
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      deleteSelectedElement();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [deleteSelectedElement]);
 
   // ── 畫布滑鼠事件處理 ─────────────────────────────────────────────────────
 
@@ -336,6 +397,30 @@ export default function TemplateEditor() {
       }));
       setActiveTool("select");
       setSelectedElement({ type: "bubble", id: newBubble.id });
+      return;
+    }
+
+    // 新增純文字工具
+    if (activeTool === "addText") {
+      const newTextLabel = {
+        id: generateElementId(),
+        x: toRealCoord(canvasPosition.x),
+        y: toRealCoord(canvasPosition.y),
+        width: 240, height: 80,
+        rotation: 0,
+        text: "{name}的文字標題",
+        font_size: 28,
+        font_color: "#3B6B8C",
+        font_family: "msjh",
+        text_align: "center",
+        line_height: 1.4,
+      };
+      setPageLayout(currentLayout => ({
+        ...currentLayout,
+        text_labels: [...(currentLayout.text_labels || []), newTextLabel],
+      }));
+      setActiveTool("select");
+      setSelectedElement({ type: "text", id: newTextLabel.id });
       return;
     }
 
@@ -462,106 +547,129 @@ export default function TemplateEditor() {
   const selectedItem = selectedElement ? getElement(selectedElement) : null;
 
   return (
-    <div>
-      {/* 頂部導覽列 */}
-      <div className="flex items-center gap-4 mb-4">
-        <button onClick={() => navigate("/templates")} className="text-gray-500 hover:text-gray-700">
+    <div className="flex flex-col">
+      {/* 頂部標題列 */}
+      <div className="flex items-center gap-3 mb-3 flex-shrink-0">
+        <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
           ← 返回
         </button>
-        <h1 className="text-xl font-bold">{template.name}</h1>
-        <span className="text-gray-400 text-sm">模板編輯器</span>
+        <h1 className="text-lg font-bold">{template.name}</h1>
+        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">模板編輯器</span>
+        <div className="ml-auto flex items-center gap-2">
+          {selectedElement && (
+            <button
+              onClick={deleteSelectedElement}
+              className="px-3 py-1 text-sm rounded border border-red-300 text-red-500 hover:bg-red-50"
+            >
+              刪除選取
+            </button>
+          )}
+          <button
+            onClick={handleSaveLayout}
+            disabled={isSaving}
+            className="px-4 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {isSaving ? "儲存中..." : "儲存"}
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-6">
-        {/* 左側：畫布區域 */}
-        <div className="flex-shrink-0">
-          {/* 頁面分頁標籤 */}
-          <div className="flex gap-1 mb-2">
-            {template.pages.map((templatePage, pageTabIndex) => (
-              <button
-                key={templatePage.id}
-                onClick={() => setCurrentPageIndex(pageTabIndex)}
-                className={`px-3 py-1 rounded text-sm border ${
-                  currentPageIndex === pageTabIndex
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                第 {pageTabIndex + 1} 頁
-              </button>
-            ))}
-            <button
-              onClick={handleAddPage}
-              className="px-3 py-1 rounded text-sm border bg-white hover:bg-gray-50"
-            >
-              + 新增頁
-            </button>
+      {/* 背景裁切 Modal */}
+      {bgCropFile && (
+        <BackgroundCropModal
+          file={bgCropFile}
+          onConfirm={handleBgCropConfirm}
+          onCancel={() => setBgCropFile(null)}
+        />
+      )}
+
+      {/* 三欄主體 */}
+      <div className="flex gap-4">
+        {/* 左側工具欄 */}
+        <div className="flex-shrink-0 w-40 flex flex-col gap-4" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
+          {/* 工具 */}
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">工具</p>
+            <div className="flex flex-col gap-1">
+              {[
+                { key: "select",    label: "↖ 選取" },
+                { key: "addPhoto",  label: "＋ 照片格" },
+                { key: "addText",   label: "＋ 純文字" },
+              ].map(tool => (
+                <button
+                  key={tool.key}
+                  onClick={() => setActiveTool(tool.key)}
+                  className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
+                    activeTool === tool.key
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-700 hover:bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  {tool.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* 工具列 */}
-          <div className="flex gap-2 mb-2">
-            {[
-              { key: "select",   label: "選取" },
-              { key: "addPhoto", label: "＋照片格" },
-              { key: "addBubble", label: "＋氣泡框" },
-            ].map(tool => (
+          {/* 素材 */}
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">素材</p>
+            <div className="flex flex-col gap-1">
+              <label className="px-3 py-1.5 rounded text-sm text-left border bg-white hover:bg-gray-50 cursor-pointer text-gray-700 border-gray-200 transition-colors">
+                ↑ 上傳背景
+                <input type="file" accept="image/*" className="hidden" onChange={handleBackgroundSelect} />
+              </label>
+              <label className="px-3 py-1.5 rounded text-sm text-left border bg-white hover:bg-gray-50 cursor-pointer text-gray-700 border-gray-200 transition-colors">
+                ＋ 貼圖素材
+                <input
+                  ref={stickerFileInputRef}
+                  type="file" accept="image/*" className="hidden"
+                  onChange={event => {
+                    if (event.target.files?.[0]) {
+                      handleStickerUpload(event.target.files[0]);
+                      event.target.value = "";
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* 頁面 */}
+          <div className="flex flex-col flex-1 min-h-0">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">頁面</p>
+            <div className="flex flex-col gap-1 overflow-y-auto flex-1">
+              {template.pages.map((templatePage, pageTabIndex) => (
+                <button
+                  key={templatePage.id}
+                  onClick={() => setCurrentPageIndex(pageTabIndex)}
+                  className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
+                    currentPageIndex === pageTabIndex
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-600 hover:bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  第 {pageTabIndex + 1} 頁
+                </button>
+              ))}
               <button
-                key={tool.key}
-                onClick={() => setActiveTool(tool.key)}
-                className={`px-3 py-1 rounded text-sm border ${
-                  activeTool === tool.key
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white hover:bg-gray-50"
-                }`}
+                onClick={handleAddPage}
+                className="px-3 py-1.5 rounded text-sm text-left border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 transition-colors"
               >
-                {tool.label}
+                ＋ 新增頁
               </button>
-            ))}
-
-            <label className="px-3 py-1 rounded text-sm border bg-white hover:bg-gray-50 cursor-pointer">
-              上傳背景
-              <input type="file" accept="image/*" className="hidden" onChange={handleBackgroundUpload} />
-            </label>
-
-            <label className="px-3 py-1 rounded text-sm border bg-white hover:bg-gray-50 cursor-pointer">
-              ＋貼圖素材
-              <input
-                ref={stickerFileInputRef}
-                type="file" accept="image/*" className="hidden"
-                onChange={event => {
-                  if (event.target.files?.[0]) {
-                    handleStickerUpload(event.target.files[0]);
-                    event.target.value = "";
-                  }
-                }}
-              />
-            </label>
-
-            {selectedElement && (
-              <button
-                onClick={deleteSelectedElement}
-                className="px-3 py-1 rounded text-sm border border-red-300 text-red-500 hover:bg-red-50"
-              >
-                刪除選取
-              </button>
-            )}
-
+            </div>
             <button
               onClick={handleDeletePage}
-              className="px-3 py-1 rounded text-sm border border-red-200 text-red-400 hover:bg-red-50"
+              className="mt-2 px-3 py-1.5 rounded text-sm border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
             >
               刪除此頁
             </button>
-
-            <button
-              onClick={handleSaveLayout}
-              disabled={isSaving}
-              className="ml-auto px-4 py-1 rounded text-sm bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
-            >
-              {isSaving ? "儲存中..." : "儲存"}
-            </button>
           </div>
+        </div>
 
+        {/* 中央畫布區 */}
+        <div className="flex-shrink-0 flex flex-col">
           {/* 畫布本體 */}
           <div
             ref={canvasRef}
@@ -604,7 +712,7 @@ export default function TemplateEditor() {
             )}
 
             {/* 照片格層 */}
-            {pageLayout?.photo_slots?.map(photoSlot => {
+            {pageLayout?.photo_slots?.map((photoSlot, slotIndex) => {
               const isSelected = selectedElement?.type === "photo" && selectedElement?.id === photoSlot.id;
               const hasBorder = photoSlot.border !== false;
               const borderDisplayWidth = toDisplayCoord(photoSlot.border_width ?? 8);
@@ -619,6 +727,7 @@ export default function TemplateEditor() {
                 : "none";
 
               return (
+                // 外層：定位 + 旋轉 + 把手，overflow 保持 visible 才不截斷把手
                 <div
                   key={photoSlot.id}
                   style={{
@@ -629,6 +738,13 @@ export default function TemplateEditor() {
                     height: toDisplayCoord(photoSlot.height),
                     transform: `rotate(${photoSlot.rotation}deg)`,
                     transformOrigin: "center",
+                    pointerEvents: "none",
+                    overflow: "visible",
+                  }}
+                >
+                  {/* 內層：視覺樣式（圓角 / 陰影 / 外框），需 overflow hidden 裁切內容 */}
+                  <div style={{
+                    position: "absolute", inset: 0,
                     background: hasBorder ? "#ffffff" : "#EEEEEE",
                     boxShadow,
                     borderRadius: slotDisplayRadius,
@@ -636,46 +752,42 @@ export default function TemplateEditor() {
                       ? "2px solid #4F46E5"
                       : hasBorder ? "1px solid #e2e8f0" : "1px solid #CCCCCC",
                     outlineOffset: isSelected ? 2 : 0,
-                    pointerEvents: "none",
                     boxSizing: "border-box",
                     overflow: "hidden",
-                  }}
-                >
-                  {/* 拍立得內部照片區（空槽標籤） */}
-                  {hasBorder ? (
-                    <div style={{
-                      position: "absolute",
-                      left: borderDisplayWidth, top: borderDisplayWidth,
-                      right: borderDisplayWidth, bottom: borderDisplayWidth * 2,
-                      background: "#EEEEEE",
-                      borderRadius: Math.max(0, slotDisplayRadius - borderDisplayWidth),
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
-                        P{currentPageIndex + 1}·{photoSlot.id}
-                      </span>
-                    </div>
-                  ) : (
-                    <div style={{
-                      position: "absolute", inset: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
-                        P{currentPageIndex + 1}·{photoSlot.id}
-                      </span>
-                    </div>
-                  )}
+                  }}>
+                    {hasBorder ? (
+                      <div style={{
+                        position: "absolute",
+                        left: borderDisplayWidth, top: borderDisplayWidth,
+                        right: borderDisplayWidth, bottom: borderDisplayWidth * 2,
+                        background: "#EEEEEE",
+                        borderRadius: Math.max(0, slotDisplayRadius - borderDisplayWidth),
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
+                          P{currentPageIndex + 1}·{slotIndex + 1}
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{
+                        position: "absolute", inset: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
+                          P{currentPageIndex + 1}·{slotIndex + 1}
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
-                  {/* 選取把手 */}
+                  {/* 選取把手（放在外層，不受 overflow hidden 截斷） */}
                   {isSelected && (
                     <>
-                      {/* 縮放把手（右下角） */}
                       <div style={{
                         position: "absolute", bottom: -4, right: -4,
                         width: 12, height: 12, background: "#4F46E5",
                         borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
                       }} />
-                      {/* 旋轉把手（頂部中央） */}
                       <div
                         title="拖曳旋轉（Shift=15°對齊）"
                         style={{
@@ -778,6 +890,76 @@ export default function TemplateEditor() {
               );
             })}
 
+            {/* 純文字層 */}
+            {(pageLayout?.text_labels || []).map(textLabel => {
+              const isSelected = selectedElement?.type === "text" && selectedElement?.id === textLabel.id;
+              return (
+                <div
+                  key={textLabel.id}
+                  style={{
+                    position: "absolute",
+                    left: toDisplayCoord(textLabel.x),
+                    top: toDisplayCoord(textLabel.y),
+                    width: toDisplayCoord(textLabel.width),
+                    height: toDisplayCoord(textLabel.height),
+                    transform: `rotate(${textLabel.rotation ?? 0}deg)`,
+                    transformOrigin: "center",
+                    outline: isSelected ? "2px solid #4F46E5" : "1px dashed #AAAAAA",
+                    outlineOffset: 2,
+                    pointerEvents: "none",
+                    overflow: "visible",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: textLabel.text_align === "left" ? "flex-start"
+                      : textLabel.text_align === "right" ? "flex-end" : "center",
+                  }}
+                >
+                  <span style={{
+                    fontSize: Math.max(8, toDisplayCoord(textLabel.font_size ?? 24)),
+                    color: textLabel.font_color ?? "#333333",
+                    fontFamily: getFontCss(textLabel.font_family),
+                    fontWeight: isFontBold(textLabel.font_family) ? "bold" : "normal",
+                    textAlign: textLabel.text_align ?? "center",
+                    padding: "0 4px",
+                    userSelect: "none",
+                    pointerEvents: "none",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    width: "100%",
+                  }}>
+                    {textLabel.text?.substring(0, 60)}
+                  </span>
+
+                  {isSelected && (
+                    <>
+                      <div style={{
+                        position: "absolute", bottom: -4, right: -4,
+                        width: 12, height: 12, background: "#4F46E5",
+                        borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
+                      }} />
+                      <div
+                        title="拖曳旋轉（Shift=15°對齊）"
+                        style={{
+                          position: "absolute", top: -28, left: "50%",
+                          transform: "translateX(-50%)",
+                          pointerEvents: "auto", cursor: "grab",
+                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                        }}
+                        onMouseDown={event => startRotating(event, "text", textLabel.id)}
+                      >
+                        <div style={{ width: 1, height: 10, background: "#4F46E5" }} />
+                        <div style={{
+                          width: 14, height: 14, borderRadius: "50%",
+                          background: "#fff", border: "2px solid #4F46E5",
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
+                        }} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+
             {/* 貼圖層 */}
             {(pageLayout?.stickers || []).map(sticker => {
               const isSelected = selectedElement?.type === "sticker" && selectedElement?.id === sticker.id;
@@ -835,13 +1017,13 @@ export default function TemplateEditor() {
             })}
           </div>
 
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-gray-400 mt-1.5">
             提示：點選工具後在畫布上點擊放置；拖曳移動；右下角拖曳調整大小
           </p>
         </div>
 
         {/* 右側：屬性面板 */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-y-auto" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
           {selectedElement && selectedItem ? (
             <PropertyPanel
               selectedElement={selectedElement}
@@ -849,7 +1031,13 @@ export default function TemplateEditor() {
               onPropertyChange={(updates) => updateElement(selectedElement.type, selectedElement.id, updates)}
             />
           ) : (
-            <div className="text-gray-400 text-sm mt-8">點選畫布上的元素以編輯屬性</div>
+            <div className="flex flex-col items-center justify-center h-full text-gray-300 text-sm select-none" style={{ minHeight: 200 }}>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3">
+                <path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" />
+              </svg>
+              <p>點選畫布元素</p>
+              <p>以編輯屬性</p>
+            </div>
           )}
         </div>
       </div>
@@ -870,13 +1058,17 @@ export default function TemplateEditor() {
 function PropertyPanel({ selectedElement, elementData, onPropertyChange }) {
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
+  const isTextLabel = selectedElement.type === "text";
   const isSticker = selectedElement.type === "sticker";
+
+  const panelTitle = isPhotoSlot ? "📷 照片格屬性"
+    : isSticker ? "🖼️ 貼圖素材屬性"
+    : isTextLabel ? "Ａ 純文字屬性"
+    : "💬 氣泡框屬性";
 
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4">
-      <h3 className="font-semibold">
-        {isPhotoSlot ? "📷 照片格屬性" : isSticker ? "🖼️ 貼圖素材屬性" : "💬 氣泡框屬性"}
-      </h3>
+      <h3 className="font-semibold">{panelTitle}</h3>
 
       {/* 通用：位置與尺寸 */}
       <div className="grid grid-cols-2 gap-3">
@@ -1177,6 +1369,249 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange }) {
           </div>
         </>
       )}
+
+      {/* 純文字專屬屬性 */}
+      {isTextLabel && (
+        <>
+          {/* 預設文字 */}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">文字內容（可用 {"{name}"} 代入姓名）</span>
+            <textarea
+              rows={3}
+              value={elementData.text ?? ""}
+              onChange={event => onPropertyChange({ text: event.target.value })}
+              className="border rounded px-2 py-1 text-sm"
+            />
+          </label>
+
+          {/* 對齊 */}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">對齊</span>
+            <div className="flex gap-1">
+              {[
+                { value: "left",   label: "靠左" },
+                { value: "center", label: "置中" },
+                { value: "right",  label: "靠右" },
+              ].map(alignOption => (
+                <button
+                  key={alignOption.value}
+                  onClick={() => onPropertyChange({ text_align: alignOption.value })}
+                  className={`flex-1 px-2 py-1 rounded border text-sm transition-colors ${
+                    (elementData.text_align ?? "center") === alignOption.value
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-600 hover:bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  {alignOption.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 字體選擇 */}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">字體</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              {FONT_OPTIONS.map(fontOption => (
+                <button
+                  key={fontOption.value}
+                  onClick={() => onPropertyChange({ font_family: fontOption.value })}
+                  style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
+                  className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
+                    elementData.font_family === fontOption.value
+                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+                      : "border-gray-200 hover:border-gray-300 text-gray-700"
+                  }`}
+                >
+                  {fontOption.label}
+                </button>
+              ))}
+            </div>
+          </label>
+
+          {/* 字級 */}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">字級（pt）</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="10" max="96" step="1"
+                value={elementData.font_size ?? 28}
+                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
+                className="flex-1"
+              />
+              <input
+                type="number" min="10" max="96"
+                value={elementData.font_size ?? 28}
+                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
+                className="border rounded px-1 py-1 text-sm w-14 text-center"
+              />
+            </div>
+          </label>
+
+          <ColorPicker
+            label="文字顏色"
+            value={elementData.font_color ?? "#333333"}
+            onChange={colorValue => onPropertyChange({ font_color: colorValue })}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ── 背景裁切 Modal ─────────────────────────────────────────────────────────────
+
+// 顯示尺寸：A4 比例 (794:1123)，以半尺寸呈現
+const CROP_FRAME_W = 397;
+const CROP_FRAME_H = Math.round(1123 * (397 / 794)); // ≈ 561
+
+/**
+ * 上傳背景前先讓使用者裁切至 A4 比例。
+ * 支援拖曳平移與滾輪縮放，確認後以 canvas 輸出 794×1123 JPEG 並回傳。
+ */
+function BackgroundCropModal({ file, onConfirm, onCancel }) {
+  const [scale, setScale] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [imgNat, setImgNat] = useState(null);
+  const imgRef = useRef(null);
+  const isDragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  const url = useMemo(() => URL.createObjectURL(file), [file]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+
+  // fitScale：讓圖片恰好覆蓋整個裁切框（object-fit: cover 效果）
+  const fitScale = imgNat
+    ? Math.max(CROP_FRAME_W / imgNat.w, CROP_FRAME_H / imgNat.h)
+    : 1;
+  const effectiveScale = fitScale * scale;
+
+  const imgDisplayW = imgNat ? imgNat.w * effectiveScale : CROP_FRAME_W;
+  const imgDisplayH = imgNat ? imgNat.h * effectiveScale : CROP_FRAME_H;
+
+  // 限制平移範圍，確保圖片始終覆蓋裁切框
+  const maxPanX = Math.max(0, (imgDisplayW - CROP_FRAME_W) / 2);
+  const maxPanY = Math.max(0, (imgDisplayH - CROP_FRAME_H) / 2);
+  const clampedPanX = Math.min(maxPanX, Math.max(-maxPanX, panX));
+  const clampedPanY = Math.min(maxPanY, Math.max(-maxPanY, panY));
+
+  const imgLeft = CROP_FRAME_W / 2 + clampedPanX - imgDisplayW / 2;
+  const imgTop  = CROP_FRAME_H / 2 + clampedPanY - imgDisplayH / 2;
+
+  const handleWheel = (wheelEvent) => {
+    wheelEvent.preventDefault();
+    const zoomFactor = wheelEvent.deltaY < 0 ? 1.1 : 0.9;
+    setScale(currentScale => Math.max(1, Math.min(6, currentScale * zoomFactor)));
+  };
+
+  const handleMouseDown = (mouseEvent) => {
+    isDragging.current = true;
+    lastPos.current = { x: mouseEvent.clientX, y: mouseEvent.clientY };
+  };
+  const handleMouseMove = (mouseEvent) => {
+    if (!isDragging.current) return;
+    const deltaX = mouseEvent.clientX - lastPos.current.x;
+    const deltaY = mouseEvent.clientY - lastPos.current.y;
+    lastPos.current = { x: mouseEvent.clientX, y: mouseEvent.clientY };
+    setPanX(prev => prev + deltaX);
+    setPanY(prev => prev + deltaY);
+  };
+  const handleMouseUp = () => { isDragging.current = false; };
+
+  const handleConfirm = () => {
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width  = 794;
+    outputCanvas.height = 1123;
+    const ctx = outputCanvas.getContext("2d");
+    // renderScale：從顯示座標映射回 794×1123
+    const renderScale = 794 / CROP_FRAME_W;
+    ctx.drawImage(
+      imgRef.current,
+      imgLeft * renderScale,
+      imgTop  * renderScale,
+      imgDisplayW * renderScale,
+      imgDisplayH * renderScale,
+    );
+    outputCanvas.toBlob(blob => {
+      onConfirm(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+    }, "image/jpeg", 0.92);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+        <div>
+          <h2 className="font-semibold text-gray-800">裁切背景圖</h2>
+          <p className="text-xs text-gray-400 mt-0.5">拖曳平移 · 滾輪縮放 · 裁切範圍固定為 A4 比例</p>
+        </div>
+
+        {/* 裁切預覽框 */}
+        <div
+          style={{
+            width: CROP_FRAME_W, height: CROP_FRAME_H,
+            overflow: "hidden", position: "relative",
+            cursor: isDragging.current ? "grabbing" : "grab",
+            background: "#ddd",
+          }}
+          className="rounded border border-gray-300 select-none"
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          {/* A4 格線提示 */}
+          <div style={{
+            position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1,
+            boxShadow: "inset 0 0 0 2px rgba(99,102,241,0.5)",
+          }} />
+          <img
+            ref={imgRef}
+            src={url}
+            onLoad={loadEvent => setImgNat({
+              w: loadEvent.target.naturalWidth,
+              h: loadEvent.target.naturalHeight,
+            })}
+            style={{
+              position: "absolute",
+              left: imgLeft, top: imgTop,
+              width: imgDisplayW, height: imgDisplayH,
+              pointerEvents: "none", userSelect: "none",
+            }}
+            draggable={false}
+            alt=""
+          />
+        </div>
+
+        {/* 縮放滑桿 */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 w-8">縮放</span>
+          <input
+            type="range" min="1" max="6" step="0.01"
+            value={scale}
+            onChange={sliderEvent => setScale(Number(sliderEvent.target.value))}
+            className="flex-1"
+          />
+          <span className="text-xs text-gray-400 w-10 text-right">{Math.round(scale * 100)}%</span>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-1.5 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleConfirm}
+            className="px-4 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700"
+          >
+            確認裁切
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

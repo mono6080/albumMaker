@@ -49,16 +49,39 @@ export default function ProjectReview() {
     loadComments();
   }, [id]);
 
+  /** 透過 apiClient 下載 blob 並觸發瀏覽器儲存，確保 Bearer token 隨請求傳送 */
+  const triggerBlobDownload = async (url, fallbackFilename) => {
+    // urls.js 回傳的路徑已含 /api 前綴；apiClient.baseURL 也是 /api，需去掉重複的前綴
+    const apiPath = url.startsWith("/api") ? url.slice(4) : url;
+    const response = await apiClient.get(apiPath, { responseType: "blob" });
+    const disposition = response.headers["content-disposition"] ?? "";
+    // 嘗試從 filename*=UTF-8'' 或 filename= 讀取檔名
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const asciiMatch = disposition.match(/filename="([^"]+)"/i);
+    const filename = utf8Match
+      ? decodeURIComponent(utf8Match[1])
+      : asciiMatch
+        ? asciiMatch[1]
+        : fallbackFilename;
+    const blobUrl = URL.createObjectURL(response.data);
+    const anchor = document.createElement("a");
+    anchor.href = blobUrl;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(blobUrl);
+  };
+
   const handleDownloadOne = async (studentId) => {
     setRendering(prev => ({ ...prev, [studentId]: true }));
     try {
       await renderStudent(id, studentId);
       await loadProject();
       setTs(Date.now());
-      const anchor = document.createElement("a");
-      // 非 admin 強制 screen（後端也會強制，前端保持一致）
-      anchor.href = downloadPdf(id, studentId, canDownloadPrint ? outputMode : "screen");
-      anchor.click();
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
+      await triggerBlobDownload(
+        downloadPdf(id, studentId, effectiveMode),
+        "album.pdf",
+      );
     } catch { toast.error("產生失敗"); }
     setRendering(prev => ({ ...prev, [studentId]: false }));
   };
@@ -69,9 +92,11 @@ export default function ProjectReview() {
       await renderAll(id);
       await loadProject();
       setTs(Date.now());
-      const anchor = document.createElement("a");
-      anchor.href = downloadAllZip(id, canDownloadPrint ? outputMode : "screen");
-      anchor.click();
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
+      await triggerBlobDownload(
+        downloadAllZip(id, effectiveMode),
+        "albums.zip",
+      );
     } catch { toast.error("批次產生失敗"); }
     setRenderingAll(false);
   };

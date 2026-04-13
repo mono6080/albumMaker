@@ -127,6 +127,7 @@ def add_page(
         "canvas_height": 1123,
         "photo_slots": [],
         "text_bubbles": [],
+        "text_labels": [],
         "stickers": [],
         "footer": None,
         "logo": None,
