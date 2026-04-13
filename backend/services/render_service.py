@@ -47,7 +47,7 @@ Student page data schema (pages_data_json is a list, one item per page):
       "1": "uploads/photos/xxx.jpg",
       "2": "uploads/photos/yyy.jpg"
     },
-    "bubble_texts": {
+    "label_texts": {
       "1": "筠喬笑得好開心呀！",
       "2": "充滿活力的橘色"
     }

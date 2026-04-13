@@ -106,7 +106,7 @@ frontend/src/
 | 類別 | `PascalCase` | `Template`，`RenderService` |
 | 常數 | `UPPER_SNAKE_CASE` | `UPLOADS_DIR`，`FRONTEND_DIST_DIR` |
 | 路由函式 | 動詞 + 名詞 | `create_template`，`rename_student`，`render_all_students` |
-| 服務函式 | 動詞 + 名詞，描述行為 | `build_combined_stem`，`merge_project_bubble_texts_into_pages` |
+| 服務函式 | 動詞 + 名詞，描述行為 | `build_combined_stem`，`merge_project_label_texts_into_pages` |
 | 注釋語言 | **中文** | `# 依頁碼升序排列` |
 
 禁止：`p`、`t`、`s`、`r` 等單字母縮寫當一般變數。
@@ -186,15 +186,15 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 
 ## 資料流
 
-### 氣泡文字優先序（低→高覆蓋）
+### 對印文字優先序（低→高覆蓋）
 
 ```
-模板預設（layout_json.text_bubbles[].text）
-  → 專案覆蓋（projects.bubble_texts_json）
-      → 學生個別覆蓋（students.pages_data_json[].bubble_texts）
+模板預設（layout_json.text_labels[].text）
+  → 專案覆蓋（projects.label_texts_json）
+      → 學生個別覆蓋（students.pages_data_json[].label_texts）
 ```
 
-渲染時 `merge_project_bubble_texts_into_pages()` 依此順序合併。
+渲染時 `merge_project_label_texts_into_pages()` 依此順序合併。
 
 ### Storage key 格式
 
