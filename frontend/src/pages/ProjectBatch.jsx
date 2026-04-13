@@ -172,7 +172,7 @@ export default function ProjectBatch() {
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
-              對印文字 — 第 {activePage + 1} 頁
+              文字 — 第 {activePage + 1} 頁
             </h3>
             <span className="text-xs text-gray-400 hidden sm:inline">
               （{"{name}"} 會自動代入各學生姓名）
@@ -198,7 +198,7 @@ export default function ProjectBatch() {
         </div>
       ) : (
         <div className="flex items-center justify-center py-10 text-gray-400 text-sm">
-          此頁沒有對印文字方塊
+          此頁沒有文字方塊
         </div>
       )}
     </div>
@@ -309,7 +309,7 @@ export default function ProjectBatch() {
           }`}
         >
           <Type className="w-4 h-4" />
-          對印文字
+          文字
         </button>
       </div>
 

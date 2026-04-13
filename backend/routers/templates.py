@@ -210,12 +210,12 @@ def get_background(
 
     if not template_page.background_filename:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="No background")
+        raise HTTPException(status_code=404, detail="此頁尚未設定背景圖")
 
     storage = get_storage()
     if not storage.exists(template_page.background_filename):
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail="找不到檔案")
 
     return storage.serve(template_page.background_filename)
 
@@ -244,7 +244,7 @@ def get_sticker(
     key = get_sticker_key(template_id, filename)
     if not storage.exists(key):
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Sticker not found")
+        raise HTTPException(status_code=404, detail="找不到貼圖")
     return storage.serve(key)
 
 

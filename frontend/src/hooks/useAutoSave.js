@@ -33,24 +33,33 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
 
   // 定時器 ref，用於清除尚未執行的防抖計時
   const timerRef = useRef(null);
+  // AbortController ref，用於取消進行中的舊請求
+  const abortControllerRef = useRef(null);
 
   /** 排程一次防抖儲存：重複呼叫只有最後一次會真正執行 */
   const scheduleSave = useCallback(() => {
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      saveCallbackRef.current(latestDataRef.current);
+      // 取消上一個尚未完成的請求
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+      const signal = abortControllerRef.current.signal;
+      saveCallbackRef.current(latestDataRef.current, signal);
     }, delayMs);
   }, [delayMs]);
 
   /** 取消尚未執行的排程儲存 */
   const cancelSave = useCallback(() => {
     clearTimeout(timerRef.current);
+    abortControllerRef.current?.abort();
   }, []);
 
   /** 立即執行儲存並等待完成（用於提交前的強制同步） */
   const flushSave = useCallback(async () => {
     clearTimeout(timerRef.current);
-    await saveCallbackRef.current(latestDataRef.current);
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = new AbortController();
+    await saveCallbackRef.current(latestDataRef.current, abortControllerRef.current.signal);
   }, []);
 
   return { scheduleSave, cancelSave, flushSave, latestDataRef };

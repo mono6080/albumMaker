@@ -4,33 +4,41 @@
 
 import axios from "axios";
 
-export const apiClient = axios.create({ baseURL: "/api" });
-
-// ── Request interceptor：自動附帶 Bearer token ────────────────────────────────
-
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+export const apiClient = axios.create({
+  baseURL: "/api",
+  timeout: 15000,  // 一般請求 15 秒
 });
 
-// ── Response interceptor：401 自動跳轉登入頁 ─────────────────────────────────
+// 渲染端點可能耗時較長，個別設定更長 timeout
+export const renderClient = axios.create({
+  baseURL: "/api",
+  timeout: 120000,  // 渲染 PDF 最長 2 分鐘
+});
 
-apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("access_token");
-      // 避免在登入頁本身觸發無限跳轉
-      if (window.location.pathname !== "/login") {
-        window.location.href = "/login";
+// ── 共用 interceptor 設定 ─────────────────────────────────────────────────────
+
+function attachAuthInterceptors(client) {
+  client.interceptors.request.use((config) => {
+    const token = localStorage.getItem("access_token");
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  });
+  client.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        localStorage.removeItem("access_token");
+        if (window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
       }
+      return Promise.reject(error);
     }
-    return Promise.reject(error);
-  }
-);
+  );
+}
+
+attachAuthInterceptors(apiClient);
+attachAuthInterceptors(renderClient);
 
 // ── 認證 API 函式 ─────────────────────────────────────────────────────────────
 

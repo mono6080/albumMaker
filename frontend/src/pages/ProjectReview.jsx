@@ -273,6 +273,7 @@ export default function ProjectReview() {
             return (
               <div
                 key={student.id}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
                 className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all hover:shadow-md ${
                   isDone ? "border-emerald-100" : "border-gray-200"
                 }`}

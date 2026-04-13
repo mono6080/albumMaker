@@ -3,7 +3,7 @@
 // 照片、氣泡文字、渲染及下載相關的 API 呼叫
 
 // 使用統一含 Bearer token interceptor 的 apiClient
-import { apiClient } from "./authApi";
+import { apiClient, renderClient } from "./authApi";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 
@@ -88,10 +88,10 @@ export const batchUpdateStudentTexts = (projectId, studentsPayload) =>
 
 /** 渲染單一學生的相冊並儲存為 PDF */
 export const renderStudent = (projectId, studentId) =>
-  apiClient.post(`/projects/${projectId}/students/${studentId}/render`);
+  renderClient.post(`/projects/${projectId}/students/${studentId}/render`);
 
 /** 批次渲染專案中所有學生的相冊 */
 export const renderAllStudents = (projectId) =>
-  apiClient.post(`/projects/${projectId}/render/all`);
+  renderClient.post(`/projects/${projectId}/render/all`);
 
 export default apiClient;

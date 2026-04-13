@@ -51,7 +51,7 @@ export default function TemplateList() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">模板管理</h1>
-          <p className="text-sm text-gray-500">美術老師在此建立每月相本版型</p>
+          <p className="text-sm text-gray-500">管中設計在此建立每月相本版型</p>
         </div>
       </div>
 

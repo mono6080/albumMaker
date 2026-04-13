@@ -13,7 +13,7 @@ import {
 
 const ROLE_OPTIONS = [
   { value: "admin",      label: "管理員" },
-  { value: "art_team",   label: "美學組" },
+  { value: "art_team",   label: "設計" },
   { value: "supervisor", label: "帶班主管" },
   { value: "teacher",    label: "帶班老師" },
   { value: "none",       label: "無權限" },

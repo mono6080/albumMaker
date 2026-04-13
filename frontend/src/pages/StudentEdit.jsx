@@ -63,7 +63,8 @@ export default function StudentEdit() {
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
-  const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
+  // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
+  const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
   const [skippedPages, setSkippedPages] = useState(new Set()); // 被刪除（跳過）的頁面索引
 
@@ -78,7 +79,12 @@ export default function StudentEdit() {
       });
       try {
         await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } });
-        setPreviewTimestamp(Date.now());
+        // 更新所有有文字資料的頁面時間戳
+        const now = Date.now();
+        setPageTimestamps(prev => ({
+          ...prev,
+          ...Object.fromEntries(Object.keys(payload).map(pi => [pi, now])),
+        }));
       } catch { /* 靜默失敗，不打擾使用者 */ }
     },
     500
@@ -138,7 +144,17 @@ export default function StudentEdit() {
     }));
   };
 
-  const refreshPreview = () => setPreviewTimestamp(Date.now());
+  const refreshPreview = (pageIdx = activePage) =>
+    setPageTimestamps(prev => ({ ...prev, [pageIdx]: Date.now() }));
+
+  const refreshAllPreviews = () => {
+    const now = Date.now();
+    const count = template?.pages.length ?? 0;
+    setPageTimestamps(prev => ({
+      ...prev,
+      ...Object.fromEntries(Array.from({ length: count }, (_, i) => [i, now])),
+    }));
+  };
 
   // ── 頁面刪除 / 還原 ───────────────────────────────────────────────────────
 
@@ -175,7 +191,7 @@ export default function StudentEdit() {
     try {
       await renderStudent(projectId, studentId);
       await loadStudentData();
-      refreshPreview();
+      refreshAllPreviews();
       // 渲染完成後自動下載
       const downloadPath = buildDownloadPdfUrl(projectId, studentId);
       const apiPath = downloadPath.replace(/^\/api/, "");
@@ -249,7 +265,7 @@ export default function StudentEdit() {
           projectId={projectId}
           studentId={studentId}
           pageIndex={activePage}
-          timestamp={previewTimestamp}
+          timestamp={pageTimestamps[activePage] ?? 0}
         />
         {isCurrentPageSkipped && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -275,8 +291,8 @@ export default function StudentEdit() {
       pages={templatePages}
       student={student}
       skippedPages={skippedPages}
-      onPhotoSaved={() => setPreviewTimestamp(Date.now())}
-      onSaved={() => { loadStudentData(); setPreviewTimestamp(Date.now()); }}
+      onPhotoSaved={() => refreshAllPreviews()}
+      onSaved={() => { loadStudentData(); refreshAllPreviews(); }}
     />
   );
 
@@ -288,7 +304,7 @@ export default function StudentEdit() {
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
-              第 {activePage + 1} 頁對印文字
+              第 {activePage + 1} 頁文字
             </h3>
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
               ({"{name}"} 自動代入姓名)
@@ -322,7 +338,7 @@ export default function StudentEdit() {
           </div>
         </div>
       ) : (
-        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有對印文字方塊</div>
+        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有文字方塊</div>
       )}
     </div>
   );

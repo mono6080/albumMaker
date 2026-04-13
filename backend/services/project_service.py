@@ -109,7 +109,7 @@ def render_and_save_student_album(
     page_layouts = get_template_page_layouts(project)
     if not page_layouts:
         from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Template has no pages")
+        raise HTTPException(status_code=400, detail="模板尚未建立任何頁面")
 
     project_label_texts = json.loads(project.label_texts_json or "{}")
     student_pages_data = merge_project_label_texts_into_pages(
@@ -125,6 +125,8 @@ def render_and_save_student_album(
     screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
 
     storage = get_storage()
+    # 清除該學生舊的輸出（PDF + 頁面圖），避免無限累積
+    storage.delete_prefix(f"{output_prefix}/{combined_stem}")
     storage.put(print_key, save_album_pdf(rendered_images, mode="print"))
     storage.put(screen_key, save_album_pdf(rendered_images, mode="screen"))
     for filename, img_bytes in save_album_images(rendered_images, combined_stem).items():

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from auth import hash_password, require_role
 from crud.user_crud import get_user_or_404
-from database import User, get_db
+from database import Project, User, get_db
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -137,6 +137,8 @@ def delete_user(
     if user_id == current_admin.id:
         raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
     target_user = get_user_or_404(user_id, db)
+    # 將被刪除使用者的專案移交給執行刪除的 admin
+    db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
     db.delete(target_user)
     db.commit()
     return {"ok": True}

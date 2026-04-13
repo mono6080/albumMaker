@@ -4,12 +4,16 @@
 
 import io
 import json
+import logging
+import time
 from typing import Optional
 from urllib.parse import quote
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user, require_role
 from database import Project, ProjectComment, Student, Template, User, get_db
@@ -77,7 +81,7 @@ def list_projects(
     current_user: User = Depends(get_current_user),
 ):
     """依角色回傳可存取的專案摘要清單（依建立時間降序）。"""
-    query = db.query(Project)
+    query = db.query(Project).options(joinedload(Project.owner), joinedload(Project.students))
 
     if current_user.role == "admin":
         pass  # 看全部
@@ -116,7 +120,7 @@ def create_project(
     """建立新專案，需指定使用的模板，自動設定所有者為當前使用者。"""
     template = db.query(Template).filter(Template.id == template_id).first()
     if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=404, detail="找不到模板")
 
     new_project = Project(name=name, template_id=template_id, owner_id=current_user.id)
     db.add(new_project)
@@ -306,6 +310,16 @@ async def upload_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
+    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="檔案過大，上限 10 MB")
+    await file.seek(0)
+
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
@@ -354,11 +368,11 @@ def get_photo(
 
     pages_data = json.loads(student.pages_data_json)
     if page_index >= len(pages_data):
-        raise HTTPException(status_code=404, detail="Page not found")
+        raise HTTPException(status_code=404, detail="找不到頁面")
 
     photo_record = pages_data[page_index].get("photos", {}).get(str(slot_id))
     if not photo_record:
-        raise HTTPException(status_code=404, detail="Photo not found")
+        raise HTTPException(status_code=404, detail="找不到照片")
 
     photo_key = (
         photo_record
@@ -366,11 +380,11 @@ def get_photo(
         else photo_record.get("path", "")
     )
     if not photo_key:
-        raise HTTPException(status_code=404, detail="Photo not found")
+        raise HTTPException(status_code=404, detail="找不到照片")
 
     storage = get_storage()
     if not storage.exists(photo_key):
-        raise HTTPException(status_code=404, detail="Photo not found")
+        raise HTTPException(status_code=404, detail="找不到照片")
 
     return storage.serve(photo_key)
 
@@ -408,7 +422,7 @@ def update_photo_mapping(
             pages_data.append({
                 "page_index": len(pages_data),
                 "photos": {},
-                "bubble_texts": {},
+                "label_texts": {},
             })
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
@@ -550,7 +564,7 @@ def preview_project_page(
 
     page_layouts = get_template_page_layouts(project)
     if page_index >= len(page_layouts):
-        raise HTTPException(status_code=404, detail="Page index out of range")
+        raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
     project_label_texts = json.loads(project.label_texts_json or "{}")
     page_label_texts = project_label_texts.get(str(page_index), {})
@@ -581,7 +595,7 @@ def preview_student_page(
 
     page_layouts = get_template_page_layouts(project)
     if page_index >= len(page_layouts):
-        raise HTTPException(status_code=404, detail="Page index out of range")
+        raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
     project_label_texts = json.loads(project.label_texts_json or "{}")
     student_pages_data = merge_project_label_texts_into_pages(
@@ -621,7 +635,12 @@ def render_student(
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
-    return render_and_save_student_album(project, student, project_id, db)
+    logger.info("開始渲染 project_id=%s student_id=%s student=%s", project_id, student_id, student.name)
+    t0 = time.monotonic()
+    result = render_and_save_student_album(project, student, project_id, db)
+    logger.info("渲染完成 project_id=%s student_id=%s 耗時=%.2fs pages=%s",
+                project_id, student_id, time.monotonic() - t0, result.get("pages"))
+    return result
 
 
 @router.post("/{project_id}/render/all")
@@ -636,14 +655,21 @@ def render_all_students(
 
     render_results = []
     render_errors = []
+    t_all = time.monotonic()
+    logger.info("開始批次渲染 project_id=%s 共 %s 位學生", project_id, len(project.students))
 
     for student in project.students:
+        t0 = time.monotonic()
         try:
             result = render_and_save_student_album(project, student, project_id, db)
             render_results.append({"student": student.name, "pdf": result["pdf"]})
+            logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
         except Exception as render_error:
             render_errors.append({"student": student.name, "error": str(render_error)})
+            logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
+    logger.info("批次渲染完成 project_id=%s 成功=%s 失敗=%s 總耗時=%.2fs",
+                project_id, len(render_results), len(render_errors), time.monotonic() - t_all)
     return {"rendered": render_results, "errors": render_errors}
 
 
@@ -666,7 +692,7 @@ def download_student_pdf(
     effective_mode = mode if current_user.role == "admin" else "screen"
 
     if not student.output_filename:
-        raise HTTPException(status_code=404, detail="PDF not generated yet")
+        raise HTTPException(status_code=404, detail="尚未產生 PDF，請先渲染")
 
     # output_filename 為 key，如 "projects/proj1/output/stem.pdf"
     base_key = student.output_filename
@@ -729,6 +755,13 @@ def list_comments(
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
 
+    comments = (
+        db.query(ProjectComment)
+        .options(joinedload(ProjectComment.author))
+        .filter(ProjectComment.project_id == project_id)
+        .order_by(ProjectComment.created_at)
+        .all()
+    )
     return [
         {
             "id": comment.id,
@@ -737,7 +770,7 @@ def list_comments(
             "content": comment.content,
             "created_at": comment.created_at,
         }
-        for comment in project.comments
+        for comment in comments
     ]
 
 
