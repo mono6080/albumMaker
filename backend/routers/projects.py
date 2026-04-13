@@ -264,6 +264,35 @@ def delete_student(
     return {"ok": True}
 
 
+# ── 頁面跳過（個別學生刪除頁） ───────────────────────────────────────────────
+
+@router.patch("/{project_id}/students/{student_id}/pages/{page_index}/skip")
+def set_page_skip(
+    project_id: int,
+    student_id: int,
+    page_index: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """設定或取消學生某頁的跳過旗標（渲染時略過此頁）。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
+    student = get_student_or_404(student_id, project_id, db)
+
+    pages_data = json.loads(student.pages_data_json)
+    while len(pages_data) <= page_index:
+        pages_data.append({
+            "page_index": len(pages_data),
+            "photos": {},
+            "bubble_texts": {},
+        })
+    pages_data[page_index]["skip"] = bool(payload.get("skip", True))
+    student.pages_data_json = json.dumps(pages_data)
+    db.commit()
+    return {"ok": True}
+
+
 # ── 照片上傳與讀取 ────────────────────────────────────────────────────────────
 
 @router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}")

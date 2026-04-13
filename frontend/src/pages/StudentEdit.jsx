@@ -6,13 +6,13 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
-import { fetchProject, renderStudent, batchUpdateStudentTexts } from "../api/projectApi";
+import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
 import { buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
   ChevronRight, ChevronLeft, RefreshCw, Download,
-  Loader2, MessageCircle,
+  Loader2, MessageCircle, Trash2, RotateCcw,
 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
@@ -64,6 +64,7 @@ export default function StudentEdit() {
   const [isRendering, setIsRendering] = useState(false);
   const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
+  const [skippedPages, setSkippedPages] = useState(new Set()); // 被刪除（跳過）的頁面索引
 
   // ── 自動儲存氣泡文字（防抖 500ms） ────────────────────────────────────────
 
@@ -111,10 +112,13 @@ export default function StudentEdit() {
 
       // 初始化氣泡文字狀態（從學生頁面資料讀取）
       const initialTexts = {};
+      const initialSkipped = new Set();
       (foundStudent?.pages_data || []).forEach(pageData => {
         initialTexts[pageData.page_index] = pageData.bubble_texts || {};
+        if (pageData.skip) initialSkipped.add(pageData.page_index);
       });
       setBubbleTexts(initialTexts);
+      setSkippedPages(initialSkipped);
     } catch {
       setLoadError("找不到專案或學生");
     }
@@ -135,6 +139,31 @@ export default function StudentEdit() {
   };
 
   const refreshPreview = () => setPreviewTimestamp(Date.now());
+
+  // ── 頁面刪除 / 還原 ───────────────────────────────────────────────────────
+
+  const handlePageSkip = async (pageIndex, skip) => {
+    try {
+      await setStudentPageSkip(projectId, studentId, pageIndex, skip);
+      setSkippedPages(prev => {
+        const next = new Set(prev);
+        if (skip) next.add(pageIndex); else next.delete(pageIndex);
+        return next;
+      });
+      if (skip && activePage === pageIndex) {
+        // 跳到下一個未刪除頁；若沒有則往前找
+        const templatePageCount = template?.pages.length ?? 0;
+        for (let i = pageIndex + 1; i < templatePageCount; i++) {
+          if (!skippedPages.has(i) && i !== pageIndex) { setActivePage(i); return; }
+        }
+        for (let i = pageIndex - 1; i >= 0; i--) {
+          if (!skippedPages.has(i)) { setActivePage(i); return; }
+        }
+      }
+    } catch {
+      toast.error("操作失敗");
+    }
+  };
 
   // ── 渲染（含前置強制儲存） ────────────────────────────────────────────────
 
@@ -179,15 +208,45 @@ export default function StudentEdit() {
 
   // ── 共用面板內容 ──────────────────────────────────────────────────────────
 
+  const isCurrentPageSkipped = skippedPages.has(activePage);
+
   const previewPanel = (
     <div className="space-y-3">
       <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-      <PagePreview
-        projectId={projectId}
-        studentId={studentId}
-        pageIndex={activePage}
-        timestamp={previewTimestamp}
-      />
+      {/* 刪除 / 還原頁面 */}
+      <div className="flex items-center justify-between">
+        {isCurrentPageSkipped ? (
+          <div className="flex items-center gap-2 flex-1">
+            <span className="text-xs text-red-400 font-medium">此頁已刪除（不會出現在 PDF）</span>
+            <button
+              onClick={() => handlePageSkip(activePage, false)}
+              className="flex items-center gap-1 text-xs text-indigo-600 border border-indigo-300 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors ml-auto"
+            >
+              <RotateCcw className="w-3 h-3" />還原此頁
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => handlePageSkip(activePage, true)}
+            className="flex items-center gap-1 text-xs text-red-500 border border-red-200 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors ml-auto"
+          >
+            <Trash2 className="w-3 h-3" />刪除此頁
+          </button>
+        )}
+      </div>
+      <div className={`relative ${isCurrentPageSkipped ? "opacity-40" : ""}`}>
+        <PagePreview
+          projectId={projectId}
+          studentId={studentId}
+          pageIndex={activePage}
+          timestamp={previewTimestamp}
+        />
+        {isCurrentPageSkipped && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="bg-red-100 text-red-500 text-sm font-medium px-3 py-1 rounded-full border border-red-200">已刪除</span>
+          </div>
+        )}
+      </div>
       <div className="flex justify-center">
         <button
           onClick={refreshPreview}
@@ -205,6 +264,7 @@ export default function StudentEdit() {
       studentId={studentId}
       pages={templatePages}
       student={student}
+      skippedPages={skippedPages}
       onPhotoSaved={() => setPreviewTimestamp(Date.now())}
       onSaved={() => { loadStudentData(); setPreviewTimestamp(Date.now()); }}
     />

@@ -36,15 +36,15 @@ for pid in list(listening_pids):
         if re.match(r"^\d+$", line):
             all_pids.add(line)
 
-# 逐一強制結束
+# 逐一強制結束（/T 同時結束子進程樹，以 return code 判斷是否成功）
 for pid in all_pids:
     kill = subprocess.run(
-        ["taskkill", "/F", "/PID", pid],
+        ["taskkill", "/F", "/T", "/PID", pid],
         capture_output=True, text=True, encoding="utf-8", errors="ignore"
     )
-    if "成功" in kill.stdout or "SUCCESS" in kill.stdout.upper():
+    if kill.returncode == 0:
         print(f"  已結束 PID {pid}")
     else:
-        print(f"  PID {pid}：{kill.stdout.strip() or kill.stderr.strip()}")
+        print(f"  PID {pid} 無法結束（可能已退出）")
 
 print("完成。")

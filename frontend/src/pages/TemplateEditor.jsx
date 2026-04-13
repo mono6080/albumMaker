@@ -1,10 +1,10 @@
-// 模板編輯器頁面
-// 提供視覺化拖曳介面讓使用者設計相冊模板，
-// 包含照片格、氣泡框、貼圖素材的新增、移動、縮放、旋轉與屬性編輯
+// 模板編輯器頁面（Konva Canvas 版）
+// 以 Konva.js (Canvas 2D) 取代 CSS div 渲染，提高與 PIL 後端輸出的視覺一致性
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Group, Shape, Transformer } from "react-konva";
 
 import {
   fetchTemplate,
@@ -17,41 +17,31 @@ import {
 import { buildStickerUrl } from "../api/urls";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS, getFontCss, isFontBold } from "../constants/fonts";
-import BubbleSVG from "../components/canvas/BubbleSVG";
 import ColorPicker from "../components/ColorPicker";
 
 // ── 畫布尺寸常數 ──────────────────────────────────────────────────────────────
-// 顯示寬度固定為 530px，實際儲存尺寸為 A4（794×1123）
 const CANVAS_DISPLAY_WIDTH = 530;
 const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / 794;
 const CANVAS_DISPLAY_HEIGHT = Math.round(1123 * CANVAS_SCALE);
 
-// ── 座標轉換工具 ──────────────────────────────────────────────────────────────
-
-/** 將實際座標值換算為畫布顯示座標 */
 function toDisplayCoord(realValue) {
   return realValue * CANVAS_SCALE;
 }
 
-/** 將畫布顯示座標換算回實際座標值（四捨五入取整數） */
 function toRealCoord(displayValue) {
   return Math.round(displayValue / CANVAS_SCALE);
 }
 
-/** 將數值限制在 [minValue, maxValue] 範圍內 */
 function clampValue(value, minValue, maxValue) {
   return Math.max(minValue, Math.min(maxValue, value));
 }
 
-/** 產生 5 位隨機整數 ID，用於新增元素時分配識別碼 */
 function generateElementId() {
   return Math.floor(Math.random() * 90000) + 10000;
 }
 
-// 各元素類型的預設 z_index 基底（確保未設定時維持原渲染順序）
 const _Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
 
-/** 取得所有元素（含類型、原始陣列索引），依 z_index 升序排列 */
 function getAllElementsSorted(layout) {
   if (!layout) return [];
   return [
@@ -62,14 +52,12 @@ function getAllElementsSorted(layout) {
   ].sort((a, b) => (a.data.z_index ?? a.zDefault) - (b.data.z_index ?? b.zDefault));
 }
 
-/** 取得目前佈局中最高的 z_index（新增元素時使其置於最上層） */
 function getNextZIndex(layout) {
   const all = getAllElementsSorted(layout);
   if (all.length === 0) return 0;
   return Math.max(...all.map(e => e.data.z_index ?? e.zDefault)) + 1;
 }
 
-/** 將排序後的元素陣列（已修改 z_index）寫回佈局物件 */
 function applyElementsToLayout(layout, sortedElements) {
   const keyMap = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
   const newLayout = { ...layout };
@@ -80,6 +68,206 @@ function applyElementsToLayout(layout, sortedElements) {
   return newLayout;
 }
 
+// ── Canvas 2D 圓角矩形路徑 ────────────────────────────────────────────────────
+function drawRoundRectPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// ── 氣泡框 Konva Shape 元件 ───────────────────────────────────────────────────
+
+/**
+ * 以 Canvas 2D sceneFunc 繪製氣泡形狀，幾何計算與 BubbleSVG.jsx 保持一致。
+ */
+function BubbleKonvaShape({ width: w, height: h, shape, fill, borderColor, borderWidth, borderRadius }) {
+  const hasStroke = !!(borderColor && borderWidth > 0);
+  const defaultBorderRadius = Math.round(Math.min(w, h) / 5);
+  const cornerRadius = Math.max(0, borderRadius ?? defaultBorderRadius);
+  const tailHeight = Math.round(h / 4);
+  const tailWidth = Math.round(w / 5);
+  const centerX = w / 2;
+  const centerY = h / 2;
+
+  const sceneFunc = useCallback((context) => {
+    const ctx = context._context;
+    ctx.save();
+
+    const doFill = () => { ctx.fillStyle = fill; ctx.fill(); };
+    const doStroke = () => {
+      if (hasStroke) {
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = borderWidth;
+        ctx.stroke();
+      }
+    };
+
+    if (shape === "rect") {
+      drawRoundRectPath(ctx, 0, 0, w, h, cornerRadius);
+      doFill(); doStroke();
+
+    } else if (shape === "speech_right") {
+      const tipY = h * 3 / 4;
+      drawRoundRectPath(ctx, 0, 0, w, h, cornerRadius);
+      doFill(); doStroke();
+      ctx.beginPath();
+      ctx.moveTo(w - 2, tipY - tailHeight / 2);
+      ctx.lineTo(w - 2, tipY + tailHeight / 2);
+      ctx.lineTo(w + tailWidth, tipY);
+      ctx.closePath();
+      doFill();
+      if (hasStroke) doStroke();
+
+    } else if (shape === "speech_left") {
+      const tipY = h * 3 / 4;
+      drawRoundRectPath(ctx, 0, 0, w, h, cornerRadius);
+      doFill(); doStroke();
+      ctx.beginPath();
+      ctx.moveTo(2, tipY - tailHeight / 2);
+      ctx.lineTo(2, tipY + tailHeight / 2);
+      ctx.lineTo(-tailWidth, tipY);
+      ctx.closePath();
+      doFill();
+      if (hasStroke) doStroke();
+
+    } else if (shape === "speech_bottom") {
+      drawRoundRectPath(ctx, 0, 0, w, h, cornerRadius);
+      doFill(); doStroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX - tailWidth / 2, h - 2);
+      ctx.lineTo(centerX + tailWidth / 2, h - 2);
+      ctx.lineTo(centerX, h + tailHeight);
+      ctx.closePath();
+      doFill();
+
+    } else if (shape === "speech_top") {
+      drawRoundRectPath(ctx, 0, 0, w, h, cornerRadius);
+      doFill(); doStroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX - tailWidth / 2, 2);
+      ctx.lineTo(centerX + tailWidth / 2, 2);
+      ctx.lineTo(centerX, -tailHeight);
+      ctx.closePath();
+      doFill();
+
+    } else if (shape === "cloud") {
+      const bodyTopY = h * 2 / 5;
+      const cloudRadius = Math.min(cornerRadius, h / 4);
+      const bumpCount = Math.max(3, Math.floor(w / 60));
+      const bumpRadius = Math.floor(w / (bumpCount * 2));
+      drawRoundRectPath(ctx, 0, bodyTopY, w, h - bodyTopY, cloudRadius);
+      doFill();
+      for (let i = 0; i < bumpCount; i++) {
+        const bumpCenterX = bumpRadius + i * (w - bumpRadius * 2) / Math.max(bumpCount - 1, 1);
+        ctx.beginPath();
+        ctx.arc(bumpCenterX, bodyTopY, bumpRadius, 0, Math.PI * 2);
+        doFill();
+      }
+      if (hasStroke) {
+        drawRoundRectPath(ctx, 0, bodyTopY, w, h - bodyTopY, cloudRadius);
+        doStroke();
+      }
+
+    } else if (shape === "star") {
+      const outerRadius = Math.min(w, h) / 2;
+      const innerRadius = outerRadius * 2 / 5;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const angle = Math.PI / 2 + i * Math.PI / 5;
+        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+        const px = centerX + radius * Math.cos(angle);
+        const py = centerY - radius * Math.sin(angle);
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      doFill(); doStroke();
+
+    } else if (shape === "heart") {
+      const halfWidth = Math.floor(w / 2);
+      const lowerH = Math.round(h * 0.55);
+      ctx.beginPath();
+      ctx.ellipse((halfWidth + 4) / 2, lowerH, (halfWidth + 4) / 2, lowerH, 0, 0, Math.PI * 2);
+      doFill();
+      ctx.beginPath();
+      ctx.ellipse((halfWidth - 4 + w) / 2, lowerH, (w - (halfWidth - 4)) / 2, lowerH, 0, 0, Math.PI * 2);
+      doFill();
+      ctx.beginPath();
+      ctx.moveTo(0, lowerH);
+      ctx.lineTo(w, lowerH);
+      ctx.lineTo(centerX, h);
+      ctx.closePath();
+      doFill();
+
+    } else if (shape === "diamond") {
+      ctx.beginPath();
+      ctx.moveTo(centerX, 0);
+      ctx.lineTo(w, centerY);
+      ctx.lineTo(centerX, h);
+      ctx.lineTo(0, centerY);
+      ctx.closePath();
+      doFill(); doStroke();
+
+    } else {
+      // 預設：橢圓
+      ctx.beginPath();
+      ctx.ellipse(centerX, centerY, w / 2, h / 2, 0, 0, Math.PI * 2);
+      doFill(); doStroke();
+    }
+
+    ctx.restore();
+  }, [w, h, shape, fill, borderColor, borderWidth, hasStroke, cornerRadius, tailHeight, tailWidth, centerX, centerY]);
+
+  return (
+    <Shape
+      width={w} height={h}
+      sceneFunc={sceneFunc}
+      listening={false}
+      perfectDrawEnabled={false}
+    />
+  );
+}
+
+// ── 貼圖 Konva 節點（非同步載入圖片） ─────────────────────────────────────────
+
+function StickerNode({ sticker, templateId, isSelected, groupProps }) {
+  const [image, setImage] = useState(null);
+  const displayW = groupProps.width;
+  const displayH = groupProps.height;
+
+  useEffect(() => {
+    const img = new window.Image();
+    img.src = buildStickerUrl(templateId, sticker.filename);
+    img.onload = () => setImage(img);
+    img.onerror = () => setImage(null);
+  }, [sticker.filename, templateId]);
+
+  return (
+    <Group {...groupProps}>
+      {image && (
+        <KonvaImage image={image} width={displayW} height={displayH} listening={false} />
+      )}
+      {isSelected && (
+        <Rect
+          width={displayW} height={displayH}
+          fill="transparent"
+          stroke="#4F46E5" strokeWidth={2}
+          listening={false}
+        />
+      )}
+      {/* 透明矩形作為點擊感應區 */}
+      <Rect width={displayW} height={displayH} fill="transparent" />
+    </Group>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -90,18 +278,43 @@ export default function TemplateEditor() {
   const [template, setTemplate] = useState(null);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [pageLayout, setPageLayout] = useState(null);
-  const [selectedElement, setSelectedElement] = useState(null); // { type: 'photo'|'bubble'|'sticker', id }
+  const [selectedElement, setSelectedElement] = useState(null);
   const [backgroundUrl, setBackgroundUrl] = useState(null);
-  const [activeTool, setActiveTool] = useState("select"); // select | addPhoto | addBubble
-  const [draggingState, setDraggingState] = useState(null);
-  const [resizingState, setResizingState] = useState(null);
-  const [rotatingState, setRotatingState] = useState(null);
+  const [bgImage, setBgImage] = useState(null);
+  const [activeTool, setActiveTool] = useState("select");
   const [isSaving, setIsSaving] = useState(false);
+  const [bgCropFile, setBgCropFile] = useState(null);
 
-  const canvasRef = useRef(null);
+  const stageRef = useRef(null);
+  const transformerRef = useRef(null);
   const stickerFileInputRef = useRef(null);
-  // 各頁未儲存的草稿佈局（key = page id），換頁時暫存，避免修改丟失
   const draftLayouts = useRef({});
+
+  // ── 背景圖載入 ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!backgroundUrl) { setBgImage(null); return; }
+    const img = new window.Image();
+    img.src = backgroundUrl;
+    img.onload = () => setBgImage(img);
+    img.onerror = () => setBgImage(null);
+  }, [backgroundUrl]);
+
+  // ── Transformer 同步選取節點 ─────────────────────────────────────────────
+  useEffect(() => {
+    const tr = transformerRef.current;
+    if (!tr || !stageRef.current) return;
+    if (selectedElement) {
+      const node = stageRef.current.findOne(`#${selectedElement.type}-${selectedElement.id}`);
+      if (node) {
+        tr.nodes([node]);
+      } else {
+        tr.nodes([]);
+      }
+    } else {
+      tr.nodes([]);
+    }
+    tr.getLayer()?.batchDraw();
+  }, [selectedElement, pageLayout]);
 
   // ── 載入與頁面切換 ────────────────────────────────────────────────────────
 
@@ -111,7 +324,6 @@ export default function TemplateEditor() {
       const pages = response.data.pages;
       if (pages.length > 0) {
         const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-        // 初次載入時優先使用記憶體中的草稿（例如已切換頁再切回來）
         setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
         setBackgroundUrl(
           safePage.background_filename
@@ -124,13 +336,11 @@ export default function TemplateEditor() {
 
   useEffect(() => { loadTemplate(); }, [loadTemplate]);
 
-  // 切換頁面時更新佈局與背景圖（不自動儲存，改稿暫存在 draftLayouts）
   useEffect(() => {
     if (!template) return;
     const pages = template.pages;
     if (pages.length === 0) return;
     const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-    // 優先讀取草稿，沒有草稿才回退到已儲存的佈局
     setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
     setSelectedElement(null);
     setBackgroundUrl(
@@ -142,7 +352,6 @@ export default function TemplateEditor() {
 
   const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
 
-  // pageLayout 有任何變動時同步更新草稿，換頁時不會丟失
   useEffect(() => {
     if (currentPage && pageLayout) {
       draftLayouts.current[currentPage.id] = pageLayout;
@@ -152,12 +361,21 @@ export default function TemplateEditor() {
   // ── 頁面操作 ──────────────────────────────────────────────────────────────
 
   const handleSaveLayout = async () => {
-    if (!pageLayout || !currentPage) return;
+    if (!template) return;
     setIsSaving(true);
     try {
-      await updatePageLayout(templateId, currentPage.id, pageLayout);
-      // 儲存成功後清除草稿，下次切回此頁直接讀已存資料
-      delete draftLayouts.current[currentPage.id];
+      const dirtyPageIds = Object.keys(draftLayouts.current).map(Number);
+      if (dirtyPageIds.length === 0) {
+        toast.success("已儲存");
+        setIsSaving(false);
+        return;
+      }
+      await Promise.all(
+        template.pages
+          .filter(page => dirtyPageIds.includes(page.id))
+          .map(page => updatePageLayout(templateId, page.id, draftLayouts.current[page.id]))
+      );
+      dirtyPageIds.forEach(pageId => { delete draftLayouts.current[pageId]; });
       toast.success("已儲存");
     } catch {
       toast.error("儲存失敗");
@@ -180,8 +398,6 @@ export default function TemplateEditor() {
     await loadTemplate();
     toast.success("已刪除頁面");
   };
-
-  const [bgCropFile, setBgCropFile] = useState(null);
 
   const handleBackgroundSelect = (event) => {
     const imageFile = event.target.files[0];
@@ -223,47 +439,17 @@ export default function TemplateEditor() {
     }
   };
 
-  // ── 畫布互動：座標計算與元素查找 ─────────────────────────────────────────
+  // ── 元素操作 ──────────────────────────────────────────────────────────────
 
-  /** 計算滑鼠事件相對於畫布左上角的座標 */
-  const getCanvasPosition = (mouseEvent) => {
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    return {
-      x: mouseEvent.clientX - canvasRect.left,
-      y: mouseEvent.clientY - canvasRect.top,
-    };
-  };
-
-  /** 從最上層往下逐層進行點擊碰撞測試，回傳被點到的元素識別資訊（依 z_index 由高到低） */
-  const hitTestElement = (canvasPosition) => {
-    if (!pageLayout) return null;
-    const sortedDesc = getAllElementsSorted(pageLayout).reverse();
-    for (const { type, data } of sortedDesc) {
-      const displayX = toDisplayCoord(data.x);
-      const displayY = toDisplayCoord(data.y);
-      const displayW = toDisplayCoord(data.width);
-      const displayH = toDisplayCoord(data.height);
-      if (
-        canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
-        canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
-      ) {
-        return { type, id: data.id };
-      }
-    }
-    return null;
-  };
-
-  /** 取得指定元素的資料物件 */
   const getElement = ({ type, id }) => {
     if (!pageLayout) return null;
-    if (type === "photo") return pageLayout.photo_slots.find(slot => slot.id === id);
-    if (type === "bubble") return pageLayout.text_bubbles.find(bubble => bubble.id === id);
-    if (type === "text") return (pageLayout.text_labels || []).find(label => label.id === id);
+    if (type === "photo")   return pageLayout.photo_slots.find(slot => slot.id === id);
+    if (type === "bubble")  return pageLayout.text_bubbles.find(bubble => bubble.id === id);
+    if (type === "text")    return (pageLayout.text_labels || []).find(label => label.id === id);
     if (type === "sticker") return (pageLayout.stickers || []).find(sticker => sticker.id === id);
     return null;
   };
 
-  /** 更新指定元素的部分屬性 */
   const updateElement = (elementType, elementId, propertyUpdates) => {
     setPageLayout(currentLayout => {
       if (elementType === "photo") {
@@ -302,7 +488,6 @@ export default function TemplateEditor() {
     });
   };
 
-  /** 刪除目前選取的元素 */
   const deleteSelectedElement = useCallback(() => {
     if (!selectedElement) return;
     if (selectedElement.type === "photo") {
@@ -329,12 +514,10 @@ export default function TemplateEditor() {
     setSelectedElement(null);
   }, [selectedElement]);
 
-  /** 調整選取元素的層次（上移/下移/移至最上/移至最底） */
   const handleLayerChange = useCallback((direction) => {
     if (!selectedElement) return;
     setPageLayout(currentLayout => {
       const sorted = getAllElementsSorted(currentLayout);
-      // 正規化 z_index 為連續整數
       sorted.forEach((item, i) => { item.data = { ...item.data, z_index: i }; });
       const selectedIdx = sorted.findIndex(
         item => item.type === selectedElement.type && item.data.id === selectedElement.id
@@ -363,11 +546,10 @@ export default function TemplateEditor() {
     });
   }, [selectedElement]);
 
-  // Delete / Backspace 鍵盤快捷鍵刪除選取元素
+  // Delete / Backspace 鍵盤快捷鍵
   useEffect(() => {
     const handleKeyDown = (keyEvent) => {
       if (keyEvent.key !== "Delete" && keyEvent.key !== "Backspace") return;
-      // 避免在輸入框打字時觸發
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       deleteSelectedElement();
@@ -376,37 +558,35 @@ export default function TemplateEditor() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [deleteSelectedElement]);
 
-  // ── 畫布滑鼠事件處理 ─────────────────────────────────────────────────────
+  // ── Konva Stage 事件：放置元素 or 取消選取 ───────────────────────────────
 
-  const onCanvasMouseDown = (mouseEvent) => {
+  const handleStageClick = (e) => {
     if (!pageLayout) return;
-    const canvasPosition = getCanvasPosition(mouseEvent);
+    const pos = stageRef.current.getPointerPosition();
+    const realX = toRealCoord(pos.x);
+    const realY = toRealCoord(pos.y);
 
-    // 新增照片格工具
     if (activeTool === "addPhoto") {
-      const newPhotoSlot = {
+      const newSlot = {
         id: generateElementId(),
-        x: toRealCoord(canvasPosition.x),
-        y: toRealCoord(canvasPosition.y),
+        x: realX, y: realY,
         width: 300, height: 220, rotation: 0,
         border: true, border_width: 8,
         z_index: getNextZIndex(pageLayout),
       };
       setPageLayout(currentLayout => ({
         ...currentLayout,
-        photo_slots: [...currentLayout.photo_slots, newPhotoSlot],
+        photo_slots: [...currentLayout.photo_slots, newSlot],
       }));
       setActiveTool("select");
-      setSelectedElement({ type: "photo", id: newPhotoSlot.id });
+      setSelectedElement({ type: "photo", id: newSlot.id });
       return;
     }
 
-    // 新增氣泡框工具
     if (activeTool === "addBubble") {
       const newBubble = {
         id: generateElementId(),
-        x: toRealCoord(canvasPosition.x),
-        y: toRealCoord(canvasPosition.y),
+        x: realX, y: realY,
         width: 180, height: 110,
         shape: "ellipse", fill: "#FDED6E",
         border_color: null, border_width: 0,
@@ -424,12 +604,10 @@ export default function TemplateEditor() {
       return;
     }
 
-    // 新增純文字工具
     if (activeTool === "addText") {
       const newTextLabel = {
         id: generateElementId(),
-        x: toRealCoord(canvasPosition.x),
-        y: toRealCoord(canvasPosition.y),
+        x: realX, y: realY,
         width: 240, height: 80,
         rotation: 0,
         text: "{name}的文字標題",
@@ -449,109 +627,62 @@ export default function TemplateEditor() {
       return;
     }
 
-    // 選取工具
-    const hitResult = hitTestElement(canvasPosition);
-    if (hitResult) {
-      setSelectedElement(hitResult);
-      const hitElement = getElement(hitResult);
-      if (hitElement) {
-        // 判斷是否點擊縮放把手（右下角 10px 區域）
-        const resizeHandleX = toDisplayCoord(hitElement.x) + toDisplayCoord(hitElement.width) - 10;
-        const resizeHandleY = toDisplayCoord(hitElement.y) + toDisplayCoord(hitElement.height) - 10;
-        if (canvasPosition.x >= resizeHandleX && canvasPosition.y >= resizeHandleY) {
-          setResizingState({
-            ...hitResult,
-            startX: canvasPosition.x,
-            startY: canvasPosition.y,
-            originalWidth: hitElement.width,
-            originalHeight: hitElement.height,
-          });
-          return;
-        }
-      }
-      // 否則進入拖曳模式
-      setDraggingState({
-        ...hitResult,
-        startX: canvasPosition.x,
-        startY: canvasPosition.y,
-        originalX: getElement(hitResult)?.x,
-        originalY: getElement(hitResult)?.y,
-      });
-    } else {
+    // 選取模式：點擊空白處取消選取
+    if (e.target === stageRef.current) {
       setSelectedElement(null);
     }
   };
 
-  const onCanvasMouseMove = (mouseEvent) => {
-    const canvasPosition = getCanvasPosition(mouseEvent);
+  // ── 元素 Group 共用 Konva 屬性 ────────────────────────────────────────────
 
-    if (draggingState) {
-      const deltaX = toRealCoord(canvasPosition.x - draggingState.startX);
-      const deltaY = toRealCoord(canvasPosition.y - draggingState.startY);
-      const currentElement = getElement(draggingState);
-      updateElement(draggingState.type, draggingState.id, {
-        x: clampValue(draggingState.originalX + deltaX, 0, 794 - (currentElement?.width ?? 100)),
-        y: clampValue(draggingState.originalY + deltaY, 0, 1123 - (currentElement?.height ?? 60)),
-      });
-    }
+  const makeGroupProps = (type, data) => {
+    const displayX = toDisplayCoord(data.x);
+    const displayY = toDisplayCoord(data.y);
+    const displayW = toDisplayCoord(data.width);
+    const displayH = toDisplayCoord(data.height);
+    const isSelectMode = activeTool === "select";
 
-    if (resizingState) {
-      const deltaX = toRealCoord(canvasPosition.x - resizingState.startX);
-      const deltaY = toRealCoord(canvasPosition.y - resizingState.startY);
-      if (mouseEvent.shiftKey) {
-        // Shift 鍵：等比縮放
-        const aspectRatio = resizingState.originalWidth / resizingState.originalHeight;
-        const dominantDelta = Math.abs(deltaX) >= Math.abs(deltaY) ? deltaX : deltaY * aspectRatio;
-        const newWidth = Math.max(60, resizingState.originalWidth + dominantDelta);
-        const newHeight = Math.max(40, newWidth / aspectRatio);
-        updateElement(resizingState.type, resizingState.id, { width: newWidth, height: newHeight });
-      } else {
-        updateElement(resizingState.type, resizingState.id, {
-          width: Math.max(60, resizingState.originalWidth + deltaX),
-          height: Math.max(40, resizingState.originalHeight + deltaY),
+    return {
+      id: `${type}-${data.id}`,
+      x: displayX + displayW / 2,
+      y: displayY + displayH / 2,
+      offsetX: displayW / 2,
+      offsetY: displayH / 2,
+      width: displayW,
+      height: displayH,
+      rotation: data.rotation ?? 0,
+      scaleX: 1,
+      scaleY: 1,
+      draggable: isSelectMode,
+      listening: isSelectMode,
+      onDragEnd: (e) => {
+        const node = e.target;
+        updateElement(type, data.id, {
+          x: clampValue(toRealCoord(node.x() - node.offsetX()), 0, 794 - data.width),
+          y: clampValue(toRealCoord(node.y() - node.offsetY()), 0, 1123 - data.height),
         });
-      }
-    }
-
-    if (rotatingState) {
-      const angle = Math.atan2(
-        canvasPosition.y - rotatingState.centerY,
-        canvasPosition.x - rotatingState.centerX
-      ) * (180 / Math.PI);
-      const angleDelta = angle - rotatingState.startAngle;
-      const newRotation = rotatingState.originalRotation + angleDelta;
-      // Shift 鍵：對齊至 15° 倍數；否則對齊至 0.5° 倍數
-      const snapIncrement = mouseEvent.shiftKey ? 15 : 0.5;
-      updateElement(rotatingState.type, rotatingState.id, {
-        rotation: Math.round(newRotation / snapIncrement) * snapIncrement,
-      });
-    }
-  };
-
-  const onCanvasMouseUp = () => {
-    setDraggingState(null);
-    setResizingState(null);
-    setRotatingState(null);
-  };
-
-  // ── 旋轉把手 onMouseDown（由子元素觸發） ────────────────────────────────
-
-  const startRotating = (mouseEvent, elementType, elementId) => {
-    mouseEvent.stopPropagation();
-    const canvasPosition = getCanvasPosition(mouseEvent);
-    const element = getElement({ type: elementType, id: elementId });
-    const centerX = toDisplayCoord(element.x) + toDisplayCoord(element.width) / 2;
-    const centerY = toDisplayCoord(element.y) + toDisplayCoord(element.height) / 2;
-    const startAngle = Math.atan2(
-      canvasPosition.y - centerY,
-      canvasPosition.x - centerX
-    ) * (180 / Math.PI);
-    setRotatingState({
-      type: elementType, id: elementId,
-      centerX, centerY,
-      startAngle,
-      originalRotation: element.rotation ?? 0,
-    });
+      },
+      onTransformEnd: (e) => {
+        const node = e.target;
+        const newDisplayW = Math.max(toDisplayCoord(60), node.width() * Math.abs(node.scaleX()));
+        const newDisplayH = Math.max(toDisplayCoord(40), node.height() * Math.abs(node.scaleY()));
+        // 正規化 scale 並更新 offset，保持中心旋轉軸正確
+        node.scaleX(1); node.scaleY(1);
+        node.offsetX(newDisplayW / 2); node.offsetY(newDisplayH / 2);
+        node.width(newDisplayW); node.height(newDisplayH);
+        updateElement(type, data.id, {
+          x: toRealCoord(node.x() - node.offsetX()),
+          y: toRealCoord(node.y() - node.offsetY()),
+          width: Math.max(60, toRealCoord(newDisplayW)),
+          height: Math.max(40, toRealCoord(newDisplayH)),
+          rotation: node.rotation(),
+        });
+      },
+      onClick: (e) => {
+        e.cancelBubble = true;
+        setSelectedElement({ type, id: data.id });
+      },
+    };
   };
 
   // ── 渲染 ──────────────────────────────────────────────────────────────────
@@ -695,367 +826,235 @@ export default function TemplateEditor() {
 
         {/* 中央畫布區 */}
         <div className="flex-shrink-0 flex flex-col">
-          {/* 畫布本體 */}
           <div
-            ref={canvasRef}
-            style={{
-              width: CANVAS_DISPLAY_WIDTH,
-              height: CANVAS_DISPLAY_HEIGHT,
-              position: "relative",
-              cursor: rotatingState ? "grabbing" : activeTool === "select" ? "default" : "crosshair",
-            }}
+            style={{ cursor: activeTool === "select" ? "default" : "crosshair" }}
             className="border border-gray-300 rounded overflow-hidden bg-white select-none"
-            onMouseDown={onCanvasMouseDown}
-            onMouseMove={onCanvasMouseMove}
-            onMouseUp={onCanvasMouseUp}
-            onMouseLeave={onCanvasMouseUp}
           >
-            {/* 背景圖層 */}
-            {backgroundUrl && (
-              <img
-                src={backgroundUrl}
-                style={{
-                  position: "absolute", inset: 0,
-                  width: "100%", height: "100%",
-                  objectFit: "cover", pointerEvents: "none",
-                }}
-                alt=""
-                draggable={false}
-              />
-            )}
+            <Stage
+              ref={stageRef}
+              width={CANVAS_DISPLAY_WIDTH}
+              height={CANVAS_DISPLAY_HEIGHT}
+              onClick={handleStageClick}
+            >
+              <Layer>
+                {/* 白色底色 */}
+                <Rect
+                  x={0} y={0}
+                  width={CANVAS_DISPLAY_WIDTH}
+                  height={CANVAS_DISPLAY_HEIGHT}
+                  fill="#ffffff"
+                  listening={false}
+                />
 
-            {!backgroundUrl && (
-              <div
-                style={{
-                  position: "absolute", inset: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}
-                className="text-gray-300 text-sm pointer-events-none"
-              >
-                請上傳背景圖
-              </div>
-            )}
-
-            {/* 所有元素依 z_index 統一排序渲染 */}
-            {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
-              const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
-
-              // ── 照片格 ──
-              if (type === "photo") {
-              const photoSlot = data;
-              const slotIndex = elemIndex;
-              const isSelected = selectedElement?.type === "photo" && selectedElement?.id === photoSlot.id;
-              const hasBorder = photoSlot.border !== false;
-              const borderDisplayWidth = toDisplayCoord(photoSlot.border_width ?? 8);
-              const slotDisplayRadius = toDisplayCoord(photoSlot.border_radius ?? 0);
-              const shadowEnabled = photoSlot.shadow_enabled ?? hasBorder;
-              const shadowX = toDisplayCoord(photoSlot.shadow_offset_x ?? 5);
-              const shadowY = toDisplayCoord(photoSlot.shadow_offset_y ?? 8);
-              const shadowBlur = toDisplayCoord(photoSlot.shadow_blur ?? 14);
-              const shadowOpacity = ((photoSlot.shadow_opacity ?? 120) / 255).toFixed(2);
-              const boxShadow = shadowEnabled
-                ? `${shadowX}px ${shadowY}px ${shadowBlur}px rgba(0,0,0,${shadowOpacity})`
-                : "none";
-
-              return (
-                // 外層：定位 + 旋轉 + 把手，overflow 保持 visible 才不截斷把手
-                <div
-                  key={`photo-${photoSlot.id}`}
-                  style={{
-                    position: "absolute",
-                    left: toDisplayCoord(photoSlot.x),
-                    top: toDisplayCoord(photoSlot.y),
-                    width: toDisplayCoord(photoSlot.width),
-                    height: toDisplayCoord(photoSlot.height),
-                    transform: `rotate(${photoSlot.rotation}deg)`,
-                    transformOrigin: "center",
-                    pointerEvents: "none",
-                    overflow: "visible",
-                  }}
-                >
-                  {/* 內層：視覺樣式（圓角 / 陰影 / 外框），需 overflow hidden 裁切內容 */}
-                  <div style={{
-                    position: "absolute", inset: 0,
-                    background: hasBorder ? "#ffffff" : "#EEEEEE",
-                    boxShadow,
-                    borderRadius: slotDisplayRadius,
-                    outline: isSelected
-                      ? "2px solid #4F46E5"
-                      : hasBorder ? "1px solid #e2e8f0" : "1px solid #CCCCCC",
-                    outlineOffset: isSelected ? 2 : 0,
-                    boxSizing: "border-box",
-                    overflow: "hidden",
-                  }}>
-                    {hasBorder ? (
-                      <div style={{
-                        position: "absolute",
-                        left: borderDisplayWidth, top: borderDisplayWidth,
-                        right: borderDisplayWidth, bottom: borderDisplayWidth * 2,
-                        background: "#EEEEEE",
-                        borderRadius: Math.max(0, slotDisplayRadius - borderDisplayWidth),
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
-                          P{currentPageIndex + 1}·{slotIndex + 1}
-                        </span>
-                      </div>
-                    ) : (
-                      <div style={{
-                        position: "absolute", inset: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none" }}>
-                          P{currentPageIndex + 1}·{slotIndex + 1}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 選取把手（放在外層，不受 overflow hidden 截斷） */}
-                  {isSelected && (
-                    <>
-                      <div style={{
-                        position: "absolute", bottom: -4, right: -4,
-                        width: 12, height: 12, background: "#4F46E5",
-                        borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
-                      }} />
-                      <div
-                        title="拖曳旋轉（Shift=15°對齊）"
-                        style={{
-                          position: "absolute", top: -28, left: "50%",
-                          transform: "translateX(-50%)",
-                          pointerEvents: "auto", cursor: "grab",
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                        }}
-                        onMouseDown={event => startRotating(event, "photo", photoSlot.id)}
-                      >
-                        <div style={{ width: 1, height: 10, background: "#4F46E5" }} />
-                        <div style={{
-                          width: 14, height: 14, borderRadius: "50%",
-                          background: "#fff", border: "2px solid #4F46E5",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
-                        }} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-              } // end photo
-
-              // ── 氣泡框 ──
-              if (type === "bubble") {
-              const bubble = data;
-              const isSelected = selectedElement?.type === "bubble" && selectedElement?.id === bubble.id;
-              const displayWidth = toDisplayCoord(bubble.width);
-              const displayHeight = toDisplayCoord(bubble.height);
-              const displayBorderRadius = bubble.border_radius != null
-                ? toDisplayCoord(bubble.border_radius)
-                : Math.round(Math.min(displayWidth, displayHeight) / 5);
-              const displayBorderWidth = bubble.border_width > 0 ? toDisplayCoord(bubble.border_width) : 0;
-
-              return (
-                <div
-                  key={`bubble-${bubble.id}`}
-                  style={{
-                    position: "absolute",
-                    left: toDisplayCoord(bubble.x),
-                    top: toDisplayCoord(bubble.y),
-                    width: displayWidth,
-                    height: displayHeight,
-                    transform: `rotate(${bubble.rotation ?? 0}deg)`,
-                    transformOrigin: "center",
-                    pointerEvents: "none",
-                    overflow: "visible",
-                  }}
-                >
-                  <BubbleSVG
-                    displayWidth={displayWidth}
-                    displayHeight={displayHeight}
-                    fill={bubble.fill}
-                    borderColor={bubble.border_color}
-                    borderWidth={displayBorderWidth}
-                    shape={bubble.shape ?? "ellipse"}
-                    borderRadius={displayBorderRadius}
-                    isSelected={isSelected}
+                {/* 背景圖 */}
+                {bgImage ? (
+                  <KonvaImage
+                    image={bgImage}
+                    x={0} y={0}
+                    width={CANVAS_DISPLAY_WIDTH}
+                    height={CANVAS_DISPLAY_HEIGHT}
+                    listening={false}
                   />
-                  {/* 氣泡預覽文字 */}
-                  <span style={{
-                    position: "absolute", inset: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: Math.max(8, toDisplayCoord(bubble.font_size ?? 20)),
-                    color: bubble.font_color,
-                    textAlign: "center", padding: 4, lineHeight: 1.3,
-                    overflow: "hidden", pointerEvents: "none",
-                    fontFamily: getFontCss(bubble.font_family),
-                    fontWeight: isFontBold(bubble.font_family) ? "bold" : "normal",
-                  }}>
-                    {bubble.text?.substring(0, 30)}
-                  </span>
-
-                  {isSelected && (
-                    <>
-                      <div style={{
-                        position: "absolute", bottom: -4, right: -4,
-                        width: 12, height: 12, background: "#4F46E5",
-                        borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
-                      }} />
-                      <div
-                        title="拖曳旋轉（Shift=15°對齊）"
-                        style={{
-                          position: "absolute", top: -28, left: "50%",
-                          transform: "translateX(-50%)",
-                          pointerEvents: "auto", cursor: "grab",
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                        }}
-                        onMouseDown={event => startRotating(event, "bubble", bubble.id)}
-                      >
-                        <div style={{ width: 1, height: 10, background: "#4F46E5" }} />
-                        <div style={{
-                          width: 14, height: 14, borderRadius: "50%",
-                          background: "#fff", border: "2px solid #4F46E5",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
-                        }} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-              } // end bubble
-
-              // ── 純文字 ──
-              if (type === "text") {
-              const textLabel = data;
-              const isSelected = selectedElement?.type === "text" && selectedElement?.id === textLabel.id;
-              return (
-                <div
-                  key={`text-${textLabel.id}`}
-                  style={{
-                    position: "absolute",
-                    left: toDisplayCoord(textLabel.x),
-                    top: toDisplayCoord(textLabel.y),
-                    width: toDisplayCoord(textLabel.width),
-                    height: toDisplayCoord(textLabel.height),
-                    transform: `rotate(${textLabel.rotation ?? 0}deg)`,
-                    transformOrigin: "center",
-                    outline: isSelected ? "2px solid #4F46E5" : "1px dashed #AAAAAA",
-                    outlineOffset: 2,
-                    pointerEvents: "none",
-                    overflow: "visible",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: textLabel.text_align === "left" ? "flex-start"
-                      : textLabel.text_align === "right" ? "flex-end" : "center",
-                  }}
-                >
-                  <span style={{
-                    fontSize: Math.max(8, toDisplayCoord(textLabel.font_size ?? 24)),
-                    color: textLabel.font_color ?? "#333333",
-                    fontFamily: getFontCss(textLabel.font_family),
-                    fontWeight: isFontBold(textLabel.font_family) ? "bold" : "normal",
-                    textAlign: textLabel.text_align ?? "center",
-                    padding: "0 4px",
-                    userSelect: "none",
-                    pointerEvents: "none",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    width: "100%",
-                  }}>
-                    {textLabel.text?.substring(0, 60)}
-                  </span>
-
-                  {isSelected && (
-                    <>
-                      <div style={{
-                        position: "absolute", bottom: -4, right: -4,
-                        width: 12, height: 12, background: "#4F46E5",
-                        borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
-                      }} />
-                      <div
-                        title="拖曳旋轉（Shift=15°對齊）"
-                        style={{
-                          position: "absolute", top: -28, left: "50%",
-                          transform: "translateX(-50%)",
-                          pointerEvents: "auto", cursor: "grab",
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                        }}
-                        onMouseDown={event => startRotating(event, "text", textLabel.id)}
-                      >
-                        <div style={{ width: 1, height: 10, background: "#4F46E5" }} />
-                        <div style={{
-                          width: 14, height: 14, borderRadius: "50%",
-                          background: "#fff", border: "2px solid #4F46E5",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
-                        }} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-              } // end text
-
-              // ── 貼圖 ──
-              if (type === "sticker") {
-              const sticker = data;
-              const isSelected = selectedElement?.type === "sticker" && selectedElement?.id === sticker.id;
-              return (
-                <div
-                  key={`sticker-${sticker.id}`}
-                  style={{
-                    position: "absolute",
-                    left: toDisplayCoord(sticker.x),
-                    top: toDisplayCoord(sticker.y),
-                    width: toDisplayCoord(sticker.width),
-                    height: toDisplayCoord(sticker.height),
-                    transform: `rotate(${sticker.rotation ?? 0}deg)`,
-                    transformOrigin: "center",
-                    outline: isSelected ? "2px solid #4F46E5" : "none",
-                    outlineOffset: 2,
-                    pointerEvents: "none",
-                    overflow: "visible",
-                  }}
-                >
-                  <img
-                    src={buildStickerUrl(templateId, sticker.filename)}
-                    alt=""
-                    draggable={false}
-                    style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                ) : (
+                  <KonvaText
+                    x={0}
+                    y={CANVAS_DISPLAY_HEIGHT / 2 - 10}
+                    width={CANVAS_DISPLAY_WIDTH}
+                    text="請上傳背景圖"
+                    fontSize={14}
+                    fill="#CCCCCC"
+                    align="center"
+                    listening={false}
                   />
-                  {isSelected && (
-                    <>
-                      <div style={{
-                        position: "absolute", bottom: -4, right: -4,
-                        width: 12, height: 12, background: "#4F46E5",
-                        borderRadius: 2, cursor: "se-resize", pointerEvents: "auto",
-                      }} />
-                      <div
-                        title="拖曳旋轉（Shift=15°對齊）"
-                        style={{
-                          position: "absolute", top: -28, left: "50%",
-                          transform: "translateX(-50%)",
-                          pointerEvents: "auto", cursor: "grab",
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                        }}
-                        onMouseDown={event => startRotating(event, "sticker", sticker.id)}
-                      >
-                        <div style={{ width: 1, height: 10, background: "#4F46E5" }} />
-                        <div style={{
-                          width: 14, height: 14, borderRadius: "50%",
-                          background: "#fff", border: "2px solid #4F46E5",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
-                        }} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-              } // end sticker
+                )}
 
-              return null;
-            })}
+                {/* 所有元素依 z_index 統一排序渲染 */}
+                {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
+                  const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
+                  const displayW = toDisplayCoord(data.width);
+                  const displayH = toDisplayCoord(data.height);
+                  const groupProps = makeGroupProps(type, data);
+
+                  // ── 照片格 ──
+                  if (type === "photo") {
+                    const hasBorder = data.border !== false;
+                    const borderDisplayW = toDisplayCoord(data.border_width ?? 8);
+                    const slotRadius = toDisplayCoord(data.border_radius ?? 0);
+                    const shadowEnabled = data.shadow_enabled ?? hasBorder;
+                    const shadowX = shadowEnabled ? toDisplayCoord(data.shadow_offset_x ?? 5) : 0;
+                    const shadowY = shadowEnabled ? toDisplayCoord(data.shadow_offset_y ?? 8) : 0;
+                    // HTML Canvas2D shadowBlur 的 sigma = shadowBlur/2，PIL GaussianBlur(radius) 的實測 sigma ≈ radius*0.87
+                    // 量測換算：需要 Canvas2D shadowBlur = toDisplayCoord(pil_blur) * 1.74 使兩者視覺一致
+                    const shadowBlur = shadowEnabled ? toDisplayCoord(data.shadow_blur ?? 14) * 1.74 : 0;
+                    const shadowOpacity = shadowEnabled ? (data.shadow_opacity ?? 120) / 255 : 0;
+
+                    return (
+                      <Group key={`photo-${data.id}`} {...groupProps}>
+                        <Rect
+                          width={displayW} height={displayH}
+                          fill={hasBorder ? "#ffffff" : "#EEEEEE"}
+                          cornerRadius={slotRadius}
+                          stroke={isSelected ? "#4F46E5" : hasBorder ? "#e2e8f0" : "#CCCCCC"}
+                          strokeWidth={isSelected ? 2 : 1}
+                          shadowColor="black"
+                          shadowOpacity={shadowOpacity}
+                          shadowOffsetX={shadowX}
+                          shadowOffsetY={shadowY}
+                          shadowBlur={shadowBlur}
+                          listening={false}
+                        />
+                        {hasBorder && (
+                          <Rect
+                            x={borderDisplayW}
+                            y={borderDisplayW}
+                            width={Math.max(1, displayW - borderDisplayW * 2)}
+                            height={Math.max(1, displayH - borderDisplayW * 3)}
+                            fill="#EEEEEE"
+                            cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
+                            listening={false}
+                          />
+                        )}
+                        <KonvaText
+                          x={0} y={0}
+                          width={displayW} height={displayH}
+                          text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
+                          fontSize={10}
+                          fill="#AAAAAA"
+                          align="center"
+                          verticalAlign="middle"
+                          listening={false}
+                        />
+                        {/* 透明點擊感應區 */}
+                        <Rect width={displayW} height={displayH} fill="transparent" />
+                      </Group>
+                    );
+                  }
+
+                  // ── 氣泡框 ──
+                  if (type === "bubble") {
+                    const displayBorderRadius = data.border_radius != null
+                      ? toDisplayCoord(data.border_radius)
+                      : Math.round(Math.min(displayW, displayH) / 5);
+                    const displayBorderWidth = (data.border_width ?? 0) > 0
+                      ? toDisplayCoord(data.border_width)
+                      : 0;
+                    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20));
+
+                    return (
+                      <Group key={`bubble-${data.id}`} {...groupProps}>
+                        <BubbleKonvaShape
+                          width={displayW} height={displayH}
+                          shape={data.shape ?? "ellipse"}
+                          fill={data.fill ?? "#FDED6E"}
+                          borderColor={data.border_color}
+                          borderWidth={displayBorderWidth}
+                          borderRadius={displayBorderRadius}
+                        />
+                        <KonvaText
+                          x={4} y={4}
+                          width={displayW - 8} height={displayH - 8}
+                          text={(data.text ?? "").substring(0, 30)}
+                          fontSize={fontSize}
+                          fill={data.font_color ?? "#333333"}
+                          fontFamily={getFontCss(data.font_family)}
+                          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
+                          align="center"
+                          verticalAlign="middle"
+                          wrap="word"
+                          listening={false}
+                        />
+                        {isSelected && (
+                          <Rect
+                            width={displayW} height={displayH}
+                            fill="transparent"
+                            stroke="#4F46E5" strokeWidth={2}
+                            listening={false}
+                          />
+                        )}
+                        {/* 透明點擊感應區 */}
+                        <Rect width={displayW} height={displayH} fill="transparent" />
+                      </Group>
+                    );
+                  }
+
+                  // ── 純文字 ──
+                  if (type === "text") {
+                    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
+                    return (
+                      <Group key={`text-${data.id}`} {...groupProps}>
+                        <Rect
+                          width={displayW} height={displayH}
+                          fill="transparent"
+                          stroke={isSelected ? "#4F46E5" : "#AAAAAA"}
+                          strokeWidth={isSelected ? 2 : 1}
+                          dash={isSelected ? [] : [4, 3]}
+                          listening={false}
+                        />
+                        <KonvaText
+                          x={4} y={0}
+                          width={displayW - 8} height={displayH}
+                          text={(data.text ?? "").substring(0, 60)}
+                          fontSize={fontSize}
+                          fill={data.font_color ?? "#333333"}
+                          fontFamily={getFontCss(data.font_family)}
+                          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
+                          align={data.text_align ?? "center"}
+                          verticalAlign="middle"
+                          wrap="word"
+                          listening={false}
+                        />
+                        {/* 透明點擊感應區 */}
+                        <Rect width={displayW} height={displayH} fill="transparent" />
+                      </Group>
+                    );
+                  }
+
+                  // ── 貼圖 ──
+                  if (type === "sticker") {
+                    return (
+                      <StickerNode
+                        key={`sticker-${data.id}`}
+                        sticker={data}
+                        templateId={templateId}
+                        isSelected={isSelected}
+                        groupProps={groupProps}
+                      />
+                    );
+                  }
+
+                  return null;
+                })}
+
+                {/* Transformer：顯示縮放/旋轉把手 */}
+                <Transformer
+                  ref={transformerRef}
+                  keepRatio={false}
+                  rotateEnabled={true}
+                  borderStroke="#4F46E5"
+                  borderStrokeWidth={1}
+                  anchorFill="#4F46E5"
+                  anchorStroke="#ffffff"
+                  anchorStrokeWidth={1}
+                  anchorSize={8}
+                  rotateAnchorOffset={20}
+                  enabledAnchors={[
+                    "top-left", "top-center", "top-right",
+                    "middle-left", "middle-right",
+                    "bottom-left", "bottom-center", "bottom-right",
+                  ]}
+                  boundBoxFunc={(oldBox, newBox) => {
+                    if (newBox.width < toDisplayCoord(60) || newBox.height < toDisplayCoord(40)) {
+                      return oldBox;
+                    }
+                    return newBox;
+                  }}
+                />
+              </Layer>
+            </Stage>
           </div>
 
           <p className="text-xs text-gray-400 mt-1.5">
-            提示：點選工具後在畫布上點擊放置；拖曳移動；右下角拖曳調整大小
+            提示：點選工具後在畫布上點擊放置；拖曳移動；四角拖曳調整大小；頂部圓點旋轉
           </p>
         </div>
 
@@ -1086,14 +1085,6 @@ export default function TemplateEditor() {
 
 // ── 屬性面板元件 ──────────────────────────────────────────────────────────────
 
-/**
- * 右側屬性面板：依選取元素類型顯示對應的可編輯屬性。
- *
- * @param {Object}   selectedElement    - 目前選取的元素識別資訊 { type, id }
- * @param {Object}   elementData        - 元素的完整屬性資料
- * @param {Function} onPropertyChange   - 屬性變更時的回呼函式
- * @param {Function} onLayerChange      - 層次調整回呼 ('up'|'down'|'top'|'bottom')
- */
 function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayerChange }) {
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
@@ -1244,7 +1235,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
                   </label>
                 ))}
 
-                {/* 陰影不透明度 */}
                 <label className="flex flex-col gap-0.5">
                   <span className="text-xs text-gray-500">不透明度（%）</span>
                   <div className="flex items-center gap-2">
@@ -1275,7 +1265,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
       {/* 氣泡框專屬屬性 */}
       {isBubble && (
         <>
-          {/* 形狀選擇器 */}
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">形狀</span>
             <div className="grid grid-cols-5 gap-1">
@@ -1297,7 +1286,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             </div>
           </div>
 
-          {/* 圓角（非橢圓形狀才顯示） */}
           {elementData.shape !== "ellipse" && (
             <label className="flex flex-col gap-1">
               <span className="text-xs text-gray-500">圓角半徑（px）</span>
@@ -1332,7 +1320,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             onChange={colorValue => onPropertyChange({ fill: colorValue })}
           />
 
-          {/* 預設文字 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">預設文字（可用 {"{name}"} 代入姓名）</span>
             <textarea
@@ -1343,7 +1330,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             />
           </label>
 
-          {/* 字體選擇 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字體</span>
             <div className="grid grid-cols-2 gap-1.5">
@@ -1351,10 +1337,7 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
                 <button
                   key={fontOption.value}
                   onClick={() => onPropertyChange({ font_family: fontOption.value })}
-                  style={{
-                    fontFamily: fontOption.css,
-                    fontWeight: fontOption.bold ? "bold" : "normal",
-                  }}
+                  style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
                   className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
                     elementData.font_family === fontOption.value
                       ? "border-indigo-500 bg-indigo-50 text-indigo-700"
@@ -1367,7 +1350,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             </div>
           </label>
 
-          {/* 字級 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字級（pt）</span>
             <div className="flex items-center gap-2">
@@ -1392,7 +1374,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
           />
 
-          {/* 外框設定 */}
           <div className="space-y-2 pt-1 border-t border-gray-100">
             <span className="text-xs text-gray-500 block">外框</span>
             <div className="flex items-center gap-3">
@@ -1433,7 +1414,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
       {/* 純文字專屬屬性 */}
       {isTextLabel && (
         <>
-          {/* 預設文字 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">文字內容（可用 {"{name}"} 代入姓名）</span>
             <textarea
@@ -1444,7 +1424,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             />
           </label>
 
-          {/* 對齊 */}
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">對齊</span>
             <div className="flex gap-1">
@@ -1468,7 +1447,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             </div>
           </div>
 
-          {/* 字體選擇 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字體</span>
             <div className="grid grid-cols-2 gap-1.5">
@@ -1489,7 +1467,6 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
             </div>
           </label>
 
-          {/* 字級 */}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字級（pt）</span>
             <div className="flex items-center gap-2">
@@ -1522,14 +1499,9 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
 
 // ── 背景裁切 Modal ─────────────────────────────────────────────────────────────
 
-// 顯示尺寸：A4 比例 (794:1123)，以半尺寸呈現
 const CROP_FRAME_W = 397;
-const CROP_FRAME_H = Math.round(1123 * (397 / 794)); // ≈ 561
+const CROP_FRAME_H = Math.round(1123 * (397 / 794));
 
-/**
- * 上傳背景前先讓使用者裁切至 A4 比例。
- * 支援拖曳平移與滾輪縮放，確認後以 canvas 輸出 794×1123 JPEG 並回傳。
- */
 function BackgroundCropModal({ file, onConfirm, onCancel }) {
   const [scale, setScale] = useState(1);
   const [panX, setPanX] = useState(0);
@@ -1542,7 +1514,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
   const url = useMemo(() => URL.createObjectURL(file), [file]);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
 
-  // fitScale：讓圖片恰好覆蓋整個裁切框（object-fit: cover 效果）
   const fitScale = imgNat
     ? Math.max(CROP_FRAME_W / imgNat.w, CROP_FRAME_H / imgNat.h)
     : 1;
@@ -1551,7 +1522,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
   const imgDisplayW = imgNat ? imgNat.w * effectiveScale : CROP_FRAME_W;
   const imgDisplayH = imgNat ? imgNat.h * effectiveScale : CROP_FRAME_H;
 
-  // 限制平移範圍，確保圖片始終覆蓋裁切框
   const maxPanX = Math.max(0, (imgDisplayW - CROP_FRAME_W) / 2);
   const maxPanY = Math.max(0, (imgDisplayH - CROP_FRAME_H) / 2);
   const clampedPanX = Math.min(maxPanX, Math.max(-maxPanX, panX));
@@ -1585,7 +1555,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
     outputCanvas.width  = 794;
     outputCanvas.height = 1123;
     const ctx = outputCanvas.getContext("2d");
-    // renderScale：從顯示座標映射回 794×1123
     const renderScale = 794 / CROP_FRAME_W;
     ctx.drawImage(
       imgRef.current,
@@ -1607,7 +1576,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
           <p className="text-xs text-gray-400 mt-0.5">拖曳平移 · 滾輪縮放 · 裁切範圍固定為 A4 比例</p>
         </div>
 
-        {/* 裁切預覽框 */}
         <div
           style={{
             width: CROP_FRAME_W, height: CROP_FRAME_H,
@@ -1622,7 +1590,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
         >
-          {/* A4 格線提示 */}
           <div style={{
             position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1,
             boxShadow: "inset 0 0 0 2px rgba(99,102,241,0.5)",
@@ -1645,7 +1612,6 @@ function BackgroundCropModal({ file, onConfirm, onCancel }) {
           />
         </div>
 
-        {/* 縮放滑桿 */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500 w-8">縮放</span>
           <input

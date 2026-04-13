@@ -229,23 +229,30 @@ export default function ProjectReview() {
               alt="preview"
               className="w-full"
             />
-            {pageCount > 1 && (
-              <div className="flex justify-center gap-2 p-3 border-t border-gray-100">
-                {Array.from({ length: pageCount }, (_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPreview(p => ({ ...p, pageIndex: i }))}
-                    className={`w-7 h-7 rounded-lg text-xs font-medium transition-colors ${
-                      preview.pageIndex === i
-                        ? "bg-indigo-600 text-white"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
-              </div>
-            )}
+            {pageCount > 1 && (() => {
+              const previewStudent = project.students.find(s => s.id === preview.studentId);
+              const previewSkipped = new Set(
+                (previewStudent?.pages_data || []).filter(p => p.skip).map(p => p.page_index)
+              );
+              const visiblePages = Array.from({ length: pageCount }, (_, i) => i).filter(i => !previewSkipped.has(i));
+              return visiblePages.length > 1 ? (
+                <div className="flex justify-center gap-2 p-3 border-t border-gray-100">
+                  {visiblePages.map(i => (
+                    <button
+                      key={i}
+                      onClick={() => setPreview(p => ({ ...p, pageIndex: i }))}
+                      className={`w-7 h-7 rounded-lg text-xs font-medium transition-colors ${
+                        preview.pageIndex === i
+                          ? "bg-indigo-600 text-white"
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      {i + 1}
+                    </button>
+                  ))}
+                </div>
+              ) : null;
+            })()}
           </div>
         </div>
       )}
@@ -260,6 +267,9 @@ export default function ProjectReview() {
           {project.students.map(student => {
             const isDone = !!student.output_filename;
             const isStudentRendering = rendering[student.id];
+            const studentSkippedPages = new Set(
+              (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
+            );
             return (
               <div
                 key={student.id}
@@ -267,25 +277,28 @@ export default function ProjectReview() {
                   isDone ? "border-emerald-100" : "border-gray-200"
                 }`}
               >
-                {/* Thumbnail strip */}
+                {/* Thumbnail strip — 跳過已刪除的頁面 */}
                 <div className="flex gap-1 p-3 bg-gray-50 border-b border-gray-100 overflow-x-auto">
-                  {Array.from({ length: pageCount }, (_, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setPreview({ studentId: student.id, pageIndex: i })}
-                      className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
-                    >
-                      <img
-                        src={`${previewUrl(id, student.id, i)}?t=${ts}`}
-                        alt={`p${i + 1}`}
-                        className="w-full h-24 object-cover"
-                        loading="lazy"
-                      />
-                      <div className="text-center text-xs text-gray-400 py-0.5 group-hover:text-indigo-500">
-                        第 {i + 1} 頁
-                      </div>
-                    </button>
-                  ))}
+                  {Array.from({ length: pageCount }, (_, i) => {
+                    if (studentSkippedPages.has(i)) return null;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setPreview({ studentId: student.id, pageIndex: i })}
+                        className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
+                      >
+                        <img
+                          src={`${previewUrl(id, student.id, i)}?t=${ts}`}
+                          alt={`p${i + 1}`}
+                          className="w-full h-24 object-cover"
+                          loading="lazy"
+                        />
+                        <div className="text-center text-xs text-gray-400 py-0.5 group-hover:text-indigo-500">
+                          第 {i + 1} 頁
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Student info */}

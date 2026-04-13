@@ -180,7 +180,8 @@ def _add_drop_shadow(img: Image.Image, offset=(4, 6), blur=10,
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
 
     combined = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    combined.paste(shadow, (0, 0), shadow)
+    # 直接覆蓋（不帶 mask），避免 PIL 對 alpha 做平方（alpha_out = alpha² / 255）
+    combined.paste(shadow, (0, 0))
     combined.paste(img, (pad, pad), img)
     return combined
 
@@ -415,15 +416,16 @@ def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index
 
 
 def _render_sticker(canvas: Image.Image, sticker: dict) -> None:
-    """渲染貼圖素材。"""
+    """渲染貼圖素材。直接從 storage 開啟以保留透明通道，不經 _to_srgb 轉換。"""
     stkr_path_str = sticker.get("path", "")
     if not stkr_path_str:
         return
     try:
-        stkr_img = _load_key(stkr_path_str)
-        if stkr_img is None:
+        from services.storage import get_storage
+        storage = get_storage()
+        if not storage.exists(stkr_path_str):
             return
-        stkr_img = stkr_img.convert("RGBA")
+        stkr_img = storage.open_image(stkr_path_str).convert("RGBA")
         sw, sh = int(sticker["width"]), int(sticker["height"])
         stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)
         cx = sticker["x"] + sw / 2

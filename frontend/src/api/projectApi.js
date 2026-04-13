@@ -44,6 +44,10 @@ export const renameStudent = (projectId, studentId, newName) =>
 export const deleteStudent = (projectId, studentId) =>
   apiClient.delete(`/projects/${projectId}/students/${studentId}`);
 
+/** 設定或取消學生某頁的跳過旗標 */
+export const setStudentPageSkip = (projectId, studentId, pageIndex, skip) =>
+  apiClient.patch(`/projects/${projectId}/students/${studentId}/pages/${pageIndex}/skip`, { skip });
+
 // ── 照片管理 ──────────────────────────────────────────────────────────────────
 
 /** 上傳學生照片至指定頁面欄位 */

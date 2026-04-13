@@ -146,7 +146,7 @@ function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRefCallback }) {
             onLoad={onImgLoad}
           />
         ) : (
-          !disabled && <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none", pointerEvents: "none" }}>P{it.pi + 1}·{it.slotId}</span>
+          !disabled && <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none", pointerEvents: "none" }}>P{it.pi + 1}·{it.slotIndex + 1}</span>
         )}
       </div>
 
@@ -161,13 +161,16 @@ function normalizePhotoData(raw) {
 }
 
 function buildItems(allSlots, student) {
-  return allSlots.map(({ pi, slotId, slotW, slotH, border, borderW, borderRadius,
+  const pagesDataMap = Object.fromEntries(
+    (student?.pages_data ?? []).map(p => [p.page_index, p])
+  );
+  return allSlots.map(({ pi, slotId, slotIndex, slotW, slotH, border, borderW, borderRadius,
     shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity }) => {
-    const raw = student?.pages_data?.[pi]?.photos?.[String(slotId)] ?? null;
+    const raw = pagesDataMap[pi]?.photos?.[String(slotId)] ?? null;
     const photo = normalizePhotoData(raw);
     const transform = { scale: photo?.scale ?? 1.0, offsetX: photo?.offsetX ?? 0, offsetY: photo?.offsetY ?? 0 };
     return {
-      pi, slotId, slotW: slotW ?? 400, slotH: slotH ?? 400,
+      pi, slotId, slotIndex, slotW: slotW ?? 400, slotH: slotH ?? 400,
       border: border ?? false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,
       shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity,
       origPi: photo ? pi : null,
@@ -200,11 +203,12 @@ function clampPan(px, py, cropW, cropH, imgAspect, scale) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function PhotoManager({ projectId, studentId, pages, student, onSaved, onPhotoSaved, disabled = false }) {
+export default function PhotoManager({ projectId, studentId, pages, student, onSaved, onPhotoSaved, disabled = false, skippedPages = new Set() }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
-      (p.layout?.photo_slots || []).map(s => ({
-        pi, slotId: s.id, slotW: s.width, slotH: s.height,
+      (p.layout?.photo_slots || []).map((s, slotIndex) => ({
+        pi, slotId: s.id, slotIndex,
+        slotW: s.width, slotH: s.height,
         border: s.border ?? false, borderW: s.border_width ?? 8,
         borderRadius: s.border_radius ?? 0,
         shadowEnabled: s.shadow_enabled,
@@ -592,7 +596,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
               {/* Modal header */}
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
                 <div>
-                  <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotId}</div>
+                  <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotIndex + 1}</div>
                   <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
                 </div>
                 <button
@@ -753,9 +757,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           const isDragOver = dragOverIdx === idx && dragIdxRef.current !== idx;
           const nat = aspectMap[rk];
           const isSelected = isTouchDevice && selectedIdx === idx;
+          const isItemDisabled = disabled || skippedPages.has(it.pi);
 
           const handleCellClick = () => {
-            if (disabled) return;
+            if (isItemDisabled) return;
             if (isTouchDevice) {
               if (!url) { replaceRefs.current[rk]?.click(); return; }
               setSelectedIdx(prev => prev === idx ? null : idx);
@@ -767,7 +772,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           return (
             <div
               key={rk}
-              draggable={!!url && !disabled && !isTouchDevice}
+              draggable={!!url && !isItemDisabled && !isTouchDevice}
               onDragStart={e => handleDragStart(e, idx)}
               onDragOver={e => handleDragOver(e, idx)}
               onDragLeave={handleDragLeave}
@@ -776,20 +781,28 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
               onClick={handleCellClick}
               className="group aspect-square relative flex items-center justify-center rounded-xl transition-all"
               style={{
-                background: isSelected ? "rgba(99,102,241,0.1)" : isDragOver ? "rgba(99,102,241,0.08)" : dirty ? "rgba(251,191,36,0.08)" : "#f3f4f6",
-                outline: isSelected ? "2px solid #6366f1" : isDragOver ? "2px solid #6366f1" : dirty ? "2px solid #fbbf24" : "2px solid transparent",
-                cursor: url && !disabled && !isTouchDevice ? "grab" : (!disabled ? "pointer" : "default"),
+                background: isItemDisabled ? "#f8fafc" : isSelected ? "rgba(99,102,241,0.1)" : isDragOver ? "rgba(99,102,241,0.08)" : dirty ? "rgba(251,191,36,0.08)" : "#f3f4f6",
+                outline: isItemDisabled ? "2px dashed #e2e8f0" : isSelected ? "2px solid #6366f1" : isDragOver ? "2px solid #6366f1" : dirty ? "2px solid #fbbf24" : "2px solid transparent",
+                cursor: isItemDisabled ? "default" : (url && !isTouchDevice ? "grab" : "pointer"),
+                opacity: isItemDisabled ? 0.5 : 1,
               }}
             >
               {/* Pure display */}
               <PhotoSlotCard
-                it={it} url={url} nat={nat} disabled={disabled}
+                it={it} url={url} nat={nat} disabled={isItemDisabled}
                 onImgLoad={e => setAspectMap(prev => ({ ...prev, [rk]: e.target.naturalWidth / e.target.naturalHeight }))}
                 imgRefCallback={el => { thumbImgRefs.current[rk] = el; }}
               />
 
+              {/* 已刪除頁面遮罩 */}
+              {skippedPages.has(it.pi) && (
+                <div className="absolute inset-0 rounded-xl flex items-end justify-center pb-1 pointer-events-none">
+                  <span className="text-[9px] text-red-400 bg-white/80 px-1 rounded">已刪除</span>
+                </div>
+              )}
+
               {/* Desktop hover overlay */}
-              {url && !disabled && !isTouchDevice && (
+              {url && !isItemDisabled && !isTouchDevice && (
                 <div className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 pointer-events-none">
                   <div className="pointer-events-auto flex gap-1.5">
                     <button onClick={e => { e.stopPropagation(); openEditModal(idx); }} title="位移/縮放"
@@ -809,7 +822,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
               )}
 
               {/* Mobile tap-selected overlay */}
-              {url && !disabled && isTouchDevice && isSelected && (
+              {url && !isItemDisabled && isTouchDevice && isSelected && (
                 <div className="absolute inset-0 rounded-xl bg-black/55 flex flex-col items-center justify-center gap-2">
                   {/* Top row: move left / move right */}
                   <div className="flex gap-2">
@@ -848,7 +861,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
               {/* Slot label */}
               <div className="absolute bottom-1 left-0 right-0 text-center text-[10px] text-gray-400 pointer-events-none select-none">
-                P{it.pi + 1}·{it.slotId}
+                P{it.pi + 1}·{it.slotIndex + 1}
               </div>
 
               {/* File input lives in the cell, not the card */}
