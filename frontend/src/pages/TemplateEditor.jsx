@@ -18,6 +18,7 @@ import { buildStickerUrl } from "../api/urls";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS, getFontCss, isFontBold } from "../constants/fonts";
 import ColorPicker from "../components/ColorPicker";
+import ImageCropModal from "../components/ImageCropModal";
 
 // ── 畫布尺寸常數 ──────────────────────────────────────────────────────────────
 const CANVAS_DISPLAY_WIDTH = 530;
@@ -732,8 +733,10 @@ export default function TemplateEditor() {
 
       {/* 背景裁切 Modal */}
       {bgCropFile && (
-        <BackgroundCropModal
+        <ImageCropModal
           file={bgCropFile}
+          title="裁切背景圖"
+          hint="拖曳平移 · 滾輪縮放 · 裁切範圍固定為 A4 比例"
           onConfirm={handleBgCropConfirm}
           onCancel={() => setBgCropFile(null)}
         />
@@ -1496,148 +1499,3 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayer
   );
 }
 
-
-// ── 背景裁切 Modal ─────────────────────────────────────────────────────────────
-
-const CROP_FRAME_W = 397;
-const CROP_FRAME_H = Math.round(1123 * (397 / 794));
-
-function BackgroundCropModal({ file, onConfirm, onCancel }) {
-  const [scale, setScale] = useState(1);
-  const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
-  const [imgNat, setImgNat] = useState(null);
-  const imgRef = useRef(null);
-  const isDragging = useRef(false);
-  const lastPos = useRef({ x: 0, y: 0 });
-
-  const url = useMemo(() => URL.createObjectURL(file), [file]);
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
-
-  const fitScale = imgNat
-    ? Math.max(CROP_FRAME_W / imgNat.w, CROP_FRAME_H / imgNat.h)
-    : 1;
-  const effectiveScale = fitScale * scale;
-
-  const imgDisplayW = imgNat ? imgNat.w * effectiveScale : CROP_FRAME_W;
-  const imgDisplayH = imgNat ? imgNat.h * effectiveScale : CROP_FRAME_H;
-
-  const maxPanX = Math.max(0, (imgDisplayW - CROP_FRAME_W) / 2);
-  const maxPanY = Math.max(0, (imgDisplayH - CROP_FRAME_H) / 2);
-  const clampedPanX = Math.min(maxPanX, Math.max(-maxPanX, panX));
-  const clampedPanY = Math.min(maxPanY, Math.max(-maxPanY, panY));
-
-  const imgLeft = CROP_FRAME_W / 2 + clampedPanX - imgDisplayW / 2;
-  const imgTop  = CROP_FRAME_H / 2 + clampedPanY - imgDisplayH / 2;
-
-  const handleWheel = (wheelEvent) => {
-    wheelEvent.preventDefault();
-    const zoomFactor = wheelEvent.deltaY < 0 ? 1.1 : 0.9;
-    setScale(currentScale => Math.max(1, Math.min(6, currentScale * zoomFactor)));
-  };
-
-  const handleMouseDown = (mouseEvent) => {
-    isDragging.current = true;
-    lastPos.current = { x: mouseEvent.clientX, y: mouseEvent.clientY };
-  };
-  const handleMouseMove = (mouseEvent) => {
-    if (!isDragging.current) return;
-    const deltaX = mouseEvent.clientX - lastPos.current.x;
-    const deltaY = mouseEvent.clientY - lastPos.current.y;
-    lastPos.current = { x: mouseEvent.clientX, y: mouseEvent.clientY };
-    setPanX(prev => prev + deltaX);
-    setPanY(prev => prev + deltaY);
-  };
-  const handleMouseUp = () => { isDragging.current = false; };
-
-  const handleConfirm = () => {
-    const outputCanvas = document.createElement("canvas");
-    outputCanvas.width  = 794;
-    outputCanvas.height = 1123;
-    const ctx = outputCanvas.getContext("2d");
-    const renderScale = 794 / CROP_FRAME_W;
-    ctx.drawImage(
-      imgRef.current,
-      imgLeft * renderScale,
-      imgTop  * renderScale,
-      imgDisplayW * renderScale,
-      imgDisplayH * renderScale,
-    );
-    outputCanvas.toBlob(blob => {
-      onConfirm(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
-    }, "image/jpeg", 0.92);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4">
-        <div>
-          <h2 className="font-semibold text-gray-800">裁切背景圖</h2>
-          <p className="text-xs text-gray-400 mt-0.5">拖曳平移 · 滾輪縮放 · 裁切範圍固定為 A4 比例</p>
-        </div>
-
-        <div
-          style={{
-            width: CROP_FRAME_W, height: CROP_FRAME_H,
-            overflow: "hidden", position: "relative",
-            cursor: isDragging.current ? "grabbing" : "grab",
-            background: "#ddd",
-          }}
-          className="rounded border border-gray-300 select-none"
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-        >
-          <div style={{
-            position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1,
-            boxShadow: "inset 0 0 0 2px rgba(99,102,241,0.5)",
-          }} />
-          <img
-            ref={imgRef}
-            src={url}
-            onLoad={loadEvent => setImgNat({
-              w: loadEvent.target.naturalWidth,
-              h: loadEvent.target.naturalHeight,
-            })}
-            style={{
-              position: "absolute",
-              left: imgLeft, top: imgTop,
-              width: imgDisplayW, height: imgDisplayH,
-              pointerEvents: "none", userSelect: "none",
-            }}
-            draggable={false}
-            alt=""
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500 w-8">縮放</span>
-          <input
-            type="range" min="1" max="6" step="0.01"
-            value={scale}
-            onChange={sliderEvent => setScale(Number(sliderEvent.target.value))}
-            className="flex-1"
-          />
-          <span className="text-xs text-gray-400 w-10 text-right">{Math.round(scale * 100)}%</span>
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="px-4 py-1.5 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
-          >
-            取消
-          </button>
-          <button
-            onClick={handleConfirm}
-            className="px-4 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700"
-          >
-            確認裁切
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
