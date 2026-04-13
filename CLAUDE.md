@@ -63,7 +63,7 @@ frontend/src/
     AuthContext.jsx    # 登入狀態全域管理（currentUser / login / logout）
   components/
     PrivateRoute.jsx       # 路由守衛（未登入 → /login，角色不符 → 無權限提示）
-    canvas/BubbleSVG.jsx   # 純 SVG 氣泡框顯示元件
+    canvas/BubbleSVG.jsx   # 純 SVG 氣泡框顯示元件（ProjectReview 預覽用）
     PhotoManager.jsx        # 照片格管理（上傳 / 位移縮放）
     AlbumPageNav.jsx        # 頁面導覽列
     PanelSwitcher.jsx       # 行動版分頁切換
@@ -76,9 +76,9 @@ frontend/src/
   pages/
     Login.jsx          # 登入頁（表單 + 角色導向）
     UserManagement.jsx # 使用者管理（admin only）
-    TemplateEditor.jsx # 模板版型編輯器（拖曳畫布）
+    TemplateEditor.jsx # 模板版型編輯器（react-konva Canvas 2D 拖曳畫布）
     ProjectBatch.jsx   # 批次學生管理 + 全班氣泡文字
-    StudentEdit.jsx    # 單一學生照片 + 個別氣泡文字
+    StudentEdit.jsx    # 單一學生照片 + 個別氣泡文字 + 產出並下載 PDF
     ProjectReview.jsx  # 輸出審閱 + PDF 下載 + 留言
     TemplateList.jsx   # 模板清單
     ProjectList.jsx    # 專案清單（依角色過濾操作按鈕）
@@ -168,7 +168,8 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 - **API 分層**：`templateApi.js` / `projectApi.js` / `urls.js` 分別管理，`api.js` 為向後相容層
 - **共用 apiClient**：所有 axios 請求從 `authApi.js` 的 `apiClient` 出發，interceptor 自動帶 Bearer token；401 自動跳登入頁
 - **自動儲存**：氣泡文字編輯使用 `useAutoSave` hook，防抖 500ms；渲染前呼叫 `flushSave()` 確保最新
-- **BubbleSVG**：純顯示元件，幾何計算與後端 PIL 渲染保持一致
+- **BubbleSVG**：純顯示元件，幾何計算與後端 PIL 渲染保持一致（用於 ProjectReview）
+- **TemplateEditor Konva**：編輯器以 `react-konva` 取代 CSS div 渲染；`shadowBlur × 1.74` 補償 Canvas2D（sigma = shadowBlur/2）與 PIL GaussianBlur（sigma ≈ radius）的差異
 - **常數集中**：形狀清單、顏色預設、字型選項分別定義在 `constants/`
 
 ---
@@ -241,3 +242,5 @@ cd D:/projects/album_maker/frontend && npm run build
 - **圖片端點不加 auth**：`<img src>` 是瀏覽器原生請求，不帶 Authorization header。preview / sticker / background / photo 六個 GET 端點不設 `get_current_user`，否則外網（ngrok 等）圖片全黑
 - **bcrypt 套件**：使用 `bcrypt` 直接呼叫（`bcrypt.hashpw` / `bcrypt.checkpw`），不透過 passlib（passlib 與 bcrypt 4.x+ 不相容）
 - **使用者管理 API body 格式**：`POST /api/users/` 與 `PATCH /api/users/{id}` 接收 JSON body（Pydantic model），前端用 `apiClient.post(url, params)`（axios 預設 JSON），不用 URLSearchParams
+- **PIL 陰影 `_add_drop_shadow`**：`combined.paste(shadow, (0,0))` 不帶 mask；若帶 mask（自身 RGBA），PIL 會對 alpha 做平方（`alpha² / 255`），陰影會變成約 ¼ 濃度
+- **PIL 貼圖透明通道**：`_render_sticker` 直接呼叫 `storage.open_image()` 後 `.convert("RGBA")`，不經 `_load_key`；`_to_srgb` 會執行 `img.convert("RGB")` 將透明通道填白
