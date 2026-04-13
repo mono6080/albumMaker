@@ -23,6 +23,7 @@ class CreateUserBody(BaseModel):
 
 
 class UpdateUserBody(BaseModel):
+    username: str | None = None
     display_name: str | None = None
     role: str | None = None
     supervisor_id: int | None = None
@@ -91,6 +92,15 @@ def update_user(
 ):
     """修改使用者資料（顯示名稱、角色、主管、密碼重設）。"""
     target_user = get_user_or_404(user_id, db)
+
+    if body.username is not None:
+        new_username = body.username.strip()
+        if not new_username:
+            raise HTTPException(status_code=400, detail="帳號不能為空")
+        conflict = db.query(User).filter(User.username == new_username, User.id != user_id).first()
+        if conflict:
+            raise HTTPException(status_code=400, detail="帳號已存在")
+        target_user.username = new_username
 
     if body.display_name is not None:
         target_user.display_name = body.display_name.strip()

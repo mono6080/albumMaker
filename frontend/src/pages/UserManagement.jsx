@@ -1,9 +1,9 @@
 // 使用者管理頁面（僅 admin 可存取）
 // 提供使用者清單、建立、修改角色/主管/密碼、刪除功能
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Trash2, UserPlus, KeyRound, ChevronDown } from "lucide-react";
+import { Trash2, UserPlus, KeyRound, Pencil, Check, X } from "lucide-react";
 import {
   fetchAllUsers,
   createUser,
@@ -41,6 +41,10 @@ export default function UserManagement() {
 
   // 密碼重設狀態：{ [userId]: string }
   const [resetPasswords, setResetPasswords] = useState({});
+
+  // inline 編輯狀態：{ userId, field: 'display_name'|'username', value }
+  const [editingField, setEditingField] = useState(null);
+  const editInputRef = useRef(null);
 
   const loadUsers = async () => {
     try {
@@ -112,6 +116,32 @@ export default function UserManagement() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "重設失敗");
     }
+  };
+
+  const startEdit = (userId, field, currentValue) => {
+    setEditingField({ userId, field, value: currentValue });
+    // 下一個 tick 才 focus，等元素出現
+    setTimeout(() => editInputRef.current?.select(), 0);
+  };
+
+  const handleEditConfirm = async () => {
+    if (!editingField) return;
+    const { userId, field, value } = editingField;
+    const trimmed = value.trim();
+    if (!trimmed) { setEditingField(null); return; }
+    try {
+      await updateUser(userId, { [field]: trimmed });
+      toast.success("已更新");
+      setEditingField(null);
+      await loadUsers();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "更新失敗");
+    }
+  };
+
+  const handleEditKeyDown = (e) => {
+    if (e.key === "Enter") handleEditConfirm();
+    if (e.key === "Escape") setEditingField(null);
   };
 
   const handleDelete = async (userId, displayName) => {
@@ -208,8 +238,52 @@ export default function UserManagement() {
           <tbody className="divide-y divide-gray-50">
             {users.map((user) => (
               <tr key={user.id} className="hover:bg-gray-50/50">
-                <td className="px-4 py-3 font-medium text-gray-900">{user.display_name}</td>
-                <td className="px-4 py-3 text-gray-500">{user.username}</td>
+                <td className="px-4 py-3">
+                  {editingField?.userId === user.id && editingField.field === "display_name" ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        ref={editInputRef}
+                        value={editingField.value}
+                        onChange={(e) => setEditingField((prev) => ({ ...prev, value: e.target.value }))}
+                        onKeyDown={handleEditKeyDown}
+                        className="border border-indigo-300 rounded-lg px-2 py-0.5 text-sm w-32 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      <button onClick={handleEditConfirm} className="p-0.5 text-indigo-600 hover:text-indigo-800"><Check className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setEditingField(null)} className="p-0.5 text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEdit(user.id, "display_name", user.display_name)}
+                      className="group flex items-center gap-1 font-medium text-gray-900 hover:text-indigo-600 transition-colors"
+                    >
+                      {user.display_name}
+                      <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-40 transition-opacity" />
+                    </button>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {editingField?.userId === user.id && editingField.field === "username" ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        ref={editInputRef}
+                        value={editingField.value}
+                        onChange={(e) => setEditingField((prev) => ({ ...prev, value: e.target.value }))}
+                        onKeyDown={handleEditKeyDown}
+                        className="border border-indigo-300 rounded-lg px-2 py-0.5 text-sm w-28 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      <button onClick={handleEditConfirm} className="p-0.5 text-indigo-600 hover:text-indigo-800"><Check className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setEditingField(null)} className="p-0.5 text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEdit(user.id, "username", user.username)}
+                      className="group flex items-center gap-1 text-gray-500 hover:text-indigo-600 transition-colors"
+                    >
+                      {user.username}
+                      <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-40 transition-opacity" />
+                    </button>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <select
                     value={user.role}
