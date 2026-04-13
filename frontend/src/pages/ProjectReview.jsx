@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import {
-  getProject, getTemplate, renderStudent, renderAll,
-  downloadPdf, downloadAllZip, previewUrl
-} from "../api";
+import { fetchProject as getProject, renderStudent, renderAllStudents as renderAll } from "../api/projectApi";
+import { fetchTemplate as getTemplate } from "../api/templateApi";
+import { buildStudentPagePreviewUrl as previewUrl, buildDownloadPdfUrl as downloadPdf, buildDownloadAllZipUrl as downloadAllZip } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";

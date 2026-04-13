@@ -18,7 +18,7 @@ from ._helpers import (
     assert_project_readable,
     assert_project_writable,
 )
-from .schemas import ProjectDetail, ProjectSummary
+from .schemas import BatchAddResult, OkResult, PageSkipPayload, ProjectCreated, ProjectDetail, ProjectSummary
 
 router = APIRouter()
 
@@ -59,7 +59,7 @@ def list_projects(
     ]
 
 
-@router.post("/")
+@router.post("/", response_model=ProjectCreated, status_code=201)
 def create_project(
     name: str = Form(..., max_length=100),
     template_id: int = Form(...),
@@ -140,7 +140,7 @@ def delete_project(
 
 # ── 學生管理 ──────────────────────────────────────────────────────────────────
 
-@router.post("/{project_id}/students/batch")
+@router.post("/{project_id}/students/batch", response_model=BatchAddResult)
 def batch_add_students(
     project_id: int,
     names: list[str],
@@ -220,12 +220,12 @@ def delete_student(
 
 # ── 頁面跳過（個別學生刪除頁） ───────────────────────────────────────────────
 
-@router.patch("/{project_id}/students/{student_id}/pages/{page_index}/skip")
+@router.patch("/{project_id}/students/{student_id}/pages/{page_index}/skip", response_model=OkResult)
 def set_page_skip(
     project_id: int,
     student_id: int,
     page_index: int,
-    payload: dict,
+    payload: PageSkipPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -241,7 +241,7 @@ def set_page_skip(
             "photos": {},
             "label_texts": {},
         })
-    pages_data[page_index]["skip"] = bool(payload.get("skip", True))
+    pages_data[page_index]["skip"] = payload.skip
     student.pages_data_json = json.dumps(pages_data)
     db.commit()
     return {"ok": True}

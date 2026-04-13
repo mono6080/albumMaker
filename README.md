@@ -28,7 +28,8 @@ album_maker/
 │   ├── migrations.py      # Schema 遷移（啟動時自動執行，冪等設計）
 │   ├── auth.py            # JWT 認證、bcrypt 密碼、get_current_user / require_role
 │   ├── crud/              # get_or_404 查詢輔助（含 user_crud.py）
-│   ├── routers/           # 薄路由層（auth / users / templates / projects）
+│   ├── routers/           # 薄路由層（auth / users / templates / projects/）
+│   │   └── projects/      # 照片、文字、留言、渲染各子路由
 │   ├── services/
 │   │   ├── render_service.py    # 公開 API：render_page / render_album / save_album_pdf
 │   │   ├── draw_helpers.py      # PIL 底層：字型、圖片合成、形狀繪製、文字換行
@@ -192,8 +193,8 @@ docker compose up -d --build
 | PATCH | `/api/projects/{id}` | 改名（admin / 專案擁有者） |
 | DELETE | `/api/projects/{id}` | 刪除（admin / 專案擁有者） |
 | GET | `/api/projects/{id}` | 取得專案詳細（含所有學生） |
-| GET | `/api/projects/{id}/bubble_texts` | 取得全班氣泡文字預設值 |
-| PUT | `/api/projects/{id}/bubble_texts` | 更新全班氣泡文字預設值 |
+| GET | `/api/projects/{id}/label_texts` | 取得全班對印文字預設值 |
+| PUT | `/api/projects/{id}/label_texts` | 更新全班對印文字預設值 |
 | GET | `/api/projects/{id}/comments` | 取得審閱留言 |
 | POST | `/api/projects/{id}/comments` | 新增留言（admin / art_team / supervisor） |
 | DELETE | `/api/projects/{id}/comments/{cid}` | 刪除留言（admin） |
@@ -259,7 +260,7 @@ SQLite 單一檔案 `backend/album_maker.db`，包含六張資料表：
 | `project_comments` | 審閱留言（project_id / author_id / 內容 / 時間） |
 
 Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行。  
-預設管理員帳號：**admin / admin**（首次啟動自動建立，請盡快更改密碼）。
+首次啟動時自動建立 **admin** 帳號，初始密碼為隨機產生並印在終端機啟動日誌中，請立即登入後修改。
 
 ---
 
@@ -270,5 +271,5 @@ Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行。
 | admin | 完整 | 全部 | 全部 | ✓ | ✓ | ✓ |
 | art_team | 完整 | 全部（唯讀） | — | ✓ | — | — |
 | supervisor | 唯讀 | 管轄老師 | — | ✓ | — | — |
-| teacher | 唯讀 | 自己的 | 自己的 | — | — | — |
+| teacher | 唯讀 | 自己的 | 自己的 | 唯讀 | — | — |
 | none | — | — | — | — | — | — |

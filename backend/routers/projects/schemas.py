@@ -92,3 +92,63 @@ class PhotoMappingResult(BaseModel):
     """照片映射更新結果"""
     ok: bool
     renames: dict[str, dict[str, str]] = {}
+
+
+class ProjectCreated(BaseModel):
+    """建立專案回應"""
+    id: int
+    name: str
+
+
+class BatchAddResult(BaseModel):
+    """批次新增學生回應"""
+    created: list[str]
+    skipped: list[str]
+
+
+class RenderStudentError(BaseModel):
+    """單生渲染失敗紀錄"""
+    student: str
+    error: str
+
+
+class RenderStudentSuccess(BaseModel):
+    """單生渲染成功紀錄"""
+    student: str
+    pdf: Optional[str] = None
+
+
+class RenderAllResult(BaseModel):
+    """批次渲染全班回應"""
+    rendered: list[RenderStudentSuccess]
+    errors: list[RenderStudentError]
+
+
+class PhotoUploadResult(BaseModel):
+    """照片上傳回應"""
+    filename: str
+    path: str
+
+
+class PageSkipPayload(BaseModel):
+    """設定頁面跳過旗標的 payload"""
+    skip: bool
+
+
+class OkResult(BaseModel):
+    """通用成功回應"""
+    ok: bool = True
+
+
+class BatchTextsPayload(BaseModel):
+    """
+    批次更新多位學生對印文字的 payload。
+
+    格式：
+      students: {
+        "student_id": {
+          "page_index": { "label_id": "text" }
+        }
+      }
+    """
+    students: dict[str, dict[str, dict[str, str]]] = {}

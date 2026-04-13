@@ -45,7 +45,15 @@ backend/
     auth.py            # /api/auth/login, /api/auth/me
     users.py           # /api/users/* （admin only）
     templates.py       # /api/templates/* 薄路由
-    projects.py        # /api/projects/* 薄路由
+    projects/          # /api/projects/* 薄路由（拆分子模組）
+      __init__.py      # 路由組合，掛載各子路由
+      _helpers.py      # 共用輔助（assert_project_readable/writable、LabelTextsPayload）
+      schemas.py       # Pydantic response schema（ProjectDetail / StudentInProject / ...）
+      crud.py          # 專案 CRUD 路由（列表、建立、刪除、學生管理）
+      photos.py        # 照片上傳、讀取、欄位映射路由
+      texts.py         # 對印文字讀取 / 更新 / 批次更新路由
+      comments.py      # 審閱留言路由
+      render.py        # 渲染 / PDF 輸出路由
   services/
     render_service.py    # 公開 API：render_page / render_album / save_album_pdf / save_album_images；持有 UPLOADS_DIR
     draw_helpers.py      # PIL 底層工具：字型載入、圖片合成、形狀繪製、文字換行
@@ -255,3 +263,6 @@ cd D:/projects/album_maker/frontend && npm run build
 - **PIL 貼圖透明通道**：`render_sticker`（`element_renderers.py`）直接呼叫 `storage.open_image()` 後 `.convert("RGBA")`，不經 `load_key`；`to_srgb` 會執行 `img.convert("RGB")` 將透明通道填白
 - **PIL 字型**：`draw_helpers.py` 的 `get_font()` 使用系統 TrueType 字型；Windows 上路徑為 `C:/Windows/Fonts/`
 - **render_service 分層**：`render_service.py` 只持有公開 API 與 `UPLOADS_DIR`（storage.py 從這裡 import 它，不能移走）；PIL 工具在 `draw_helpers.py`，元素渲染在 `element_renderers.py`
+- **Pydantic v2 嚴格型別**：`dict[str, str]` 在 lax mode 下仍會拒絕 value 為 dict 的資料（回傳 422）。專案層級 label_texts 格式為 `{page_index: {label_id: text}}`，payload 型別必須宣告 `dict[str, Any]`（`texts.py` 的 `update_project_label_texts`）
+- **審閱意見角色**：`canComment`（admin / art_team / supervisor）可新增留言；teacher 僅能讀取留言清單（`ProjectReview.jsx` 用 `currentUser?.role === "teacher"` 單獨控制顯示）
+- **SQLite ADD COLUMN 限制**：`ALTER TABLE ADD COLUMN` 不支援非常數預設值（如 `CURRENT_TIMESTAMP`）。需先加 `DATETIME` 無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填（見 `migrations.py`）

@@ -17,6 +17,7 @@ from ._helpers import (
     assert_project_readable,
     assert_project_writable,
 )
+from .schemas import BatchTextsPayload
 
 router = APIRouter()
 
@@ -79,14 +80,14 @@ def update_student_label_texts(
 @router.put("/{project_id}/batch/texts")
 def batch_update_texts(
     project_id: int,
-    payload: dict,
+    payload: BatchTextsPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """批次更新多位學生的對印文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    students_payload = payload.get("students", {})
+    students_payload = payload.students
 
     for student in project.students:
         student_id_str = str(student.id)

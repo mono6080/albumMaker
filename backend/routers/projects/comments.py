@@ -44,7 +44,7 @@ def list_comments(
     ]
 
 
-@router.post("/{project_id}/comments", status_code=201)
+@router.post("/{project_id}/comments", response_model=CommentOut, status_code=201)
 def add_comment(
     project_id: int,
     content: str = Form(..., max_length=1000),

@@ -30,7 +30,7 @@ from ._helpers import (
     assert_project_readable,
     assert_project_writable,
 )
-from .schemas import RenderStudentResult
+from .schemas import RenderAllResult, RenderStudentResult
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def preview_project_page(
     page_index: int,
     db: Session = Depends(get_db),
 ):
-    """使用專案層級氣泡文字渲染頁面預覽，回傳 JPEG。"""
+    """使用專案層級對印文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
 
     page_layouts = get_template_page_layouts(project)
@@ -125,7 +125,7 @@ def render_student(
     return result
 
 
-@router.post("/{project_id}/render/all")
+@router.post("/{project_id}/render/all", response_model=RenderAllResult)
 def render_all_students(
     project_id: int,
     db: Session = Depends(get_db),

@@ -14,12 +14,12 @@ from services.file_service import get_photo_key, rename_photo_to_slot, save_uplo
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
-from .schemas import PhotoMappingPayload, PhotoMappingResult
+from .schemas import PhotoMappingPayload, PhotoMappingResult, PhotoUploadResult
 
 router = APIRouter()
 
 
-@router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}")
+@router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
 async def upload_photo(
     project_id: int,
     student_id: int,
@@ -116,7 +116,20 @@ def update_photo_mapping(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """直接更新欄位→路徑的對應關係，支援重新排列與清除欄位。"""
+    """
+    更新照片欄位對應關係，支援跨頁移動、位移縮放與清除。
+
+    兩步驟協議（前後端共同約定）：
+    1. 重命名（第一步）：所有非 null 項目先重命名檔案，使路徑前綴與新格位對齊。
+       後端回傳 renames 供前端同步 serverPath，避免下次儲存送出舊路徑。
+    2. 清除（第二步）：所有 null 項目統一刪除，但只刪除未被移走的檔案。
+       跨頁互換時先收集 incoming_paths，確保「A 移到 B、B 移到 A」不誤刪。
+
+    Payload 格式：
+      pages: { "頁面索引": { "slot_id": { path, scale, offset_x, offset_y } | null } }
+    - 非 null：寫入（自動重命名至新格位前綴）
+    - null：清除此格位並刪除對應檔案
+    """
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
