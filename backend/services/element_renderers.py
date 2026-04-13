@@ -153,9 +153,11 @@ def render_sticker(canvas: Image.Image, sticker: dict) -> None:
         return
 
 
-def render_text_label(canvas: Image.Image, label: dict, student_name: str) -> None:
-    """渲染純文字區塊（無背景）。"""
-    label_text = label.get("text", "").replace("{name}", student_name)
+def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, student_name: str) -> None:
+    """渲染對印文字方塊（無背景）。label_texts 提供專案 / 學生層級的文字覆蓋。"""
+    label_id = str(label.get("id", ""))
+    raw_text = label_texts.get(label_id, label.get("text", ""))
+    label_text = raw_text.replace("{name}", student_name)
     if not label_text:
         return
     font_size = label.get("font_size", 24)
@@ -197,10 +199,9 @@ def render_text_label(canvas: Image.Image, label: dict, student_name: str) -> No
             draw.text((label["x"] + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
 
 
-def render_text_bubble(canvas: Image.Image, bubble: dict, bubble_texts: dict, student_name: str) -> None:
-    """渲染氣泡框（含背景與文字）。"""
-    bubble_id = str(bubble["id"])
-    raw_text = bubble_texts.get(bubble_id, bubble.get("text", ""))
+def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> None:
+    """渲染氣泡框（含背景與文字），使用模板內定義的文字。"""
+    raw_text = bubble.get("text", "")
     text = raw_text.replace("{name}", student_name)
     rotation = bubble.get("rotation", 0)
     font_size = bubble.get("font_size", 20)

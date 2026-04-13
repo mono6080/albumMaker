@@ -1,6 +1,6 @@
 // 專案設定頁面
-// 提供學生名單管理（批次新增、刪除、改名）與專案層級氣泡文字的統一填入，
-// 氣泡文字變更後自動防抖儲存（600ms），並在右側顯示即時預覽
+// 提供學生名單管理（批次新增、刪除、改名）與專案層級對印文字的統一填入，
+// 文字變更後自動防抖儲存（600ms），並在右側顯示即時預覽
 
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
@@ -8,13 +8,13 @@ import toast from "react-hot-toast";
 
 import {
   fetchProject, batchAddStudents, deleteStudent,
-  updateProjectBubbleTexts, renameStudent,
+  updateProjectLabelTexts, renameStudent,
 } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
 import { buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
-  Users, Plus, ChevronRight, X, MessageCircle,
+  Users, Plus, ChevronRight, X, Type,
   Eye, Loader2, RefreshCw, Pencil, Check,
 } from "lucide-react";
 import PanelSwitcher from "../components/PanelSwitcher";
@@ -40,24 +40,23 @@ export default function ProjectBatch() {
   const [editingStudentName, setEditingStudentName] = useState("");
   const [isAddingStudents, setIsAddingStudents] = useState(false);
 
-  // 氣泡文字 tab 狀態
+  // 對印文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
-  const [bubbleTexts, setBubbleTexts] = useState({});  // { [pageIndex]: { [bubbleId]: text } }
+  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
 
-  // ── 自動儲存氣泡文字（防抖 600ms） ────────────────────────────────────────
+  // ── 自動儲存對印文字（防抖 600ms） ────────────────────────────────────────
 
   const { scheduleSave } = useAutoSave(
-    bubbleTexts,
-    async (currentBubbleTexts) => {
-      // 將 { [pageIndex]: { [bubbleId]: text } } 轉換為 API payload 格式
+    labelTexts,
+    async (currentLabelTexts) => {
       const payload = {};
-      Object.entries(currentBubbleTexts).forEach(([pageIndex, bubbles]) => {
-        payload[String(pageIndex)] = bubbles;
+      Object.entries(currentLabelTexts).forEach(([pageIndex, labels]) => {
+        payload[String(pageIndex)] = labels;
       });
       try {
-        await updateProjectBubbleTexts(projectId, payload);
+        await updateProjectLabelTexts(projectId, payload);
         setPreviewTimestamp(Date.now());
       } catch { /* 靜默失敗 */ }
     },
@@ -73,17 +72,17 @@ export default function ProjectBatch() {
     const templateResponse = await fetchTemplate(projectResponse.data.template_id);
     setTemplate(templateResponse.data);
 
-    // 初始化氣泡文字狀態（專案設定優先，若無則使用模板預設）
-    const savedProjectBubbleTexts = projectResponse.data.bubble_texts || {};
-    const initialBubbleTexts = {};
+    // 初始化對印文字狀態（專案設定優先，若無則使用模板預設）
+    const savedProjectLabelTexts = projectResponse.data.label_texts || {};
+    const initialLabelTexts = {};
     templateResponse.data.pages.forEach((templatePage, pageIndex) => {
-      initialBubbleTexts[pageIndex] = {};
-      (templatePage.layout?.text_bubbles || []).forEach(bubble => {
-        initialBubbleTexts[pageIndex][String(bubble.id)] =
-          savedProjectBubbleTexts[String(pageIndex)]?.[String(bubble.id)] ?? bubble.text ?? "";
+      initialLabelTexts[pageIndex] = {};
+      (templatePage.layout?.text_labels || []).forEach(label => {
+        initialLabelTexts[pageIndex][String(label.id)] =
+          savedProjectLabelTexts[String(pageIndex)]?.[String(label.id)] ?? label.text ?? "";
       });
     });
-    setBubbleTexts(initialBubbleTexts);
+    setLabelTexts(initialLabelTexts);
   };
 
   useEffect(() => { loadProjectData(); }, [projectId]);
@@ -138,17 +137,16 @@ export default function ProjectBatch() {
     await loadProjectData();
   };
 
-  // ── 氣泡文字操作 ──────────────────────────────────────────────────────────
+  // ── 對印文字操作 ──────────────────────────────────────────────────────────
 
-  const getBubbleText = (pageIndex, bubbleId) =>
-    bubbleTexts[pageIndex]?.[String(bubbleId)] ?? "";
+  const getLabelText = (pageIndex, labelId) =>
+    labelTexts[pageIndex]?.[String(labelId)] ?? "";
 
-  const setBubbleText = (pageIndex, bubbleId, textValue) => {
-    setBubbleTexts(prevTexts => ({
+  const setLabelText = (pageIndex, labelId, textValue) => {
+    setLabelTexts(prevTexts => ({
       ...prevTexts,
-      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(bubbleId)]: textValue },
+      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
     }));
-    // 每次文字變更後排程一次防抖儲存
     scheduleSave();
   };
 
@@ -163,40 +161,35 @@ export default function ProjectBatch() {
   const templatePages = template.pages;
   const activePageLayout = templatePages[activePage]?.layout;
 
-  // ── 氣泡文字編輯面板 ──────────────────────────────────────────────────────
+  // ── 對印文字編輯面板 ──────────────────────────────────────────────────────
 
   const editorPanel = (
     <div className="space-y-3">
       <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
 
-      {activePageLayout?.text_bubbles?.length > 0 ? (
+      {activePageLayout?.text_labels?.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
-            <MessageCircle className="w-4 h-4 text-violet-500" />
+            <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
-              氣泡文字 — 第 {activePage + 1} 頁
+              對印文字 — 第 {activePage + 1} 頁
             </h3>
             <span className="text-xs text-gray-400 hidden sm:inline">
               （{"{name}"} 會自動代入各學生姓名）
             </span>
           </div>
           <div className="space-y-3">
-            {activePageLayout.text_bubbles.map(bubble => (
-              <div key={bubble.id} className="flex gap-3">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-1"
-                  style={{ background: bubble.fill + "60" }}
-                >
-                  <span className="text-xs font-bold" style={{ color: bubble.font_color || "#555" }}>
-                    {bubble.id}
-                  </span>
+            {activePageLayout.text_labels.map(label => (
+              <div key={label.id} className="flex gap-3">
+                <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
+                  <span className="text-xs font-bold text-indigo-400">{label.id}</span>
                 </div>
                 <div className="flex-1">
                   <textarea
                     rows={2}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
-                    value={getBubbleText(activePage, bubble.id)}
-                    onChange={event => setBubbleText(activePage, bubble.id, event.target.value)}
+                    value={getLabelText(activePage, label.id)}
+                    onChange={event => setLabelText(activePage, label.id, event.target.value)}
                   />
                 </div>
               </div>
@@ -205,7 +198,7 @@ export default function ProjectBatch() {
         </div>
       ) : (
         <div className="flex items-center justify-center py-10 text-gray-400 text-sm">
-          此頁沒有氣泡文字
+          此頁沒有對印文字方塊
         </div>
       )}
     </div>
@@ -315,8 +308,8 @@ export default function ProjectBatch() {
               : "text-gray-500 hover:text-gray-700"
           }`}
         >
-          <MessageCircle className="w-4 h-4" />
-          氣泡文字
+          <Type className="w-4 h-4" />
+          對印文字
         </button>
       </div>
 
@@ -426,7 +419,7 @@ export default function ProjectBatch() {
         </div>
       )}
 
-      {/* Tab 2：氣泡文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
+      {/* Tab 2：對印文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
       {desktopTab === "texts" && (
         <div
           className="lg:grid lg:gap-6 lg:items-start"

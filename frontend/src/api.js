@@ -33,9 +33,9 @@ export {
   uploadPhoto,
   updatePhotoMapping,
 
-  // 氣泡文字 API
-  fetchProjectBubbleTexts as getProjectBubbleTexts,
-  updateProjectBubbleTexts,
+  // 對印文字 API
+  fetchProjectLabelTexts as getProjectLabelTexts,
+  updateProjectLabelTexts,
   batchUpdateStudentTexts as batchUpdateTexts,
 
   // 渲染 API

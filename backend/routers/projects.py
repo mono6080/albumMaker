@@ -21,7 +21,7 @@ from services.project_service import (
     build_content_disposition_header,
     build_zip_of_all_student_pdfs,
     get_template_page_layouts,
-    merge_project_bubble_texts_into_pages,
+    merge_project_label_texts_into_pages,
     render_and_save_student_album,
 )
 from services.render_service import render_page
@@ -140,7 +140,7 @@ def get_project(
         "template_id": project.template_id,
         "created_at": project.created_at,
         "owner_id": project.owner_id,
-        "bubble_texts": json.loads(project.bubble_texts_json or "{}"),
+        "label_texts": json.loads(project.label_texts_json or "{}"),
         "students": [
             {
                 "id": student.id,
@@ -285,7 +285,7 @@ def set_page_skip(
         pages_data.append({
             "page_index": len(pages_data),
             "photos": {},
-            "bubble_texts": {},
+            "label_texts": {},
         })
     pages_data[page_index]["skip"] = bool(payload.get("skip", True))
     student.pages_data_json = json.dumps(pages_data)
@@ -315,7 +315,7 @@ async def upload_photo(
         pages_data.append({
             "page_index": len(pages_data),
             "photos": {},
-            "bubble_texts": {},
+            "label_texts": {},
         })
 
     # 若該 slot 已有舊照片，先刪除避免殘留
@@ -444,39 +444,39 @@ def update_photo_mapping(
     return {"ok": True, "renames": renames}
 
 
-# ── 專案層級氣泡文字 ──────────────────────────────────────────────────────────
+# ── 專案層級對印文字 ──────────────────────────────────────────────────────────
 
-@router.get("/{project_id}/bubble_texts")
-def get_project_bubble_texts(
+@router.get("/{project_id}/label_texts")
+def get_project_label_texts(
     project_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """取得專案層級的氣泡文字設定。"""
+    """取得專案層級的對印文字設定。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    return json.loads(project.bubble_texts_json or "{}")
+    return json.loads(project.label_texts_json or "{}")
 
 
-@router.put("/{project_id}/bubble_texts")
-def update_project_bubble_texts(
+@router.put("/{project_id}/label_texts")
+def update_project_label_texts(
     project_id: int,
     payload: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新專案層級的氣泡文字設定。"""
+    """更新專案層級的對印文字設定。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    project.bubble_texts_json = json.dumps(payload)
+    project.label_texts_json = json.dumps(payload)
     db.commit()
     return {"ok": True}
 
 
-# ── 學生個人氣泡文字 ──────────────────────────────────────────────────────────
+# ── 學生個人對印文字 ──────────────────────────────────────────────────────────
 
 @router.put("/{project_id}/students/{student_id}/pages/{page_index}/texts")
-def update_student_bubble_texts(
+def update_student_label_texts(
     project_id: int,
     student_id: int,
     page_index: int,
@@ -484,7 +484,7 @@ def update_student_bubble_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新學生指定頁面的個人氣泡文字。"""
+    """更新學生指定頁面的個人對印文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
@@ -494,10 +494,10 @@ def update_student_bubble_texts(
         pages_data.append({
             "page_index": len(pages_data),
             "photos": {},
-            "bubble_texts": {},
+            "label_texts": {},
         })
 
-    pages_data[page_index]["bubble_texts"] = texts
+    pages_data[page_index]["label_texts"] = texts
     student.pages_data_json = json.dumps(pages_data)
     db.commit()
     return {"ok": True}
@@ -510,7 +510,7 @@ def batch_update_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """批次更新多位學生的氣泡文字。"""
+    """批次更新多位學生的對印文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     students_payload = payload.get("students", {})
@@ -521,15 +521,15 @@ def batch_update_texts(
             continue
 
         pages_data = json.loads(student.pages_data_json)
-        for page_index_str, bubble_texts in students_payload[student_id_str].items():
+        for page_index_str, label_texts in students_payload[student_id_str].items():
             page_index = int(page_index_str)
             while len(pages_data) <= page_index:
                 pages_data.append({
                     "page_index": len(pages_data),
                     "photos": {},
-                    "bubble_texts": {},
+                    "label_texts": {},
                 })
-            pages_data[page_index]["bubble_texts"] = bubble_texts
+            pages_data[page_index]["label_texts"] = label_texts
 
         student.pages_data_json = json.dumps(pages_data)
 
@@ -552,13 +552,13 @@ def preview_project_page(
     if page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="Page index out of range")
 
-    project_bubble_texts = json.loads(project.bubble_texts_json or "{}")
-    page_bubble_texts = project_bubble_texts.get(str(page_index), {})
+    project_label_texts = json.loads(project.label_texts_json or "{}")
+    page_label_texts = project_label_texts.get(str(page_index), {})
 
     preview_image = render_page(
         page_layouts[page_index],
         "（姓名）",
-        {"bubble_texts": page_bubble_texts},
+        {"label_texts": page_label_texts},
         page_index=page_index,
     )
 
@@ -583,10 +583,10 @@ def preview_student_page(
     if page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="Page index out of range")
 
-    project_bubble_texts = json.loads(project.bubble_texts_json or "{}")
-    student_pages_data = merge_project_bubble_texts_into_pages(
+    project_label_texts = json.loads(project.label_texts_json or "{}")
+    student_pages_data = merge_project_label_texts_into_pages(
         json.loads(student.pages_data_json),
-        project_bubble_texts,
+        project_label_texts,
     )
 
     page_data_by_index = {

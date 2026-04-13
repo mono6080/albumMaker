@@ -92,7 +92,7 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
 
     # 2. 依 z_index 排序所有元素並逐一渲染
     photos = page_data.get("photos", {})
-    bubble_texts = page_data.get("bubble_texts", {})
+    label_texts = page_data.get("label_texts", {})
     elements_ordered = sorted([
         *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i), i) for i, slot    in enumerate(layout.get("photo_slots",  []))],
         *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i), 0) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
@@ -104,9 +104,9 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         if elem_type == "photo":
             render_photo_slot(canvas, elem_data, photos, page_index, slot_index=elem_index)
         elif elem_type == "bubble":
-            render_text_bubble(canvas, elem_data, bubble_texts, student_name)
+            render_text_bubble(canvas, elem_data, student_name)
         elif elem_type == "text":
-            render_text_label(canvas, elem_data, student_name)
+            render_text_label(canvas, elem_data, label_texts, student_name)
         elif elem_type == "sticker":
             render_sticker(canvas, elem_data)
         draw = ImageDraw.Draw(canvas, "RGBA")  # 每個元素繪製後重建 draw

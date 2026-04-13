@@ -45,28 +45,28 @@ def build_content_disposition_header(filename: str) -> str:
     return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}'
 
 
-# ── 氣泡文字合併 ───────────────────────────────────────────────────────────────
+# ── 對印文字合併 ───────────────────────────────────────────────────────────────
 
-def merge_project_bubble_texts_into_pages(
+def merge_project_label_texts_into_pages(
     student_pages_data: list,
-    project_bubble_texts: dict
+    project_label_texts: dict
 ) -> list:
     """
-    將專案層級氣泡文字合併入學生頁面資料，作為學生未自訂時的預設值。
+    將專案層級對印文字合併入學生頁面資料，作為學生未自訂時的預設值。
 
     優先順序（高到低）：
-      學生個人氣泡文字 > 專案層級氣泡文字 > 模板預設文字（由 render_page 處理）
+      學生個人對印文字 > 專案層級對印文字 > 模板預設文字（由 render_page 處理）
 
     回傳新的 pages_data 列表，不修改原始物件。
     """
     merged_pages = []
     for page_data in student_pages_data:
         page_index_key = str(page_data.get("page_index", 0))
-        project_page_bubble_texts = project_bubble_texts.get(page_index_key, {})
-        if project_page_bubble_texts:
-            # 學生的設定優先；專案設定補足尚未覆寫的氣泡
-            merged_bubble_texts = {**project_page_bubble_texts, **page_data.get("bubble_texts", {})}
-            page_data = {**page_data, "bubble_texts": merged_bubble_texts}
+        project_page_label_texts = project_label_texts.get(page_index_key, {})
+        if project_page_label_texts:
+            # 學生的設定優先；專案設定補足尚未覆寫的對印文字
+            merged_label_texts = {**project_page_label_texts, **page_data.get("label_texts", {})}
+            page_data = {**page_data, "label_texts": merged_label_texts}
         merged_pages.append(page_data)
     return merged_pages
 
@@ -111,10 +111,10 @@ def render_and_save_student_album(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Template has no pages")
 
-    project_bubble_texts = json.loads(project.bubble_texts_json or "{}")
-    student_pages_data = merge_project_bubble_texts_into_pages(
+    project_label_texts = json.loads(project.label_texts_json or "{}")
+    student_pages_data = merge_project_label_texts_into_pages(
         json.loads(student.pages_data_json),
-        project_bubble_texts
+        project_label_texts
     )
 
     rendered_images = render_album(page_layouts, student.name, student_pages_data)

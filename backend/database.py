@@ -57,7 +57,7 @@ class Project(Base):
     # 專案所有者（帶班老師或 admin），nullable 以相容歷史資料
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    bubble_texts_json = Column(Text, nullable=False, default="{}")
+    label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
     students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")
     owner = relationship("User", back_populates="owned_projects", foreign_keys=[owner_id])

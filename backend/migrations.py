@@ -14,6 +14,7 @@ def run_migrations():
         _add_owner_id_to_projects(connection)
         _add_project_comments_table(connection)
         _assign_historical_projects_to_admin(connection)
+        _rename_bubble_texts_to_label_texts(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -93,6 +94,24 @@ def _add_project_comments_table(connection):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        connection.commit()
+
+
+def _rename_bubble_texts_to_label_texts(connection):
+    """將 projects.bubble_texts_json 欄位資料複製至 label_texts_json（欄位重命名）。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "label_texts_json" not in existing_columns:
+        connection.execute(
+            text("ALTER TABLE projects ADD COLUMN label_texts_json TEXT NOT NULL DEFAULT '{}'")
+        )
+        # 將舊欄位資料複製到新欄位
+        if "bubble_texts_json" in existing_columns:
+            connection.execute(
+                text("UPDATE projects SET label_texts_json = bubble_texts_json WHERE bubble_texts_json != '{}'")
+            )
         connection.commit()
 
 

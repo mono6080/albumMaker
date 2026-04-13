@@ -13,7 +13,7 @@ import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
   ChevronRight, ChevronLeft, RefreshCw, Download,
-  Loader2, MessageCircle, Trash2, RotateCcw,
+  Loader2, Type, Trash2, RotateCcw,
 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
@@ -58,24 +58,23 @@ export default function StudentEdit() {
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
   const [student, setStudent] = useState(null);
-  const [projectBubbleTexts, setProjectBubbleTexts] = useState({});
+  const [projectLabelTexts, setProjectLabelTexts] = useState({});
   const [loadError, setLoadError] = useState(null);
   const [activePage, setActivePage] = useState(0);
-  const [bubbleTexts, setBubbleTexts] = useState({});  // { [pageIndex]: { [bubbleId]: text } }
+  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
   const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
   const [skippedPages, setSkippedPages] = useState(new Set()); // 被刪除（跳過）的頁面索引
 
-  // ── 自動儲存氣泡文字（防抖 500ms） ────────────────────────────────────────
+  // ── 自動儲存對印文字（防抖 500ms） ────────────────────────────────────────
 
   const { scheduleSave, flushSave } = useAutoSave(
-    bubbleTexts,
-    async (currentBubbleTexts) => {
-      // 將 { [pageIndex]: { [bubbleId]: text } } 轉換為 API payload 格式
+    labelTexts,
+    async (currentLabelTexts) => {
       const payload = {};
-      Object.entries(currentBubbleTexts).forEach(([pageIndex, bubbles]) => {
-        payload[pageIndex] = bubbles;
+      Object.entries(currentLabelTexts).forEach(([pageIndex, labels]) => {
+        payload[pageIndex] = labels;
       });
       try {
         await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } });
@@ -85,11 +84,11 @@ export default function StudentEdit() {
     500
   );
 
-  // 每次 bubbleTexts 變更且已載入學生資料時，排程自動儲存
+  // 每次 labelTexts 變更且已載入學生資料時，排程自動儲存
   useEffect(() => {
     if (!student) return;
     scheduleSave();
-  }, [bubbleTexts]);
+  }, [labelTexts]);
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
@@ -106,19 +105,19 @@ export default function StudentEdit() {
         return;
       }
       setStudent(foundStudent);
-      setProjectBubbleTexts(projectResponse.data.bubble_texts || {});
+      setProjectLabelTexts(projectResponse.data.label_texts || {});
 
       const templateResponse = await fetchTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
 
-      // 初始化氣泡文字狀態（從學生頁面資料讀取）
+      // 初始化對印文字狀態（從學生頁面資料讀取）
       const initialTexts = {};
       const initialSkipped = new Set();
       (foundStudent?.pages_data || []).forEach(pageData => {
-        initialTexts[pageData.page_index] = pageData.bubble_texts || {};
+        initialTexts[pageData.page_index] = pageData.label_texts || {};
         if (pageData.skip) initialSkipped.add(pageData.page_index);
       });
-      setBubbleTexts(initialTexts);
+      setLabelTexts(initialTexts);
       setSkippedPages(initialSkipped);
     } catch {
       setLoadError("找不到專案或學生");
@@ -127,15 +126,15 @@ export default function StudentEdit() {
 
   useEffect(() => { loadStudentData(); }, [projectId, studentId]);
 
-  // ── 氣泡文字操作 ──────────────────────────────────────────────────────────
+  // ── 對印文字操作 ──────────────────────────────────────────────────────────
 
-  const getBubbleText = (pageIndex, bubbleId) =>
-    bubbleTexts[pageIndex]?.[String(bubbleId)] ?? "";
+  const getLabelText = (pageIndex, labelId) =>
+    labelTexts[pageIndex]?.[String(labelId)] ?? "";
 
-  const setBubbleText = (pageIndex, bubbleId, textValue) => {
-    setBubbleTexts(prevTexts => ({
+  const setLabelText = (pageIndex, labelId, textValue) => {
+    setLabelTexts(prevTexts => ({
       ...prevTexts,
-      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(bubbleId)]: textValue },
+      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
     }));
   };
 
@@ -284,29 +283,26 @@ export default function StudentEdit() {
   const textPanel = (
     <div className="space-y-4">
       <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-      {activePageLayout?.text_bubbles?.length > 0 ? (
+      {activePageLayout?.text_labels?.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
-            <MessageCircle className="w-4 h-4 text-violet-500" />
+            <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
-              第 {activePage + 1} 頁氣泡文字
+              第 {activePage + 1} 頁對印文字
             </h3>
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
               ({"{name}"} 自動代入姓名)
             </span>
           </div>
           <div className="space-y-3">
-            {activePageLayout.text_bubbles.map(bubble => {
+            {activePageLayout.text_labels.map(label => {
               const rawDefaultText =
-                projectBubbleTexts[String(activePage)]?.[String(bubble.id)] ?? bubble.text ?? "";
+                projectLabelTexts[String(activePage)]?.[String(label.id)] ?? label.text ?? "";
               const displayDefaultText = rawDefaultText.replace("{name}", student.name);
               return (
-                <div key={bubble.id} className="flex gap-3">
-                  <div
-                    className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-1 text-xs font-bold"
-                    style={{ background: bubble.fill + "60", color: bubble.font_color || "#555" }}
-                  >
-                    {bubble.id}
+                <div key={label.id} className="flex gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
+                    <span className="text-xs font-bold text-indigo-400">{label.id}</span>
                   </div>
                   <div className="flex-1">
                     <div className="text-xs text-gray-400 mb-1">
@@ -316,8 +312,8 @@ export default function StudentEdit() {
                       rows={2}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                       placeholder={displayDefaultText}
-                      value={getBubbleText(activePage, bubble.id)}
-                      onChange={event => setBubbleText(activePage, bubble.id, event.target.value)}
+                      value={getLabelText(activePage, label.id)}
+                      onChange={event => setLabelText(activePage, label.id, event.target.value)}
                     />
                   </div>
                 </div>
@@ -326,7 +322,7 @@ export default function StudentEdit() {
           </div>
         </div>
       ) : (
-        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有氣泡文字</div>
+        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有對印文字方塊</div>
       )}
     </div>
   );

@@ -70,17 +70,17 @@ export const updatePhotoMapping = (projectId, studentId, pagesMapping) =>
     { pages: pagesMapping }
   );
 
-// ── 氣泡文字 ──────────────────────────────────────────────────────────────────
+// ── 對印文字 ──────────────────────────────────────────────────────────────────
 
-/** 取得專案層級的氣泡文字設定 */
-export const fetchProjectBubbleTexts = (projectId) =>
-  apiClient.get(`/projects/${projectId}/bubble_texts`);
+/** 取得專案層級的對印文字設定 */
+export const fetchProjectLabelTexts = (projectId) =>
+  apiClient.get(`/projects/${projectId}/label_texts`);
 
-/** 更新專案層級的氣泡文字設定 */
-export const updateProjectBubbleTexts = (projectId, bubbleTextsPayload) =>
-  apiClient.put(`/projects/${projectId}/bubble_texts`, bubbleTextsPayload);
+/** 更新專案層級的對印文字設定 */
+export const updateProjectLabelTexts = (projectId, labelTextsPayload) =>
+  apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload);
 
-/** 批次更新多位學生的氣泡文字 */
+/** 批次更新多位學生的對印文字 */
 export const batchUpdateStudentTexts = (projectId, studentsPayload) =>
   apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload);
 
