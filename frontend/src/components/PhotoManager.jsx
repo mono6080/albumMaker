@@ -282,7 +282,12 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
           };
         }
-        if (Object.keys(pagesMap).length) await updatePhotoMapping(projectId, studentId, pagesMap);
+        // 儲存 mapping；若有重命名，後端回傳 renames 讓前端同步 serverPath
+        let renames = {};
+        if (Object.keys(pagesMap).length) {
+          const res = await updatePhotoMapping(projectId, studentId, pagesMap);
+          renames = res.data.renames || {};
+        }
 
         // Sync orig values in-place so dirty flags clear without a full load().
         // This prevents the parent's load() → buildItems() from reverting changes
@@ -304,8 +309,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             };
           }
           if (snap.pendingFile !== null) return it; // upload was attempted but failed
-          // For moved/transform-changed items, sync orig to what we actually saved
-          return { ...it, origServerPath: snap.serverPath, origTransform: { ...snap.transform } };
+          // 若後端重命名了此 slot 的照片，同步更新 serverPath 避免下次存檔送出舊路徑
+          const renamedPath = renames[String(snap.pi)]?.[String(snap.slotId)];
+          const syncedPath = renamedPath ?? snap.serverPath;
+          return { ...it, serverPath: syncedPath, origServerPath: syncedPath, origTransform: { ...snap.transform } };
         }));
 
         onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
