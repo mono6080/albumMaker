@@ -4,7 +4,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import bcrypt as _bcrypt
 from jose import JWTError, jwt
@@ -14,8 +14,17 @@ from database import User, get_db
 
 # ── 設定 ──────────────────────────────────────────────────────────────────────
 
-# 正式部署時請透過環境變數 SECRET_KEY 設定強密鑰
-SECRET_KEY = os.environ.get("SECRET_KEY", "album-maker-dev-secret-change-in-production")
+# 正式部署時必須透過環境變數 SECRET_KEY 設定強密鑰。
+# PRODUCTION=1 時未設定則拒絕啟動；開發環境使用預設值並印出警告。
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if os.environ.get("PRODUCTION"):
+        raise RuntimeError(
+            "環境變數 SECRET_KEY 未設定。"
+            "請執行：python -c 'import secrets; print(secrets.token_hex(32))' 並寫入 .env"
+        )
+    SECRET_KEY = "album-maker-dev-only-do-not-use-in-production"
+    print("[WARNING] SECRET_KEY 未設定，使用開發用預設值。正式部署請在 .env 設定 SECRET_KEY 與 PRODUCTION=1")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 
@@ -63,17 +72,22 @@ def decode_access_token(token: str) -> dict:
 # ── FastAPI 依賴注入 ───────────────────────────────────────────────────────────
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """從 Authorization: Bearer <token> 取得並驗證當前使用者。"""
-    if not credentials:
+    """從 HttpOnly Cookie 或 Authorization: Bearer header 取得並驗證當前使用者。
+    Cookie 優先；Bearer token 作為備用（供 API 工具直接呼叫使用）。"""
+    token = request.cookies.get("access_token")
+    if not token and credentials:
+        token = credentials.credentials
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="請先登入",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     user_id = int(payload.get("sub", 0))
     current_user = db.query(User).filter(User.id == user_id).first()
     if not current_user:

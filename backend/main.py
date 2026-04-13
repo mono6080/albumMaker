@@ -2,6 +2,8 @@
 # 負責建立 FastAPI 實例、掛載中介層、路由與靜態檔案服務，
 # 以及啟動時執行資料庫初始化與遷移
 
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -17,12 +19,16 @@ FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 app = FastAPI(title="幼兒園相本製作系統")
 
-# 允許前端開發伺服器跨域存取
+# 允許前端開發伺服器跨域存取（正式網域由環境變數 ALLOWED_ORIGINS 設定，逗號分隔）
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,  # Cookie 認證需要
 )
 
 app.include_router(auth.router)

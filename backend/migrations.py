@@ -50,19 +50,26 @@ def _add_users_table(connection):
         """))
         connection.commit()
 
-    # 插入預設 admin 帳號（密碼：admin），若已存在則跳過
+    # 插入預設 admin 帳號（隨機密碼），若已存在則跳過
     existing_admin = connection.execute(
         text("SELECT id FROM users WHERE username = 'admin'")
     ).fetchone()
     if not existing_admin:
+        import secrets
         import bcrypt as _bcrypt
-        hashed = _bcrypt.hashpw(b"admin", _bcrypt.gensalt()).decode()
+        initial_password = secrets.token_urlsafe(12)
+        hashed = _bcrypt.hashpw(initial_password.encode(), _bcrypt.gensalt()).decode()
         connection.execute(
             text("INSERT INTO users (username, display_name, hashed_password, role) VALUES ('admin', '系統管理員', :hashed, 'admin')"),
             {"hashed": hashed}
         )
         connection.commit()
-        print("[migrations] 預設 admin 帳號已建立（請盡快更改密碼）")
+        print("=" * 60)
+        print(f"[migrations] 初始 admin 帳號已建立")
+        print(f"  帳號：admin")
+        print(f"  密碼：{initial_password}")
+        print(f"  請立即登入後至使用者管理修改密碼！")
+        print("=" * 60)
 
 
 def _add_owner_id_to_projects(connection):

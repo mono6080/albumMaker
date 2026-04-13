@@ -1,7 +1,9 @@
 # 認證路由模組
-# 提供登入與取得當前使用者資訊的端點
+# 提供登入、登出與取得當前使用者資訊的端點
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -11,13 +13,18 @@ from database import User, get_db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+# 正式環境（PRODUCTION=1）啟用 Secure 旗標，確保 Cookie 只走 HTTPS
+_IS_PRODUCTION = bool(os.environ.get("PRODUCTION"))
+_COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天，與 JWT 有效期一致
+
 
 @router.post("/login")
 def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    """登入並回傳 JWT access token。"""
+    """登入：驗證帳密後以 HttpOnly Cookie 回傳 JWT，同時回傳使用者基本資訊。"""
     target_user = get_user_by_username(form_data.username, db)
     if not target_user or not verify_password(form_data.password, target_user.hashed_password):
         raise HTTPException(
@@ -34,13 +41,28 @@ def login(
         username=target_user.username,
         role=target_user.role,
     )
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        samesite="lax",
+        secure=_IS_PRODUCTION,
+        max_age=_COOKIE_MAX_AGE,
+        path="/",
+    )
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
         "role": target_user.role,
         "display_name": target_user.display_name,
         "user_id": target_user.id,
+        "username": target_user.username,
     }
+
+
+@router.post("/logout")
+def logout(response: Response):
+    """登出：清除認證 Cookie。"""
+    response.delete_cookie(key="access_token", path="/", samesite="lax")
+    return {"ok": True}
 
 
 @router.get("/me")
