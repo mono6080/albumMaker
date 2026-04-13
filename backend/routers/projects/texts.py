@@ -2,6 +2,7 @@
 # 處理專案層級與學生個人的對印文字讀取、更新與批次更新
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -35,11 +36,11 @@ def get_project_label_texts(
 @router.put("/{project_id}/label_texts")
 def update_project_label_texts(
     project_id: int,
-    payload: LabelTextsPayload,
+    payload: dict[str, Any],
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新專案層級的對印文字設定。"""
+    """更新專案層級的對印文字設定。格式：{page_index: {label_id: text}}"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     project.label_texts_json = json.dumps(payload)

@@ -6,6 +6,7 @@ import {
   downloadPdf, downloadAllZip, previewUrl
 } from "../api";
 import { apiClient } from "../api/authApi";
+import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   ChevronRight, Download, Loader2, Eye, Pencil, Package,
@@ -15,6 +16,7 @@ import {
 export default function ProjectReview() {
   const { id } = useParams();
   const { canDownloadPrint, canComment, isAdmin } = usePermissions();
+  const { currentUser } = useAuth();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -386,8 +388,8 @@ export default function ProjectReview() {
         </div>
       )}
 
-      {/* 審閱留言區（admin / 美學組 / 主管可見） */}
-      {canComment && (
+      {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
+      {(canComment || currentUser?.role === "teacher") && (
         <div className="mt-8 bg-white border border-gray-200 rounded-2xl shadow-sm p-5">
           <div className="flex items-center gap-2 mb-4">
             <MessageCircle className="w-4 h-4 text-violet-500" />
@@ -434,28 +436,32 @@ export default function ProjectReview() {
             </div>
           )}
 
-          {/* 新增留言 */}
-          <div className="flex gap-2">
-            <textarea
-              rows={2}
-              value={newCommentText}
-              onChange={(e) => setNewCommentText(e.target.value)}
-              placeholder="輸入審閱意見..."
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
-              }}
-            />
-            <button
-              onClick={handleSubmitComment}
-              disabled={isSubmittingComment || !newCommentText.trim()}
-              className="self-end flex items-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">送出</span>
-            </button>
-          </div>
-          <p className="text-xs text-gray-300 mt-1.5">Ctrl+Enter 快速送出</p>
+          {/* 新增留言（老師唯讀，不顯示輸入區） */}
+          {canComment && (
+            <>
+              <div className="flex gap-2">
+                <textarea
+                  rows={2}
+                  value={newCommentText}
+                  onChange={(e) => setNewCommentText(e.target.value)}
+                  placeholder="輸入審閱意見..."
+                  className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
+                  }}
+                />
+                <button
+                  onClick={handleSubmitComment}
+                  disabled={isSubmittingComment || !newCommentText.trim()}
+                  className="self-end flex items-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">送出</span>
+                </button>
+              </div>
+              <p className="text-xs text-gray-300 mt-1.5">Ctrl+Enter 快速送出</p>
+            </>
+          )}
         </div>
       )}
     </div>
