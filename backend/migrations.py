@@ -170,8 +170,13 @@ def _add_timestamp_columns(connection):
         }
         for col in columns:
             if col not in existing:
+                # SQLite 不允許 ADD COLUMN 使用非常數預設值（如 CURRENT_TIMESTAMP）
+                # 改為先加 NULL 欄位，再回填現有資料列
                 connection.execute(text(
-                    f"ALTER TABLE {table} ADD COLUMN {col} DATETIME DEFAULT CURRENT_TIMESTAMP"
+                    f"ALTER TABLE {table} ADD COLUMN {col} DATETIME"
+                ))
+                connection.execute(text(
+                    f"UPDATE {table} SET {col} = CURRENT_TIMESTAMP WHERE {col} IS NULL"
                 ))
     connection.commit()
 
