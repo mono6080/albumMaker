@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    volumes:
+      - uploads:/app/uploads
+      - db:/app/db
+      - production_album_maker_socket:/album_maker_socket
+    env_file:
+      - .env
+    networks:
+      - nginx_net
+    restart: unless-stopped
+    command: >
+      python -m uvicorn main:app
+      --uds /album_maker_socket/app.sock
+      --forwarded-allow-ips='*'
+
+networks:
+  nginx_net:
+    external: true
+
+volumes:
+  uploads:
+  db:
+  production_album_maker_socket:

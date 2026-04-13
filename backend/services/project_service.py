@@ -6,13 +6,11 @@ import io
 import json
 import re
 import zipfile
-from pathlib import Path
 from urllib.parse import quote
 
 from database import Project, Student
-from services.render_service import (
-    UPLOADS_DIR, render_album, save_album_pdf, save_album_images
-)
+from services.render_service import render_album, save_album_pdf, save_album_images
+from services.storage import get_storage
 
 
 # ── 檔名與目錄工具 ─────────────────────────────────────────────────────────────
@@ -22,11 +20,9 @@ def make_safe_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or "unnamed"
 
 
-def get_project_output_dir(project_id: int) -> Path:
-    """取得專案 PDF 輸出目錄，目錄不存在時自動建立。"""
-    output_dir = UPLOADS_DIR / "output" / f"proj{project_id}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
+def get_project_output_prefix(project_id: int) -> str:
+    """回傳專案輸出檔案的 storage key 前綴。"""
+    return f"projects/proj{project_id}/output"
 
 
 def build_combined_stem(project_name: str, student_name: str) -> str:
@@ -123,19 +119,21 @@ def render_and_save_student_album(
 
     rendered_images = render_album(page_layouts, student.name, student_pages_data)
 
-    output_dir = get_project_output_dir(project_id)
     combined_stem = build_combined_stem(project.name, student.name)
-    print_pdf_path = output_dir / f"{combined_stem}.pdf"
-    screen_pdf_path = output_dir / f"{combined_stem}_screen.pdf"
+    output_prefix = get_project_output_prefix(project_id)
+    print_key = f"{output_prefix}/{combined_stem}.pdf"
+    screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
 
-    save_album_pdf(rendered_images, print_pdf_path, mode="print")
-    save_album_pdf(rendered_images, screen_pdf_path, mode="screen")
-    save_album_images(rendered_images, output_dir / combined_stem, combined_stem)
+    storage = get_storage()
+    storage.put(print_key, save_album_pdf(rendered_images, mode="print"))
+    storage.put(screen_key, save_album_pdf(rendered_images, mode="screen"))
+    for filename, img_bytes in save_album_images(rendered_images, combined_stem).items():
+        storage.put(f"{output_prefix}/{combined_stem}/{filename}", img_bytes)
 
-    student.output_filename = str(print_pdf_path)
+    student.output_filename = print_key
     db.commit()
 
-    return {"pdf": str(print_pdf_path), "pages": len(rendered_images)}
+    return {"pdf": print_key, "pages": len(rendered_images)}
 
 
 # ── ZIP 封裝 ───────────────────────────────────────────────────────────────────
@@ -146,21 +144,23 @@ def build_zip_of_all_student_pdfs(project: Project, output_mode: str) -> bytes:
 
     output_mode：'print'（列印畫質）或 'screen'（螢幕顯示畫質）
     """
+    storage = get_storage()
     output_buffer = io.BytesIO()
     with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
         for student in project.students:
             if not student.output_filename:
                 continue
-            base_path = Path(student.output_filename)
-            pdf_path = (
-                base_path.parent / f"{base_path.stem}_screen.pdf"
+            # output_filename 現為 key，如 "projects/proj1/output/stem.pdf"
+            base_key = student.output_filename
+            pdf_key = (
+                base_key[:-4] + "_screen.pdf"
                 if output_mode == "screen"
-                else base_path
+                else base_key
             )
-            if not pdf_path.exists():
+            if not storage.exists(pdf_key):
                 continue
             combined_stem = build_combined_stem(project.name, student.name)
             suffix = "_screen" if output_mode == "screen" else ""
-            zip_archive.write(pdf_path, f"{combined_stem}{suffix}.pdf")
+            zip_archive.writestr(f"{combined_stem}{suffix}.pdf", storage.get_bytes(pdf_key))
     output_buffer.seek(0)
     return output_buffer.read()

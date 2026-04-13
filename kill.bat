@@ -1,0 +1,3 @@
+@echo off
+echo 關閉後端伺服器 (port 8765)...
+python "%~dp0kill_server.py"

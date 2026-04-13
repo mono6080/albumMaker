@@ -6,18 +6,15 @@ import io
 import json
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
 from database import Template, TemplatePage, User, get_db
 from crud.template_crud import get_template_or_404, get_template_page_or_404
-from services.file_service import (
-    get_background_destination_path,
-    get_sticker_destination_path,
-    save_uploaded_file,
-)
-from services.render_service import UPLOADS_DIR, render_page
+from services.file_service import get_background_key, get_sticker_key, save_uploaded_file
+from services.render_service import render_page
+from services.storage import get_storage
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -188,18 +185,17 @@ async def upload_background(
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
 
-    # 計算儲存路徑並寫入檔案
-    destination_path = get_background_destination_path(template_id, page_id, file.filename)
-    await save_uploaded_file(file, destination_path)
+    # 計算 key 並透過 adapter 寫入
+    key = get_background_key(template_id, page_id, file.filename)
+    await save_uploaded_file(key, file)
 
-    # 更新資料庫欄位與佈局中的背景檔名
-    template_page.background_filename = destination_path.name
+    template_page.background_filename = key
     page_layout = json.loads(template_page.layout_json)
-    page_layout["background_filename"] = destination_path.name
+    page_layout["background_filename"] = key
     template_page.layout_json = json.dumps(page_layout)
     db.commit()
 
-    return {"filename": destination_path.name}
+    return {"filename": key}
 
 
 @router.get("/{template_id}/pages/{page_id}/background")
@@ -215,12 +211,12 @@ def get_background(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="No background")
 
-    background_file_path = UPLOADS_DIR / "backgrounds" / template_page.background_filename
-    if not background_file_path.exists():
+    storage = get_storage()
+    if not storage.exists(template_page.background_filename):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(background_file_path)
+    return storage.serve(template_page.background_filename)
 
 
 # ── 貼圖素材 ──────────────────────────────────────────────────────────────────
@@ -232,12 +228,9 @@ async def upload_sticker(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳貼圖素材至模板專屬目錄。"""
-    destination_path = get_sticker_destination_path(template_id, file.filename)
-    await save_uploaded_file(file, destination_path)
-    return {
-        "path": f"stickers/tmpl{template_id}/{file.filename}",
-        "filename": file.filename,
-    }
+    key = get_sticker_key(template_id, file.filename)
+    await save_uploaded_file(key, file)
+    return {"path": key, "filename": file.filename}
 
 
 @router.get("/{template_id}/stickers/{filename}")
@@ -246,11 +239,12 @@ def get_sticker(
     filename: str,
 ):
     """回傳指定貼圖素材檔案。"""
-    sticker_file_path = UPLOADS_DIR / "stickers" / f"tmpl{template_id}" / filename
-    if not sticker_file_path.exists():
+    storage = get_storage()
+    key = get_sticker_key(template_id, filename)
+    if not storage.exists(key):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Sticker not found")
-    return FileResponse(str(sticker_file_path))
+    return storage.serve(key)
 
 
 # ── 頁面預覽 ──────────────────────────────────────────────────────────────────

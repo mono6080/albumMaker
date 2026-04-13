@@ -45,6 +45,9 @@ backend/rendered_*.png
 *.jpg
 *.jpeg
 
+# Env
+.env
+
 # OS
 .DS_Store
 Thumbs.db

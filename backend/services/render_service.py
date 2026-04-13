@@ -59,6 +59,7 @@ import io
 import json
 import math
 import os
+from typing import Optional
 import textwrap
 from pathlib import Path
 from typing import Optional
@@ -68,31 +69,41 @@ from PIL import Image, ImageCms, ImageDraw, ImageFilter, ImageFont
 BACKEND_DIR = Path(__file__).parent.parent
 UPLOADS_DIR = BACKEND_DIR / "uploads"
 
-# Try to find a CJK-capable font on Windows
+# CJK 字型候選清單：Windows 優先，找不到自動 fallback 至 Linux 路徑
 CJK_FONTS = [
-    "C:/Windows/Fonts/msjh.ttc",      # Microsoft JhengHei (Traditional Chinese)
+    # Windows
+    "C:/Windows/Fonts/msjh.ttc",
     "C:/Windows/Fonts/msjhbd.ttc",
     "C:/Windows/Fonts/mingliu.ttc",
     "C:/Windows/Fonts/kaiu.ttf",
     "C:/Windows/Fonts/simsun.ttc",
-    "C:/Windows/Fonts/msyh.ttc",      # Microsoft YaHei (Simplified)
+    "C:/Windows/Fonts/msyh.ttc",
+    # Linux（Noto CJK / WenQuanYi）
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
 ]
 
 # Named font map: key matches layout JSON "font_family" field
 FONT_MAP = {
+    # Windows
     "msjh":    "C:/Windows/Fonts/msjh.ttc",
     "msjhbd":  "C:/Windows/Fonts/msjhbd.ttc",
     "mingliu": "C:/Windows/Fonts/mingliu.ttc",
     "kaiu":    "C:/Windows/Fonts/kaiu.ttf",
     "simsun":  "C:/Windows/Fonts/simsun.ttc",
     "msyh":    "C:/Windows/Fonts/msyh.ttc",
+    # Linux
+    "noto":    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "wqy":     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 }
 
 _SRGB_PROFILE = ImageCms.createProfile("sRGB")
 
-def _open_as_srgb(path: Path) -> Image.Image:
-    """Open an image and convert to sRGB, preserving colors from embedded ICC profile."""
-    img = Image.open(path)
+
+def _to_srgb(img: Image.Image) -> Image.Image:
+    """將已開啟的 PIL Image 套用 ICC profile 並轉為 sRGB。"""
     icc = img.info.get("icc_profile")
     if icc:
         try:
@@ -101,12 +112,19 @@ def _open_as_srgb(path: Path) -> Image.Image:
                 src_profile, _SRGB_PROFILE, img.mode, "RGB",
                 renderingIntent=ImageCms.Intent.RELATIVE_COLORIMETRIC,
             )
-            img = ImageCms.applyTransform(img, transform)
+            return ImageCms.applyTransform(img, transform)
         except Exception:
-            img = img.convert("RGB")
-    else:
-        img = img.convert("RGB")
-    return img
+            return img.convert("RGB")
+    return img.convert("RGB")
+
+
+def _load_key(key: str) -> Optional[Image.Image]:
+    """從 storage 讀取圖片並轉為 sRGB，key 不存在時回傳 None。"""
+    from services.storage import get_storage
+    storage = get_storage()
+    if not storage.exists(key):
+        return None
+    return _to_srgb(storage.open_image(key))
 
 
 def _get_font(size: int, family: str = None) -> ImageFont.FreeTypeFont:
@@ -280,9 +298,9 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     # 1. Background
     bg_filename = layout.get("background_filename")
     if bg_filename:
-        bg_path = UPLOADS_DIR / "backgrounds" / bg_filename
-        if bg_path.exists():
-            bg = _open_as_srgb(bg_path).convert("RGBA").resize((w, h), Image.LANCZOS)
+        bg = _load_key(bg_filename)
+        if bg:
+            bg = bg.convert("RGBA").resize((w, h), Image.LANCZOS)
             canvas.paste(bg, (0, 0), bg)
 
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -358,12 +376,11 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         if not photo_path:
             continue
 
-        full_path = BACKEND_DIR.parent / photo_path if not Path(photo_path).is_absolute() else Path(photo_path)
-        if not full_path.exists():
-            full_path = BACKEND_DIR / photo_path
-
         try:
-            img = _open_as_srgb(full_path).convert("RGBA")
+            img = _load_key(photo_path)
+            if img is None:
+                continue
+            img = img.convert("RGBA")
         except Exception:
             continue
 
@@ -432,11 +449,11 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         stkr_path_str = sticker.get("path", "")
         if not stkr_path_str:
             continue
-        stkr_path = UPLOADS_DIR / stkr_path_str
-        if not stkr_path.exists():
-            continue
         try:
-            stkr_img = Image.open(stkr_path).convert("RGBA")
+            stkr_img = _load_key(stkr_path_str)
+            if stkr_img is None:
+                continue
+            stkr_img = stkr_img.convert("RGBA")
             sw, sh = int(sticker["width"]), int(sticker["height"])
             stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)
             cx = sticker["x"] + sw / 2
@@ -505,14 +522,14 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     # 5. Logo
     logo = layout.get("logo")
     if logo and logo.get("filename"):
-        logo_path = UPLOADS_DIR / "logos" / logo["filename"]
-        if logo_path.exists():
-            try:
-                lg = Image.open(logo_path).convert("RGBA")
+        try:
+            lg = _load_key(f"logos/{logo['filename']}")
+            if lg is not None:
+                lg = lg.convert("RGBA")
                 lg = lg.resize((logo.get("width", 80), logo.get("height", 50)), Image.LANCZOS)
                 canvas.paste(lg, (logo.get("x", w - 90), logo.get("y", 20)), lg)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     return canvas
 
@@ -529,15 +546,13 @@ def render_album(template_pages: list[dict], student_name: str,
     return images
 
 
-def save_album_pdf(images: list[Image.Image], output_path: Path,
-                   mode: str = "print") -> Path:
-    """Save list of PIL Images as a multi-page PDF.
+def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
+    """將相冊頁面轉成 PDF bytes 並回傳。
 
-    mode='print'  — lossless PNG, full resolution (suitable for printing)
-    mode='screen' — JPEG quality=72, half resolution (small file, screen only)
+    mode='print'  — lossless PNG，列印畫質
+    mode='screen' — JPEG quality=72，半尺寸，螢幕用
     """
     import img2pdf
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     pages_bytes = []
     for img in images:
         buf = io.BytesIO()
@@ -548,17 +563,14 @@ def save_album_pdf(images: list[Image.Image], output_path: Path,
         else:
             img.convert("RGB").save(buf, format="PNG", dpi=(150, 150))
         pages_bytes.append(buf.getvalue())
-    with open(output_path, "wb") as f:
-        f.write(img2pdf.convert(pages_bytes))
-    return output_path
+    return img2pdf.convert(pages_bytes)
 
 
-def save_album_images(images: list[Image.Image], output_dir: Path, student_name: str) -> list[Path]:
-    """Save each page as a JPEG."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths = []
+def save_album_images(images: list[Image.Image], student_name: str) -> dict[str, bytes]:
+    """將每頁轉為 JPEG bytes，回傳 {檔名: bytes} 字典。"""
+    result = {}
     for i, img in enumerate(images):
-        path = output_dir / f"{student_name}_page{i+1}.jpg"
-        img.convert("RGB").save(path, format="JPEG", quality=92, dpi=(150, 150))
-        paths.append(path)
-    return paths
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=92, dpi=(150, 150))
+        result[f"{student_name}_page{i + 1}.jpg"] = buf.getvalue()
+    return result

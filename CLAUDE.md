@@ -186,8 +186,10 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 ### 照片儲存路徑
 
 ```
-uploads/projects/{project_id}/students/{student_id}/p{page_index}_s{slot_id}.jpg
+uploads/photos/proj{project_id}/student{student_id}/p{page_index}_slot{slot_id}_{original_filename}
 ```
+
+照片移動到不同格位時，`update_photo_mapping` 會自動重命名實體檔案，使檔名前綴與新格位保持一致。
 
 ### PDF 輸出路徑
 

@@ -1,0 +1,12 @@
+kill_server.py
+backend/__pycache__
+backend/**/__pycache__
+backend/*.db
+backend/uploads/
+backend/.env
+frontend/node_modules
+frontend/dist
+.git
+*.bat
+*.md
+docker-data/

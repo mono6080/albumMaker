@@ -4,30 +4,28 @@
 
 import io
 import json
-import shutil
-from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
 from database import Project, ProjectComment, Student, Template, User, get_db
 from crud.project_crud import get_project_or_404, get_student_or_404
 from crud.user_crud import get_subordinate_user_ids
-from services.file_service import get_photo_destination_path, save_uploaded_file
+from services.file_service import get_photo_key, rename_photo_to_slot, save_uploaded_file
 from services.project_service import (
     build_combined_stem,
     build_content_disposition_header,
     build_zip_of_all_student_pdfs,
-    get_project_output_dir,
     get_template_page_layouts,
     merge_project_bubble_texts_into_pages,
     render_and_save_student_album,
 )
-from services.render_service import UPLOADS_DIR, render_page
+from services.render_service import render_page
+from services.storage import get_storage
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -182,13 +180,7 @@ def delete_project(
     assert_project_writable(project, current_user)
     db.delete(project)
     db.commit()
-    # 刪除專案的照片目錄與 PDF 輸出目錄
-    project_photo_dir = UPLOADS_DIR / "photos" / f"proj{project_id}"
-    if project_photo_dir.exists():
-        shutil.rmtree(project_photo_dir)
-    project_output_dir = UPLOADS_DIR / "output" / f"proj{project_id}"
-    if project_output_dir.exists():
-        shutil.rmtree(project_output_dir)
+    get_storage().delete_prefix(f"projects/proj{project_id}")
     return {"ok": True}
 
 
@@ -268,10 +260,7 @@ def delete_student(
     student = get_student_or_404(student_id, project_id, db)
     db.delete(student)
     db.commit()
-    # 刪除學生照片目錄（含所有頁面的照片）
-    student_photo_dir = UPLOADS_DIR / "photos" / f"proj{project_id}" / f"student{student_id}"
-    if student_photo_dir.exists():
-        shutil.rmtree(student_photo_dir)
+    get_storage().delete_prefix(f"projects/proj{project_id}/photos/student{student_id}")
     return {"ok": True}
 
 
@@ -300,22 +289,18 @@ async def upload_photo(
             "bubble_texts": {},
         })
 
-    # 若該 slot 已有舊照片，先刪除舊檔避免殘留
+    # 若該 slot 已有舊照片，先刪除避免殘留
     old_record = pages_data[page_index]["photos"].get(str(slot_id))
     if old_record:
-        old_path_str = old_record if isinstance(old_record, str) else old_record.get("path", "")
-        if old_path_str:
-            old_file = Path(old_path_str)
-            if old_file.exists():
-                old_file.unlink()
+        old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
+        if old_key:
+            get_storage().delete(old_key)
 
-    destination_path = get_photo_destination_path(
-        project_id, student_id, page_index, slot_id, file.filename
-    )
-    await save_uploaded_file(file, destination_path)
+    key = get_photo_key(project_id, student_id, page_index, slot_id, file.filename)
+    await save_uploaded_file(key, file)
 
     pages_data[page_index]["photos"][str(slot_id)] = {
-        "path": str(destination_path),
+        "path": key,
         "scale": 1.0,
         "offset_x": 0.0,
         "offset_y": 0.0,
@@ -323,7 +308,7 @@ async def upload_photo(
     student.pages_data_json = json.dumps(pages_data)
     db.commit()
 
-    return {"filename": destination_path.name, "path": str(destination_path)}
+    return {"filename": key.split("/")[-1], "path": key}
 
 
 @router.get("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}")
@@ -346,19 +331,19 @@ def get_photo(
     if not photo_record:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo_path_str = (
+    photo_key = (
         photo_record
         if isinstance(photo_record, str)
         else photo_record.get("path", "")
     )
-    if not photo_path_str:
+    if not photo_key:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo_file_path = Path(photo_path_str)
-    if not photo_file_path.exists():
+    storage = get_storage()
+    if not storage.exists(photo_key):
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    return FileResponse(str(photo_file_path))
+    return storage.serve(photo_key)
 
 
 @router.put("/{project_id}/students/{student_id}/photos/mapping")
@@ -375,7 +360,20 @@ def update_photo_mapping(
     student = get_student_or_404(student_id, project_id, db)
     pages_data = json.loads(student.pages_data_json)
 
-    for page_index_str, slot_updates in payload.get("pages", {}).items():
+    renames = {}  # 記錄所有重命名結果，供前端同步 serverPath
+    all_pages = payload.get("pages", {})
+
+    # 跨頁統一收集所有「即將被寫入」的路徑，防止跨頁互換時先刪後找不到
+    incoming_paths: set[str] = set()
+    for slot_updates in all_pages.values():
+        for photo_path in slot_updates.values():
+            if photo_path is not None:
+                path_str = photo_path if isinstance(photo_path, str) else photo_path.get("path", "")
+                if path_str:
+                    incoming_paths.add(path_str)
+
+    # 第一步：所有頁面的非 null 項目先重命名並寫入
+    for page_index_str, slot_updates in all_pages.items():
         page_index = int(page_index_str)
         while len(pages_data) <= page_index:
             pages_data.append({
@@ -385,21 +383,36 @@ def update_photo_mapping(
             })
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
-                # 清除 slot：刪除實際檔案
-                old_record = pages_data[page_index]["photos"].get(slot_id_str)
-                if old_record:
-                    old_path_str = old_record if isinstance(old_record, str) else old_record.get("path", "")
-                    if old_path_str:
-                        old_file = Path(old_path_str)
-                        if old_file.exists():
-                            old_file.unlink()
-                pages_data[page_index]["photos"].pop(slot_id_str, None)
-            else:
-                pages_data[page_index]["photos"][slot_id_str] = photo_path
+                continue
+            if isinstance(photo_path, dict) and photo_path.get("path"):
+                new_path_str = rename_photo_to_slot(
+                    photo_path["path"], page_index, int(slot_id_str)
+                )
+                # 同步更新 incoming_paths，讓後續 null 清除知道新路徑
+                if new_path_str != photo_path["path"]:
+                    incoming_paths.discard(photo_path["path"])
+                    incoming_paths.add(new_path_str)
+                    renames.setdefault(page_index_str, {})[slot_id_str] = new_path_str
+                photo_path = {**photo_path, "path": new_path_str}
+            pages_data[page_index]["photos"][slot_id_str] = photo_path
+
+    # 第二步：所有頁面的 null 項目統一清除，只刪除未被移走的檔案
+    storage = get_storage()
+    for page_index_str, slot_updates in all_pages.items():
+        page_index = int(page_index_str)
+        for slot_id_str, photo_path in slot_updates.items():
+            if photo_path is not None:
+                continue
+            old_record = pages_data[page_index]["photos"].get(slot_id_str)
+            if old_record:
+                old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
+                if old_key and old_key not in incoming_paths:
+                    storage.delete(old_key)
+            pages_data[page_index]["photos"].pop(slot_id_str, None)
 
     student.pages_data_json = json.dumps(pages_data)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "renames": renames}
 
 
 # ── 專案層級氣泡文字 ──────────────────────────────────────────────────────────
@@ -626,26 +639,25 @@ def download_student_pdf(
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="PDF not generated yet")
 
-    base_pdf_path = Path(student.output_filename)
-    pdf_file_path = (
-        base_pdf_path.parent / f"{base_pdf_path.stem}_screen.pdf"
+    # output_filename 為 key，如 "projects/proj1/output/stem.pdf"
+    base_key = student.output_filename
+    pdf_key = (
+        base_key[:-4] + "_screen.pdf"
         if effective_mode == "screen"
-        else base_pdf_path
+        else base_key
     )
 
-    if not pdf_file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="PDF file missing — please render first"
-        )
+    storage = get_storage()
+    if not storage.exists(pdf_key):
+        raise HTTPException(status_code=404, detail="PDF file missing — please render first")
 
     combined_stem = build_combined_stem(project.name, student.name)
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     download_filename = f"{combined_stem}{screen_suffix}.pdf"
-
     content_disposition = build_content_disposition_header(download_filename)
-    return FileResponse(
-        pdf_file_path,
+
+    return Response(
+        content=storage.get_bytes(pdf_key),
         media_type="application/pdf",
         headers={"Content-Disposition": content_disposition},
     )
