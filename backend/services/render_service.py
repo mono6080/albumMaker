@@ -292,7 +292,7 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Im
 
 # ── 各元素類型的獨立渲染 helper ──────────────────────────────────────────────────
 
-def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int) -> None:
+def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int, slot_index: int = 0) -> None:
     """渲染單一照片格（有照片則合成，否則繪製佔位框）。"""
     slot_id = str(slot["id"])
     photo_val = photos.get(slot_id)
@@ -323,7 +323,7 @@ def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index
                 fd.rectangle([ix1, iy1, ix2, iy2], fill="#EEEEEE")
             fd.rectangle([0, 0, sw - 1, sh - 1], outline="#C8CDD8", width=1)
             mid_x, mid_y = (ix1 + ix2) // 2, (iy1 + iy2) // 2
-            fd.text((mid_x, mid_y), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+            fd.text((mid_x, mid_y), f"P{page_index+1}·{slot_index+1}", fill="#AAAAAA",
                     font=_get_font(14), anchor="mm")
             frame = _apply_rounded_corners(frame, slot_radius)
             if sh_enabled:
@@ -336,7 +336,7 @@ def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index
                 fd2 = ImageDraw.Draw(frame)
                 fd2.rectangle([0, 0, sw - 1, sh - 1], outline="#CCCCCC", width=2)
                 mid_x2, mid_y2 = sw // 2, sh // 2
-                fd2.text((mid_x2, mid_y2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+                fd2.text((mid_x2, mid_y2), f"P{page_index+1}·{slot_index+1}", fill="#AAAAAA",
                          font=_get_font(16), anchor="mm")
                 frame = _apply_rounded_corners(frame, slot_radius)
                 frame = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
@@ -344,7 +344,7 @@ def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index
                 _paste_rotated(canvas, frame, sx + sw / 2, sy + sh / 2, rotation)
             else:
                 draw.rectangle([sx, sy, sx + sw, sy + sh], fill="#EEEEEE", outline="#CCCCCC", width=2)
-                draw.text((sx + sw // 2, sy + sh // 2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+                draw.text((sx + sw // 2, sy + sh // 2), f"P{page_index+1}·{slot_index+1}", fill="#AAAAAA",
                           font=_get_font(16), anchor="mm")
         return
 
@@ -542,15 +542,15 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     photos = page_data.get("photos", {})
     bubble_texts = page_data.get("bubble_texts", {})
     elements_ordered = sorted([
-        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i)) for i, slot    in enumerate(layout.get("photo_slots",  []))],
-        *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i)) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
-        *[("text",    label,   label.get("z_index",   _TYPE_Z_BASE["text"]    + i)) for i, label   in enumerate(layout.get("text_labels",  []))],
-        *[("sticker", sticker, sticker.get("z_index", _TYPE_Z_BASE["sticker"] + i)) for i, sticker in enumerate(layout.get("stickers",     []))],
+        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i), i) for i, slot    in enumerate(layout.get("photo_slots",  []))],
+        *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i), 0) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
+        *[("text",    label,   label.get("z_index",   _TYPE_Z_BASE["text"]    + i), 0) for i, label   in enumerate(layout.get("text_labels",  []))],
+        *[("sticker", sticker, sticker.get("z_index", _TYPE_Z_BASE["sticker"] + i), 0) for i, sticker in enumerate(layout.get("stickers",     []))],
     ], key=lambda t: t[2])
 
-    for elem_type, elem_data, _ in elements_ordered:
+    for elem_type, elem_data, _, elem_index in elements_ordered:
         if elem_type == "photo":
-            _render_photo_slot(canvas, elem_data, photos, page_index)
+            _render_photo_slot(canvas, elem_data, photos, page_index, slot_index=elem_index)
         elif elem_type == "bubble":
             _render_text_bubble(canvas, elem_data, bubble_texts, student_name)
         elif elem_type == "text":
@@ -589,6 +589,9 @@ def render_album(template_pages: list[dict], student_name: str,
     data_map = {p["page_index"]: p for p in pages_data}
     for i, page_layout in enumerate(template_pages):
         page_data = data_map.get(i, {})
+        # 跳過已標記刪除的頁面
+        if page_data.get("skip"):
+            continue
         img = render_page(page_layout, student_name, page_data, page_index=i)
         images.append(img)
     return images
