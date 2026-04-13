@@ -21,7 +21,7 @@ VALID_ROLES = {"admin", "art_team", "supervisor", "teacher", "none"}
 class CreateUserBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=50)
     display_name: str = Field(..., min_length=1, max_length=50)
-    password: str = Field(..., min_length=4, max_length=100)
+    password: str = Field(..., min_length=8, max_length=100)
     role: str
     supervisor_id: int | None = None
 
@@ -31,7 +31,7 @@ class UpdateUserBody(BaseModel):
     display_name: str | None = Field(None, min_length=1, max_length=50)
     role: str | None = None
     supervisor_id: int | None = None
-    new_password: str | None = Field(None, min_length=4, max_length=100)
+    new_password: str | None = Field(None, min_length=8, max_length=100)
     clear_supervisor: bool = False
 
 

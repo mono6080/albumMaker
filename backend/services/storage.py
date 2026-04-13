@@ -54,7 +54,11 @@ class LocalStorageAdapter(StorageAdapter):
         self._base = base_dir
 
     def _path(self, key: str) -> Path:
-        return self._base / key
+        """解析 key 為絕對路徑，並驗證結果在 base_dir 內，防止 path traversal。"""
+        resolved = (self._base / key).resolve()
+        if not str(resolved).startswith(str(self._base.resolve())):
+            raise ValueError(f"path traversal detected: {key!r}")
+        return resolved
 
     def put(self, key: str, data: bytes) -> None:
         path = self._path(key)

@@ -3,8 +3,10 @@
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from auth import create_access_token, get_current_user, verify_password
@@ -12,6 +14,7 @@ from crud.user_crud import get_user_by_username
 from database import User, get_db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+limiter = Limiter(key_func=get_remote_address)
 
 # 正式環境（PRODUCTION=1）啟用 Secure 旗標，確保 Cookie 只走 HTTPS
 _IS_PRODUCTION = bool(os.environ.get("PRODUCTION"))
@@ -19,7 +22,9 @@ _COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天，與 JWT 有效期一致
 
 
 @router.post("/login")
+@limiter.limit("10/minute")
 def login(
+    request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),

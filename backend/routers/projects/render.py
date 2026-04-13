@@ -151,7 +151,7 @@ def render_all_students(
             logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
         except Exception as render_error:
             db.rollback()
-            render_errors.append({"student": student.name, "error": str(render_error)})
+            render_errors.append({"student": student.name, "error": "渲染失敗"})
             logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
     logger.info("批次渲染完成 project_id=%s 成功=%s 失敗=%s 總耗時=%.2fs",
