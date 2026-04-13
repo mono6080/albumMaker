@@ -32,17 +32,24 @@ album_maker/
 │   ├── services/
 │   │   ├── render_service.py   # PIL 頁面合成引擎
 │   │   ├── project_service.py  # PDF 輸出、ZIP 打包、氣泡文字合併
-│   │   └── file_service.py     # 上傳檔案路徑管理
+│   │   ├── file_service.py     # Storage key 計算與上傳工具
+│   │   └── storage.py          # StorageAdapter 抽象層（本機 / 未來可換 S3）
 │   └── uploads/           # 背景圖、貼圖、學生照片（執行期產生）
 │
-└── frontend/              # React + Vite + Tailwind CSS
-    └── src/
-        ├── api/           # authApi.js（共用 apiClient）/ templateApi.js / projectApi.js / urls.js
-        ├── context/       # AuthContext.jsx（登入狀態全域管理）
-        ├── components/    # PrivateRoute / PhotoManager / AlbumPageNav / BubbleSVG …
-        ├── constants/     # shapes.js / fonts.js
-        ├── hooks/         # useAutoSave.js / usePermissions.js
-        └── pages/         # Login / UserManagement / TemplateEditor / ProjectBatch / StudentEdit / ProjectReview
+├── frontend/              # React + Vite + Tailwind CSS
+│   └── src/
+│       ├── api/           # authApi.js（共用 apiClient）/ templateApi.js / projectApi.js / urls.js
+│       ├── context/       # AuthContext.jsx（登入狀態全域管理）
+│       ├── components/    # PrivateRoute / PhotoManager / AlbumPageNav / BubbleSVG …
+│       ├── constants/     # shapes.js / fonts.js
+│       ├── hooks/         # useAutoSave.js / usePermissions.js
+│       └── pages/         # Login / UserManagement / TemplateEditor / ProjectBatch / StudentEdit / ProjectReview
+│
+├── deploy/                # 部署設定參考
+│   └── album_maker.conf   # nginx 設定範本（Unix socket 模式）
+├── Dockerfile             # Multi-stage build（Node 編前端 → Python 跑後端）
+├── docker-compose.yml     # 容器編排（Unix socket + named volumes）
+└── .env.example           # 環境變數範本
 ```
 
 ### 後端
@@ -50,6 +57,7 @@ album_maker/
 - **FastAPI 0.135** — HTTP API（`/api/auth/`、`/api/users/`、`/api/templates/`、`/api/projects/`）
 - **SQLAlchemy 2.0** — SQLite ORM（`album_maker.db`）
 - **Pillow 12** — 頁面 PNG 合成與 PDF 輸出
+- **StorageAdapter** — 抽象檔案 I/O 層；本機使用 `LocalStorageAdapter`，切換雲端儲存只需實作新 adapter 並設定 `STORAGE_BACKEND` 環境變數
 - **python-jose** — JWT 簽發與驗證
 - **bcrypt** — 密碼雜湊（直接使用，不透過 passlib）
 - 後端同時提供前端靜態檔案（SPA catch-all）
@@ -75,7 +83,7 @@ album_maker/
 ```bash
 # 後端
 cd backend
-pip install fastapi uvicorn sqlalchemy pillow python-multipart python-jose[cryptography] bcrypt
+pip install -r requirements.txt
 
 # 前端
 cd frontend
@@ -94,22 +102,47 @@ cd frontend
 npm run dev
 ```
 
-### 正式部署
+Windows 可直接雙擊 `start.bat` 啟動後端。
+
+---
+
+## Docker 部署
+
+### 本機測試
 
 ```bash
-# 1. 編譯前端
-cd frontend && npm run build
-
-# 2. 啟動後端（同時提供前端靜態檔案）
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8765
+cp .env.example .env        # 填入 SECRET_KEY
+docker compose up -d --build
 ```
 
-Windows 可直接雙擊：
+### 正式部署（接現有 nginx）
 
-| 腳本 | 用途 |
-|------|------|
-| `start.bat` | 啟動後端並自動開啟瀏覽器 |
-| `build_frontend.bat` | 編譯前端 |
+容器透過 Unix socket 與 nginx 通訊，不對外暴露 port。
+
+1. **上傳專案**至 VPS 目錄（例如 `~/albumMakerCompose/`）
+
+2. **建立 `.env`** 並填入正式 SECRET_KEY：
+   ```bash
+   cp .env.example .env
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   ```
+
+3. **啟動容器**（建立 socket volume）：
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. **將 nginx 設定加入現有 nginx compose**（參考 `deploy/album_maker.conf`），並重啟 nginx。
+
+---
+
+## 環境變數
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SECRET_KEY` | `album-maker-dev-secret-...` | JWT 簽名密鑰，正式環境必須修改 |
+| `DATABASE_URL` | `sqlite:///./album_maker.db` | 資料庫連線字串 |
+| `STORAGE_BACKEND` | `local` | 儲存後端（目前僅支援 `local`） |
 
 ---
 
@@ -221,8 +254,10 @@ SQLite 單一檔案 `backend/album_maker.db`，包含六張資料表：
 | `students` | 學生（每人儲存照片映射與個別氣泡文字的 JSON） |
 | `project_comments` | 審閱留言（project_id / author_id / 內容 / 時間） |
 
-Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行（新欄位或新表只加一次）。  
+Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行。  
 預設管理員帳號：**admin / admin**（首次啟動自動建立，請盡快更改密碼）。
+
+---
 
 ## 角色權限
 

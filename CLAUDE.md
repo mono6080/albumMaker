@@ -49,7 +49,8 @@ backend/
   services/
     render_service.py  # PIL 頁面合成引擎（canvas 794×1123）
     project_service.py # PDF 輸出、ZIP 打包、氣泡文字合併邏輯
-    file_service.py    # 上傳檔案路徑管理
+    file_service.py    # Storage key 計算與上傳工具
+    storage.py         # StorageAdapter 抽象層（LocalStorageAdapter / 未來可換 S3）
 
 frontend/src/
   api/
@@ -160,6 +161,7 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 - **Form 參數**：rename 端點使用 `Form(...)`（不是 JSON Body）
 - **Query 驗證**：使用 `pattern=` 而非棄用的 `regex=`
 - **認證**：資料操作端點加 `Depends(get_current_user)` 或 `Depends(require_role(...))`；圖片 / 預覽 serving 端點**不加 auth**（`<img>` 標籤不帶 Bearer header）
+- **StorageAdapter**：所有檔案 I/O 透過 `get_storage()` 取得 adapter，不直接操作 `Path`；本機用 `LocalStorageAdapter`，切換雲端只需實作新 class 並設 `STORAGE_BACKEND` 環境變數
 
 ### 前端
 
@@ -183,19 +185,26 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 
 渲染時 `merge_project_bubble_texts_into_pages()` 依此順序合併。
 
-### 照片儲存路徑
+### Storage key 格式
+
+所有檔案以相對於 `uploads/` 的 key 字串存取，不使用絕對路徑：
 
 ```
-uploads/photos/proj{project_id}/student{student_id}/p{page_index}_slot{slot_id}_{original_filename}
+# 照片
+projects/proj{project_id}/photos/student{student_id}/p{page_index}_slot{slot_id}_{filename}
+
+# 背景圖
+templates/tmpl{template_id}/backgrounds/page{page_id}_{filename}
+
+# 貼圖
+templates/tmpl{template_id}/stickers/{filename}
+
+# PDF 輸出
+projects/proj{project_id}/output/{stem}.pdf
+projects/proj{project_id}/output/{stem}_screen.pdf
 ```
 
-照片移動到不同格位時，`update_photo_mapping` 會自動重命名實體檔案，使檔名前綴與新格位保持一致。
-
-### PDF 輸出路徑
-
-```
-uploads/projects/{project_id}/output/{student_name}_{student_id}.pdf
-```
+照片移動到不同格位時，`rename_photo_to_slot()` 透過 adapter 重命名，使檔名前綴與新格位保持一致。
 
 ---
 
