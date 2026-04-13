@@ -33,6 +33,9 @@ from services.storage import get_storage
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
+# label_texts 格式：{label_id_str: text_str}，值必須為字串
+LabelTextsPayload = dict[str, str]
+
 
 def _parse_json_field(raw: str, field_name: str = "欄位") -> any:
     """安全解析 JSON 欄位，格式損壞時回傳 422 而非 500。"""
@@ -500,7 +503,7 @@ def get_project_label_texts(
 @router.put("/{project_id}/label_texts")
 def update_project_label_texts(
     project_id: int,
-    payload: dict,
+    payload: LabelTextsPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -519,7 +522,7 @@ def update_student_label_texts(
     project_id: int,
     student_id: int,
     page_index: int,
-    texts: dict,
+    texts: LabelTextsPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

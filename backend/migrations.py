@@ -17,6 +17,7 @@ def run_migrations():
         _rename_bubble_texts_to_label_texts(connection)
         _add_foreign_key_indexes(connection)
         _add_template_page_unique_constraint(connection)
+        _add_timestamp_columns(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -154,6 +155,25 @@ def _add_template_page_unique_constraint(connection):
             "CREATE UNIQUE INDEX idx_template_pages_unique_page ON template_pages(template_id, page_number)"
         ))
         connection.commit()
+
+
+def _add_timestamp_columns(connection):
+    """為 projects、students 補 updated_at；為 students 補 created_at。"""
+    tables_columns = {
+        "projects":  ["updated_at"],
+        "students":  ["created_at", "updated_at"],
+    }
+    for table, columns in tables_columns.items():
+        existing = {
+            row[1]
+            for row in connection.execute(text(f"PRAGMA table_info({table})"))
+        }
+        for col in columns:
+            if col not in existing:
+                connection.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {col} DATETIME DEFAULT CURRENT_TIMESTAMP"
+                ))
+    connection.commit()
 
 
 def _assign_historical_projects_to_admin(connection):

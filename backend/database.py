@@ -7,7 +7,15 @@ from datetime import datetime
 SQLALCHEMY_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "sqlite:///./album_maker.db"
 )
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """啟用 SQLite 外鍵約束（預設關閉），確保關聯完整性。"""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+from sqlalchemy import event as _sa_event
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+_sa_event.listen(engine, "connect", _set_sqlite_pragmas)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -57,6 +65,7 @@ class Project(Base):
     # 專案所有者（帶班老師或 admin），nullable 以相容歷史資料
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
     students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")
@@ -72,6 +81,8 @@ class Student(Base):
     order_index = Column(Integer, default=0)
     pages_data_json = Column(Text, nullable=False, default="[]")
     output_filename = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     project = relationship("Project", back_populates="students")
 
 
