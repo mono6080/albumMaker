@@ -47,10 +47,12 @@ backend/
     templates.py       # /api/templates/* 薄路由
     projects.py        # /api/projects/* 薄路由
   services/
-    render_service.py  # PIL 頁面合成引擎（canvas 794×1123）
-    project_service.py # PDF 輸出、ZIP 打包、氣泡文字合併邏輯
-    file_service.py    # Storage key 計算與上傳工具
-    storage.py         # StorageAdapter 抽象層（LocalStorageAdapter / 未來可換 S3）
+    render_service.py    # 公開 API：render_page / render_album / save_album_pdf / save_album_images；持有 UPLOADS_DIR
+    draw_helpers.py      # PIL 底層工具：字型載入、圖片合成、形狀繪製、文字換行
+    element_renderers.py # 各元素類型渲染：render_photo_slot / render_sticker / render_text_label / render_text_bubble
+    project_service.py   # PDF 輸出、ZIP 打包、氣泡文字合併邏輯
+    file_service.py      # Storage key 計算與上傳工具
+    storage.py           # StorageAdapter 抽象層（LocalStorageAdapter / 未來可換 S3）
 
 frontend/src/
   api/
@@ -62,17 +64,25 @@ frontend/src/
   context/
     AuthContext.jsx    # 登入狀態全域管理（currentUser / login / logout）
   components/
-    PrivateRoute.jsx       # 路由守衛（未登入 → /login，角色不符 → 無權限提示）
-    canvas/BubbleSVG.jsx   # 純 SVG 氣泡框顯示元件（ProjectReview 預覽用）
-    PhotoManager.jsx        # 照片格管理（上傳 / 位移縮放）
-    AlbumPageNav.jsx        # 頁面導覽列
-    PanelSwitcher.jsx       # 行動版分頁切換
+    PrivateRoute.jsx          # 路由守衛（未登入 → /login，角色不符 → 無權限提示）
+    PropertyPanel.jsx         # 元素屬性面板（照片格 / 氣泡框 / 文字標籤 / 貼圖）
+    PhotoManager.jsx          # 照片格管理主元件（上傳 / 位移縮放 / 拖曳排序）
+    SlotFramePreview.jsx      # 空格位相框預覽縮圖（純顯示）
+    PhotoSlotCard.jsx         # 照片縮圖卡片（PIL 精確位移計算，純顯示）
+    AlbumPageNav.jsx          # 頁面導覽列
+    PanelSwitcher.jsx         # 行動版分頁切換
+    canvas/
+      BubbleSVG.jsx           # 純 SVG 氣泡框（ProjectReview 預覽用）
+      BubbleKonvaShape.jsx    # Konva Canvas 2D 氣泡框繪製（TemplateEditor 用）
+      StickerNode.jsx         # Konva 貼圖節點（非同步載入圖片）
   constants/
     shapes.js          # BUBBLE_SHAPES, BUBBLE_PRESET_COLORS
     fonts.js           # FONT_OPTIONS, getFontCss(), isFontBold()
   hooks/
     useAutoSave.js     # 通用防抖自動儲存 hook（scheduleSave / flushSave）
     usePermissions.js  # 依角色回傳權限旗標（canCreateProject / canEditProject …）
+  utils/
+    photoUtils.js      # normalizePhotoData / buildItems / photoDims / clampPan
   pages/
     Login.jsx          # 登入頁（表單 + 角色導向）
     UserManagement.jsx # 使用者管理（admin only）
@@ -238,9 +248,10 @@ cd D:/projects/album_maker/frontend && npm run build
 - **中文檔名 PDF**：使用 RFC 5987 `Content-Disposition: attachment; filename*=UTF-8''...` 格式
 - **Windows curl 中文輸入**：終端機為 cp950，直接輸入中文會產生亂碼。請使用 Unicode escape（`\u4e0a`）或透過瀏覽器 UI 操作
 - **SQLite text_factory**：`database.py` 不設定 `text_factory`，SQLAlchemy 以 UTF-8 存取；若用 raw sqlite3 讀取需自行處理 encoding
-- **PIL 字型**：render_service 使用系統 TrueType 字型；Windows 上路徑為 `C:/Windows/Fonts/`
 - **圖片端點不加 auth**：`<img src>` 是瀏覽器原生請求，不帶 Authorization header。preview / sticker / background / photo 六個 GET 端點不設 `get_current_user`，否則外網（ngrok 等）圖片全黑
 - **bcrypt 套件**：使用 `bcrypt` 直接呼叫（`bcrypt.hashpw` / `bcrypt.checkpw`），不透過 passlib（passlib 與 bcrypt 4.x+ 不相容）
 - **使用者管理 API body 格式**：`POST /api/users/` 與 `PATCH /api/users/{id}` 接收 JSON body（Pydantic model），前端用 `apiClient.post(url, params)`（axios 預設 JSON），不用 URLSearchParams
-- **PIL 陰影 `_add_drop_shadow`**：`combined.paste(shadow, (0,0))` 不帶 mask；若帶 mask（自身 RGBA），PIL 會對 alpha 做平方（`alpha² / 255`），陰影會變成約 ¼ 濃度
-- **PIL 貼圖透明通道**：`_render_sticker` 直接呼叫 `storage.open_image()` 後 `.convert("RGBA")`，不經 `_load_key`；`_to_srgb` 會執行 `img.convert("RGB")` 將透明通道填白
+- **PIL 陰影 `add_drop_shadow`**（`draw_helpers.py`）：`combined.paste(shadow, (0,0))` 不帶 mask；若帶 mask（自身 RGBA），PIL 會對 alpha 做平方（`alpha² / 255`），陰影會變成約 ¼ 濃度
+- **PIL 貼圖透明通道**：`render_sticker`（`element_renderers.py`）直接呼叫 `storage.open_image()` 後 `.convert("RGBA")`，不經 `load_key`；`to_srgb` 會執行 `img.convert("RGB")` 將透明通道填白
+- **PIL 字型**：`draw_helpers.py` 的 `get_font()` 使用系統 TrueType 字型；Windows 上路徑為 `C:/Windows/Fonts/`
+- **render_service 分層**：`render_service.py` 只持有公開 API 與 `UPLOADS_DIR`（storage.py 從這裡 import 它，不能移走）；PIL 工具在 `draw_helpers.py`，元素渲染在 `element_renderers.py`

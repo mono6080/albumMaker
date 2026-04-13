@@ -30,19 +30,23 @@ album_maker/
 │   ├── crud/              # get_or_404 查詢輔助（含 user_crud.py）
 │   ├── routers/           # 薄路由層（auth / users / templates / projects）
 │   ├── services/
-│   │   ├── render_service.py   # PIL 頁面合成引擎
-│   │   ├── project_service.py  # PDF 輸出、ZIP 打包、氣泡文字合併
-│   │   ├── file_service.py     # Storage key 計算與上傳工具
-│   │   └── storage.py          # StorageAdapter 抽象層（本機 / 未來可換 S3）
+│   │   ├── render_service.py    # 公開 API：render_page / render_album / save_album_pdf
+│   │   ├── draw_helpers.py      # PIL 底層：字型、圖片合成、形狀繪製、文字換行
+│   │   ├── element_renderers.py # 各元素渲染：照片格 / 氣泡框 / 文字標籤 / 貼圖
+│   │   ├── project_service.py   # PDF 輸出、ZIP 打包、氣泡文字合併
+│   │   ├── file_service.py      # Storage key 計算與上傳工具
+│   │   └── storage.py           # StorageAdapter 抽象層（本機 / 未來可換 S3）
 │   └── uploads/           # 背景圖、貼圖、學生照片（執行期產生）
 │
 ├── frontend/              # React + Vite + Tailwind CSS
 │   └── src/
 │       ├── api/           # authApi.js（共用 apiClient）/ templateApi.js / projectApi.js / urls.js
 │       ├── context/       # AuthContext.jsx（登入狀態全域管理）
-│       ├── components/    # PrivateRoute / PhotoManager / AlbumPageNav / BubbleSVG …
+│       ├── components/    # PropertyPanel / PhotoManager / PhotoSlotCard / SlotFramePreview
+│       │   └── canvas/    # BubbleKonvaShape / StickerNode / BubbleSVG
 │       ├── constants/     # shapes.js / fonts.js
 │       ├── hooks/         # useAutoSave.js / usePermissions.js
+│       ├── utils/         # photoUtils.js
 │       └── pages/         # Login / UserManagement / TemplateEditor / ProjectBatch / StudentEdit / ProjectReview
 │
 ├── deploy/                # 部署設定參考
@@ -67,7 +71,7 @@ album_maker/
 - **React 19 + Vite 8** — SPA
 - **Tailwind CSS 4** — 樣式
 - **Axios** — API 請求；共用 `apiClient` 自動附帶 Bearer token，401 自動跳登入頁
-- 拖曳畫布以 DOM 事件實作（不依賴 canvas 函式庫）
+- **react-konva** — 模板編輯器拖曳畫布（Canvas 2D，視覺與後端 PIL 渲染一致）
 
 ---
 
