@@ -1,28 +1,28 @@
 // 認證 Context
-// 提供全域登入狀態、使用者資訊、login / logout 函式，
-// Provider 掛載時自動從 localStorage 還原 session
+// 提供全域登入狀態、使用者資訊、login / logout 函式
+// 認證改用 HttpOnly Cookie：不再讀寫 localStorage，session 由後端 Cookie 維護
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { fetchMe, login as apiLogin } from "../api/authApi";
+import { fetchMe, login as apiLogin, logout as apiLogout } from "../api/authApi";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
-  // loading：true 表示尚在驗證 localStorage token，避免閃爍跳轉
+  // loading：true 表示尚在向後端確認 Cookie session，避免閃爍跳轉
   const [isLoading, setIsLoading] = useState(true);
 
-  // ── 頁面載入時嘗試還原 session ────────────────────────────────────────────
+  // ── 頁面載入時嘗試還原 session（Cookie 由瀏覽器自動帶） ──────────────────
 
   useEffect(() => {
-    const storedToken = localStorage.getItem("access_token");
-    if (!storedToken) {
-      setIsLoading(false);
-      return;
-    }
     fetchMe()
       .then((response) => setCurrentUser(response.data))
-      .catch(() => localStorage.removeItem("access_token"))
+      .catch((error) => {
+        // 只在 401 時確認未登入；網路錯誤不清除 session
+        if (error.response?.status === 401) {
+          setCurrentUser(null);
+        }
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
@@ -30,16 +30,20 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (username, password) => {
     const response = await apiLogin(username, password);
-    const { access_token, role, display_name, user_id } = response.data;
-    localStorage.setItem("access_token", access_token);
-    setCurrentUser({ id: user_id, username, display_name, role });
+    const { role, display_name, user_id, username: uname } = response.data;
+    // Cookie 由後端 Set-Cookie 寫入，前端只保存使用者資訊到 state
+    setCurrentUser({ id: user_id, username: uname, display_name, role });
     return response.data;
   }, []);
 
   // ── 登出 ──────────────────────────────────────────────────────────────────
 
-  const logout = useCallback(() => {
-    localStorage.removeItem("access_token");
+  const logout = useCallback(async () => {
+    try {
+      await apiLogout(); // 通知後端清除 Cookie
+    } catch {
+      // 網路錯誤時仍清除本地 state，確保 UI 跳回登入頁
+    }
     setCurrentUser(null);
   }, []);
 

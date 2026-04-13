@@ -20,6 +20,8 @@ export default function ProjectReview() {
   const [template, setTemplate] = useState(null);
   const [rendering, setRendering] = useState({});
   const [renderingAll, setRenderingAll] = useState(false);
+  // { current: number, total: number } | null
+  const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [preview, setPreview] = useState(null);
   const [ts, setTs] = useState(Date.now());
   // 非 admin 固定使用 screen 模式
@@ -71,6 +73,26 @@ export default function ProjectReview() {
     URL.revokeObjectURL(blobUrl);
   };
 
+  const showRetryToast = (message, onRetry) => {
+    toast.custom(t => (
+      <div className={`flex items-center gap-3 bg-white border border-red-200 rounded-xl shadow-lg px-4 py-3 transition-opacity ${t.visible ? "opacity-100" : "opacity-0"}`}>
+        <span className="text-sm text-red-600 font-medium">{message}</span>
+        <button
+          onClick={() => { toast.dismiss(t.id); onRetry(); }}
+          className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg transition-colors font-medium"
+        >
+          重試
+        </button>
+        <button
+          onClick={() => toast.dismiss(t.id)}
+          className="text-gray-400 hover:text-gray-600 text-xs"
+        >
+          ✕
+        </button>
+      </div>
+    ), { duration: 8000 });
+  };
+
   const handleDownloadOne = async (studentId) => {
     setRendering(prev => ({ ...prev, [studentId]: true }));
     try {
@@ -82,14 +104,20 @@ export default function ProjectReview() {
         downloadPdf(id, studentId, effectiveMode),
         "album.pdf",
       );
-    } catch { toast.error("產生失敗"); }
+    } catch { showRetryToast("產生失敗", () => handleDownloadOne(studentId)); }
     setRendering(prev => ({ ...prev, [studentId]: false }));
   };
 
   const handleDownloadAll = async () => {
+    const students = project.students;
+    if (!students.length) return;
     setRenderingAll(true);
+    setRenderAllProgress({ current: 0, total: students.length });
     try {
-      await renderAll(id);
+      for (let i = 0; i < students.length; i++) {
+        setRenderAllProgress({ current: i + 1, total: students.length });
+        await renderStudent(id, students[i].id);
+      }
       await loadProject();
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
@@ -97,8 +125,9 @@ export default function ProjectReview() {
         downloadAllZip(id, effectiveMode),
         "albums.zip",
       );
-    } catch { toast.error("批次產生失敗"); }
+    } catch { showRetryToast("批次產生失敗", handleDownloadAll); }
     setRenderingAll(false);
+    setRenderAllProgress(null);
   };
 
   const handleSubmitComment = async () => {
@@ -177,7 +206,13 @@ export default function ProjectReview() {
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
           >
             {renderingAll
-              ? <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">產生中...</span><span className="sm:hidden">...</span></>
+              ? <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {renderAllProgress
+                    ? <span>{renderAllProgress.current}/{renderAllProgress.total}</span>
+                    : <span className="hidden sm:inline">產生中...</span>
+                  }
+                </>
               : <><Package className="w-4 h-4" /><span>下載全部 ZIP</span></>
             }
           </button>

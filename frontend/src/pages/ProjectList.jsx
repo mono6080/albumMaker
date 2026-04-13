@@ -1,10 +1,109 @@
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { getProjects, createProject, deleteProject, getTemplates, renameProject } from "../api";
-import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, ChevronRight, Check, X } from "lucide-react";
+import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
+import ConfirmModal from "../components/ConfirmModal";
+
+// ── 專案卡片（memo 化，只在自身資料變動時重渲染）────────────────────────────
+
+const ProjectCard = memo(function ProjectCard({
+  project,
+  editingId,
+  editingName,
+  showOwner,
+  canEditProject,
+  onEditStart,
+  onEditSave,
+  onEditCancel,
+  onEditNameChange,
+  onDelete,
+}) {
+  const isEditing = editingId === project.id;
+
+  return (
+    <div className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            {isEditing ? (
+              <div className="flex items-center gap-1 mb-1">
+                <input
+                  autoFocus
+                  className="border border-indigo-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-semibold"
+                  value={editingName}
+                  onChange={e => onEditNameChange(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") onEditSave(project.id);
+                    if (e.key === "Escape") onEditCancel();
+                  }}
+                />
+                <button onClick={() => onEditSave(project.id)} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded">
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={onEditCancel} className="p-1 text-gray-400 hover:bg-gray-100 rounded">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 group/name">
+                <div className="font-semibold text-gray-900 text-lg">{project.name}</div>
+                {canEditProject(project.owner_id) && (
+                  <button
+                    onClick={() => onEditStart(project)}
+                    className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
+              <Users className="w-3 h-3" />
+              {project.student_count} 位學生 · {new Date(project.created_at).toLocaleDateString("zh-TW")}
+              {showOwner && project.owner_name && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <span>{project.owner_name}</span>
+                </>
+              )}
+            </div>
+          </div>
+          {canEditProject(project.owner_id) && (
+            <button
+              onClick={() => onDelete(project.id)}
+              className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEditProject(project.owner_id) ? "grid-cols-2" : "grid-cols-1"}`}>
+        {canEditProject(project.owner_id) && (
+          <Link
+            to={`/projects/${project.id}/batch`}
+            className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            專案設定
+          </Link>
+        )}
+        <Link
+          to={`/projects/${project.id}/review`}
+          className="flex items-center justify-center gap-1.5 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
+        >
+          <Eye className="w-3.5 h-3.5" />
+          個人編輯
+        </Link>
+      </div>
+    </div>
+  );
+});
+
+// ── 專案清單頁面 ──────────────────────────────────────────────────────────────
 
 export default function ProjectList() {
   const { canCreateProject, canEditProject } = usePermissions();
@@ -18,49 +117,92 @@ export default function ProjectList() {
   const [editingName, setEditingName] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [confirmModal, setConfirmModal] = useState(null);
 
-  const load = () => {
+  useEffect(() => {
     getProjects().then(r => setProjects(r.data));
     getTemplates().then(r => setTemplates(r.data));
-  };
-  useEffect(load, []);
+  }, []);
 
   const selectedTemplate = templates.find(t => String(t.id) === String(form.template_id));
   const composedName = selectedTemplate
     ? `${selectedTemplate.name}${form.customName.trim() ? " " + form.customName.trim() : ""}`
     : form.customName.trim();
 
+  // ── 建立（樂觀更新：先顯示後 fetch 完整清單）
   const handleCreate = async () => {
     if (!form.template_id) return toast.error("請選擇模板");
     if (!composedName.trim()) return toast.error("請填寫名稱");
     setCreating(true);
-    await createProject(composedName, form.template_id);
-    toast.success("專案已建立");
-    setForm({ customName: "", template_id: "" });
-    setShowForm(false);
-    load();
-    setCreating(false);
+    try {
+      await createProject(composedName, form.template_id);
+      toast.success("專案已建立");
+      setForm({ customName: "", template_id: "" });
+      setShowForm(false);
+      // 建立後 fetch 完整清單以取得 id / student_count / owner_name
+      const r = await getProjects();
+      setProjects(r.data);
+    } catch {
+      toast.error("建立失敗");
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const startEdit = (p) => { setEditingId(p.id); setEditingName(p.name); };
-  const cancelEdit = () => { setEditingId(null); setEditingName(""); };
-  const saveEdit = async (id) => {
-    if (!editingName.trim()) return cancelEdit();
-    await renameProject(id, editingName.trim());
-    toast.success("已更新名稱");
-    cancelEdit();
-    load();
-  };
+  // ── 重命名（樂觀更新）
+  const handleEditStart = useCallback((project) => {
+    setEditingId(project.id);
+    setEditingName(project.name);
+  }, []);
 
-  const handleDelete = async (id) => {
-    if (!confirm("確定刪除此專案？所有學生資料將一併刪除。")) return;
-    await deleteProject(id);
-    toast.success("已刪除");
-    load();
-  };
+  const handleEditCancel = useCallback(() => {
+    setEditingId(null);
+    setEditingName("");
+  }, []);
+
+  const handleEditSave = useCallback(async (id) => {
+    const newName = editingName.trim();
+    if (!newName) return handleEditCancel();
+    // 樂觀更新
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
+    setEditingId(null);
+    try {
+      await renameProject(id, newName);
+      toast.success("已更新名稱");
+    } catch {
+      // rollback
+      const r = await getProjects();
+      setProjects(r.data);
+      toast.error("更新失敗");
+    }
+  }, [editingName, handleEditCancel]);
+
+  // ── 刪除（樂觀更新）
+  const handleDelete = useCallback((id) => {
+    setConfirmModal({
+      message: "確定刪除此專案？所有學生資料將一併刪除。",
+      onConfirm: async () => {
+        const prev = projects;
+        setProjects(p => p.filter(x => x.id !== id));
+        try {
+          await deleteProject(id);
+          toast.success("已刪除");
+        } catch {
+          setProjects(prev);
+          toast.error("刪除失敗");
+        }
+      },
+    });
+  }, [projects]);
 
   return (
     <div className="w-full">
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
@@ -142,72 +284,19 @@ export default function ProjectList() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {projects.map(p => (
-            <div key={p.id} className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden">
-              <div className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    {editingId === p.id ? (
-                      <div className="flex items-center gap-1 mb-1">
-                        <input
-                          autoFocus
-                          className="border border-indigo-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-semibold"
-                          value={editingName}
-                          onChange={e => setEditingName(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter") saveEdit(p.id); if (e.key === "Escape") cancelEdit(); }}
-                        />
-                        <button onClick={() => saveEdit(p.id)} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"><Check className="w-3.5 h-3.5" /></button>
-                        <button onClick={cancelEdit} className="p-1 text-gray-400 hover:bg-gray-100 rounded"><X className="w-3.5 h-3.5" /></button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 group/name">
-                        <div className="font-semibold text-gray-900 text-lg">{p.name}</div>
-                        {canEditProject(p.owner_id) && (
-                          <button onClick={() => startEdit(p)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
-                      <Users className="w-3 h-3" />
-                      {p.student_count} 位學生 · {new Date(p.created_at).toLocaleDateString("zh-TW")}
-                      {showOwner && p.owner_name && (
-                        <span className="text-gray-300">·</span>
-                      )}
-                      {showOwner && p.owner_name && (
-                        <span>{p.owner_name}</span>
-                      )}
-                    </div>
-                  </div>
-                  {canEditProject(p.owner_id) && (
-                    <button
-                      onClick={() => handleDelete(p.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEditProject(p.owner_id) ? "grid-cols-2" : "grid-cols-1"}`}>
-                {canEditProject(p.owner_id) && (
-                  <Link
-                    to={`/projects/${p.id}/batch`}
-                    className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    專案設定
-                  </Link>
-                )}
-                <Link
-                  to={`/projects/${p.id}/review`}
-                  className="flex items-center justify-center gap-1.5 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  個人編輯
-                </Link>
-              </div>
-            </div>
+            <ProjectCard
+              key={p.id}
+              project={p}
+              editingId={editingId}
+              editingName={editingName}
+              showOwner={showOwner}
+              canEditProject={canEditProject}
+              onEditStart={handleEditStart}
+              onEditSave={handleEditSave}
+              onEditCancel={handleEditCancel}
+              onEditNameChange={setEditingName}
+              onDelete={handleDelete}
+            />
           ))}
         </div>
       )}

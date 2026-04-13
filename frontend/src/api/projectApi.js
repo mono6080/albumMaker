@@ -50,13 +50,14 @@ export const setStudentPageSkip = (projectId, studentId, pageIndex, skip) =>
 
 // ── 照片管理 ──────────────────────────────────────────────────────────────────
 
-/** 上傳學生照片至指定頁面欄位 */
-export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile) => {
+/** 上傳學生照片至指定頁面欄位，onProgress(0~100) 可選 */
+export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, onProgress) => {
   const formData = new FormData();
   formData.append("file", photoFile);
   return apiClient.post(
     `/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}`,
-    formData
+    formData,
+    onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}
   );
 };
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import toast from "react-hot-toast";
@@ -34,6 +34,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const [dragOverIdx, setDragOverIdx] = useState(null);
   const dragIdxRef = useRef(null);
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
+  // uploadProgress: null = 閒置，0-100 = 上傳中
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [isTouchDevice] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(hover: none)").matches
   );
@@ -71,11 +73,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       try {
         // Upload pending files, track returned server paths
         const uploadedPaths = {};
-        for (let i = 0; i < cur.length; i++) {
-          if (cur[i].pendingFile) {
-            const res = await uploadPhoto(projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile);
-            uploadedPaths[i] = res.data.path;
-          }
+        const pendingIndices = cur.map((it, i) => it.pendingFile ? i : -1).filter(i => i >= 0);
+        if (pendingIndices.length) setUploadProgress(0);
+        for (let fileNo = 0; fileNo < pendingIndices.length; fileNo++) {
+          const i = pendingIndices[fileNo];
+          const res = await uploadPhoto(
+            projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
+            pct => setUploadProgress(Math.round((fileNo * 100 + pct) / pendingIndices.length))
+          );
+          uploadedPaths[i] = res.data.path;
         }
         // Save mapping for moved / transform-changed items (skip pending — just uploaded)
         const pagesMap = {};
@@ -127,7 +133,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         }));
 
         onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
-      } catch (_) { /* silent — manual save remains available */ }
+      } catch (_) { /* silent — manual save remains available */ } finally {
+        setUploadProgress(null);
+      }
     }, 300);
   }, [items, studentId, projectId]);
 
@@ -534,7 +542,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         <h3 className="font-semibold text-gray-800 text-sm">照片管理</h3>
         <span className="text-xs text-gray-400">
           {filledCount} / {allSlots.length} 格
-          {hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>}
+          {uploadProgress !== null
+            ? <span className="text-indigo-600 ml-1">↑ 上傳中 {uploadProgress}%</span>
+            : hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>
+          }
         </span>
         <div className="ml-auto flex gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
           <button
@@ -548,6 +559,16 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             onChange={e => { if (e.target.files?.length) { handleMultiUpload(e.target.files); e.target.value = ""; } }} />
         </div>
       </div>
+
+      {/* Upload progress bar */}
+      {uploadProgress !== null && (
+        <div className="w-full h-1 bg-gray-100 rounded-full mb-3 overflow-hidden">
+          <div
+            className="h-full bg-indigo-500 rounded-full transition-all duration-200"
+            style={{ width: `${uploadProgress}%` }}
+          />
+        </div>
+      )}
 
       {/* Photo grid */}
       <div

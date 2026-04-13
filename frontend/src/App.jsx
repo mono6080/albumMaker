@@ -28,8 +28,8 @@ function Nav() {
   const { currentUser, logout } = useAuth();
   const isActive = (path) => loc.pathname.startsWith(path);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate("/login");
   };
 

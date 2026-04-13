@@ -8,46 +8,14 @@ import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
-import { buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
+import { buildDownloadPdfUrl } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
-import {
-  ChevronRight, ChevronLeft, RefreshCw, Download,
-  Loader2, Type, Trash2, RotateCcw,
-} from "lucide-react";
+import { ChevronRight, ChevronLeft, Download, Loader2 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
-import AlbumPageNav from "../components/AlbumPageNav";
-
-// ── 頁面預覽子元件 ────────────────────────────────────────────────────────────
-
-/**
- * 單頁渲染預覽圖，依 timestamp 更新觸發重新載入。
- */
-function PagePreview({ projectId, studentId, pageIndex, timestamp }) {
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  return (
-    <div
-      className="relative w-full rounded-xl overflow-hidden border border-gray-200 shadow-sm"
-      style={{ aspectRatio: "794 / 1123" }}
-    >
-      {!isLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-          <Loader2 className="w-5 h-5 text-gray-300 animate-spin" />
-        </div>
-      )}
-      <img
-        key={timestamp}
-        src={`${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${timestamp}`}
-        alt={`第 ${pageIndex + 1} 頁`}
-        className="w-full h-full object-cover"
-        onLoad={() => setIsLoaded(true)}
-        onError={() => setIsLoaded(true)}
-      />
-    </div>
-  );
-}
+import StudentPreviewPanel from "../components/StudentPreviewPanel";
+import StudentTextPanel from "../components/StudentTextPanel";
 
 // ── 主頁面元件 ────────────────────────────────────────────────────────────────
 
@@ -70,7 +38,7 @@ export default function StudentEdit() {
 
   // ── 自動儲存對印文字（防抖 500ms） ────────────────────────────────────────
 
-  const { scheduleSave, flushSave } = useAutoSave(
+  const { scheduleSave, flushSave, isSaving } = useAutoSave(
     labelTexts,
     async (currentLabelTexts) => {
       const payload = {};
@@ -236,113 +204,6 @@ export default function StudentEdit() {
 
   const isCurrentPageSkipped = skippedPages.has(activePage);
 
-  const previewPanel = (
-    <div className="space-y-3">
-      <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-      {/* 刪除 / 還原頁面 */}
-      <div className="flex items-center justify-between">
-        {isCurrentPageSkipped ? (
-          <div className="flex items-center gap-2 flex-1">
-            <span className="text-xs text-red-400 font-medium">此頁已刪除（不會出現在 PDF）</span>
-            <button
-              onClick={() => handlePageSkip(activePage, false)}
-              className="flex items-center gap-1 text-xs text-indigo-600 border border-indigo-300 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors ml-auto"
-            >
-              <RotateCcw className="w-3 h-3" />還原此頁
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => handlePageSkip(activePage, true)}
-            className="flex items-center gap-1 text-xs text-red-500 border border-red-200 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors ml-auto"
-          >
-            <Trash2 className="w-3 h-3" />刪除此頁
-          </button>
-        )}
-      </div>
-      <div className={`relative ${isCurrentPageSkipped ? "opacity-40" : ""}`}>
-        <PagePreview
-          projectId={projectId}
-          studentId={studentId}
-          pageIndex={activePage}
-          timestamp={pageTimestamps[activePage] ?? 0}
-        />
-        {isCurrentPageSkipped && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="bg-red-100 text-red-500 text-sm font-medium px-3 py-1 rounded-full border border-red-200">已刪除</span>
-          </div>
-        )}
-      </div>
-      <div className="flex justify-center">
-        <button
-          onClick={refreshPreview}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 py-1.5 px-3 rounded-lg hover:bg-gray-100 transition-colors"
-        >
-          <RefreshCw className="w-3 h-3" />重新整理預覽
-        </button>
-      </div>
-    </div>
-  );
-
-  const photoPanel = (
-    <PhotoManager
-      projectId={projectId}
-      studentId={studentId}
-      pages={templatePages}
-      student={student}
-      skippedPages={skippedPages}
-      onPhotoSaved={() => refreshAllPreviews()}
-      onSaved={() => { loadStudentData(); refreshAllPreviews(); }}
-    />
-  );
-
-  const textPanel = (
-    <div className="space-y-4">
-      <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-      {activePageLayout?.text_labels?.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
-            <Type className="w-4 h-4 text-indigo-500" />
-            <h3 className="font-semibold text-gray-800 text-sm">
-              第 {activePage + 1} 頁文字
-            </h3>
-            <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
-              ({"{name}"} 自動代入姓名)
-            </span>
-          </div>
-          <div className="space-y-3">
-            {activePageLayout.text_labels.map(label => {
-              const rawDefaultText =
-                projectLabelTexts[String(activePage)]?.[String(label.id)] ?? label.text ?? "";
-              const displayDefaultText = rawDefaultText.replace("{name}", student.name);
-              return (
-                <div key={label.id} className="flex gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
-                    <span className="text-xs font-bold text-indigo-400">{label.id}</span>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-xs text-gray-400 mb-1">
-                      預設：{displayDefaultText.substring(0, 25)}
-                    </div>
-                    <textarea
-                      rows={2}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
-                      placeholder={displayDefaultText}
-                      value={getLabelText(activePage, label.id)}
-                      onChange={event => setLabelText(activePage, label.id, event.target.value)}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有文字方塊</div>
-      )}
-    </div>
-  );
-
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
   return (
@@ -397,20 +258,58 @@ export default function StudentEdit() {
       <div className="lg:flex lg:gap-6 lg:items-start">
         {/* 預覽面板 */}
         <div className={`lg:block lg:flex-shrink-0 lg:w-1/3 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`}>
-          {previewPanel}
+          <StudentPreviewPanel
+            activePage={activePage}
+            pageCount={pageCount}
+            onPageChange={setActivePage}
+            projectId={projectId}
+            studentId={studentId}
+            pageTimestamps={pageTimestamps}
+            isCurrentPageSkipped={isCurrentPageSkipped}
+            onPageSkip={handlePageSkip}
+            onRefresh={refreshPreview}
+          />
         </div>
 
         {/* 照片面板 + 桌面版文字面板 */}
         <div className={`lg:block lg:flex-1 lg:min-w-0 ${mobileTab === "photo" ? "block" : "hidden lg:block"} lg:space-y-6`}>
-          {photoPanel}
+          <PhotoManager
+            projectId={projectId}
+            studentId={studentId}
+            pages={templatePages}
+            student={student}
+            skippedPages={skippedPages}
+            onPhotoSaved={() => refreshAllPreviews()}
+            onSaved={() => { loadStudentData(); refreshAllPreviews(); }}
+          />
           <div className="hidden lg:block">
-            {textPanel}
+            <StudentTextPanel
+              activePage={activePage}
+              pageCount={pageCount}
+              onPageChange={setActivePage}
+              activePageLayout={activePageLayout}
+              projectLabelTexts={projectLabelTexts}
+              student={student}
+              getLabelText={getLabelText}
+              onLabelChange={setLabelText}
+              isSaving={isSaving}
+            />
           </div>
         </div>
 
         {/* 行動版文字面板（獨立顯示） */}
         <div className={`lg:hidden ${mobileTab === "text" ? "block" : "hidden"} w-full`}>
-          {textPanel}
+          <StudentTextPanel
+            activePage={activePage}
+            pageCount={pageCount}
+            onPageChange={setActivePage}
+            activePageLayout={activePageLayout}
+            projectLabelTexts={projectLabelTexts}
+            student={student}
+            getLabelText={getLabelText}
+            onLabelChange={setLabelText}
+            isSaving={isSaving}
+          />
         </div>
       </div>
     </div>

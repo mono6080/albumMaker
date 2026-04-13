@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import PanelSwitcher from "../components/PanelSwitcher";
 import AlbumPageNav from "../components/AlbumPageNav";
+import ConfirmModal from "../components/ConfirmModal";
 
 export default function ProjectBatch() {
   const { id: projectId } = useParams();
@@ -39,6 +40,7 @@ export default function ProjectBatch() {
   const [editingStudentId, setEditingStudentId] = useState(null);
   const [editingStudentName, setEditingStudentName] = useState("");
   const [isAddingStudents, setIsAddingStudents] = useState(false);
+  const [confirmModal, setConfirmModal] = useState(null);
 
   // 對印文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
@@ -129,12 +131,16 @@ export default function ProjectBatch() {
     await loadProjectData();
   };
 
-  const handleDeleteStudent = async (studentId, clickEvent) => {
+  const handleDeleteStudent = (studentId, clickEvent) => {
     clickEvent.stopPropagation();
-    if (!confirm("確定刪除此學生？")) return;
-    await deleteStudent(projectId, studentId);
-    toast.success("已刪除");
-    await loadProjectData();
+    setConfirmModal({
+      message: "確定刪除此學生？",
+      onConfirm: async () => {
+        await deleteStudent(projectId, studentId);
+        toast.success("已刪除");
+        await loadProjectData();
+      },
+    });
   };
 
   // ── 對印文字操作 ──────────────────────────────────────────────────────────
@@ -190,7 +196,17 @@ export default function ProjectBatch() {
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                     value={getLabelText(activePage, label.id)}
                     onChange={event => setLabelText(activePage, label.id, event.target.value)}
+                    maxLength={200}
                   />
+                  {(() => {
+                    const len = getLabelText(activePage, label.id).length;
+                    if (len === 0) return null;
+                    return (
+                      <div className={`text-right text-xs mt-0.5 ${len >= 180 ? "text-red-500" : "text-gray-300"}`}>
+                        {len}/200
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ))}
@@ -250,6 +266,12 @@ export default function ProjectBatch() {
 
   return (
     <div className="w-full">
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
       {/* 頂部標頭 */}
       <div className="flex items-center gap-2 sm:gap-3 mb-5 sm:mb-6">
         <Link

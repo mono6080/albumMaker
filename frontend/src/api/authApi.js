@@ -1,33 +1,29 @@
 // 認證 API 模組
-// 封裝登入、登出與取得當前使用者的 API 呼叫，
-// 同時設定 axios interceptor 讓所有請求自動附帶 Bearer token
+// 封裝登入、登出與取得當前使用者的 API 呼叫
+// 認證改用 HttpOnly Cookie，axios 設定 withCredentials 自動帶 Cookie
 
 import axios from "axios";
 
 export const apiClient = axios.create({
   baseURL: "/api",
-  timeout: 15000,  // 一般請求 15 秒
+  timeout: 15000,       // 一般請求 15 秒
+  withCredentials: true, // 自動帶 Cookie（HttpOnly 認證）
 });
 
 // 渲染端點可能耗時較長，個別設定更長 timeout
 export const renderClient = axios.create({
   baseURL: "/api",
-  timeout: 120000,  // 渲染 PDF 最長 2 分鐘
+  timeout: 120000,       // 渲染 PDF 最長 2 分鐘
+  withCredentials: true, // 自動帶 Cookie（HttpOnly 認證）
 });
 
 // ── 共用 interceptor 設定 ─────────────────────────────────────────────────────
 
 function attachAuthInterceptors(client) {
-  client.interceptors.request.use((config) => {
-    const token = localStorage.getItem("access_token");
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
-  });
   client.interceptors.response.use(
     (response) => response,
     (error) => {
       if (error.response?.status === 401) {
-        localStorage.removeItem("access_token");
         if (window.location.pathname !== "/login") {
           window.location.href = "/login";
         }
@@ -42,11 +38,15 @@ attachAuthInterceptors(renderClient);
 
 // ── 認證 API 函式 ─────────────────────────────────────────────────────────────
 
-/** 登入，回傳 access_token / role / display_name */
+/** 登入，Cookie 由後端 Set-Cookie 設定，回傳 role / display_name / user_id */
 export const login = (username, password) =>
   apiClient.post("/auth/login", new URLSearchParams({ username, password }));
 
-/** 取得當前登入使用者資訊 */
+/** 登出，後端清除 Cookie */
+export const logout = () =>
+  apiClient.post("/auth/logout");
+
+/** 取得當前登入使用者資訊（依賴 Cookie，用於頁面重載時還原 session） */
 export const fetchMe = () =>
   apiClient.get("/auth/me");
 

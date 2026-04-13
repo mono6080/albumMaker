@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Trash2, UserPlus, KeyRound, Pencil, Check, X } from "lucide-react";
+import ConfirmModal from "../components/ConfirmModal";
 import {
   fetchAllUsers,
   createUser,
@@ -44,6 +45,7 @@ export default function UserManagement() {
 
   // inline 編輯狀態：{ userId, field: 'display_name'|'username', value }
   const [editingField, setEditingField] = useState(null);
+  const [confirmModal, setConfirmModal] = useState(null);
   const editInputRef = useRef(null);
 
   const loadUsers = async () => {
@@ -144,19 +146,29 @@ export default function UserManagement() {
     if (e.key === "Escape") setEditingField(null);
   };
 
-  const handleDelete = async (userId, displayName) => {
-    if (!confirm(`確定要刪除「${displayName}」嗎？`)) return;
-    try {
-      await deleteUser(userId);
-      toast.success("使用者已刪除");
-      await loadUsers();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "刪除失敗");
-    }
+  const handleDelete = (userId, displayName) => {
+    setConfirmModal({
+      message: `確定要刪除「${displayName}」嗎？`,
+      onConfirm: async () => {
+        try {
+          await deleteUser(userId);
+          toast.success("使用者已刪除");
+          await loadUsers();
+        } catch (error) {
+          toast.error(error.response?.data?.detail || "刪除失敗");
+        }
+      },
+    });
   };
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
       <h1 className="text-xl font-bold text-gray-900">使用者管理</h1>
 
       {/* 新增使用者表單 */}

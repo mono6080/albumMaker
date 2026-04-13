@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { getTemplates, createTemplate, deleteTemplate, renameTemplate } from "../api";
 import { LayoutTemplate, Plus, Pencil, Trash2, BookOpen, Check, X } from "lucide-react";
+import ConfirmModal from "../components/ConfirmModal";
 
 export default function TemplateList() {
   const [templates, setTemplates] = useState([]);
@@ -10,6 +11,7 @@ export default function TemplateList() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState("");
+  const [confirmModal, setConfirmModal] = useState(null);
 
   const load = () => getTemplates().then(r => setTemplates(r.data));
   useEffect(() => { load(); }, []);
@@ -34,16 +36,26 @@ export default function TemplateList() {
     load();
   };
 
-  const handleDelete = async (id, e) => {
+  const handleDelete = (id, e) => {
     e.preventDefault();
-    if (!confirm("確定刪除此模板？")) return;
-    await deleteTemplate(id);
-    toast.success("已刪除");
-    load();
+    setConfirmModal({
+      message: "確定刪除此模板？",
+      onConfirm: async () => {
+        await deleteTemplate(id);
+        toast.success("已刪除");
+        load();
+      },
+    });
   };
 
   return (
     <div className="max-w-4xl mx-auto">
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
         <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">

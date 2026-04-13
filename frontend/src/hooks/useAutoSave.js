@@ -2,7 +2,7 @@
 // 封裝「延遲 N 毫秒後自動呼叫儲存函式」的共通邏輯，
 // 避免各頁面各自維護 timer ref 和 latest-data ref
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 
 /**
  * 通用防抖自動儲存 Hook。
@@ -25,6 +25,9 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
     latestDataRef.current = currentData;
   });
 
+  // isSaving：儲存請求進行中時為 true，可用於 UI disable
+  const [isSaving, setIsSaving] = useState(false);
+
   // 使用 ref 保存最新的儲存函式，避免因 callback 變動而重複觸發 useEffect
   const saveCallbackRef = useRef(saveCallback);
   useEffect(() => {
@@ -39,12 +42,17 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
   /** 排程一次防抖儲存：重複呼叫只有最後一次會真正執行 */
   const scheduleSave = useCallback(() => {
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
+    timerRef.current = setTimeout(async () => {
       // 取消上一個尚未完成的請求
       abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
       const signal = abortControllerRef.current.signal;
-      saveCallbackRef.current(latestDataRef.current, signal);
+      setIsSaving(true);
+      try {
+        await saveCallbackRef.current(latestDataRef.current, signal);
+      } finally {
+        if (!signal.aborted) setIsSaving(false);
+      }
     }, delayMs);
   }, [delayMs]);
 
@@ -59,8 +67,13 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
     clearTimeout(timerRef.current);
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
-    await saveCallbackRef.current(latestDataRef.current, abortControllerRef.current.signal);
+    setIsSaving(true);
+    try {
+      await saveCallbackRef.current(latestDataRef.current, abortControllerRef.current.signal);
+    } finally {
+      setIsSaving(false);
+    }
   }, []);
 
-  return { scheduleSave, cancelSave, flushSave, latestDataRef };
+  return { scheduleSave, cancelSave, flushSave, latestDataRef, isSaving };
 }

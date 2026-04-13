@@ -19,6 +19,7 @@ import ImageCropModal from "../components/ImageCropModal";
 import BubbleKonvaShape from "../components/canvas/BubbleKonvaShape";
 import StickerNode from "../components/canvas/StickerNode";
 import PropertyPanel from "../components/PropertyPanel";
+import ConfirmModal from "../components/ConfirmModal";
 
 // ── 畫布與座標常數 ────────────────────────────────────────────────────────────
 const CANVAS_DISPLAY_WIDTH = 530;
@@ -82,6 +83,7 @@ export default function TemplateEditor() {
   const [activeTool, setActiveTool] = useState("select");
   const [isSaving, setIsSaving] = useState(false);
   const [bgCropFile, setBgCropFile] = useState(null);
+  const [confirmModal, setConfirmModal] = useState(null);
 
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
@@ -188,13 +190,17 @@ export default function TemplateEditor() {
     toast.success("已新增頁面");
   };
 
-  const handleDeletePage = async () => {
+  const handleDeletePage = () => {
     if (!currentPage) return;
-    if (!confirm("確定刪除此頁？")) return;
-    await deleteTemplatePage(templateId, currentPage.id);
-    setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
-    await loadTemplate();
-    toast.success("已刪除頁面");
+    setConfirmModal({
+      message: "確定刪除此頁？",
+      onConfirm: async () => {
+        await deleteTemplatePage(templateId, currentPage.id);
+        setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
+        await loadTemplate();
+        toast.success("已刪除頁面");
+      },
+    });
   };
 
   const handleBackgroundSelect = (event) => {
@@ -502,6 +508,12 @@ export default function TemplateEditor() {
 
   return (
     <div className="flex flex-col">
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
       {/* 頂部標題列 */}
       <div className="flex items-center gap-3 mb-3 flex-shrink-0">
         <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
