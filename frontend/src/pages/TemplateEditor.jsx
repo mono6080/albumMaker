@@ -48,6 +48,38 @@ function generateElementId() {
   return Math.floor(Math.random() * 90000) + 10000;
 }
 
+// 各元素類型的預設 z_index 基底（確保未設定時維持原渲染順序）
+const _Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
+
+/** 取得所有元素（含類型、原始陣列索引），依 z_index 升序排列 */
+function getAllElementsSorted(layout) {
+  if (!layout) return [];
+  return [
+    ...(layout.photo_slots  || []).map((e, i) => ({ type: "photo",   data: e, index: i, zDefault: _Z_BASE.photo   + i })),
+    ...(layout.text_bubbles || []).map((e, i) => ({ type: "bubble",  data: e, index: i, zDefault: _Z_BASE.bubble  + i })),
+    ...(layout.text_labels  || []).map((e, i) => ({ type: "text",    data: e, index: i, zDefault: _Z_BASE.text    + i })),
+    ...(layout.stickers     || []).map((e, i) => ({ type: "sticker", data: e, index: i, zDefault: _Z_BASE.sticker + i })),
+  ].sort((a, b) => (a.data.z_index ?? a.zDefault) - (b.data.z_index ?? b.zDefault));
+}
+
+/** 取得目前佈局中最高的 z_index（新增元素時使其置於最上層） */
+function getNextZIndex(layout) {
+  const all = getAllElementsSorted(layout);
+  if (all.length === 0) return 0;
+  return Math.max(...all.map(e => e.data.z_index ?? e.zDefault)) + 1;
+}
+
+/** 將排序後的元素陣列（已修改 z_index）寫回佈局物件 */
+function applyElementsToLayout(layout, sortedElements) {
+  const keyMap = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
+  const newLayout = { ...layout };
+  for (const { type, data } of sortedElements) {
+    const key = keyMap[type];
+    newLayout[key] = (newLayout[key] || []).map(e => e.id === data.id ? data : e);
+  }
+  return newLayout;
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -202,66 +234,22 @@ export default function TemplateEditor() {
     };
   };
 
-  /** 從最上層往下逐層進行點擊碰撞測試，回傳被點到的元素識別資訊 */
+  /** 從最上層往下逐層進行點擊碰撞測試，回傳被點到的元素識別資訊（依 z_index 由高到低） */
   const hitTestElement = (canvasPosition) => {
     if (!pageLayout) return null;
-
-    // 貼圖層（最上層，優先測試）
-    for (const sticker of [...(pageLayout.stickers || [])].reverse()) {
-      const displayX = toDisplayCoord(sticker.x);
-      const displayY = toDisplayCoord(sticker.y);
-      const displayW = toDisplayCoord(sticker.width);
-      const displayH = toDisplayCoord(sticker.height);
+    const sortedDesc = getAllElementsSorted(pageLayout).reverse();
+    for (const { type, data } of sortedDesc) {
+      const displayX = toDisplayCoord(data.x);
+      const displayY = toDisplayCoord(data.y);
+      const displayW = toDisplayCoord(data.width);
+      const displayH = toDisplayCoord(data.height);
       if (
         canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
         canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
       ) {
-        return { type: "sticker", id: sticker.id };
+        return { type, id: data.id };
       }
     }
-
-    // 純文字層
-    for (const textLabel of [...(pageLayout.text_labels || [])].reverse()) {
-      const displayX = toDisplayCoord(textLabel.x);
-      const displayY = toDisplayCoord(textLabel.y);
-      const displayW = toDisplayCoord(textLabel.width);
-      const displayH = toDisplayCoord(textLabel.height);
-      if (
-        canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
-        canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
-      ) {
-        return { type: "text", id: textLabel.id };
-      }
-    }
-
-    // 氣泡框層
-    for (const bubble of [...(pageLayout.text_bubbles || [])].reverse()) {
-      const displayX = toDisplayCoord(bubble.x);
-      const displayY = toDisplayCoord(bubble.y);
-      const displayW = toDisplayCoord(bubble.width);
-      const displayH = toDisplayCoord(bubble.height);
-      if (
-        canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
-        canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
-      ) {
-        return { type: "bubble", id: bubble.id };
-      }
-    }
-
-    // 照片格層（最底層）
-    for (const photoSlot of [...(pageLayout.photo_slots || [])].reverse()) {
-      const displayX = toDisplayCoord(photoSlot.x);
-      const displayY = toDisplayCoord(photoSlot.y);
-      const displayW = toDisplayCoord(photoSlot.width);
-      const displayH = toDisplayCoord(photoSlot.height);
-      if (
-        canvasPosition.x >= displayX && canvasPosition.x <= displayX + displayW &&
-        canvasPosition.y >= displayY && canvasPosition.y <= displayY + displayH
-      ) {
-        return { type: "photo", id: photoSlot.id };
-      }
-    }
-
     return null;
   };
 
@@ -341,6 +329,40 @@ export default function TemplateEditor() {
     setSelectedElement(null);
   }, [selectedElement]);
 
+  /** 調整選取元素的層次（上移/下移/移至最上/移至最底） */
+  const handleLayerChange = useCallback((direction) => {
+    if (!selectedElement) return;
+    setPageLayout(currentLayout => {
+      const sorted = getAllElementsSorted(currentLayout);
+      // 正規化 z_index 為連續整數
+      sorted.forEach((item, i) => { item.data = { ...item.data, z_index: i }; });
+      const selectedIdx = sorted.findIndex(
+        item => item.type === selectedElement.type && item.data.id === selectedElement.id
+      );
+      if (selectedIdx === -1) return currentLayout;
+
+      if (direction === "up" && selectedIdx < sorted.length - 1) {
+        const tmp = sorted[selectedIdx].data.z_index;
+        sorted[selectedIdx].data     = { ...sorted[selectedIdx].data,     z_index: sorted[selectedIdx + 1].data.z_index };
+        sorted[selectedIdx + 1].data = { ...sorted[selectedIdx + 1].data, z_index: tmp };
+      } else if (direction === "down" && selectedIdx > 0) {
+        const tmp = sorted[selectedIdx].data.z_index;
+        sorted[selectedIdx].data     = { ...sorted[selectedIdx].data,     z_index: sorted[selectedIdx - 1].data.z_index };
+        sorted[selectedIdx - 1].data = { ...sorted[selectedIdx - 1].data, z_index: tmp };
+      } else if (direction === "top") {
+        sorted[selectedIdx].data = { ...sorted[selectedIdx].data, z_index: sorted.length };
+        sorted.sort((a, b) => a.data.z_index - b.data.z_index);
+        sorted.forEach((item, i) => { item.data = { ...item.data, z_index: i }; });
+      } else if (direction === "bottom") {
+        sorted[selectedIdx].data = { ...sorted[selectedIdx].data, z_index: -1 };
+        sorted.sort((a, b) => a.data.z_index - b.data.z_index);
+        sorted.forEach((item, i) => { item.data = { ...item.data, z_index: i }; });
+      }
+
+      return applyElementsToLayout(currentLayout, sorted);
+    });
+  }, [selectedElement]);
+
   // Delete / Backspace 鍵盤快捷鍵刪除選取元素
   useEffect(() => {
     const handleKeyDown = (keyEvent) => {
@@ -368,6 +390,7 @@ export default function TemplateEditor() {
         y: toRealCoord(canvasPosition.y),
         width: 300, height: 220, rotation: 0,
         border: true, border_width: 8,
+        z_index: getNextZIndex(pageLayout),
       };
       setPageLayout(currentLayout => ({
         ...currentLayout,
@@ -390,6 +413,7 @@ export default function TemplateEditor() {
         text: "{name}的描述文字", font_size: 20,
         font_color: "#3B6B8C", line_height: 1.4,
         font_family: "msjh", tail_side: "right",
+        z_index: getNextZIndex(pageLayout),
       };
       setPageLayout(currentLayout => ({
         ...currentLayout,
@@ -414,6 +438,7 @@ export default function TemplateEditor() {
         font_family: "msjh",
         text_align: "center",
         line_height: 1.4,
+        z_index: getNextZIndex(pageLayout),
       };
       setPageLayout(currentLayout => ({
         ...currentLayout,
@@ -711,8 +736,14 @@ export default function TemplateEditor() {
               </div>
             )}
 
-            {/* 照片格層 */}
-            {pageLayout?.photo_slots?.map((photoSlot, slotIndex) => {
+            {/* 所有元素依 z_index 統一排序渲染 */}
+            {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
+              const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
+
+              // ── 照片格 ──
+              if (type === "photo") {
+              const photoSlot = data;
+              const slotIndex = elemIndex;
               const isSelected = selectedElement?.type === "photo" && selectedElement?.id === photoSlot.id;
               const hasBorder = photoSlot.border !== false;
               const borderDisplayWidth = toDisplayCoord(photoSlot.border_width ?? 8);
@@ -729,7 +760,7 @@ export default function TemplateEditor() {
               return (
                 // 外層：定位 + 旋轉 + 把手，overflow 保持 visible 才不截斷把手
                 <div
-                  key={photoSlot.id}
+                  key={`photo-${photoSlot.id}`}
                   style={{
                     position: "absolute",
                     left: toDisplayCoord(photoSlot.x),
@@ -809,10 +840,11 @@ export default function TemplateEditor() {
                   )}
                 </div>
               );
-            })}
+              } // end photo
 
-            {/* 氣泡框層 */}
-            {pageLayout?.text_bubbles?.map(bubble => {
+              // ── 氣泡框 ──
+              if (type === "bubble") {
+              const bubble = data;
               const isSelected = selectedElement?.type === "bubble" && selectedElement?.id === bubble.id;
               const displayWidth = toDisplayCoord(bubble.width);
               const displayHeight = toDisplayCoord(bubble.height);
@@ -823,7 +855,7 @@ export default function TemplateEditor() {
 
               return (
                 <div
-                  key={bubble.id}
+                  key={`bubble-${bubble.id}`}
                   style={{
                     position: "absolute",
                     left: toDisplayCoord(bubble.x),
@@ -888,14 +920,15 @@ export default function TemplateEditor() {
                   )}
                 </div>
               );
-            })}
+              } // end bubble
 
-            {/* 純文字層 */}
-            {(pageLayout?.text_labels || []).map(textLabel => {
+              // ── 純文字 ──
+              if (type === "text") {
+              const textLabel = data;
               const isSelected = selectedElement?.type === "text" && selectedElement?.id === textLabel.id;
               return (
                 <div
-                  key={textLabel.id}
+                  key={`text-${textLabel.id}`}
                   style={{
                     position: "absolute",
                     left: toDisplayCoord(textLabel.x),
@@ -958,14 +991,15 @@ export default function TemplateEditor() {
                   )}
                 </div>
               );
-            })}
+              } // end text
 
-            {/* 貼圖層 */}
-            {(pageLayout?.stickers || []).map(sticker => {
+              // ── 貼圖 ──
+              if (type === "sticker") {
+              const sticker = data;
               const isSelected = selectedElement?.type === "sticker" && selectedElement?.id === sticker.id;
               return (
                 <div
-                  key={sticker.id}
+                  key={`sticker-${sticker.id}`}
                   style={{
                     position: "absolute",
                     left: toDisplayCoord(sticker.x),
@@ -1014,6 +1048,9 @@ export default function TemplateEditor() {
                   )}
                 </div>
               );
+              } // end sticker
+
+              return null;
             })}
           </div>
 
@@ -1029,6 +1066,7 @@ export default function TemplateEditor() {
               selectedElement={selectedElement}
               elementData={selectedItem}
               onPropertyChange={(updates) => updateElement(selectedElement.type, selectedElement.id, updates)}
+              onLayerChange={handleLayerChange}
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-gray-300 text-sm select-none" style={{ minHeight: 200 }}>
@@ -1054,8 +1092,9 @@ export default function TemplateEditor() {
  * @param {Object}   selectedElement    - 目前選取的元素識別資訊 { type, id }
  * @param {Object}   elementData        - 元素的完整屬性資料
  * @param {Function} onPropertyChange   - 屬性變更時的回呼函式
+ * @param {Function} onLayerChange      - 層次調整回呼 ('up'|'down'|'top'|'bottom')
  */
-function PropertyPanel({ selectedElement, elementData, onPropertyChange }) {
+function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayerChange }) {
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
   const isTextLabel = selectedElement.type === "text";
@@ -1069,6 +1108,27 @@ function PropertyPanel({ selectedElement, elementData, onPropertyChange }) {
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4">
       <h3 className="font-semibold">{panelTitle}</h3>
+
+      {/* 通用：層次控制 */}
+      <div>
+        <span className="text-xs text-gray-500 block mb-1">層次</span>
+        <div className="flex gap-1">
+          {[
+            { dir: "bottom", label: "⬇ 最底" },
+            { dir: "down",   label: "↓ 下移" },
+            { dir: "up",     label: "↑ 上移" },
+            { dir: "top",    label: "⬆ 最頂" },
+          ].map(({ dir, label }) => (
+            <button
+              key={dir}
+              onClick={() => onLayerChange(dir)}
+              className="flex-1 px-1 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* 通用：位置與尺寸 */}
       <div className="grid grid-cols-2 gap-3">

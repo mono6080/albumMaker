@@ -290,6 +290,239 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Im
     return lines
 
 
+# ── 各元素類型的獨立渲染 helper ──────────────────────────────────────────────────
+
+def _render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int) -> None:
+    """渲染單一照片格（有照片則合成，否則繪製佔位框）。"""
+    slot_id = str(slot["id"])
+    photo_val = photos.get(slot_id)
+    sx, sy, sw, sh = slot["x"], slot["y"], slot["width"], slot["height"]
+    border = slot.get("border", True)
+    border_w = slot.get("border_width", 8)
+    slot_radius = slot.get("border_radius", 0)
+    rotation = slot.get("rotation", 0)
+    _sh_raw = slot.get("shadow_enabled")
+    sh_enabled = border if _sh_raw is None else _sh_raw
+    sh_ox = slot.get("shadow_offset_x", 5)
+    sh_oy = slot.get("shadow_offset_y", 8)
+    sh_blur = slot.get("shadow_blur", 14)
+    sh_opacity = slot.get("shadow_opacity", 120)
+
+    if not photo_val:
+        # 繪製空白佔位框
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        if border:
+            frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
+            fd = ImageDraw.Draw(frame)
+            ix1, iy1 = border_w, border_w
+            ix2, iy2 = sw - border_w, sh - border_w * 2
+            inner_r = max(0, slot_radius - border_w)
+            if inner_r > 0:
+                fd.rounded_rectangle([ix1, iy1, ix2, iy2], radius=inner_r, fill="#EEEEEE")
+            else:
+                fd.rectangle([ix1, iy1, ix2, iy2], fill="#EEEEEE")
+            fd.rectangle([0, 0, sw - 1, sh - 1], outline="#C8CDD8", width=1)
+            mid_x, mid_y = (ix1 + ix2) // 2, (iy1 + iy2) // 2
+            fd.text((mid_x, mid_y), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+                    font=_get_font(14), anchor="mm")
+            frame = _apply_rounded_corners(frame, slot_radius)
+            if sh_enabled:
+                frame = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
+                                         shadow_color=(0, 0, 0, sh_opacity))
+            _paste_rotated(canvas, frame, sx + sw / 2, sy + sh / 2, rotation)
+        else:
+            if sh_enabled:
+                frame = Image.new("RGBA", (sw, sh), (0xEE, 0xEE, 0xEE, 255))
+                fd2 = ImageDraw.Draw(frame)
+                fd2.rectangle([0, 0, sw - 1, sh - 1], outline="#CCCCCC", width=2)
+                mid_x2, mid_y2 = sw // 2, sh // 2
+                fd2.text((mid_x2, mid_y2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+                         font=_get_font(16), anchor="mm")
+                frame = _apply_rounded_corners(frame, slot_radius)
+                frame = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
+                                        shadow_color=(0, 0, 0, sh_opacity))
+                _paste_rotated(canvas, frame, sx + sw / 2, sy + sh / 2, rotation)
+            else:
+                draw.rectangle([sx, sy, sx + sw, sy + sh], fill="#EEEEEE", outline="#CCCCCC", width=2)
+                draw.text((sx + sw // 2, sy + sh // 2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
+                          font=_get_font(16), anchor="mm")
+        return
+
+    # 解析照片資料（支援路徑字串與含位移縮放的 dict）
+    if isinstance(photo_val, dict):
+        photo_path = photo_val.get("path", "")
+        user_scale = float(photo_val.get("scale", 1.0))
+        offset_x   = float(photo_val.get("offset_x", 0.0))
+        offset_y   = float(photo_val.get("offset_y", 0.0))
+    else:
+        photo_path = photo_val
+        user_scale, offset_x, offset_y = 1.0, 0.0, 0.0
+
+    if not photo_path:
+        return
+
+    try:
+        img = _load_key(photo_path)
+        if img is None:
+            return
+        img = img.convert("RGBA")
+    except Exception:
+        return
+
+    def _cover_crop(img, box_w, box_h, u_scale, ox, oy):
+        ir = img.width / img.height
+        br = box_w / box_h
+        if ir > br:
+            base_h = box_h
+            base_w = int(box_h * ir)
+        else:
+            base_w = box_w
+            base_h = int(box_w / ir)
+        nw = max(box_w, int(base_w * u_scale))
+        nh = max(box_h, int(base_h * u_scale))
+        img = img.resize((nw, nh), Image.LANCZOS)
+        avail_x = nw - box_w
+        avail_y = nh - box_h
+        cx = int(avail_x * (0.5 + ox * 0.5))
+        cy = int(avail_y * (0.5 + oy * 0.5))
+        cx = max(0, min(cx, avail_x))
+        cy = max(0, min(cy, avail_y))
+        return img.crop((cx, cy, cx + box_w, cy + box_h))
+
+    if border:
+        inner_w = sw - border_w * 2
+        inner_h = sh - border_w * 2 - border_w * 2
+        photo = _cover_crop(img, inner_w, inner_h, user_scale, offset_x, offset_y)
+        inner_r = max(0, slot_radius - border_w)
+        if inner_r > 0:
+            photo = _apply_rounded_corners(photo, inner_r)
+        frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
+        frame.paste(photo, (border_w, border_w), photo)
+        frame = _apply_rounded_corners(frame, slot_radius)
+        if sh_enabled:
+            img = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
+                                   shadow_color=(0, 0, 0, sh_opacity))
+        else:
+            img = frame
+    else:
+        img = _cover_crop(img, sw, sh, user_scale, offset_x, offset_y)
+        img = _apply_rounded_corners(img.convert("RGBA"), slot_radius)
+        if sh_enabled:
+            img = _add_drop_shadow(img, offset=(sh_ox, sh_oy), blur=sh_blur,
+                                   shadow_color=(0, 0, 0, sh_opacity))
+
+    _paste_rotated(canvas, img, sx + sw / 2, sy + sh / 2, rotation)
+
+
+def _render_sticker(canvas: Image.Image, sticker: dict) -> None:
+    """渲染貼圖素材。"""
+    stkr_path_str = sticker.get("path", "")
+    if not stkr_path_str:
+        return
+    try:
+        stkr_img = _load_key(stkr_path_str)
+        if stkr_img is None:
+            return
+        stkr_img = stkr_img.convert("RGBA")
+        sw, sh = int(sticker["width"]), int(sticker["height"])
+        stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)
+        cx = sticker["x"] + sw / 2
+        cy = sticker["y"] + sh / 2
+        _paste_rotated(canvas, stkr_img, cx, cy, sticker.get("rotation", 0))
+    except Exception:
+        return
+
+
+def _render_text_label(canvas: Image.Image, label: dict, student_name: str) -> None:
+    """渲染純文字區塊（無背景）。"""
+    label_text = label.get("text", "").replace("{name}", student_name)
+    if not label_text:
+        return
+    font_size = label.get("font_size", 24)
+    font_color = label.get("font_color", "#333333")
+    font = _get_font(font_size, label.get("font_family"))
+    line_height_px = int(font_size * label.get("line_height", 1.4))
+    lw, lh = int(label["width"]), int(label["height"])
+    rotation = label.get("rotation", 0)
+    text_align = label.get("text_align", "center")
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    lines = _wrap_text(label_text, font, lw, draw)
+    total_h = len(lines) * line_height_px
+
+    if rotation:
+        diag = int(math.sqrt(lw**2 + lh**2)) + 4
+        pad = (diag - min(lw, lh)) // 2 + 2
+        tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
+        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+        tmp_y = pad + (lh - total_h) // 2
+        for i, line in enumerate(lines):
+            ty = tmp_y + i * line_height_px
+            if text_align == "left":
+                tmp_draw.text((pad, ty), line, fill=font_color, font=font, anchor="lt")
+            elif text_align == "right":
+                tmp_draw.text((pad + lw, ty), line, fill=font_color, font=font, anchor="rt")
+            else:
+                tmp_draw.text((pad + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+        _paste_rotated(canvas, tmp, label["x"] + lw / 2, label["y"] + lh / 2, rotation)
+        return
+
+    start_y = label["y"] + (lh - total_h) // 2
+    for i, line in enumerate(lines):
+        ty = start_y + i * line_height_px
+        if text_align == "left":
+            draw.text((label["x"], ty), line, fill=font_color, font=font, anchor="lt")
+        elif text_align == "right":
+            draw.text((label["x"] + lw, ty), line, fill=font_color, font=font, anchor="rt")
+        else:
+            draw.text((label["x"] + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+
+
+def _render_text_bubble(canvas: Image.Image, bubble: dict, bubble_texts: dict, student_name: str) -> None:
+    """渲染氣泡框（含背景與文字）。"""
+    bubble_id = str(bubble["id"])
+    raw_text = bubble_texts.get(bubble_id, bubble.get("text", ""))
+    text = raw_text.replace("{name}", student_name)
+    rotation = bubble.get("rotation", 0)
+    font_size = bubble.get("font_size", 20)
+    font_color = bubble.get("font_color", "#333333")
+    font = _get_font(font_size, bubble.get("font_family"))
+    line_height = int(font_size * bubble.get("line_height", 1.4))
+    bw_px, bh_px = int(bubble["width"]), int(bubble["height"])
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    if rotation:
+        diag = int(math.sqrt(bw_px**2 + bh_px**2)) + 4
+        pad_img = (diag - min(bw_px, bh_px)) // 2 + 2
+        tmp_w, tmp_h = bw_px + pad_img * 2, bh_px + pad_img * 2
+        tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
+        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+        shifted = {**bubble, "x": pad_img, "y": pad_img}
+        _draw_speech_bubble(tmp_draw, shifted)
+        txt_pad = 14
+        lines = _wrap_text(text, font, bw_px - txt_pad * 2, tmp_draw)
+        total_h = len(lines) * line_height
+        ty = pad_img + (bh_px - total_h) // 2
+        for i, line in enumerate(lines):
+            tmp_draw.text((pad_img + bw_px // 2, ty + i * line_height), line,
+                          fill=font_color, font=font, anchor="mt")
+        _paste_rotated(canvas, tmp, bubble["x"] + bw_px / 2, bubble["y"] + bh_px / 2, rotation)
+        return
+
+    _draw_speech_bubble(draw, bubble)
+    pad = 14
+    max_text_w = bubble["width"] - pad * 2
+    lines = _wrap_text(text, font, max_text_w, draw)
+    total_text_h = len(lines) * line_height
+    text_start_y = bubble["y"] + (bubble["height"] - total_text_h) // 2
+    for i, line in enumerate(lines):
+        draw.text((bubble["x"] + bubble["width"] // 2, text_start_y + i * line_height),
+                  line, fill=font_color, font=font, anchor="mt")
+
+
+# 各元素類型未設定 z_index 時的預設基底（維持向後相容的渲染順序）
+_TYPE_Z_BASE = {"photo": 0, "bubble": 100, "text": 200, "sticker": 300}
+
+
 def render_page(layout: dict, student_name: str, page_data: dict, output_size: tuple = (794, 1123), page_index: int = 0) -> Image.Image:
     """Render one album page and return a PIL Image."""
     w, h = layout.get("canvas_width", output_size[0]), layout.get("canvas_height", output_size[1])
@@ -305,259 +538,28 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
 
     draw = ImageDraw.Draw(canvas, "RGBA")
 
-    # 2. Photo slots
+    # 2. 依 z_index 排序所有元素並逐一渲染
     photos = page_data.get("photos", {})
-    for slot in layout.get("photo_slots", []):
-        slot_id = str(slot["id"])
-        photo_val = photos.get(slot_id)
-        if not photo_val:
-            sx, sy, sw, sh = slot["x"], slot["y"], slot["width"], slot["height"]
-            border = slot.get("border", True)
-            border_w = slot.get("border_width", 8)
-            slot_radius = slot.get("border_radius", 0)
-            rotation = slot.get("rotation", 0)
-            _sh_raw = slot.get("shadow_enabled")
-            sh_enabled = border if _sh_raw is None else _sh_raw
-            sh_ox = slot.get("shadow_offset_x", 5)
-            sh_oy = slot.get("shadow_offset_y", 8)
-            sh_blur = slot.get("shadow_blur", 14)
-            sh_opacity = slot.get("shadow_opacity", 120)
-            if border:
-                # Render realistic polaroid frame placeholder
-                frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
-                fd = ImageDraw.Draw(frame)
-                ix1, iy1 = border_w, border_w
-                ix2, iy2 = sw - border_w, sh - border_w * 2
-                inner_r = max(0, slot_radius - border_w)
-                if inner_r > 0:
-                    fd.rounded_rectangle([ix1, iy1, ix2, iy2], radius=inner_r, fill="#EEEEEE")
-                else:
-                    fd.rectangle([ix1, iy1, ix2, iy2], fill="#EEEEEE")
-                # Subtle grey outline
-                fd.rectangle([0, 0, sw - 1, sh - 1], outline="#C8CDD8", width=1)
-                mid_x, mid_y = (ix1 + ix2) // 2, (iy1 + iy2) // 2
-                fd.text((mid_x, mid_y), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
-                        font=_get_font(14), anchor="mm")
-                frame = _apply_rounded_corners(frame, slot_radius)
-                if sh_enabled:
-                    frame = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
-                                             shadow_color=(0, 0, 0, sh_opacity))
-                _paste_rotated(canvas, frame, sx + sw / 2, sy + sh / 2, rotation)
-                draw = ImageDraw.Draw(canvas, "RGBA")
-            else:
-                if sh_enabled:
-                    frame = Image.new("RGBA", (sw, sh), (0xEE, 0xEE, 0xEE, 255))
-                    fd2 = ImageDraw.Draw(frame)
-                    fd2.rectangle([0, 0, sw - 1, sh - 1], outline="#CCCCCC", width=2)
-                    mid_x2, mid_y2 = sw // 2, sh // 2
-                    fd2.text((mid_x2, mid_y2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
-                             font=_get_font(16), anchor="mm")
-                    frame = _apply_rounded_corners(frame, slot_radius)
-                    frame = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
-                                            shadow_color=(0, 0, 0, sh_opacity))
-                    _paste_rotated(canvas, frame, sx + sw / 2, sy + sh / 2, rotation)
-                    draw = ImageDraw.Draw(canvas, "RGBA")
-                else:
-                    draw.rectangle([sx, sy, sx + sw, sy + sh], fill="#EEEEEE", outline="#CCCCCC", width=2)
-                    draw.text((sx + sw // 2, sy + sh // 2), f"P{page_index+1}·{slot_id}", fill="#AAAAAA",
-                              font=_get_font(16), anchor="mm")
-            continue
-
-        # Support both plain path string and transform dict
-        if isinstance(photo_val, dict):
-            photo_path = photo_val.get("path", "")
-            user_scale = float(photo_val.get("scale", 1.0))
-            offset_x   = float(photo_val.get("offset_x", 0.0))
-            offset_y   = float(photo_val.get("offset_y", 0.0))
-        else:
-            photo_path = photo_val
-            user_scale, offset_x, offset_y = 1.0, 0.0, 0.0
-
-        if not photo_path:
-            continue
-
-        try:
-            img = _load_key(photo_path)
-            if img is None:
-                continue
-            img = img.convert("RGBA")
-        except Exception:
-            continue
-
-        sw, sh = slot["width"], slot["height"]
-        border = slot.get("border", True)
-        border_w = slot.get("border_width", 8)
-        slot_radius = slot.get("border_radius", 0)
-        _sh_raw = slot.get("shadow_enabled")
-        sh_enabled = border if _sh_raw is None else _sh_raw
-        sh_ox = slot.get("shadow_offset_x", 5)
-        sh_oy = slot.get("shadow_offset_y", 8)
-        sh_blur = slot.get("shadow_blur", 14)
-        sh_opacity = slot.get("shadow_opacity", 120)
-
-        def _cover_crop(img, box_w, box_h, u_scale, ox, oy):
-            """Cover-fill box_w×box_h with extra zoom u_scale and pan offset ox/oy ∈ [-1,1]."""
-            ir = img.width / img.height
-            br = box_w / box_h
-            if ir > br:
-                base_h = box_h
-                base_w = int(box_h * ir)
-            else:
-                base_w = box_w
-                base_h = int(box_w / ir)
-            nw = max(box_w, int(base_w * u_scale))
-            nh = max(box_h, int(base_h * u_scale))
-            img = img.resize((nw, nh), Image.LANCZOS)
-            avail_x = nw - box_w
-            avail_y = nh - box_h
-            cx = int(avail_x * (0.5 + ox * 0.5))
-            cy = int(avail_y * (0.5 + oy * 0.5))
-            cx = max(0, min(cx, avail_x))
-            cy = max(0, min(cy, avail_y))
-            return img.crop((cx, cy, cx + box_w, cy + box_h))
-
-        if border:
-            inner_w = sw - border_w * 2
-            inner_h = sh - border_w * 2 - border_w * 2  # extra bottom for polaroid feel
-            photo = _cover_crop(img, inner_w, inner_h, user_scale, offset_x, offset_y)
-            inner_r = max(0, slot_radius - border_w)
-            if inner_r > 0:
-                photo = _apply_rounded_corners(photo, inner_r)
-            frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
-            frame.paste(photo, (border_w, border_w), photo)
-            frame = _apply_rounded_corners(frame, slot_radius)
-            if sh_enabled:
-                img = _add_drop_shadow(frame, offset=(sh_ox, sh_oy), blur=sh_blur,
-                                       shadow_color=(0, 0, 0, sh_opacity))
-            else:
-                img = frame
-        else:
-            img = _cover_crop(img, sw, sh, user_scale, offset_x, offset_y)
-            img = _apply_rounded_corners(img.convert("RGBA"), slot_radius)
-            if sh_enabled:
-                img = _add_drop_shadow(img, offset=(sh_ox, sh_oy), blur=sh_blur,
-                                       shadow_color=(0, 0, 0, sh_opacity))
-
-        cx = slot["x"] + slot["width"] / 2
-        cy = slot["y"] + slot["height"] / 2
-        rotation = slot.get("rotation", 0)
-        _paste_rotated(canvas, img, cx, cy, rotation)
-        draw = ImageDraw.Draw(canvas, "RGBA")  # refresh after paste
-
-    # 3. Stickers (static image decorations, rendered on top of photos)
-    for sticker in layout.get("stickers", []):
-        stkr_path_str = sticker.get("path", "")
-        if not stkr_path_str:
-            continue
-        try:
-            stkr_img = _load_key(stkr_path_str)
-            if stkr_img is None:
-                continue
-            stkr_img = stkr_img.convert("RGBA")
-            sw, sh = int(sticker["width"]), int(sticker["height"])
-            stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)
-            cx = sticker["x"] + sw / 2
-            cy = sticker["y"] + sh / 2
-            _paste_rotated(canvas, stkr_img, cx, cy, sticker.get("rotation", 0))
-            draw = ImageDraw.Draw(canvas, "RGBA")
-        except Exception:
-            continue
-
-    # 4. Plain text labels（無背景的純文字區塊）
-    for label in layout.get("text_labels", []):
-        label_text = label.get("text", "").replace("{name}", student_name)
-        if not label_text:
-            continue
-        font_size = label.get("font_size", 24)
-        font_color = label.get("font_color", "#333333")
-        font = _get_font(font_size, label.get("font_family"))
-        line_height_px = int(font_size * label.get("line_height", 1.4))
-        lw, lh = int(label["width"]), int(label["height"])
-        rotation = label.get("rotation", 0)
-        text_align = label.get("text_align", "center")
-
-        lines = _wrap_text(label_text, font, lw, draw)
-        total_h = len(lines) * line_height_px
-
-        if rotation:
-            diag = int(math.sqrt(lw**2 + lh**2)) + 4
-            pad = (diag - min(lw, lh)) // 2 + 2
-            tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
-            tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-            tmp_y = pad + (lh - total_h) // 2
-            for i, line in enumerate(lines):
-                ty = tmp_y + i * line_height_px
-                if text_align == "left":
-                    tmp_draw.text((pad, ty), line, fill=font_color, font=font, anchor="lt")
-                elif text_align == "right":
-                    tmp_draw.text((pad + lw, ty), line, fill=font_color, font=font, anchor="rt")
-                else:
-                    tmp_draw.text((pad + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
-            cx = label["x"] + lw / 2
-            cy = label["y"] + lh / 2
-            _paste_rotated(canvas, tmp, cx, cy, rotation)
-            draw = ImageDraw.Draw(canvas, "RGBA")
-            continue
-
-        start_y = label["y"] + (lh - total_h) // 2
-        for i, line in enumerate(lines):
-            ty = start_y + i * line_height_px
-            if text_align == "left":
-                draw.text((label["x"], ty), line, fill=font_color, font=font, anchor="lt")
-            elif text_align == "right":
-                draw.text((label["x"] + lw, ty), line, fill=font_color, font=font, anchor="rt")
-            else:
-                draw.text((label["x"] + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
-
-    # 5. Text bubbles  (rotation supported via bubble.rotation field)
     bubble_texts = page_data.get("bubble_texts", {})
-    for bubble in layout.get("text_bubbles", []):
-        bubble_id = str(bubble["id"])
-        raw_text = bubble_texts.get(bubble_id, bubble.get("text", ""))
-        text = raw_text.replace("{name}", student_name)
+    elements_ordered = sorted([
+        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i)) for i, slot    in enumerate(layout.get("photo_slots",  []))],
+        *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i)) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
+        *[("text",    label,   label.get("z_index",   _TYPE_Z_BASE["text"]    + i)) for i, label   in enumerate(layout.get("text_labels",  []))],
+        *[("sticker", sticker, sticker.get("z_index", _TYPE_Z_BASE["sticker"] + i)) for i, sticker in enumerate(layout.get("stickers",     []))],
+    ], key=lambda t: t[2])
 
-        rotation = bubble.get("rotation", 0)
-        font_size = bubble.get("font_size", 20)
-        font_color = bubble.get("font_color", "#333333")
-        font = _get_font(font_size, bubble.get("font_family"))
-        line_height = int(font_size * bubble.get("line_height", 1.4))
-        bw_px, bh_px = int(bubble["width"]), int(bubble["height"])
+    for elem_type, elem_data, _ in elements_ordered:
+        if elem_type == "photo":
+            _render_photo_slot(canvas, elem_data, photos, page_index)
+        elif elem_type == "bubble":
+            _render_text_bubble(canvas, elem_data, bubble_texts, student_name)
+        elif elem_type == "text":
+            _render_text_label(canvas, elem_data, student_name)
+        elif elem_type == "sticker":
+            _render_sticker(canvas, elem_data)
+        draw = ImageDraw.Draw(canvas, "RGBA")  # 每個元素繪製後重建 draw
 
-        if rotation:
-            # Render bubble to its own transparent image, then rotate-paste
-            diag = int(math.sqrt(bw_px**2 + bh_px**2)) + 4
-            pad_img = (diag - min(bw_px, bh_px)) // 2 + 2
-            tmp_w, tmp_h = bw_px + pad_img * 2, bh_px + pad_img * 2
-            tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
-            tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-            shifted = {**bubble, "x": pad_img, "y": pad_img}
-            _draw_speech_bubble(tmp_draw, shifted)
-            txt_pad = 14
-            lines = _wrap_text(text, font, bw_px - txt_pad * 2, tmp_draw)
-            total_h = len(lines) * line_height
-            ty = pad_img + (bh_px - total_h) // 2
-            for i, line in enumerate(lines):
-                tmp_draw.text((pad_img + bw_px // 2, ty + i * line_height), line,
-                              fill=font_color, font=font, anchor="mt")
-            cx = bubble["x"] + bw_px / 2
-            cy = bubble["y"] + bh_px / 2
-            _paste_rotated(canvas, tmp, cx, cy, rotation)
-            draw = ImageDraw.Draw(canvas, "RGBA")
-            continue
-
-        _draw_speech_bubble(draw, bubble)
-        pad = 14
-        max_text_w = bubble["width"] - pad * 2
-        lines = _wrap_text(text, font, max_text_w, draw)
-        total_text_h = len(lines) * line_height
-        text_start_y = bubble["y"] + (bubble["height"] - total_text_h) // 2
-
-        for i, line in enumerate(lines):
-            lx = bubble["x"] + bubble["width"] // 2
-            ly = text_start_y + i * line_height
-            draw.text((lx, ly), line, fill=font_color, font=font, anchor="mt")
-
-    # 4. Footer
+    # 3. Footer
     footer = layout.get("footer")
     if footer and footer.get("text"):
         ft = footer["text"].replace("{name}", student_name)
