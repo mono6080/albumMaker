@@ -595,19 +595,20 @@ def render_album(template_pages: list[dict], student_name: str,
 def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
     """將相冊頁面轉成 PDF bytes 並回傳。
 
-    mode='print'  — lossless PNG，列印畫質
-    mode='screen' — JPEG quality=72，半尺寸，螢幕用
+    mode='print'  — 放大至 A4@150dpi（1240×1754），lossless PNG
+    mode='screen' — 維持原始尺寸，JPEG quality=72，以 96dpi 儲存（A4 大小，省資源）
     """
     import img2pdf
     pages_bytes = []
     for img in images:
         buf = io.BytesIO()
         if mode == "screen":
-            small = img.convert("RGB").resize(
-                (img.width // 2, img.height // 2), Image.LANCZOS)
-            small.save(buf, format="JPEG", quality=72)
+            # 低畫質：原始 794×1123，JPEG 壓縮，96 DPI → PDF 頁面為 A4 大小
+            img.convert("RGB").save(buf, format="JPEG", quality=72, dpi=(96, 96))
         else:
-            img.convert("RGB").save(buf, format="PNG", dpi=(150, 150))
+            # 列印畫質：放大至 A4@150dpi（1240×1754），PNG lossless
+            a4_img = img.convert("RGB").resize((1240, 1754), Image.LANCZOS)
+            a4_img.save(buf, format="PNG", dpi=(150, 150))
         pages_bytes.append(buf.getvalue())
     return img2pdf.convert(pages_bytes)
 
