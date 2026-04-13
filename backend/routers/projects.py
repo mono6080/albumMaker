@@ -34,9 +34,22 @@ from services.storage import get_storage
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+def _parse_json_field(raw: str, field_name: str = "欄位") -> any:
+    """安全解析 JSON 欄位，格式損壞時回傳 422 而非 500。"""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=422, detail=f"資料庫中的 {field_name} JSON 格式損壞，請聯絡管理員")
+
+
 # ── 存取權限輔助 ──────────────────────────────────────────────────────────────
 
-def assert_project_readable(project: Project, current_user: User, db: Session):
+def assert_project_readable(
+    project: Project,
+    current_user: User,
+    db: Session,
+    subordinate_ids: set[int] | None = None,
+):
     """
     確認目前使用者有權限讀取此專案，否則拋出 403。
 
@@ -44,18 +57,30 @@ def assert_project_readable(project: Project, current_user: User, db: Session):
     - art_team：可讀全部（唯讀）
     - supervisor：只能讀自己管轄老師的專案
     - teacher：只能讀自己的專案
+
+    subordinate_ids 可由外部傳入（已查好時），避免同一 request 重複查詢。
     """
     if current_user.role == "admin":
         return
     if current_user.role == "art_team":
         return
     if current_user.role == "supervisor":
-        subordinate_ids = get_subordinate_user_ids(current_user.id, db)
+        if subordinate_ids is None:
+            subordinate_ids = get_subordinate_user_ids(current_user.id, db)
         if project.owner_id in subordinate_ids:
             return
     if current_user.role == "teacher" and project.owner_id == current_user.id:
         return
     raise HTTPException(status_code=403, detail="無此專案的存取權限")
+
+
+def assert_comment_deletable(comment: "ProjectComment", current_user: User):
+    """確認目前使用者有權限刪除此留言，否則拋出 403。admin 可刪任何人的留言。"""
+    if current_user.role == "admin":
+        return
+    if comment.author_id == current_user.id:
+        return
+    raise HTTPException(status_code=403, detail="只能刪除自己的留言")
 
 
 def assert_project_writable(project: Project, current_user: User):
@@ -112,7 +137,7 @@ def list_projects(
 
 @router.post("/")
 def create_project(
-    name: str = Form(...),
+    name: str = Form(..., max_length=100),
     template_id: int = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin", "teacher")),
@@ -144,13 +169,13 @@ def get_project(
         "template_id": project.template_id,
         "created_at": project.created_at,
         "owner_id": project.owner_id,
-        "label_texts": json.loads(project.label_texts_json or "{}"),
+        "label_texts": _parse_json_field(project.label_texts_json or "{}", "label_texts_json"),
         "students": [
             {
                 "id": student.id,
                 "name": student.name,
                 "order_index": student.order_index,
-                "pages_data": json.loads(student.pages_data_json),
+                "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
                 "output_filename": student.output_filename,
             }
             for student in project.students
@@ -161,7 +186,7 @@ def get_project(
 @router.patch("/{project_id}")
 def rename_project(
     project_id: int,
-    name: str = Form(...),
+    name: str = Form(..., max_length=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -182,9 +207,10 @@ def delete_project(
     """刪除指定專案及其所有學生資料與上傳檔案。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
+    # 先刪檔案再 commit：避免 DB 已提交但檔案刪除失敗造成孤立記錄
+    get_storage().delete_prefix(f"projects/proj{project_id}")
     db.delete(project)
     db.commit()
-    get_storage().delete_prefix(f"projects/proj{project_id}")
     return {"ok": True}
 
 
@@ -284,7 +310,7 @@ def set_page_skip(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = json.loads(student.pages_data_json)
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
     while len(pages_data) <= page_index:
         pages_data.append({
             "page_index": len(pages_data),
@@ -324,7 +350,7 @@ async def upload_photo(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = json.loads(student.pages_data_json)
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
     while len(pages_data) <= page_index:
         pages_data.append({
             "page_index": len(pages_data),
@@ -332,12 +358,11 @@ async def upload_photo(
             "label_texts": {},
         })
 
-    # 若該 slot 已有舊照片，先刪除避免殘留
+    # 若該 slot 已有舊照片，先刪除避免殘留（delete 已處理不存在的情況）
     old_record = pages_data[page_index]["photos"].get(str(slot_id))
     if old_record:
         old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
-        if old_key:
-            get_storage().delete(old_key)
+        get_storage().delete(old_key)
 
     key = get_photo_key(project_id, student_id, page_index, slot_id, file.filename)
     await save_uploaded_file(key, file)
@@ -366,7 +391,7 @@ def get_photo(
     project = get_project_or_404(project_id, db)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = json.loads(student.pages_data_json)
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
     if page_index >= len(pages_data):
         raise HTTPException(status_code=404, detail="找不到頁面")
 
@@ -401,7 +426,7 @@ def update_photo_mapping(
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
-    pages_data = json.loads(student.pages_data_json)
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
 
     renames = {}  # 記錄所有重命名結果，供前端同步 serverPath
     all_pages = payload.get("pages", {})
@@ -469,7 +494,7 @@ def get_project_label_texts(
     """取得專案層級的對印文字設定。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    return json.loads(project.label_texts_json or "{}")
+    return _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
 
 
 @router.put("/{project_id}/label_texts")
@@ -503,7 +528,7 @@ def update_student_label_texts(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = json.loads(student.pages_data_json)
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
     while len(pages_data) <= page_index:
         pages_data.append({
             "page_index": len(pages_data),
@@ -534,7 +559,7 @@ def batch_update_texts(
         if student_id_str not in students_payload:
             continue
 
-        pages_data = json.loads(student.pages_data_json)
+        pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
         for page_index_str, label_texts in students_payload[student_id_str].items():
             page_index = int(page_index_str)
             while len(pages_data) <= page_index:
@@ -566,7 +591,7 @@ def preview_project_page(
     if page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
-    project_label_texts = json.loads(project.label_texts_json or "{}")
+    project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
     page_label_texts = project_label_texts.get(str(page_index), {})
 
     preview_image = render_page(
@@ -597,9 +622,9 @@ def preview_student_page(
     if page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
-    project_label_texts = json.loads(project.label_texts_json or "{}")
+    project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
     student_pages_data = merge_project_label_texts_into_pages(
-        json.loads(student.pages_data_json),
+        _parse_json_field(student.pages_data_json, "pages_data_json"),
         project_label_texts,
     )
 
@@ -658,13 +683,17 @@ def render_all_students(
     t_all = time.monotonic()
     logger.info("開始批次渲染 project_id=%s 共 %s 位學生", project_id, len(project.students))
 
+    # 迴圈外預先讀取模板佈局，避免每個學生重複查詢 N×1
+    shared_page_layouts = get_template_page_layouts(project)
+
     for student in project.students:
         t0 = time.monotonic()
         try:
-            result = render_and_save_student_album(project, student, project_id, db)
+            result = render_and_save_student_album(project, student, project_id, db, shared_page_layouts)
             render_results.append({"student": student.name, "pdf": result["pdf"]})
             logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
         except Exception as render_error:
+            db.rollback()
             render_errors.append({"student": student.name, "error": str(render_error)})
             logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
@@ -777,7 +806,7 @@ def list_comments(
 @router.post("/{project_id}/comments", status_code=201)
 def add_comment(
     project_id: int,
-    content: str = Form(...),
+    content: str = Form(..., max_length=1000),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin", "art_team", "supervisor")),
 ):
@@ -820,8 +849,7 @@ def delete_comment(
     ).first()
     if not comment:
         raise HTTPException(status_code=404, detail="留言不存在")
-    if current_user.role != "admin" and comment.author_id != current_user.id:
-        raise HTTPException(status_code=403, detail="只能刪除自己的留言")
+    assert_comment_deletable(comment, current_user)
     db.delete(comment)
     db.commit()
     return {"ok": True}

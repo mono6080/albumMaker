@@ -15,6 +15,8 @@ def run_migrations():
         _add_project_comments_table(connection)
         _assign_historical_projects_to_admin(connection)
         _rename_bubble_texts_to_label_texts(connection)
+        _add_foreign_key_indexes(connection)
+        _add_template_page_unique_constraint(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -119,6 +121,38 @@ def _rename_bubble_texts_to_label_texts(connection):
             connection.execute(
                 text("UPDATE projects SET label_texts_json = bubble_texts_json WHERE bubble_texts_json != '{}'")
             )
+        connection.commit()
+
+
+def _add_foreign_key_indexes(connection):
+    """為外鍵欄位補建 INDEX，加速依所有者/專案/作者篩選的查詢。"""
+    existing_indexes = {
+        row[1]
+        for row in connection.execute(text("SELECT type, name FROM sqlite_master WHERE type='index'"))
+    }
+    indexes_to_create = [
+        ("idx_projects_owner_id",         "CREATE INDEX idx_projects_owner_id ON projects(owner_id)"),
+        ("idx_students_project_id",        "CREATE INDEX idx_students_project_id ON students(project_id)"),
+        ("idx_project_comments_project_id","CREATE INDEX idx_project_comments_project_id ON project_comments(project_id)"),
+        ("idx_project_comments_author_id", "CREATE INDEX idx_project_comments_author_id ON project_comments(author_id)"),
+        ("idx_template_pages_template_id", "CREATE INDEX idx_template_pages_template_id ON template_pages(template_id)"),
+    ]
+    for index_name, create_sql in indexes_to_create:
+        if index_name not in existing_indexes:
+            connection.execute(text(create_sql))
+    connection.commit()
+
+
+def _add_template_page_unique_constraint(connection):
+    """為 template_pages(template_id, page_number) 補建複合 UNIQUE INDEX，防止同模板重複頁碼。"""
+    existing_indexes = {
+        row[1]
+        for row in connection.execute(text("SELECT type, name FROM sqlite_master WHERE type='index'"))
+    }
+    if "idx_template_pages_unique_page" not in existing_indexes:
+        connection.execute(text(
+            "CREATE UNIQUE INDEX idx_template_pages_unique_page ON template_pages(template_id, page_number)"
+        ))
         connection.commit()
 
 

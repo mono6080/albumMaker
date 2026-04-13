@@ -68,9 +68,7 @@ class LocalStorageAdapter(StorageAdapter):
         return FileResponse(str(self._path(key)))
 
     def delete(self, key: str) -> None:
-        path = self._path(key)
-        if path.exists():
-            path.unlink()
+        self._path(key).unlink(missing_ok=True)
 
     def delete_prefix(self, key_prefix: str) -> None:
         path = self._path(key_prefix)

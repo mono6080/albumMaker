@@ -1,8 +1,12 @@
 # 使用者管理路由模組
 # 所有端點僅限 admin 角色存取
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 
 from auth import hash_password, require_role
@@ -15,19 +19,19 @@ VALID_ROLES = {"admin", "art_team", "supervisor", "teacher", "none"}
 
 
 class CreateUserBody(BaseModel):
-    username: str
-    display_name: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=50)
+    display_name: str = Field(..., min_length=1, max_length=50)
+    password: str = Field(..., min_length=4, max_length=100)
     role: str
     supervisor_id: int | None = None
 
 
 class UpdateUserBody(BaseModel):
-    username: str | None = None
-    display_name: str | None = None
+    username: str | None = Field(None, min_length=1, max_length=50)
+    display_name: str | None = Field(None, min_length=1, max_length=50)
     role: str | None = None
     supervisor_id: int | None = None
-    new_password: str | None = None
+    new_password: str | None = Field(None, min_length=4, max_length=100)
     clear_supervisor: bool = False
 
 
@@ -137,7 +141,14 @@ def delete_user(
     if user_id == current_admin.id:
         raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
     target_user = get_user_or_404(user_id, db)
-    # 將被刪除使用者的專案移交給執行刪除的 admin
+    # 將被刪除使用者的專案移交給執行刪除的 admin，並記錄審計日誌
+    transferred = db.query(Project).filter(Project.owner_id == user_id).count()
+    if transferred:
+        logger.warning(
+            "使用者刪除：%s（id=%s）的 %s 個專案移交給 admin %s（id=%s）",
+            target_user.username, user_id, transferred,
+            current_admin.username, current_admin.id,
+        )
     db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
     db.delete(target_user)
     db.commit()

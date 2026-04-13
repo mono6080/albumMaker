@@ -92,21 +92,23 @@ def render_and_save_student_album(
     project: Project,
     student: Student,
     project_id: int,
-    db
+    db,
+    page_layouts: list[dict] | None = None,
 ) -> dict:
     """
     渲染單一學生的相冊頁面並儲存為 PDF 與頁面圖片。
 
     流程：
-      1. 讀取模板佈局
-      2. 將專案氣泡文字合併入學生頁面資料
+      1. 讀取模板佈局（可由外部傳入，批次渲染時共用避免重複查詢）
+      2. 將專案對印文字合併入學生頁面資料
       3. 呼叫渲染引擎產生圖片
       4. 儲存列印用 PDF、螢幕用 PDF、單頁圖片
       5. 更新學生的輸出路徑記錄
 
     回傳：包含 pdf 路徑與頁數的 dict。
     """
-    page_layouts = get_template_page_layouts(project)
+    if page_layouts is None:
+        page_layouts = get_template_page_layouts(project)
     if not page_layouts:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="模板尚未建立任何頁面")
