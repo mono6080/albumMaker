@@ -62,7 +62,7 @@ export default function StudentEdit() {
   useEffect(() => {
     if (!student) return;
     scheduleSave();
-  }, [labelTexts]);
+  }, [labelTexts, scheduleSave]);
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 

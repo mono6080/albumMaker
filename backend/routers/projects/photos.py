@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
-from services.file_service import get_photo_key, rename_photo_to_slot, save_uploaded_file
+from services.file_service import get_photo_key, rename_photo_to_slot
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
@@ -38,7 +38,6 @@ async def upload_photo(
     file_bytes = await file.read()
     if len(file_bytes) > _MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="檔案過大，上限 10 MB")
-    await file.seek(0)
 
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
@@ -52,14 +51,15 @@ async def upload_photo(
             "label_texts": {},
         })
 
+    storage = get_storage()
     # 若該 slot 已有舊照片，先刪除避免殘留（delete 已處理不存在的情況）
     old_record = pages_data[page_index]["photos"].get(str(slot_id))
     if old_record:
         old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
-        get_storage().delete(old_key)
+        storage.delete(old_key)
 
     key = get_photo_key(project_id, student_id, page_index, slot_id, file.filename)
-    await save_uploaded_file(key, file)
+    storage.put(key, file_bytes)  # 直接使用已讀取的 bytes，避免二次讀取
 
     pages_data[page_index]["photos"][str(slot_id)] = {
         "path": key,

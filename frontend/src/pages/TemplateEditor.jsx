@@ -44,6 +44,9 @@ function generateElementId() {
 
 const _Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
 
+// 元素類型 → layout 陣列欄位名稱
+const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
+
 function getAllElementsSorted(layout) {
   if (!layout) return [];
   return [
@@ -118,21 +121,25 @@ export default function TemplateEditor() {
 
   // ── 載入與頁面切換 ────────────────────────────────────────────────────────
 
+  // 套用單一頁面的 layout 與背景圖，供 loadTemplate 和頁碼切換共用
+  const applyPageDisplay = useCallback((page) => {
+    setPageLayout(draftLayouts.current[page.id] ?? page.layout);
+    setBackgroundUrl(
+      page.background_filename
+        ? `/api/templates/${templateId}/pages/${page.id}/background?t=${Date.now()}`
+        : null
+    );
+  }, [templateId]);
+
   const loadTemplate = useCallback(() => {
     fetchTemplate(templateId).then(response => {
       setTemplate(response.data);
       const pages = response.data.pages;
       if (pages.length > 0) {
-        const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-        setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
-        setBackgroundUrl(
-          safePage.background_filename
-            ? `/api/templates/${templateId}/pages/${safePage.id}/background?t=${Date.now()}`
-            : null
-        );
+        applyPageDisplay(pages[Math.min(currentPageIndex, pages.length - 1)]);
       }
     });
-  }, [templateId, currentPageIndex]);
+  }, [templateId, currentPageIndex, applyPageDisplay]);
 
   useEffect(() => { loadTemplate(); }, [loadTemplate]);
 
@@ -140,15 +147,9 @@ export default function TemplateEditor() {
     if (!template) return;
     const pages = template.pages;
     if (pages.length === 0) return;
-    const safePage = pages[Math.min(currentPageIndex, pages.length - 1)];
-    setPageLayout(draftLayouts.current[safePage.id] ?? safePage.layout);
+    applyPageDisplay(pages[Math.min(currentPageIndex, pages.length - 1)]);
     setSelectedElement(null);
-    setBackgroundUrl(
-      safePage.background_filename
-        ? `/api/templates/${templateId}/pages/${safePage.id}/background?t=${Date.now()}`
-        : null
-    );
-  }, [currentPageIndex, template, templateId]);
+  }, [currentPageIndex, template, applyPageDisplay]);
 
   const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
 
@@ -255,66 +256,22 @@ export default function TemplateEditor() {
   };
 
   const updateElement = (elementType, elementId, propertyUpdates) => {
-    setPageLayout(currentLayout => {
-      if (elementType === "photo") {
-        return {
-          ...currentLayout,
-          photo_slots: currentLayout.photo_slots.map(slot =>
-            slot.id === elementId ? { ...slot, ...propertyUpdates } : slot
-          ),
-        };
-      }
-      if (elementType === "bubble") {
-        return {
-          ...currentLayout,
-          text_bubbles: currentLayout.text_bubbles.map(bubble =>
-            bubble.id === elementId ? { ...bubble, ...propertyUpdates } : bubble
-          ),
-        };
-      }
-      if (elementType === "text") {
-        return {
-          ...currentLayout,
-          text_labels: (currentLayout.text_labels || []).map(label =>
-            label.id === elementId ? { ...label, ...propertyUpdates } : label
-          ),
-        };
-      }
-      if (elementType === "sticker") {
-        return {
-          ...currentLayout,
-          stickers: (currentLayout.stickers || []).map(sticker =>
-            sticker.id === elementId ? { ...sticker, ...propertyUpdates } : sticker
-          ),
-        };
-      }
-      return currentLayout;
-    });
+    const arrayKey = ELEMENT_ARRAY_KEY[elementType];
+    setPageLayout(currentLayout => ({
+      ...currentLayout,
+      [arrayKey]: (currentLayout[arrayKey] || []).map(
+        element => element.id === elementId ? { ...element, ...propertyUpdates } : element
+      ),
+    }));
   };
 
   const deleteSelectedElement = useCallback(() => {
     if (!selectedElement) return;
-    if (selectedElement.type === "photo") {
-      setPageLayout(currentLayout => ({
-        ...currentLayout,
-        photo_slots: currentLayout.photo_slots.filter(slot => slot.id !== selectedElement.id),
-      }));
-    } else if (selectedElement.type === "bubble") {
-      setPageLayout(currentLayout => ({
-        ...currentLayout,
-        text_bubbles: currentLayout.text_bubbles.filter(bubble => bubble.id !== selectedElement.id),
-      }));
-    } else if (selectedElement.type === "text") {
-      setPageLayout(currentLayout => ({
-        ...currentLayout,
-        text_labels: (currentLayout.text_labels || []).filter(label => label.id !== selectedElement.id),
-      }));
-    } else if (selectedElement.type === "sticker") {
-      setPageLayout(currentLayout => ({
-        ...currentLayout,
-        stickers: (currentLayout.stickers || []).filter(sticker => sticker.id !== selectedElement.id),
-      }));
-    }
+    const arrayKey = ELEMENT_ARRAY_KEY[selectedElement.type];
+    setPageLayout(currentLayout => ({
+      ...currentLayout,
+      [arrayKey]: (currentLayout[arrayKey] || []).filter(element => element.id !== selectedElement.id),
+    }));
     setSelectedElement(null);
   }, [selectedElement]);
 
@@ -506,6 +463,143 @@ export default function TemplateEditor() {
 
   const selectedItem = selectedElement ? getElement(selectedElement) : null;
 
+  // ── Stage 元素渲染函式（閉包存取 toDisplayCoord / currentPageIndex 等） ─────
+
+  const renderPhotoSlotNode = (data, elemIndex, isSelected, groupProps) => {
+    const displayW = toDisplayCoord(data.width);
+    const displayH = toDisplayCoord(data.height);
+    const hasBorder = data.border !== false;
+    const borderDisplayW = toDisplayCoord(data.border_width ?? 8);
+    const slotRadius = toDisplayCoord(data.border_radius ?? 0);
+    const shadowEnabled = data.shadow_enabled ?? hasBorder;
+    const shadowX = shadowEnabled ? toDisplayCoord(data.shadow_offset_x ?? 5) : 0;
+    const shadowY = shadowEnabled ? toDisplayCoord(data.shadow_offset_y ?? 8) : 0;
+    // HTML Canvas2D shadowBlur 的 sigma = shadowBlur/2，PIL GaussianBlur(radius) 的實測 sigma ≈ radius*0.87
+    // 量測換算：需要 Canvas2D shadowBlur = toDisplayCoord(pil_blur) * 1.74 使兩者視覺一致
+    const shadowBlur = shadowEnabled ? toDisplayCoord(data.shadow_blur ?? 14) * 1.74 : 0;
+    const shadowOpacity = shadowEnabled ? (data.shadow_opacity ?? 120) / 255 : 0;
+    return (
+      <Group key={`photo-${data.id}`} {...groupProps}>
+        <Rect
+          width={displayW} height={displayH}
+          fill={hasBorder ? "#ffffff" : "#EEEEEE"}
+          cornerRadius={slotRadius}
+          stroke={isSelected ? "#4F46E5" : hasBorder ? "#e2e8f0" : "#CCCCCC"}
+          strokeWidth={isSelected ? 2 : 1}
+          shadowColor="black"
+          shadowOpacity={shadowOpacity}
+          shadowOffsetX={shadowX}
+          shadowOffsetY={shadowY}
+          shadowBlur={shadowBlur}
+          listening={false}
+        />
+        {hasBorder && (
+          <Rect
+            x={borderDisplayW}
+            y={borderDisplayW}
+            width={Math.max(1, displayW - borderDisplayW * 2)}
+            height={Math.max(1, displayH - borderDisplayW * 3)}
+            fill="#EEEEEE"
+            cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
+            listening={false}
+          />
+        )}
+        <KonvaText
+          x={0} y={0}
+          width={displayW} height={displayH}
+          text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
+          fontSize={10}
+          fill="#AAAAAA"
+          align="center"
+          verticalAlign="middle"
+          listening={false}
+        />
+        {/* 透明點擊感應區 */}
+        <Rect width={displayW} height={displayH} fill="transparent" />
+      </Group>
+    );
+  };
+
+  const renderBubbleNode = (data, isSelected, groupProps) => {
+    const displayW = toDisplayCoord(data.width);
+    const displayH = toDisplayCoord(data.height);
+    const displayBorderRadius = data.border_radius != null
+      ? toDisplayCoord(data.border_radius)
+      : Math.round(Math.min(displayW, displayH) / 5);
+    const displayBorderWidth = (data.border_width ?? 0) > 0
+      ? toDisplayCoord(data.border_width)
+      : 0;
+    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20));
+    return (
+      <Group key={`bubble-${data.id}`} {...groupProps}>
+        <BubbleKonvaShape
+          width={displayW} height={displayH}
+          shape={data.shape ?? "ellipse"}
+          fill={data.fill ?? "#FDED6E"}
+          borderColor={data.border_color}
+          borderWidth={displayBorderWidth}
+          borderRadius={displayBorderRadius}
+        />
+        <KonvaText
+          x={4} y={4}
+          width={displayW - 8} height={displayH - 8}
+          text={(data.text ?? "").substring(0, 30)}
+          fontSize={fontSize}
+          fill={data.font_color ?? "#333333"}
+          fontFamily={getFontCss(data.font_family)}
+          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
+          align="center"
+          verticalAlign="middle"
+          wrap="word"
+          listening={false}
+        />
+        {isSelected && (
+          <Rect
+            width={displayW} height={displayH}
+            fill="transparent"
+            stroke="#4F46E5" strokeWidth={2}
+            listening={false}
+          />
+        )}
+        {/* 透明點擊感應區 */}
+        <Rect width={displayW} height={displayH} fill="transparent" />
+      </Group>
+    );
+  };
+
+  const renderTextLabelNode = (data, isSelected, groupProps) => {
+    const displayW = toDisplayCoord(data.width);
+    const displayH = toDisplayCoord(data.height);
+    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
+    return (
+      <Group key={`text-${data.id}`} {...groupProps}>
+        <Rect
+          width={displayW} height={displayH}
+          fill="transparent"
+          stroke={isSelected ? "#4F46E5" : "#AAAAAA"}
+          strokeWidth={isSelected ? 2 : 1}
+          dash={isSelected ? [] : [4, 3]}
+          listening={false}
+        />
+        <KonvaText
+          x={4} y={0}
+          width={displayW - 8} height={displayH}
+          text={(data.text ?? "").substring(0, 60)}
+          fontSize={fontSize}
+          fill={data.font_color ?? "#333333"}
+          fontFamily={getFontCss(data.font_family)}
+          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
+          align={data.text_align ?? "center"}
+          verticalAlign="middle"
+          wrap="word"
+          listening={false}
+        />
+        {/* 透明點擊感應區 */}
+        <Rect width={displayW} height={displayH} fill="transparent" />
+      </Group>
+    );
+  };
+
   return (
     <div className="flex flex-col">
       <ConfirmModal
@@ -683,157 +777,19 @@ export default function TemplateEditor() {
                 {/* 所有元素依 z_index 統一排序渲染 */}
                 {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
                   const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
-                  const displayW = toDisplayCoord(data.width);
-                  const displayH = toDisplayCoord(data.height);
                   const groupProps = makeGroupProps(type, data);
-
-                  // ── 照片格 ──
-                  if (type === "photo") {
-                    const hasBorder = data.border !== false;
-                    const borderDisplayW = toDisplayCoord(data.border_width ?? 8);
-                    const slotRadius = toDisplayCoord(data.border_radius ?? 0);
-                    const shadowEnabled = data.shadow_enabled ?? hasBorder;
-                    const shadowX = shadowEnabled ? toDisplayCoord(data.shadow_offset_x ?? 5) : 0;
-                    const shadowY = shadowEnabled ? toDisplayCoord(data.shadow_offset_y ?? 8) : 0;
-                    // HTML Canvas2D shadowBlur 的 sigma = shadowBlur/2，PIL GaussianBlur(radius) 的實測 sigma ≈ radius*0.87
-                    // 量測換算：需要 Canvas2D shadowBlur = toDisplayCoord(pil_blur) * 1.74 使兩者視覺一致
-                    const shadowBlur = shadowEnabled ? toDisplayCoord(data.shadow_blur ?? 14) * 1.74 : 0;
-                    const shadowOpacity = shadowEnabled ? (data.shadow_opacity ?? 120) / 255 : 0;
-
-                    return (
-                      <Group key={`photo-${data.id}`} {...groupProps}>
-                        <Rect
-                          width={displayW} height={displayH}
-                          fill={hasBorder ? "#ffffff" : "#EEEEEE"}
-                          cornerRadius={slotRadius}
-                          stroke={isSelected ? "#4F46E5" : hasBorder ? "#e2e8f0" : "#CCCCCC"}
-                          strokeWidth={isSelected ? 2 : 1}
-                          shadowColor="black"
-                          shadowOpacity={shadowOpacity}
-                          shadowOffsetX={shadowX}
-                          shadowOffsetY={shadowY}
-                          shadowBlur={shadowBlur}
-                          listening={false}
-                        />
-                        {hasBorder && (
-                          <Rect
-                            x={borderDisplayW}
-                            y={borderDisplayW}
-                            width={Math.max(1, displayW - borderDisplayW * 2)}
-                            height={Math.max(1, displayH - borderDisplayW * 3)}
-                            fill="#EEEEEE"
-                            cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
-                            listening={false}
-                          />
-                        )}
-                        <KonvaText
-                          x={0} y={0}
-                          width={displayW} height={displayH}
-                          text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
-                          fontSize={10}
-                          fill="#AAAAAA"
-                          align="center"
-                          verticalAlign="middle"
-                          listening={false}
-                        />
-                        {/* 透明點擊感應區 */}
-                        <Rect width={displayW} height={displayH} fill="transparent" />
-                      </Group>
-                    );
-                  }
-
-                  // ── 氣泡框 ──
-                  if (type === "bubble") {
-                    const displayBorderRadius = data.border_radius != null
-                      ? toDisplayCoord(data.border_radius)
-                      : Math.round(Math.min(displayW, displayH) / 5);
-                    const displayBorderWidth = (data.border_width ?? 0) > 0
-                      ? toDisplayCoord(data.border_width)
-                      : 0;
-                    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20));
-
-                    return (
-                      <Group key={`bubble-${data.id}`} {...groupProps}>
-                        <BubbleKonvaShape
-                          width={displayW} height={displayH}
-                          shape={data.shape ?? "ellipse"}
-                          fill={data.fill ?? "#FDED6E"}
-                          borderColor={data.border_color}
-                          borderWidth={displayBorderWidth}
-                          borderRadius={displayBorderRadius}
-                        />
-                        <KonvaText
-                          x={4} y={4}
-                          width={displayW - 8} height={displayH - 8}
-                          text={(data.text ?? "").substring(0, 30)}
-                          fontSize={fontSize}
-                          fill={data.font_color ?? "#333333"}
-                          fontFamily={getFontCss(data.font_family)}
-                          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-                          align="center"
-                          verticalAlign="middle"
-                          wrap="word"
-                          listening={false}
-                        />
-                        {isSelected && (
-                          <Rect
-                            width={displayW} height={displayH}
-                            fill="transparent"
-                            stroke="#4F46E5" strokeWidth={2}
-                            listening={false}
-                          />
-                        )}
-                        {/* 透明點擊感應區 */}
-                        <Rect width={displayW} height={displayH} fill="transparent" />
-                      </Group>
-                    );
-                  }
-
-                  // ── 純文字 ──
-                  if (type === "text") {
-                    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
-                    return (
-                      <Group key={`text-${data.id}`} {...groupProps}>
-                        <Rect
-                          width={displayW} height={displayH}
-                          fill="transparent"
-                          stroke={isSelected ? "#4F46E5" : "#AAAAAA"}
-                          strokeWidth={isSelected ? 2 : 1}
-                          dash={isSelected ? [] : [4, 3]}
-                          listening={false}
-                        />
-                        <KonvaText
-                          x={4} y={0}
-                          width={displayW - 8} height={displayH}
-                          text={(data.text ?? "").substring(0, 60)}
-                          fontSize={fontSize}
-                          fill={data.font_color ?? "#333333"}
-                          fontFamily={getFontCss(data.font_family)}
-                          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-                          align={data.text_align ?? "center"}
-                          verticalAlign="middle"
-                          wrap="word"
-                          listening={false}
-                        />
-                        {/* 透明點擊感應區 */}
-                        <Rect width={displayW} height={displayH} fill="transparent" />
-                      </Group>
-                    );
-                  }
-
-                  // ── 貼圖 ──
-                  if (type === "sticker") {
-                    return (
-                      <StickerNode
-                        key={`sticker-${data.id}`}
-                        sticker={data}
-                        templateId={templateId}
-                        isSelected={isSelected}
-                        groupProps={groupProps}
-                      />
-                    );
-                  }
-
+                  if (type === "photo")   return renderPhotoSlotNode(data, elemIndex, isSelected, groupProps);
+                  if (type === "bubble")  return renderBubbleNode(data, isSelected, groupProps);
+                  if (type === "text")    return renderTextLabelNode(data, isSelected, groupProps);
+                  if (type === "sticker") return (
+                    <StickerNode
+                      key={`sticker-${data.id}`}
+                      sticker={data}
+                      templateId={templateId}
+                      isSelected={isSelected}
+                      groupProps={groupProps}
+                    />
+                  );
                   return null;
                 })}
 
@@ -893,7 +849,4 @@ export default function TemplateEditor() {
     </div>
   );
 }
-
-
-// ── 屬性面板元件 ──────────────────────────────────────────────────────────────
 

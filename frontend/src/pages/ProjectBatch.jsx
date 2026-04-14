@@ -26,6 +26,7 @@ export default function ProjectBatch() {
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [desktopTab, setDesktopTab] = useState("students"); // "students" | "texts"
   const [mobileTab, setMobileTab] = useState("students");   // "students" | "edit" | "preview"
 
@@ -68,23 +69,27 @@ export default function ProjectBatch() {
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
   const loadProjectData = async () => {
-    const projectResponse = await fetchProject(projectId);
-    setProject(projectResponse.data);
+    try {
+      const projectResponse = await fetchProject(projectId);
+      setProject(projectResponse.data);
 
-    const templateResponse = await fetchTemplate(projectResponse.data.template_id);
-    setTemplate(templateResponse.data);
+      const templateResponse = await fetchTemplate(projectResponse.data.template_id);
+      setTemplate(templateResponse.data);
 
-    // 初始化對印文字狀態（專案設定優先，若無則使用模板預設）
-    const savedProjectLabelTexts = projectResponse.data.label_texts || {};
-    const initialLabelTexts = {};
-    templateResponse.data.pages.forEach((templatePage, pageIndex) => {
-      initialLabelTexts[pageIndex] = {};
-      (templatePage.layout?.text_labels || []).forEach(label => {
-        initialLabelTexts[pageIndex][String(label.id)] =
-          savedProjectLabelTexts[String(pageIndex)]?.[String(label.id)] ?? label.text ?? "";
+      // 初始化對印文字狀態（專案設定優先，若無則使用模板預設）
+      const savedProjectLabelTexts = projectResponse.data.label_texts || {};
+      const initialLabelTexts = {};
+      templateResponse.data.pages.forEach((templatePage, pageIndex) => {
+        initialLabelTexts[pageIndex] = {};
+        (templatePage.layout?.text_labels || []).forEach(label => {
+          initialLabelTexts[pageIndex][String(label.id)] =
+            savedProjectLabelTexts[String(pageIndex)]?.[String(label.id)] ?? label.text ?? "";
+        });
       });
-    });
-    setLabelTexts(initialLabelTexts);
+      setLabelTexts(initialLabelTexts);
+    } catch {
+      setLoadError("找不到專案，請確認連結是否正確");
+    }
   };
 
   useEffect(() => { loadProjectData(); }, [projectId]);
@@ -157,6 +162,13 @@ export default function ProjectBatch() {
   };
 
   // ── 載入中 ────────────────────────────────────────────────────────────────
+
+  if (loadError) return (
+    <div className="flex flex-col items-center justify-center h-64 gap-3">
+      <p className="text-red-500 font-medium">{loadError}</p>
+      <Link to="/projects" className="text-sm text-indigo-600 hover:underline">← 返回專案列表</Link>
+    </div>
+  );
 
   if (!project || !template) {
     return (

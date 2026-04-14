@@ -58,7 +58,12 @@ def merge_project_label_texts_into_pages(
       學生個人對印文字 > 專案層級對印文字 > 模板預設文字（由 render_page 處理）
 
     回傳新的 pages_data 列表，不修改原始物件。
+    若學生尚無頁面資料（如剛建立的新學生），仍會補入專案層級文字，
+    確保渲染時能正確顯示全班預設文字。
     """
+    # 用 student_pages_data 建立以 page_index 為鍵的查找表
+    student_page_indices = {str(page_data.get("page_index", 0)) for page_data in student_pages_data}
+
     merged_pages = []
     for page_data in student_pages_data:
         page_index_key = str(page_data.get("page_index", 0))
@@ -68,6 +73,16 @@ def merge_project_label_texts_into_pages(
             merged_label_texts = {**project_page_label_texts, **page_data.get("label_texts", {})}
             page_data = {**page_data, "label_texts": merged_label_texts}
         merged_pages.append(page_data)
+
+    # 補充：project_label_texts 中有但學生尚無頁面資料的頁面（如剛建立的學生）
+    for page_index_key, page_label_texts in project_label_texts.items():
+        if page_index_key not in student_page_indices:
+            merged_pages.append({
+                "page_index": int(page_index_key),
+                "photos": {},
+                "label_texts": page_label_texts,
+            })
+
     return merged_pages
 
 

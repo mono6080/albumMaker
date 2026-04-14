@@ -10,6 +10,167 @@ const photoApiUrl = (projectId, studentId, pi, slotId) =>
   `/api/projects/${projectId}/students/${studentId}/pages/${pi}/photos/${slotId}`;
 
 
+// ── 照片編輯 Modal ────────────────────────────────────────────────────────────
+
+function PhotoEditModal({
+  editModal, items, displayUrl,
+  editModalRef, cropElRef, editDragRef,
+  onCropMouseDown, onCropTouchStart, onCropTouchMove, onEditImgLoad,
+  onApply, onAdjustZoom, setEditModal,
+}) {
+  // Non-passive wheel handler — 必須用 addEventListener 才能 preventDefault
+  useEffect(() => {
+    const el = cropElRef.current;
+    if (!el) return;
+    const handler = (e) => {
+      e.preventDefault();
+      const m = editModalRef.current;
+      if (!m?.imgAspect) return;
+      const delta = e.deltaY > 0 ? -0.08 : 0.08;
+      const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
+      const ratio = newScale / m.scale;
+      const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
+      setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }); // run every render so cropElRef stays current
+
+  const handleSliderChange = (e) => {
+    const m = editModalRef.current;
+    const newScale = parseFloat(e.target.value);
+    if (!m?.imgAspect) { setEditModal(prev => prev ? { ...prev, scale: newScale } : prev); return; }
+    const ratio = newScale / m.scale;
+    const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
+    setEditModal(prev => prev ? { ...prev, scale: newScale, panX: panX, panY: panY } : prev);
+  };
+
+  const it = items[editModal.idx];
+  const url = displayUrl(it);
+  const { cropW, cropH, scale, panX, panY, imgAspect } = editModal;
+  const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
+  const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
+  const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/75 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm"
+      onMouseUp={() => { editDragRef.current.dragging = false; }}
+      onTouchEnd={() => { editDragRef.current.dragging = false; }}
+    >
+      <div
+        className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
+        style={{ maxHeight: "95dvh" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Modal header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
+          <div>
+            <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotIndex + 1}</div>
+            <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
+          </div>
+          <button
+            onClick={() => setEditModal(null)}
+            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Crop area */}
+        <div
+          ref={cropElRef}
+          onMouseDown={onCropMouseDown}
+          onTouchStart={onCropTouchStart}
+          onTouchMove={onCropTouchMove}
+          style={{
+            width: cropW, height: cropH, flexShrink: 0,
+            overflow: "hidden", position: "relative",
+            background: "#1a1a1a",
+            cursor: imgAspect ? "grab" : "default",
+            touchAction: "none",
+          }}
+        >
+          {url && (
+            <img
+              src={url} alt="" draggable={false}
+              onLoad={onEditImgLoad}
+              style={{
+                position: "absolute",
+                width: dims?.w ?? "100%", height: dims?.h ?? "100%",
+                maxWidth: "none", maxHeight: "none",
+                left: photoLeft, top: photoTop,
+                userSelect: "none", pointerEvents: "none",
+                opacity: imgAspect ? 1 : 0,
+                transition: "opacity 0.15s",
+              }}
+            />
+          )}
+          {!imgAspect && (
+            <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
+              載入中...
+            </div>
+          )}
+        </div>
+
+        {/* Zoom control */}
+        <div className="px-5 py-3 bg-gray-50 border-t border-gray-100">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => onAdjustZoom(-0.1)}
+              className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
+            >
+              <ZoomOut className="w-3.5 h-3.5 text-gray-600" />
+            </button>
+            <input
+              type="range" min="1.0" max="3.0" step="0.02"
+              value={scale}
+              onChange={handleSliderChange}
+              className="flex-1 accent-violet-500"
+            />
+            <button
+              onClick={() => onAdjustZoom(0.1)}
+              className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
+            >
+              <ZoomIn className="w-3.5 h-3.5 text-gray-600" />
+            </button>
+            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
+              {scale.toFixed(2)}×
+            </span>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
+          <button
+            onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0 } : prev)}
+            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            重置
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setEditModal(null)}
+              className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={onApply}
+              disabled={!imgAspect}
+              className="px-4 py-2 text-sm bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-40 transition-colors"
+            >
+              套用
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function PhotoManager({ projectId, studentId, pages, student, onSaved, onPhotoSaved, disabled = false, skippedPages = new Set() }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
@@ -139,23 +300,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     }, 300);
   }, [items, studentId, projectId]);
 
-  // Non-passive wheel on crop element (needed to prevent page scroll)
-  useEffect(() => {
-    const el = cropElRef.current;
-    if (!el) return;
-    const handler = (e) => {
-      e.preventDefault();
-      const m = editModalRef.current;
-      if (!m?.imgAspect) return;
-      const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
-      const ratio = newScale / m.scale;
-      const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
-      setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
-    };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
-  }); // run every render so ref stays current
+  // 縮放調整（ZoomIn/Out 按鈕共用，delta 為正放大、負縮小）
+  const adjustZoom = useCallback((delta) => {
+    const m = editModalRef.current;
+    if (!m?.imgAspect) return;
+    const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
+    const ratio = newScale / m.scale;
+    const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
+    setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
+  }, []);
 
   // Global mouse move/up for drag
   useEffect(() => {
@@ -390,151 +543,23 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   return (
     <div className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden">
       {/* Edit Modal */}
-      {editModal && (() => {
-        const it = items[editModal.idx];
-        const url = displayUrl(it);
-        const { cropW, cropH, scale, panX, panY, imgAspect } = editModal;
-        const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
-        const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
-        const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
-        return (
-          <div
-            className="fixed inset-0 bg-black/75 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm"
-            onMouseUp={() => { editDragRef.current.dragging = false; }}
-            onTouchEnd={() => { editDragRef.current.dragging = false; }}
-          >
-            <div
-              className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
-              style={{ maxHeight: "95dvh" }}
-              onClick={e => e.stopPropagation()}
-            >
-              {/* Modal header */}
-              <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
-                <div>
-                  <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotIndex + 1}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
-                </div>
-                <button
-                  onClick={() => setEditModal(null)}
-                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Crop area */}
-              <div
-                ref={cropElRef}
-                onMouseDown={onCropMouseDown}
-                onTouchStart={onCropTouchStart}
-                onTouchMove={onCropTouchMove}
-                style={{
-                  width: cropW, height: cropH, flexShrink: 0,
-                  overflow: "hidden", position: "relative",
-                  background: "#1a1a1a",
-                  cursor: imgAspect ? "grab" : "default",
-                  touchAction: "none",
-                }}
-              >
-                {url && (
-                  <img
-                    src={url} alt="" draggable={false}
-                    onLoad={onEditImgLoad}
-                    style={{
-                      position: "absolute",
-                      width: dims?.w ?? "100%", height: dims?.h ?? "100%",
-                      maxWidth: "none", maxHeight: "none",
-                      left: photoLeft, top: photoTop,
-                      userSelect: "none", pointerEvents: "none",
-                      opacity: imgAspect ? 1 : 0,
-                      transition: "opacity 0.15s",
-                    }}
-                  />
-                )}
-                {!imgAspect && (
-                  <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
-                    載入中...
-                  </div>
-                )}
-              </div>
-
-              {/* Zoom control */}
-              <div className="px-5 py-3 bg-gray-50 border-t border-gray-100">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => {
-                      const m = editModalRef.current;
-                      if (!m?.imgAspect) return;
-                      const ns = parseFloat(Math.max(1.0, m.scale - 0.1).toFixed(3));
-                      const ratio = ns / m.scale;
-                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
-                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
-                    }}
-                    className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
-                  >
-                    <ZoomOut className="w-3.5 h-3.5 text-gray-600" />
-                  </button>
-                  <input
-                    type="range" min="1.0" max="3.0" step="0.02"
-                    value={scale}
-                    onChange={e => {
-                      const m = editModalRef.current;
-                      const ns = parseFloat(e.target.value);
-                      if (!m?.imgAspect) { setEditModal(prev => prev ? { ...prev, scale: ns } : prev); return; }
-                      const ratio = ns / m.scale;
-                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
-                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
-                    }}
-                    className="flex-1 accent-violet-500"
-                  />
-                  <button
-                    onClick={() => {
-                      const m = editModalRef.current;
-                      if (!m?.imgAspect) return;
-                      const ns = parseFloat(Math.min(3.0, m.scale + 0.1).toFixed(3));
-                      const ratio = ns / m.scale;
-                      const { panX: px, panY: py } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, ns);
-                      setEditModal(prev => prev ? { ...prev, scale: ns, panX: px, panY: py } : prev);
-                    }}
-                    className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
-                  >
-                    <ZoomIn className="w-3.5 h-3.5 text-gray-600" />
-                  </button>
-                  <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
-                    {scale.toFixed(2)}×
-                  </span>
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
-                <button
-                  onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0 } : prev)}
-                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  重置
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setEditModal(null)}
-                    className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-                  >
-                    取消
-                  </button>
-                  <button
-                    onClick={applyEditModal}
-                    disabled={!imgAspect}
-                    className="px-4 py-2 text-sm bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-40 transition-colors"
-                  >
-                    套用
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {editModal && (
+        <PhotoEditModal
+          editModal={editModal}
+          items={items}
+          displayUrl={displayUrl}
+          editModalRef={editModalRef}
+          cropElRef={cropElRef}
+          editDragRef={editDragRef}
+          onCropMouseDown={onCropMouseDown}
+          onCropTouchStart={onCropTouchStart}
+          onCropTouchMove={onCropTouchMove}
+          onEditImgLoad={onEditImgLoad}
+          onApply={applyEditModal}
+          onAdjustZoom={adjustZoom}
+          setEditModal={setEditModal}
+        />
+      )}
 
       {/* Header */}
       <div className="flex items-center gap-2 mb-4">

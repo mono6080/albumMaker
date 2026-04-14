@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from database import Template, TemplatePage, User, get_db
 from crud.template_crud import get_template_or_404, get_template_page_or_404
-from services.file_service import get_background_key, get_sticker_key, save_uploaded_file
+from services.file_service import get_background_key, get_sticker_key
 from services.render_service import render_page
 from services.storage import get_storage
 
@@ -97,8 +97,10 @@ def delete_template(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    """刪除指定模板及其所有頁面。"""
+    """刪除指定模板及其所有頁面與關聯檔案（背景圖、貼圖）。"""
     template = get_template_or_404(template_id, db)
+    # 先刪除 storage 檔案（背景圖、貼圖），再 commit，確保兩者一致
+    get_storage().delete_prefix(f"templates/tmpl{template_id}")
     db.delete(template)
     db.commit()
     return {"ok": True}
@@ -166,8 +168,10 @@ def delete_page(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    """刪除指定模板頁面。"""
+    """刪除指定模板頁面，並清除對應的背景圖檔案。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
+    if template_page.background_filename:
+        get_storage().delete(template_page.background_filename)
     db.delete(template_page)
     db.commit()
     return {"ok": True}
@@ -184,12 +188,27 @@ async def upload_background(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
+    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    _MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_FILE_SIZE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=413, detail="檔案過大，上限 20 MB")
+
     template_page = get_template_page_or_404(page_id, template_id, db)
+    storage = get_storage()
 
-    # 計算 key 並透過 adapter 寫入
+    # 若已有舊背景檔（且與新上傳檔名不同），先刪除以避免殘留
+    old_key = template_page.background_filename
     key = get_background_key(template_id, page_id, file.filename)
-    await save_uploaded_file(key, file)
+    if old_key and old_key != key:
+        storage.delete(old_key)
 
+    storage.put(key, file_bytes)
     template_page.background_filename = key
     page_layout = json.loads(template_page.layout_json)
     page_layout["background_filename"] = key
@@ -229,8 +248,19 @@ async def upload_sticker(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳貼圖素材至模板專屬目錄。"""
+    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_FILE_SIZE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=413, detail="檔案過大，上限 10 MB")
+
     key = get_sticker_key(template_id, file.filename)
-    await save_uploaded_file(key, file)
+    get_storage().put(key, file_bytes)
     return {"path": key, "filename": file.filename}
 
 

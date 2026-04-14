@@ -19,6 +19,7 @@ export default function ProjectReview() {
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [rendering, setRendering] = useState({});
   const [renderingAll, setRenderingAll] = useState(false);
   // { current: number, total: number } | null
@@ -34,10 +35,14 @@ export default function ProjectReview() {
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
 
   const loadProject = async () => {
-    const projectResponse = await getProject(id);
-    setProject(projectResponse.data);
-    const templateResponse = await getTemplate(projectResponse.data.template_id);
-    setTemplate(templateResponse.data);
+    try {
+      const projectResponse = await getProject(id);
+      setProject(projectResponse.data);
+      const templateResponse = await getTemplate(projectResponse.data.template_id);
+      setTemplate(templateResponse.data);
+    } catch {
+      setLoadError("找不到專案，請確認連結是否正確");
+    }
   };
 
   const loadComments = async () => {
@@ -156,6 +161,13 @@ export default function ProjectReview() {
       toast.error(error.response?.data?.detail || "刪除失敗");
     }
   };
+
+  if (loadError) return (
+    <div className="flex flex-col items-center justify-center h-64 gap-3">
+      <p className="text-red-500 font-medium">{loadError}</p>
+      <Link to="/projects" className="text-sm text-indigo-600 hover:underline">← 返回專案列表</Link>
+    </div>
+  );
 
   if (!project || !template) return (
     <div className="flex items-center justify-center h-64 text-gray-400">載入中...</div>

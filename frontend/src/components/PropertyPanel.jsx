@@ -5,6 +5,38 @@ import ColorPicker from "./ColorPicker";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
 
+// 滑桿 + 數字輸入的組合控制項
+function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
+  return (
+    <div className="flex items-center gap-2">
+      <input type="range" min={min} max={max} step={step} value={value} onChange={onChange} className="flex-1" />
+      <input type="number" min={min} max={max} step={step} value={value} onChange={onChange} className={`border rounded px-1 py-1 text-sm ${numWidth} text-center`} />
+    </div>
+  );
+}
+
+// 字體選擇器格狀按鈕
+function FontPicker({ value, onChange }) {
+  return (
+    <div className="grid grid-cols-2 gap-1.5">
+      {FONT_OPTIONS.map(fontOption => (
+        <button
+          key={fontOption.value}
+          onClick={() => onChange(fontOption.value)}
+          style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
+          className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
+            value === fontOption.value
+              ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+              : "border-gray-200 hover:border-gray-300 text-gray-700"
+          }`}
+        >
+          {fontOption.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayerChange }) {
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
@@ -98,22 +130,12 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">圓角半徑（px）</span>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="0"
-                max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
-                value={elementData.border_radius ?? 0}
-                onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
-                className="flex-1"
-              />
-              <input
-                type="number" min="0"
-                max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
-                value={elementData.border_radius ?? 0}
-                onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
-                className="border rounded px-1 py-1 text-sm w-14 text-center"
-              />
-            </div>
+            <SliderInput
+              min={0}
+              max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
+              value={elementData.border_radius ?? 0}
+              onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
+            />
           </label>
 
           {/* 陰影設定 */}
@@ -136,45 +158,21 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
                 ].map(shadowField => (
                   <label key={shadowField.key} className="flex flex-col gap-0.5">
                     <span className="text-xs text-gray-500">{shadowField.label}</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={shadowField.min} max={shadowField.max}
-                        value={elementData[shadowField.key] ?? shadowField.defaultValue}
-                        onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
-                        className="flex-1"
-                      />
-                      <input
-                        type="number"
-                        min={shadowField.min} max={shadowField.max}
-                        value={elementData[shadowField.key] ?? shadowField.defaultValue}
-                        onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
-                        className="border rounded px-1 py-1 text-sm w-14 text-center"
-                      />
-                    </div>
+                    <SliderInput
+                      min={shadowField.min} max={shadowField.max}
+                      value={elementData[shadowField.key] ?? shadowField.defaultValue}
+                      onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
+                    />
                   </label>
                 ))}
 
                 <label className="flex flex-col gap-0.5">
                   <span className="text-xs text-gray-500">不透明度（%）</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range" min="0" max="100"
-                      value={Math.round(((elementData.shadow_opacity ?? 120) / 255) * 100)}
-                      onChange={event =>
-                        onPropertyChange({ shadow_opacity: Math.round(Number(event.target.value) / 100 * 255) })
-                      }
-                      className="flex-1"
-                    />
-                    <input
-                      type="number" min="0" max="100"
-                      value={Math.round(((elementData.shadow_opacity ?? 120) / 255) * 100)}
-                      onChange={event =>
-                        onPropertyChange({ shadow_opacity: Math.round(Number(event.target.value) / 100 * 255) })
-                      }
-                      className="border rounded px-1 py-1 text-sm w-14 text-center"
-                    />
-                  </div>
+                  <SliderInput
+                    min={0} max={100}
+                    value={Math.round(((elementData.shadow_opacity ?? 120) / 255) * 100)}
+                    onChange={event => onPropertyChange({ shadow_opacity: Math.round(Number(event.target.value) / 100 * 255) })}
+                  />
                 </label>
               </div>
             )}
@@ -209,28 +207,12 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
           {elementData.shape !== "ellipse" && (
             <label className="flex flex-col gap-1">
               <span className="text-xs text-gray-500">圓角半徑（px）</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range" min="0"
-                  max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
-                  value={
-                    elementData.border_radius ??
-                    Math.round(Math.min(elementData.width, elementData.height) / 5)
-                  }
-                  onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
-                  className="flex-1"
-                />
-                <input
-                  type="number" min="0"
-                  max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
-                  value={
-                    elementData.border_radius ??
-                    Math.round(Math.min(elementData.width, elementData.height) / 5)
-                  }
-                  onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
-                  className="border rounded px-1 py-1 text-sm w-14 text-center"
-                />
-              </div>
+              <SliderInput
+                min={0}
+                max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
+                value={elementData.border_radius ?? Math.round(Math.min(elementData.width, elementData.height) / 5)}
+                onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
+              />
             </label>
           )}
 
@@ -252,40 +234,19 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字體</span>
-            <div className="grid grid-cols-2 gap-1.5">
-              {FONT_OPTIONS.map(fontOption => (
-                <button
-                  key={fontOption.value}
-                  onClick={() => onPropertyChange({ font_family: fontOption.value })}
-                  style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
-                  className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
-                    elementData.font_family === fontOption.value
-                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                      : "border-gray-200 hover:border-gray-300 text-gray-700"
-                  }`}
-                >
-                  {fontOption.label}
-                </button>
-              ))}
-            </div>
+            <FontPicker
+              value={elementData.font_family}
+              onChange={fontValue => onPropertyChange({ font_family: fontValue })}
+            />
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字級（pt）</span>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="10" max="72" step="1"
-                value={elementData.font_size ?? 20}
-                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
-                className="flex-1"
-              />
-              <input
-                type="number" min="10" max="72"
-                value={elementData.font_size ?? 20}
-                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
-                className="border rounded px-1 py-1 text-sm w-14 text-center"
-              />
-            </div>
+            <SliderInput
+              min={10} max={72}
+              value={elementData.font_size ?? 20}
+              onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
+            />
           </label>
 
           <ColorPicker
@@ -369,40 +330,19 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字體</span>
-            <div className="grid grid-cols-2 gap-1.5">
-              {FONT_OPTIONS.map(fontOption => (
-                <button
-                  key={fontOption.value}
-                  onClick={() => onPropertyChange({ font_family: fontOption.value })}
-                  style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
-                  className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
-                    elementData.font_family === fontOption.value
-                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                      : "border-gray-200 hover:border-gray-300 text-gray-700"
-                  }`}
-                >
-                  {fontOption.label}
-                </button>
-              ))}
-            </div>
+            <FontPicker
+              value={elementData.font_family}
+              onChange={fontValue => onPropertyChange({ font_family: fontValue })}
+            />
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字級（pt）</span>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="10" max="96" step="1"
-                value={elementData.font_size ?? 28}
-                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
-                className="flex-1"
-              />
-              <input
-                type="number" min="10" max="96"
-                value={elementData.font_size ?? 28}
-                onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
-                className="border rounded px-1 py-1 text-sm w-14 text-center"
-              />
-            </div>
+            <SliderInput
+              min={10} max={96}
+              value={elementData.font_size ?? 28}
+              onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
+            />
           </label>
 
           <ColorPicker
