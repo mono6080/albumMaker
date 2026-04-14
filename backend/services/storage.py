@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import Response
 from fastapi.responses import FileResponse
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 class StorageAdapter(ABC):
@@ -66,7 +66,8 @@ class LocalStorageAdapter(StorageAdapter):
         path.write_bytes(data)
 
     def open_image(self, key: str) -> Image.Image:
-        return Image.open(self._path(key))
+        img = Image.open(self._path(key))
+        return ImageOps.exif_transpose(img)
 
     def serve(self, key: str) -> Response:
         return FileResponse(str(self._path(key)))
@@ -108,7 +109,8 @@ class LocalStorageAdapter(StorageAdapter):
 #
 #     def open_image(self, key):
 #         resp = self._s3.get_object(Bucket=self._bucket, Key=key)
-#         return Image.open(io.BytesIO(resp["Body"].read()))
+#         img = Image.open(io.BytesIO(resp["Body"].read()))
+#         return ImageOps.exif_transpose(img)
 #
 #     def serve(self, key):
 #         from fastapi.responses import RedirectResponse
