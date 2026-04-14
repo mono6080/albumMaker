@@ -18,6 +18,7 @@ def run_migrations():
         _add_foreign_key_indexes(connection)
         _add_template_page_unique_constraint(connection)
         _add_timestamp_columns(connection)
+        _drop_bubble_texts_json_column(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -178,6 +179,46 @@ def _add_timestamp_columns(connection):
                 connection.execute(text(
                     f"UPDATE {table} SET {col} = CURRENT_TIMESTAMP WHERE {col} IS NULL"
                 ))
+    connection.commit()
+
+
+def _drop_bubble_texts_json_column(connection):
+    """
+    移除 projects.bubble_texts_json 舊欄位（已由 label_texts_json 取代）。
+
+    SQLite 不支援 ALTER TABLE DROP COLUMN（舊版），改用重建資料表方式：
+    建立不含舊欄位的新表 → 複製資料 → 刪除舊表 → 重新命名。
+    冪等：若欄位已不存在則跳過。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "bubble_texts_json" not in existing_columns:
+        return
+
+    connection.execute(text("""
+        CREATE TABLE projects_new (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        VARCHAR NOT NULL,
+            template_id INTEGER NOT NULL REFERENCES templates(id),
+            owner_id    INTEGER REFERENCES users(id),
+            created_at  DATETIME,
+            updated_at  DATETIME,
+            label_texts_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """))
+    connection.execute(text("""
+        INSERT INTO projects_new (id, name, template_id, owner_id, created_at, updated_at, label_texts_json)
+        SELECT id, name, template_id, owner_id, created_at, updated_at, label_texts_json
+        FROM projects
+    """))
+    connection.execute(text("DROP TABLE projects"))
+    connection.execute(text("ALTER TABLE projects_new RENAME TO projects"))
+    # 重建資料表後補回 index（DROP TABLE 時一併刪除）
+    connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id)"
+    ))
     connection.commit()
 
 
