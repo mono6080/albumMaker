@@ -5,7 +5,9 @@
 import re
 from pathlib import Path
 
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
+
+_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 def get_photo_key(
@@ -40,6 +42,16 @@ def get_sticker_key(template_id: int, original_filename: str) -> str:
     格式：templates/tmpl{template_id}/stickers/{filename}
     """
     return f"templates/tmpl{template_id}/stickers/{original_filename}"
+
+
+async def read_and_validate_image(file: UploadFile, max_mb: int = 10) -> bytes:
+    """讀取並驗證上傳圖片的類型與大小，回傳 bytes；不符則拋 HTTPException。"""
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+    file_bytes = await file.read()
+    if len(file_bytes) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"檔案過大，上限 {max_mb} MB")
+    return file_bytes
 
 
 async def save_uploaded_file(key: str, uploaded_file: UploadFile) -> None:

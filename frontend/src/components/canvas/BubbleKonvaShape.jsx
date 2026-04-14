@@ -2,6 +2,7 @@
 // 幾何計算與 BubbleSVG.jsx 及後端 PIL _draw_speech_bubble 保持一致
 
 import { useCallback } from "react";
+import { getBubbleGeometry } from "../../utils/bubbleGeometry";
 import { Shape } from "react-konva";
 
 function drawRoundRectPath(ctx, x, y, w, h, r) {
@@ -21,12 +22,8 @@ function drawRoundRectPath(ctx, x, y, w, h, r) {
 
 export default function BubbleKonvaShape({ width: w, height: h, shape, fill, borderColor, borderWidth, borderRadius }) {
   const hasStroke = !!(borderColor && borderWidth > 0);
-  const defaultBorderRadius = Math.round(Math.min(w, h) / 5);
-  const cornerRadius = Math.max(0, borderRadius ?? defaultBorderRadius);
-  const tailHeight = Math.round(h / 4);
-  const tailWidth = Math.round(w / 5);
-  const centerX = w / 2;
-  const centerY = h / 2;
+  const { tailHeight, tailWidth, centerX, centerY, cornerRadius } =
+    getBubbleGeometry(w, h, borderRadius);
 
   const sceneFunc = useCallback((context) => {
     const ctx = context._context;

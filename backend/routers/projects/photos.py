@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
-from services.file_service import get_photo_key, rename_photo_to_slot
+from services.file_service import get_photo_key, read_and_validate_image, rename_photo_to_slot
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
@@ -30,14 +30,7 @@ async def upload_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
-    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-    if file.content_type not in _ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
-    file_bytes = await file.read()
-    if len(file_bytes) > _MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="檔案過大，上限 10 MB")
+    file_bytes = await read_and_validate_image(file, max_mb=10)
 
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)

@@ -2,6 +2,8 @@
 // 純顯示元件，依照形狀參數繪製對應的 SVG 路徑，
 // 幾何計算方式與後端 PIL 渲染保持一致，確保預覽與輸出外觀相符
 
+import { getBubbleGeometry } from "../../utils/bubbleGeometry";
+
 /**
  * 繪製氣泡框 SVG。
  * 所有尺寸參數（displayWidth / displayHeight / borderRadius / borderWidth）
@@ -30,15 +32,8 @@ export default function BubbleSVG({
   const strokeColor = hasStroke ? borderColor : "none";
   const strokeWidth = hasStroke ? borderWidth : 0;
 
-  // 預設圓角：取寬高最小值的 1/5
-  const defaultBorderRadius = Math.round(Math.min(displayWidth, displayHeight) / 5);
-  const cornerRadius = Math.max(0, borderRadius ?? defaultBorderRadius);
-
-  // 氣泡尾巴的相對尺寸
-  const tailHeight = Math.round(displayHeight / 4);
-  const tailWidth = Math.round(displayWidth / 5);
-  const centerX = displayWidth / 2;
-  const centerY = displayHeight / 2;
+  const { tailHeight, tailWidth, centerX, centerY, cornerRadius } =
+    getBubbleGeometry(displayWidth, displayHeight, borderRadius);
 
   // 選取時的高亮外框
   const selectionStroke = isSelected ? "#4F46E5" : "none";

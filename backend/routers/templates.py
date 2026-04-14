@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from database import Template, TemplatePage, User, get_db
 from crud.template_crud import get_template_or_404, get_template_page_or_404
-from services.file_service import get_background_key, get_sticker_key
+from services.file_service import get_background_key, get_sticker_key, read_and_validate_image
 from services.render_service import render_page
 from services.storage import get_storage
 
@@ -188,16 +188,7 @@ async def upload_background(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
-    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-    _MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
-
-    if file.content_type not in _ALLOWED_IMAGE_TYPES:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
-    file_bytes = await file.read()
-    if len(file_bytes) > _MAX_FILE_SIZE:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=413, detail="檔案過大，上限 20 MB")
+    file_bytes = await read_and_validate_image(file, max_mb=20)
 
     template_page = get_template_page_or_404(page_id, template_id, db)
     storage = get_storage()
@@ -248,16 +239,7 @@ async def upload_sticker(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳貼圖素材至模板專屬目錄。"""
-    _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-    if file.content_type not in _ALLOWED_IMAGE_TYPES:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
-    file_bytes = await file.read()
-    if len(file_bytes) > _MAX_FILE_SIZE:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=413, detail="檔案過大，上限 10 MB")
+    file_bytes = await read_and_validate_image(file, max_mb=10)
 
     key = get_sticker_key(template_id, file.filename)
     get_storage().put(key, file_bytes)

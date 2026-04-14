@@ -2,7 +2,7 @@
 // 提供學生名單管理（批次新增、刪除、改名）與專案層級對印文字的統一填入，
 // 文字變更後自動防抖儲存（600ms），並在右側顯示即時預覽
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
@@ -18,6 +18,7 @@ import {
   Eye, Loader2, RefreshCw, Pencil, Check,
 } from "lucide-react";
 import PanelSwitcher from "../components/PanelSwitcher";
+import { useInlineEdit } from "../hooks/useInlineEdit";
 import AlbumPageNav from "../components/AlbumPageNav";
 import ConfirmModal from "../components/ConfirmModal";
 
@@ -38,8 +39,6 @@ export default function ProjectBatch() {
 
   // 學生名單 tab 狀態
   const [studentNamesInput, setStudentNamesInput] = useState("");
-  const [editingStudentId, setEditingStudentId] = useState(null);
-  const [editingStudentName, setEditingStudentName] = useState("");
   const [isAddingStudents, setIsAddingStudents] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
 
@@ -116,25 +115,14 @@ export default function ProjectBatch() {
     setIsAddingStudents(false);
   };
 
-  const startEditStudent = (student) => {
-    setEditingStudentId(student.id);
-    setEditingStudentName(student.name);
-  };
-
-  const cancelEditStudent = () => {
-    setEditingStudentId(null);
-    setEditingStudentName("");
-  };
-
-  const saveEditStudent = async (studentId) => {
-    if (!editingStudentName.trim()) {
-      cancelEditStudent();
-      return;
-    }
-    await renameStudent(projectId, studentId, editingStudentName.trim());
-    cancelEditStudent();
-    await loadProjectData();
-  };
+  const { editingId: editingStudentId, editingValue: editingStudentName,
+    setEditingValue: setEditingStudentName, startEdit: startEditStudent,
+    cancelEdit: cancelEditStudent, submitEdit: saveEditStudent } = useInlineEdit(
+    useCallback(async (studentId, newName) => {
+      await renameStudent(projectId, studentId, newName);
+      await loadProjectData();
+    }, [projectId])
+  );
 
   const handleDeleteStudent = (studentId, clickEvent) => {
     clickEvent.stopPropagation();
@@ -425,7 +413,7 @@ export default function ProjectBatch() {
                           {student.name}
                         </span>
                         <button
-                          onClick={() => startEditStudent(student)}
+                          onClick={() => startEditStudent(student.id, student.name)}
                           className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-gray-400 hover:text-indigo-600 rounded-lg"
                         >
                           <Pencil className="w-3 h-3" />

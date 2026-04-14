@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { getProjects, createProject, deleteProject, getTemplates, renameProject } from "../api";
+import { fetchAllProjects, createProject, deleteProject, renameProject } from "../api/projectApi";
+import { fetchAllTemplates } from "../api/templateApi";
 import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
+import { useInlineEdit } from "../hooks/useInlineEdit";
 
 // ── 專案卡片（memo 化，只在自身資料變動時重渲染）────────────────────────────
 
@@ -52,7 +54,7 @@ const ProjectCard = memo(function ProjectCard({
                 <div className="font-semibold text-gray-900 text-lg">{project.name}</div>
                 {canEditProject(project.owner_id) && (
                   <button
-                    onClick={() => onEditStart(project)}
+                    onClick={() => onEditStart(project.id, project.name)}
                     className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity"
                   >
                     <Pencil className="w-3.5 h-3.5" />
@@ -113,15 +115,13 @@ export default function ProjectList() {
   const [projects, setProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [form, setForm] = useState({ customName: "", template_id: "" });
-  const [editingId, setEditingId] = useState(null);
-  const [editingName, setEditingName] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
 
   useEffect(() => {
-    getProjects().then(r => setProjects(r.data));
-    getTemplates().then(r => setTemplates(r.data));
+    fetchAllProjects().then(r => setProjects(r.data));
+    fetchAllTemplates().then(r => setTemplates(r.data));
   }, []);
 
   const selectedTemplate = templates.find(t => String(t.id) === String(form.template_id));
@@ -140,7 +140,7 @@ export default function ProjectList() {
       setForm({ customName: "", template_id: "" });
       setShowForm(false);
       // 建立後 fetch 完整清單以取得 id / student_count / owner_name
-      const r = await getProjects();
+      const r = await fetchAllProjects();
       setProjects(r.data);
     } catch {
       toast.error("建立失敗");
@@ -150,32 +150,20 @@ export default function ProjectList() {
   };
 
   // ── 重命名（樂觀更新）
-  const handleEditStart = useCallback((project) => {
-    setEditingId(project.id);
-    setEditingName(project.name);
-  }, []);
-
-  const handleEditCancel = useCallback(() => {
-    setEditingId(null);
-    setEditingName("");
-  }, []);
-
-  const handleEditSave = useCallback(async (id) => {
-    const newName = editingName.trim();
-    if (!newName) return handleEditCancel();
-    // 樂觀更新
-    setProjects(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
-    setEditingId(null);
-    try {
-      await renameProject(id, newName);
-      toast.success("已更新名稱");
-    } catch {
-      // rollback
-      const r = await getProjects();
-      setProjects(r.data);
-      toast.error("更新失敗");
-    }
-  }, [editingName, handleEditCancel]);
+  const { editingId, editingValue: editingName, setEditingValue: setEditingName,
+    startEdit: handleEditStart, cancelEdit: handleEditCancel, submitEdit: handleEditSave } =
+    useInlineEdit(useCallback(async (id, newName) => {
+      // cancelEdit 在 submitEdit 中已先執行，此處直接樂觀更新
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
+      try {
+        await renameProject(id, newName);
+        toast.success("已更新名稱");
+      } catch {
+        const r = await fetchAllProjects();
+        setProjects(r.data);
+        toast.error("更新失敗");
+      }
+    }, []));
 
   // ── 刪除（樂觀更新）
   const handleDelete = useCallback((id) => {

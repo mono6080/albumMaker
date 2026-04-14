@@ -1,19 +1,18 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { getTemplates, createTemplate, deleteTemplate, renameTemplate } from "../api";
+import { fetchAllTemplates, createTemplate, deleteTemplate, renameTemplate } from "../api/templateApi";
 import { LayoutTemplate, Plus, Pencil, Trash2, BookOpen, Check, X } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
+import { useInlineEdit } from "../hooks/useInlineEdit";
 
 export default function TemplateList() {
   const [templates, setTemplates] = useState([]);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editingName, setEditingName] = useState("");
   const [confirmModal, setConfirmModal] = useState(null);
 
-  const load = () => getTemplates().then(r => setTemplates(r.data));
+  const load = () => fetchAllTemplates().then(r => setTemplates(r.data));
   useEffect(() => { load(); }, []);
 
   const handleCreate = async () => {
@@ -26,15 +25,14 @@ export default function TemplateList() {
     setCreating(false);
   };
 
-  const startEdit = (t) => { setEditingId(t.id); setEditingName(t.name); };
-  const cancelEdit = () => { setEditingId(null); setEditingName(""); };
-  const saveEdit = async (id) => {
-    if (!editingName.trim()) return cancelEdit();
-    await renameTemplate(id, editingName.trim());
-    toast.success("已更新名稱");
-    cancelEdit();
-    load();
-  };
+  const { editingId, editingValue: editingName, setEditingValue: setEditingName,
+    startEdit, cancelEdit, submitEdit: saveEdit } = useInlineEdit(
+    useCallback(async (id, newName) => {
+      await renameTemplate(id, newName);
+      toast.success("已更新名稱");
+      load();
+    }, [])
+  );
 
   const handleDelete = (id, e) => {
     e.preventDefault();
@@ -125,7 +123,7 @@ export default function TemplateList() {
               ) : (
                 <div className="flex items-center gap-1 mb-1 group/name">
                   <span className="font-semibold text-gray-900">{t.name}</span>
-                  <button onClick={() => startEdit(t)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
+                  <button onClick={() => startEdit(t.id, t.name)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
                     <Pencil className="w-3 h-3" />
                   </button>
                 </div>
