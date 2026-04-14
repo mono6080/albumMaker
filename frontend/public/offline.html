@@ -48,5 +48,13 @@
   <h1>目前沒有網路連線</h1>
   <p>相本製作需要連線才能使用，<br>請確認網路後重新整理。</p>
   <button onclick="location.reload()">重新整理</button>
+  <script>
+    // 新版 Service Worker 接管後自動重新載入，解決舊 SW 攔截路由顯示此頁的問題
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        location.reload();
+      });
+    }
+  </script>
 </body>
 </html>
