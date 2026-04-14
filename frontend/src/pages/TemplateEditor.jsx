@@ -592,6 +592,8 @@ export default function TemplateEditor() {
           align={data.text_align ?? "center"}
           verticalAlign="middle"
           wrap="word"
+          lineHeight={data.line_height ?? 1.4}
+          letterSpacing={toDisplayCoord(data.letter_spacing ?? 0)}
           listening={false}
         />
         {/* 透明點擊感應區 */}

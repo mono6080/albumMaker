@@ -79,6 +79,7 @@ frontend/src/
     PhotoSlotCard.jsx         # 照片縮圖卡片（PIL 精確位移計算，純顯示）
     AlbumPageNav.jsx          # 頁面導覽列
     PanelSwitcher.jsx         # 行動版分頁切換
+    CompositionTextarea.jsx   # IME 組字感知 textarea（中文輸入不中斷；onChange 接收 value 字串）
     canvas/
       BubbleSVG.jsx           # 純 SVG 氣泡框（ProjectReview 預覽用）
       BubbleKonvaShape.jsx    # Konva Canvas 2D 氣泡框繪製（TemplateEditor 用）
@@ -263,6 +264,9 @@ cd D:/projects/album_maker/frontend && npm run build
 - **PIL 貼圖透明通道**：`render_sticker`（`element_renderers.py`）直接呼叫 `storage.open_image()` 後 `.convert("RGBA")`，不經 `load_key`；`to_srgb` 會執行 `img.convert("RGB")` 將透明通道填白
 - **PIL 字型**：`draw_helpers.py` 的 `get_font()` 使用系統 TrueType 字型；Windows 上路徑為 `C:/Windows/Fonts/`
 - **render_service 分層**：`render_service.py` 只持有公開 API 與 `UPLOADS_DIR`（storage.py 從這裡 import 它，不能移走）；PIL 工具在 `draw_helpers.py`，元素渲染在 `element_renderers.py`
+- **PIL 中文標點對齊**：`draw_helpers.py` 的 `draw_line_with_spacing()` 以 `anchor='la'`（ascender line）逐字繪製；用 `anchor='lt'` 會讓每個字元以自身 glyph 頂端對齊，導致 `，`、`。` 等標點往上飄。全字串 `textbbox(anchor='la')[1]` 換算出 `la_y`，再對每個字元統一用 `anchor='la'` 確保同一 baseline
+- **PIL 文字垂直對齊與 Konva 一致**：`render_text_label`（`element_renderers.py`）的 `start_y` 加上 `konva_v_offset = int(line_height_float / 2 - descent + la_offset)`，補償 Konva `textBaseline='middle'` 相對於 PIL 視覺頂端的落差（msjh 28pt / lineHeight=1.4 約 18px）
+- **CompositionTextarea**：對印文字輸入框一律改用 `components/CompositionTextarea.jsx`，`onChange` 接收 `value` 字串（非 event），`onScheduleSave` 由元件在 compositionEnd 或非組字 onChange 時呼叫，避免 IME 輸入被 re-render 打斷
 - **Pydantic v2 嚴格型別**：`dict[str, str]` 在 lax mode 下仍會拒絕 value 為 dict 的資料（回傳 422）。專案層級 label_texts 格式為 `{page_index: {label_id: text}}`，payload 型別必須宣告 `dict[str, Any]`（`texts.py` 的 `update_project_label_texts`）
 - **審閱意見角色**：`canComment`（admin / art_team / supervisor）可新增留言；teacher 僅能讀取留言清單（`ProjectReview.jsx` 用 `currentUser?.role === "teacher"` 單獨控制顯示）
 - **SQLite ADD COLUMN 限制**：`ALTER TABLE ADD COLUMN` 不支援非常數預設值（如 `CURRENT_TIMESTAMP`）。需先加 `DATETIME` 無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填（見 `migrations.py`）

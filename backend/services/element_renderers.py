@@ -8,6 +8,7 @@ from services.draw_helpers import (
     get_font, load_key, paste_rotated,
     apply_rounded_corners, add_drop_shadow,
     draw_speech_bubble, wrap_text,
+    _line_width_with_spacing, draw_line_with_spacing,
 )
 
 
@@ -164,39 +165,55 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
     font_color = label.get("font_color", "#333333")
     font = get_font(font_size, label.get("font_family"))
     line_height_px = int(font_size * label.get("line_height", 1.4))
+    letter_spacing = int(label.get("letter_spacing", 0))
     lw, lh = int(label["width"]), int(label["height"])
     rotation = label.get("rotation", 0)
     text_align = label.get("text_align", "center")
     draw = ImageDraw.Draw(canvas, "RGBA")
-    lines = wrap_text(label_text, font, lw, draw)
+    lines = wrap_text(label_text, font, lw, draw, letter_spacing)
     total_h = len(lines) * line_height_px
+
+    def _draw_line(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, line: str) -> None:
+        """依對齊方式計算起始 x 並逐字繪製（含字間距）。"""
+        if letter_spacing == 0:
+            if text_align == "left":
+                target_draw.text((tx, ty), line, fill=font_color, font=font, anchor="lt")
+            elif text_align == "right":
+                target_draw.text((tx + lw, ty), line, fill=font_color, font=font, anchor="rt")
+            else:
+                target_draw.text((tx + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+        else:
+            line_w = _line_width_with_spacing(target_draw, line, font, letter_spacing)
+            if text_align == "left":
+                start_x = tx
+            elif text_align == "right":
+                start_x = tx + lw - line_w
+            else:
+                start_x = tx + (lw - line_w) // 2
+            draw_line_with_spacing(target_draw, start_x, ty, line, font, font_color, letter_spacing)
+
+    # 與 Konva textBaseline='middle' 對齊：補償 em-box 中點 vs 視覺頂端的落差
+    ascent_val, descent_val = font.getmetrics()
+    line_height_float = font_size * label.get("line_height", 1.4)
+    ref_text = lines[0] if lines else "A"
+    ref_la_bbox = draw.textbbox((0, 0), ref_text, font=font, anchor="la")
+    la_offset = ref_la_bbox[1]
+    konva_v_offset = int(line_height_float / 2 - descent_val + la_offset)
 
     if rotation:
         diag = int(math.sqrt(lw**2 + lh**2)) + 4
         pad = (diag - min(lw, lh)) // 2 + 2
         tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
         tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-        tmp_y = pad + (lh - total_h) // 2
+        tmp_y = pad + (lh - total_h) // 2 + konva_v_offset
         for i, line in enumerate(lines):
-            ty = tmp_y + i * line_height_px
-            if text_align == "left":
-                tmp_draw.text((pad, ty), line, fill=font_color, font=font, anchor="lt")
-            elif text_align == "right":
-                tmp_draw.text((pad + lw, ty), line, fill=font_color, font=font, anchor="rt")
-            else:
-                tmp_draw.text((pad + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+            _draw_line(tmp_draw, pad, tmp_y + i * line_height_px, line)
         paste_rotated(canvas, tmp, label["x"] + lw / 2, label["y"] + lh / 2, rotation)
         return
 
-    start_y = label["y"] + (lh - total_h) // 2
+    start_y = label["y"] + (lh - total_h) // 2 + konva_v_offset
     for i, line in enumerate(lines):
-        ty = start_y + i * line_height_px
-        if text_align == "left":
-            draw.text((label["x"], ty), line, fill=font_color, font=font, anchor="lt")
-        elif text_align == "right":
-            draw.text((label["x"] + lw, ty), line, fill=font_color, font=font, anchor="rt")
-        else:
-            draw.text((label["x"] + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+        _draw_line(draw, label["x"], start_y + i * line_height_px, line)
 
 
 def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> None:

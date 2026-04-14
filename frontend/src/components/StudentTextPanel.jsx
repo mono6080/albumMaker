@@ -3,6 +3,7 @@
 
 import { Type } from "lucide-react";
 import AlbumPageNav from "./AlbumPageNav";
+import CompositionTextarea from "./CompositionTextarea";
 
 export default function StudentTextPanel({
   activePage,
@@ -13,7 +14,7 @@ export default function StudentTextPanel({
   student,
   getLabelText,
   onLabelChange,
-  isSaving,
+  onScheduleSave,
 }) {
   return (
     <div className="space-y-4">
@@ -45,13 +46,13 @@ export default function StudentTextPanel({
                     <div className="text-xs text-gray-400 mb-1">
                       預設：{displayDefaultText.substring(0, 25)}
                     </div>
-                    <textarea
+                    <CompositionTextarea
                       rows={2}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none disabled:opacity-60"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                       placeholder={displayDefaultText}
                       value={currentValue}
-                      onChange={event => onLabelChange(activePage, label.id, event.target.value)}
-                      disabled={isSaving}
+                      onChange={value => onLabelChange(activePage, label.id, value)}
+                      onScheduleSave={onScheduleSave}
                       maxLength={200}
                     />
                     {len > 0 && (

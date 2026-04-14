@@ -21,6 +21,7 @@ import PanelSwitcher from "../components/PanelSwitcher";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import AlbumPageNav from "../components/AlbumPageNav";
 import ConfirmModal from "../components/ConfirmModal";
+import CompositionTextarea from "../components/CompositionTextarea";
 
 export default function ProjectBatch() {
   const { id: projectId } = useParams();
@@ -146,7 +147,6 @@ export default function ProjectBatch() {
       ...prevTexts,
       [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
     }));
-    scheduleSave();
   };
 
   // ── 載入中 ────────────────────────────────────────────────────────────────
@@ -191,11 +191,12 @@ export default function ProjectBatch() {
                   <span className="text-xs font-bold text-indigo-400">{label.id}</span>
                 </div>
                 <div className="flex-1">
-                  <textarea
+                  <CompositionTextarea
                     rows={2}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                     value={getLabelText(activePage, label.id)}
-                    onChange={event => setLabelText(activePage, label.id, event.target.value)}
+                    onChange={value => setLabelText(activePage, label.id, value)}
+                    onScheduleSave={scheduleSave}
                     maxLength={200}
                   />
                   {(() => {

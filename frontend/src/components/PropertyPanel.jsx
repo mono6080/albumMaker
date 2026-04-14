@@ -350,6 +350,24 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             value={elementData.font_color ?? "#333333"}
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
           />
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">行距</span>
+            <SliderInput
+              min={0.8} max={3.0} step={0.1} numWidth="w-16"
+              value={elementData.line_height ?? 1.4}
+              onChange={event => onPropertyChange({ line_height: Number(event.target.value) })}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">字間距（px）</span>
+            <SliderInput
+              min={0} max={30} step={1}
+              value={elementData.letter_spacing ?? 0}
+              onChange={event => onPropertyChange({ letter_spacing: Number(event.target.value) })}
+            />
+          </label>
         </>
       )}
     </div>

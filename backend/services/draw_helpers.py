@@ -208,8 +208,8 @@ def draw_speech_bubble(draw: ImageDraw.ImageDraw, bubble: dict):
         draw.polygon([(cx, y), (x + w, cy), (cx, y + h), (x, cy)], fill=fill, outline=outline)
 
 
-def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
-    """Wrap text to fit within max_width pixels."""
+def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw, letter_spacing: int = 0) -> list[str]:
+    """Wrap text to fit within max_width pixels, accounting for optional letter spacing."""
     lines = []
     for paragraph in text.split("\n"):
         if not paragraph:
@@ -219,7 +219,8 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Ima
         for char in paragraph:
             test = current + char
             bbox = draw.textbbox((0, 0), test, font=font)
-            if bbox[2] - bbox[0] > max_width and current:
+            text_w = bbox[2] - bbox[0] + max(0, len(test) - 1) * letter_spacing
+            if text_w > max_width and current:
                 lines.append(current)
                 current = char
             else:
@@ -227,3 +228,28 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Ima
         if current:
             lines.append(current)
     return lines
+
+
+def _line_width_with_spacing(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, letter_spacing: int) -> int:
+    """回傳含字間距的行寬。"""
+    if not text:
+        return 0
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0] + max(0, len(text) - 1) * letter_spacing
+
+
+def draw_line_with_spacing(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
+                           font: ImageFont.FreeTypeFont, fill: str, letter_spacing: int) -> None:
+    """從 (x, y) 開始逐字繪製，加入字間距。
+    y 為 'lt' anchor 位置（文字框頂端）。
+    內部改用 'la' anchor 確保標點與一般字元對齊同一 ascender line。
+    """
+    if not text:
+        return
+    # 將 lt y 換算成 la y：la_bbox[1] 是 la anchor 到 glyph 視覺頂端的距離
+    la_bbox = draw.textbbox((0, 0), text, font=font, anchor="la")
+    la_y = y - la_bbox[1]
+    for char in text:
+        draw.text((x, la_y), char, font=font, fill=fill, anchor="la")
+        char_bbox = draw.textbbox((0, 0), char, font=font, anchor="la")
+        x += char_bbox[2] - char_bbox[0] + letter_spacing

@@ -58,11 +58,8 @@ export default function StudentEdit() {
     500
   );
 
-  // 每次 labelTexts 變更且已載入學生資料時，排程自動儲存
-  useEffect(() => {
-    if (!student) return;
-    scheduleSave();
-  }, [labelTexts, scheduleSave]);
+  // 排程自動儲存由 StudentTextPanel 在 onChange / compositionEnd 時呼叫，
+  // 避免組字期間（中文 IME）觸發儲存打斷輸入
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
@@ -292,7 +289,7 @@ export default function StudentEdit() {
               student={student}
               getLabelText={getLabelText}
               onLabelChange={setLabelText}
-              isSaving={isSaving}
+              onScheduleSave={() => { if (student) scheduleSave(); }}
             />
           </div>
         </div>
@@ -308,7 +305,7 @@ export default function StudentEdit() {
             student={student}
             getLabelText={getLabelText}
             onLabelChange={setLabelText}
-            isSaving={isSaving}
+            onScheduleSave={() => { if (student) scheduleSave(); }}
           />
         </div>
       </div>
