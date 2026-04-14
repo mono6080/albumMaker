@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       // 離線 fallback 頁（由 workbox 在 navigate 失敗時回退）
       filename: 'sw.js',
       manifest: {

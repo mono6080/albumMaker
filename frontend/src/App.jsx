@@ -4,6 +4,7 @@ import { LogOut, Users } from "lucide-react";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import PrivateRoute from "./components/PrivateRoute";
+import PwaUpdateBanner from "./components/PwaUpdateBanner";
 import Login from "./pages/Login";
 import TemplateList from "./pages/TemplateList";
 import TemplateEditor from "./pages/TemplateEditor";
@@ -96,6 +97,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Toaster position="top-right" />
+        <PwaUpdateBanner />
         <Nav />
         <main className="p-4 sm:p-8 w-full">
           <Routes>
