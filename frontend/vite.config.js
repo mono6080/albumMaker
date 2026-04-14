@@ -27,7 +27,7 @@ export default defineConfig({
       },
       workbox: {
         // API 請求全走網路，不快取
-        navigateFallback: '/offline.html',
+        navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
