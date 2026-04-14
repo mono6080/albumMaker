@@ -197,6 +197,7 @@ def _drop_bubble_texts_json_column(connection):
     if "bubble_texts_json" not in existing_columns:
         return
 
+    connection.execute(text("DROP TABLE IF EXISTS projects_new"))
     connection.execute(text("""
         CREATE TABLE projects_new (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
