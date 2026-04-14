@@ -197,6 +197,8 @@ def _drop_bubble_texts_json_column(connection):
     if "bubble_texts_json" not in existing_columns:
         return
 
+    # 關閉外鍵約束，避免 DROP TABLE projects 被子資料表（students / project_comments）阻擋
+    connection.execute(text("PRAGMA foreign_keys = OFF"))
     connection.execute(text("DROP TABLE IF EXISTS projects_new"))
     connection.execute(text("""
         CREATE TABLE projects_new (
@@ -220,6 +222,7 @@ def _drop_bubble_texts_json_column(connection):
     connection.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id)"
     ))
+    connection.execute(text("PRAGMA foreign_keys = ON"))
     connection.commit()
 
 
