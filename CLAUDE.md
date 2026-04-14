@@ -266,3 +266,8 @@ cd D:/projects/album_maker/frontend && npm run build
 - **Pydantic v2 嚴格型別**：`dict[str, str]` 在 lax mode 下仍會拒絕 value 為 dict 的資料（回傳 422）。專案層級 label_texts 格式為 `{page_index: {label_id: text}}`，payload 型別必須宣告 `dict[str, Any]`（`texts.py` 的 `update_project_label_texts`）
 - **審閱意見角色**：`canComment`（admin / art_team / supervisor）可新增留言；teacher 僅能讀取留言清單（`ProjectReview.jsx` 用 `currentUser?.role === "teacher"` 單獨控制顯示）
 - **SQLite ADD COLUMN 限制**：`ALTER TABLE ADD COLUMN` 不支援非常數預設值（如 `CURRENT_TIMESTAMP`）。需先加 `DATETIME` 無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填（見 `migrations.py`）
+- **速率限制**：登入端點（`POST /api/auth/login`）以 `slowapi` 依 IP 限制 10 次/分鐘，超限回 429；`main.py` 設定全域 limiter，`auth.py` 用 `@limiter.limit()` 裝飾
+- **密碼最短長度**：建立與重設密碼均需 ≥ 8 字元（`routers/users.py` `min_length=8`）
+- **安全 Headers**：`main.py` 的 `SecurityHeadersMiddleware` 為所有回應加入 `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`X-XSS-Protection`、`Referrer-Policy`
+- **Storage 沙箱**：`LocalStorageAdapter._path()` 用 `.resolve()` 確認結果路徑在 `base_dir` 內，傳入含 `../` 的 key 會拋 `ValueError`（path traversal 防護）
+- **渲染錯誤不外洩**：`render_all_students` 捕捉 exception 時只回傳「渲染失敗」通用訊息，詳細錯誤記 logger，不暴露給 API 呼叫者

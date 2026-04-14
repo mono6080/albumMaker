@@ -62,10 +62,12 @@ album_maker/
 - **FastAPI 0.135** — HTTP API（`/api/auth/`、`/api/users/`、`/api/templates/`、`/api/projects/`）
 - **SQLAlchemy 2.0** — SQLite ORM（`album_maker.db`）
 - **Pillow 12** — 頁面 PNG 合成與 PDF 輸出
-- **StorageAdapter** — 抽象檔案 I/O 層；本機使用 `LocalStorageAdapter`，切換雲端儲存只需實作新 adapter 並設定 `STORAGE_BACKEND` 環境變數
-- **python-jose** — JWT 簽發與驗證
+- **StorageAdapter** — 抽象檔案 I/O 層；本機使用 `LocalStorageAdapter`（含 path traversal 防護），切換雲端只需實作新 adapter 並設定 `STORAGE_BACKEND` 環境變數
+- **python-jose** — JWT 簽發與驗證（HttpOnly Cookie，有效期 7 天）
 - **bcrypt** — 密碼雜湊（直接使用，不透過 passlib）
+- **slowapi** — 登入端點速率限制（10 次/分鐘，依 IP）
 - 後端同時提供前端靜態檔案（SPA catch-all）
+- 所有回應加入安全 Headers（`X-Frame-Options`、`X-Content-Type-Options` 等）
 
 ### 前端
 
@@ -145,9 +147,11 @@ docker compose up -d --build
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SECRET_KEY` | `album-maker-dev-secret-...` | JWT 簽名密鑰，正式環境必須修改 |
+| `SECRET_KEY` | 隨機佔位符（**必須修改**） | JWT 簽名密鑰，正式環境用 `python -c "import secrets; print(secrets.token_hex(32))"` 產生 |
+| `PRODUCTION` | 未設定 | 設為 `1` 時啟用 Cookie Secure flag（需 HTTPS）並拒絕啟動無 SECRET_KEY |
 | `DATABASE_URL` | `sqlite:///./album_maker.db` | 資料庫連線字串 |
 | `STORAGE_BACKEND` | `local` | 儲存後端（目前僅支援 `local`） |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,...` | CORS 允許來源，逗號分隔；正式部署填入實際網域 |
 
 ---
 
