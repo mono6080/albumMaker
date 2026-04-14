@@ -73,7 +73,7 @@ def on_startup():
     run_migrations()
 
 
-# 掛載靜態資源（JS / CSS 編譯包）
+# 掛載靜態資源（JS / CSS 編譯包，帶 hash 可永久快取）
 if (FRONTEND_DIST_DIR / "assets").exists():
     app.mount(
         "/assets",
@@ -82,15 +82,24 @@ if (FRONTEND_DIST_DIR / "assets").exists():
     )
 
 
-# SPA catch-all 路由 — 必須放在最後，
-# 對所有非 API 路徑回傳 index.html，讓前端 Router 接管
+# SPA catch-all 路由 — 必須放在最後
+# 優先嘗試從 frontend/dist/ 直接回傳對應靜態檔（sw.js、workbox-*.js、
+# manifest.webmanifest、icons/、offline.html 等 PWA 必要資源），
+# 找不到對應實體檔案時才回傳 index.html 讓前端 Router 接管。
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
-    """回傳前端 SPA 的入口頁面。"""
-    index_html_path = FRONTEND_DIST_DIR / "index.html"
-    if index_html_path.exists():
-        return FileResponse(index_html_path)
-    raise HTTPException(
-        status_code=404,
-        detail="Frontend not built. Run build_frontend.bat"
-    )
+    """回傳前端靜態檔或 SPA 入口頁面。"""
+    if not FRONTEND_DIST_DIR.exists():
+        raise HTTPException(status_code=404, detail="Frontend not built. Run build_frontend.bat")
+
+    # 嘗試直接 serve 實體檔案（限制在 dist 目錄內，防止 path traversal）
+    if full_path:
+        candidate = (FRONTEND_DIST_DIR / full_path).resolve()
+        try:
+            candidate.relative_to(FRONTEND_DIST_DIR.resolve())
+            if candidate.is_file():
+                return FileResponse(candidate)
+        except ValueError:
+            pass  # 路徑逸出 dist 目錄，回退至 SPA
+
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")
