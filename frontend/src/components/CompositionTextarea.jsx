@@ -14,8 +14,6 @@ export default function CompositionTextarea({ value, onChange, onScheduleSave, .
   const isComposingRef = useRef(false);
   const preCompositionValueRef = useRef("");   // 組字開始前的完整文字
   const pageHiddenWhileComposingRef = useRef(false); // 組字中是否發生過頁面隱藏
-  const onChangeRef = useRef(onChange);
-  useEffect(() => { onChangeRef.current = onChange; });
 
   // 父層值更新時（非組字中）同步本地顯示
   useEffect(() => {
