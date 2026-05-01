@@ -2,6 +2,7 @@
 # 供 projects 套件內各子模組引用，避免重複定義
 
 import json
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -14,7 +15,7 @@ from database import Project, User
 LabelTextsPayload = dict[str, str]
 
 
-def _parse_json_field(raw: str, field_name: str = "欄位") -> any:
+def _parse_json_field(raw: str, field_name: str = "欄位") -> Any:
     """安全解析 JSON 欄位，格式損壞時回傳 422 而非 500。"""
     try:
         return json.loads(raw)

@@ -1,0 +1,53 @@
+[project]
+name = "album-maker"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "httpx>=0.27",
+  "pre-commit>=3.7",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 120
+src = ["backend", "tests"]
+extend-exclude = ["backend/__pycache__", "backend/uploads", "frontend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E402"]
+
+[tool.ruff.format]
+exclude = ["backend/**/*.py"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "backend"
+explicit_package_bases = true
+ignore_missing_imports = true
+implicit_optional = true
+check_untyped_defs = false
+warn_unused_ignores = true
+exclude = ["backend/uploads/", "backend/__pycache__/"]
+# SQLAlchemy 1.x ORM 樣式的 Column[X] 不被 mypy 視為 X，會在賦值/取值/呼叫處噪音爆炸；
+# slowapi 的 exception handler 簽名也與 starlette 標稱型別不符。
+# 不引入 sqlalchemy.ext.mypy plugin（外部相依），改以 disable_error_code 壓制這些既有噪音。
+disable_error_code = ["arg-type", "assignment", "attr-defined", "index", "var-annotated", "call-overload", "operator", "return-value", "union-attr"]
+
+# database.py 用 SQLAlchemy 1.x declarative_base() 模式；mypy 不識別 Base 為合法類別，
+# 這些錯誤需 sqlalchemy.ext.mypy plugin 或 SQLAlchemy 2.0 typed Mapped[] 才能根治。
+[[tool.mypy.overrides]]
+module = ["database"]
+disable_error_code = ["valid-type", "misc"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["tests"]
+addopts = "-ra"
