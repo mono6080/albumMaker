@@ -75,7 +75,7 @@ def get_photo(
     db: Session = Depends(get_db),
 ):
     """回傳學生指定欄位的照片檔案。"""
-    project = get_project_or_404(project_id, db)
+    get_project_or_404(project_id, db)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")

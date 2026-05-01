@@ -4,7 +4,6 @@
 import io
 import logging
 import time
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
 from fastapi import HTTPException

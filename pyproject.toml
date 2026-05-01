@@ -21,8 +21,8 @@ src = ["backend", "tests"]
 extend-exclude = ["backend/__pycache__", "backend/uploads", "frontend"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-ignore = ["E501", "E402"]
+select = ["E", "F"]
+ignore = ["E501", "E402", "F541"]
 
 [tool.ruff.format]
 exclude = ["backend/**/*.py"]

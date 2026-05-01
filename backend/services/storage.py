@@ -2,7 +2,6 @@
 # 所有檔案讀寫、刪除、Serve 操作都透過此 adapter，
 # 本地開發用 LocalStorageAdapter，日後換 S3 / R2 / GCS 只需新增實作並切換 get_storage()
 
-import io
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
