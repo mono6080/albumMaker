@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { fetchProject as getProject, renderStudent, renderAllStudents as renderAll } from "../api/projectApi";
+import { fetchProject as getProject, renderStudent } from "../api/projectApi";
 import { fetchTemplate as getTemplate } from "../api/templateApi";
 import { buildStudentPagePreviewUrl as previewUrl, buildDownloadPdfUrl as downloadPdf, buildDownloadAllZipUrl as downloadAllZip } from "../api/urls";
 import { apiClient } from "../api/authApi";
@@ -25,7 +25,7 @@ export default function ProjectReview() {
   // { current: number, total: number } | null
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [ts, setTs] = useState(Date.now());
+  const [ts, setTs] = useState(0);
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
 
@@ -34,7 +34,7 @@ export default function ProjectReview() {
   const [newCommentText, setNewCommentText] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
 
-  const loadProject = async () => {
+  const loadProject = useCallback(async () => {
     try {
       const projectResponse = await getProject(id);
       setProject(projectResponse.data);
@@ -43,19 +43,19 @@ export default function ProjectReview() {
     } catch {
       setLoadError("找不到專案，請確認連結是否正確");
     }
-  };
+  }, [id]);
 
-  const loadComments = async () => {
+  const loadComments = useCallback(async () => {
     try {
       const response = await apiClient.get(`/projects/${id}/comments`);
       setComments(response.data);
     } catch { /* 靜默，留言非關鍵功能 */ }
-  };
+  }, [id]);
 
   useEffect(() => {
     loadProject();
     loadComments();
-  }, [id]);
+  }, [loadProject, loadComments]);
 
   /** 透過 apiClient 下載 blob 並觸發瀏覽器儲存，確保 HttpOnly Cookie 隨請求傳送 */
   const triggerBlobDownload = async (url, fallbackFilename) => {

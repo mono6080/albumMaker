@@ -33,7 +33,7 @@ export {
   uploadPhoto,
   updatePhotoMapping,
 
-  // 對印文字 API
+  // 對應文字 API
   fetchProjectLabelTexts as getProjectLabelTexts,
   updateProjectLabelTexts,
   batchUpdateStudentTexts as batchUpdateTexts,

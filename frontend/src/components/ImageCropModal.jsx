@@ -23,6 +23,7 @@ export default function ImageCropModal({
   const [panX,  setPanX]    = useState(0);
   const [panY,  setPanY]    = useState(0);
   const [imgNat, setImgNat] = useState(null);
+  const [isDragActive, setIsDragActive] = useState(false);
 
   const imgRef       = useRef(null);
   const containerRef = useRef(null);
@@ -91,6 +92,7 @@ export default function ImageCropModal({
   // ── 滑鼠拖曳 ─────────────────────────────────────────────────────────────
   const handleMouseDown = (e) => {
     isDragging.current = true;
+    setIsDragActive(true);
     lastPos.current = { x: e.clientX, y: e.clientY };
   };
   const handleMouseMove = (e) => {
@@ -101,12 +103,16 @@ export default function ImageCropModal({
     setPanX(prev => Math.min(maxPanX, Math.max(-maxPanX, prev + dx)));
     setPanY(prev => Math.min(maxPanY, Math.max(-maxPanY, prev + dy)));
   };
-  const handleMouseUp = () => { isDragging.current = false; };
+  const handleMouseUp = () => {
+    isDragging.current = false;
+    setIsDragActive(false);
+  };
 
   // ── 觸控拖曳 ─────────────────────────────────────────────────────────────
   const handleTouchStart = (e) => {
     const t = e.touches[0];
     isDragging.current = true;
+    setIsDragActive(true);
     lastPos.current = { x: t.clientX, y: t.clientY };
   };
   const handleTouchMove = (e) => {
@@ -118,7 +124,10 @@ export default function ImageCropModal({
     setPanX(prev => Math.min(maxPanX, Math.max(-maxPanX, prev + dx)));
     setPanY(prev => Math.min(maxPanY, Math.max(-maxPanY, prev + dy)));
   };
-  const handleTouchEnd = () => { isDragging.current = false; };
+  const handleTouchEnd = () => {
+    isDragging.current = false;
+    setIsDragActive(false);
+  };
 
   // ── 確認裁切 ─────────────────────────────────────────────────────────────
   const handleConfirm = () => {
@@ -157,7 +166,7 @@ export default function ImageCropModal({
           style={{
             width: frameW, height: frameH,
             overflow: "hidden", position: "relative",
-            cursor: isDragging.current ? "grabbing" : "grab",
+            cursor: isDragActive ? "grabbing" : "grab",
             background: "#ddd",
             touchAction: "none",
           }}

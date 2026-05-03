@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { uploadPhoto, updatePhotoMapping } from "../api";
-import toast from "react-hot-toast";
 import SlotFramePreview from "./SlotFramePreview";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan } from "../utils/photoUtils";
@@ -294,7 +293,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         }));
 
         onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
-      } catch (_) { /* silent — manual save remains available */ } finally {
+      } catch { /* silent — manual save remains available */ } finally {
         setUploadProgress(null);
       }
     }, 300);
@@ -311,8 +310,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   }, []);
 
   // Global mouse move/up for drag
+  const isEditModalOpen = editModal !== null;
   useEffect(() => {
-    if (!editModal) return;
+    if (!isEditModalOpen) return;
     const onMove = (e) => {
       if (!editDragRef.current.dragging) return;
       const m = editModalRef.current;
@@ -330,7 +330,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [!!editModal]);
+  }, [isEditModalOpen]);
 
   // Re-init when student changes
   useEffect(() => {

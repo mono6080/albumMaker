@@ -2,8 +2,8 @@
 // 提供單一學生的照片上傳、對應文字編輯與即時預覽，
 // 文字變更後自動防抖儲存（500ms）
 
-import { useEffect, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
@@ -21,7 +21,6 @@ import StudentTextPanel from "../components/StudentTextPanel";
 
 export default function StudentEdit() {
   const { projectId, studentId } = useParams();
-  const navigate = useNavigate();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -38,7 +37,7 @@ export default function StudentEdit() {
 
   // ── 自動儲存對應文字（防抖 500ms） ────────────────────────────────────────
 
-  const { scheduleSave, flushSave, isSaving } = useAutoSave(
+  const { scheduleSave, flushSave } = useAutoSave(
     labelTexts,
     async (currentLabelTexts) => {
       const payload = {};
@@ -63,7 +62,7 @@ export default function StudentEdit() {
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
-  const loadStudentData = async () => {
+  const loadStudentData = useCallback(async () => {
     try {
       const projectResponse = await fetchProject(projectId);
       setProject(projectResponse.data);
@@ -93,9 +92,9 @@ export default function StudentEdit() {
     } catch {
       setLoadError("找不到專案或學生");
     }
-  };
+  }, [projectId, studentId]);
 
-  useEffect(() => { loadStudentData(); }, [projectId, studentId]);
+  useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
   // ── 對應文字操作 ──────────────────────────────────────────────────────────
 

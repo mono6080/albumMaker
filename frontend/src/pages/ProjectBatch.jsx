@@ -1,5 +1,5 @@
 // 專案設定頁面
-// 提供學生名單管理（批次新增、刪除、改名）與專案層級對印文字的統一填入，
+// 提供學生名單管理（批次新增、刪除、改名）與專案層級對應文字的統一填入，
 // 文字變更後自動防抖儲存（600ms），並在右側顯示即時預覽
 
 import { useCallback, useEffect, useState } from "react";
@@ -43,13 +43,13 @@ export default function ProjectBatch() {
   const [isAddingStudents, setIsAddingStudents] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
 
-  // 對印文字 tab 狀態
+  // 對應文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
+  const [previewTimestamp, setPreviewTimestamp] = useState(0);
 
-  // ── 自動儲存對印文字（防抖 600ms） ────────────────────────────────────────
+  // ── 自動儲存對應文字（防抖 600ms） ────────────────────────────────────────
 
   const { scheduleSave } = useAutoSave(
     labelTexts,
@@ -68,7 +68,7 @@ export default function ProjectBatch() {
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
-  const loadProjectData = async () => {
+  const loadProjectData = useCallback(async () => {
     try {
       const projectResponse = await fetchProject(projectId);
       setProject(projectResponse.data);
@@ -76,7 +76,7 @@ export default function ProjectBatch() {
       const templateResponse = await fetchTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
 
-      // 初始化對印文字狀態（專案設定優先，若無則使用模板預設）
+      // 初始化對應文字狀態（專案設定優先，若無則使用模板預設）
       const savedProjectLabelTexts = projectResponse.data.label_texts || {};
       const initialLabelTexts = {};
       templateResponse.data.pages.forEach((templatePage, pageIndex) => {
@@ -90,9 +90,9 @@ export default function ProjectBatch() {
     } catch {
       setLoadError("找不到專案，請確認連結是否正確");
     }
-  };
+  }, [projectId]);
 
-  useEffect(() => { loadProjectData(); }, [projectId]);
+  useEffect(() => { loadProjectData(); }, [loadProjectData]);
 
   // ── 學生名單管理 ──────────────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ export default function ProjectBatch() {
     useCallback(async (studentId, newName) => {
       await renameStudent(projectId, studentId, newName);
       await loadProjectData();
-    }, [projectId])
+    }, [projectId, loadProjectData])
   );
 
   const handleDeleteStudent = (studentId, clickEvent) => {
@@ -137,7 +137,7 @@ export default function ProjectBatch() {
     });
   };
 
-  // ── 對印文字操作 ──────────────────────────────────────────────────────────
+  // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
   const getLabelText = (pageIndex, labelId) =>
     labelTexts[pageIndex]?.[String(labelId)] ?? "";
@@ -167,7 +167,7 @@ export default function ProjectBatch() {
   const templatePages = template.pages;
   const activePageLayout = templatePages[activePage]?.layout;
 
-  // ── 對印文字編輯面板 ──────────────────────────────────────────────────────
+  // ── 對應文字編輯面板 ──────────────────────────────────────────────────────
 
   const editorPanel = (
     <div className="space-y-3">
@@ -442,7 +442,7 @@ export default function ProjectBatch() {
         </div>
       )}
 
-      {/* Tab 2：對印文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
+      {/* Tab 2：對應文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
       {desktopTab === "texts" && (
         <div
           className="lg:grid lg:gap-6 lg:items-start"

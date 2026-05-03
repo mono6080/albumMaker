@@ -1,6 +1,7 @@
 // 認證 Context
 // 提供全域登入狀態、使用者資訊、login / logout 函式
 // 認證改用 HttpOnly Cookie：不再讀寫 localStorage，session 由後端 Cookie 維護
+/* eslint-disable react-refresh/only-export-components */
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { fetchMe, login as apiLogin, logout as apiLogout } from "../api/authApi";
