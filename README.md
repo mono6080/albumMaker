@@ -12,8 +12,8 @@
 |------|------|
 | **使用者系統** | JWT 登入、5 種角色（管理員/美學組/帶班主管/帶班老師/無權限）、角色型存取控制 |
 | **模板編輯器** | 建立多頁版型；拖曳擺放照片格、氣泡框、貼圖；上傳背景圖 |
-| **批次管理** | 貼上學生名單批次新增；全班統一編輯氣泡文字預設值 |
-| **個別編輯** | 單一學生照片上傳、位移縮放裁切、個人化氣泡文字覆蓋 |
+| **批次管理** | 貼上學生名單批次新增；全班統一編輯對應文字預設值 |
+| **個別編輯** | 單一學生照片上傳、位移縮放裁切、個人化對應文字覆蓋、頁面跳過 |
 | **輸出審閱** | 頁面預覽、留言回饋、單一 PDF 下載（完整畫質僅限管理員）、全班 ZIP 打包 |
 
 ---
@@ -34,14 +34,14 @@ album_maker/
 │   │   ├── render_service.py    # 公開 API：render_page / render_album / save_album_pdf
 │   │   ├── draw_helpers.py      # PIL 底層：字型、圖片合成、形狀繪製、文字換行
 │   │   ├── element_renderers.py # 各元素渲染：照片格 / 氣泡框 / 文字標籤 / 貼圖
-│   │   ├── project_service.py   # PDF 輸出、ZIP 打包、氣泡文字合併
+│   │   ├── project_service.py   # PDF 輸出、ZIP 打包、對應文字合併
 │   │   ├── file_service.py      # Storage key 計算與上傳工具
 │   │   └── storage.py           # StorageAdapter 抽象層（本機 / 未來可換 S3）
 │   └── uploads/           # 背景圖、貼圖、學生照片（執行期產生）
 │
 ├── frontend/              # React + Vite + Tailwind CSS
 │   └── src/
-│       ├── api/           # authApi.js（共用 apiClient）/ templateApi.js / projectApi.js / urls.js
+│       ├── api/           # authApi.js（apiClient / renderClient）/ templateApi.js / projectApi.js / urls.js
 │       ├── context/       # AuthContext.jsx（登入狀態全域管理）
 │       ├── components/    # PropertyPanel / PhotoManager / PhotoSlotCard / SlotFramePreview
 │       │   └── canvas/    # BubbleKonvaShape / StickerNode / BubbleSVG
@@ -73,7 +73,7 @@ album_maker/
 
 - **React 19 + Vite 8** — SPA
 - **Tailwind CSS 4** — 樣式
-- **Axios** — API 請求；共用 `apiClient` 自動附帶 Bearer token，401 自動跳登入頁
+- **Axios** — API 請求；`apiClient` / `renderClient` 以 `withCredentials` 自動帶 HttpOnly Cookie，401 自動跳登入頁
 - **react-konva** — 模板編輯器拖曳畫布（Canvas 2D，視覺與後端 PIL 渲染一致）
 
 ---
@@ -82,7 +82,7 @@ album_maker/
 
 ### 需求
 
-- Python 3.10+
+- Python 3.12+
 - Node.js 18+
 
 ### 安裝
@@ -100,11 +100,15 @@ npm install
 ### 開發模式
 
 ```bash
-# 後端（port 8765）
+# 模式 A：後端直接提供 API 與已 build 的 frontend/dist（port 8765）
 cd backend
 uvicorn main:app --host 0.0.0.0 --port 8765 --reload
 
-# 前端（port 5173，代理 /api → 8765）
+# 模式 B：Vite HMR 前端（port 5173；目前 /api proxy → 8769）
+# 搭配此模式時，後端需跑在 8769，或同步調整 frontend/vite.config.js
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8769 --reload
+
 cd frontend
 npm run dev
 ```
@@ -157,13 +161,14 @@ docker compose up -d --build
 
 ## API 摘要
 
-> 標註 🔓 的端點不需要登入（圖片 serving）；其餘皆需 `Authorization: Bearer <token>`。
+> 標註 🔓 的端點不需要登入（圖片 serving）。其餘端點需登入；瀏覽器前端以 HttpOnly Cookie 認證，API 工具也可使用 `Authorization: Bearer <token>`。
 
 ### 認證 / 使用者
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | POST | `/api/auth/login` | 登入，回傳 JWT（form: username / password） |
+| POST | `/api/auth/logout` | 登出並清除 HttpOnly Cookie |
 | GET | `/api/auth/me` | 取得當前使用者資訊 |
 | GET | `/api/users/` | 列出所有使用者（admin） |
 | POST | `/api/users/` | 建立使用者（admin） |
@@ -197,19 +202,20 @@ docker compose up -d --build
 | PATCH | `/api/projects/{id}` | 改名（admin / 專案擁有者） |
 | DELETE | `/api/projects/{id}` | 刪除（admin / 專案擁有者） |
 | GET | `/api/projects/{id}` | 取得專案詳細（含所有學生） |
-| GET | `/api/projects/{id}/label_texts` | 取得全班對印文字預設值 |
-| PUT | `/api/projects/{id}/label_texts` | 更新全班對印文字預設值 |
+| GET | `/api/projects/{id}/label_texts` | 取得全班對應文字預設值 |
+| PUT | `/api/projects/{id}/label_texts` | 更新全班對應文字預設值 |
 | GET | `/api/projects/{id}/comments` | 取得審閱留言 |
 | POST | `/api/projects/{id}/comments` | 新增留言（admin / art_team / supervisor） |
 | DELETE | `/api/projects/{id}/comments/{cid}` | 刪除留言（admin） |
 | POST | `/api/projects/{id}/students/batch` | 批次新增學生 |
-| PATCH | `/api/projects/{id}/students/{sid}` | 學生改名 |
+| PUT | `/api/projects/{id}/students/{sid}` | 學生改名 |
 | DELETE | `/api/projects/{id}/students/{sid}` | 刪除學生 |
+| PATCH | `/api/projects/{id}/students/{sid}/pages/{page}/skip` | 設定或取消單一學生頁面跳過 |
 | POST | `/api/projects/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳照片 |
 | GET 🔓 | `/api/projects/{id}/students/{sid}/pages/{page}/photos/{slot}` | 照片檔案 |
 | PUT | `/api/projects/{id}/students/{sid}/photos/mapping` | 更新照片位移縮放 |
-| PUT | `/api/projects/{id}/students/{sid}/pages/{page}/texts` | 更新個別學生氣泡文字 |
-| PUT | `/api/projects/{id}/batch/texts` | 批次更新學生氣泡文字 |
+| PUT | `/api/projects/{id}/students/{sid}/pages/{page}/texts` | 更新個別學生對應文字 |
+| PUT | `/api/projects/{id}/batch/texts` | 批次更新學生對應文字 |
 | POST | `/api/projects/{id}/students/{sid}/render` | 產生單一學生 PDF |
 | POST | `/api/projects/{id}/render/all` | 產生全班 PDF |
 | GET | `/api/projects/{id}/students/{sid}/pdf?mode=print\|screen` | 下載單一 PDF（非 admin 強制 screen） |
@@ -239,14 +245,28 @@ docker compose up -d --build
       "font_size": 20, "font_color": "#3B6B8C"
     }
   ],
-  "stickers": [
-    { "id": 1, "filename": "star.png", "x": 10, "y": 10, "width": 60, "height": 60 }
+  "text_labels": [
+    {
+      "id": 1, "x": 80, "y": 820, "width": 640, "height": 80,
+      "text": "{name}今天完成了平衡挑戰！",
+      "font_size": 28, "font_color": "#333333",
+      "text_align": "center", "line_height": 1.4
+    }
   ],
-  "footer": { "enabled": true, "text": "{name} · 2026年1月" }
+  "stickers": [
+    {
+      "id": 1,
+      "path": "templates/tmpl1/stickers/star.png",
+      "filename": "star.png",
+      "x": 10, "y": 10, "width": 60, "height": 60
+    }
+  ],
+  "footer": { "text": "{name} · 2026年1月" }
 }
 ```
 
-`{name}` 在渲染時自動替換為學生姓名。
+`{name}` 在渲染時自動替換為學生姓名。`text_bubbles` 是模板固定文字氣泡；
+`text_labels` 是可被專案層級與學生個別文字覆蓋的對應文字。
 
 ---
 
@@ -260,7 +280,7 @@ SQLite 單一檔案 `backend/album_maker.db`，包含六張資料表：
 | `templates` | 模板基本資料 |
 | `template_pages` | 模板頁面版型 JSON |
 | `projects` | 專案（綁定模板、owner_id FK 至 users） |
-| `students` | 學生（每人儲存照片映射與個別氣泡文字的 JSON） |
+| `students` | 學生（每人儲存照片映射、個別對應文字與跳過頁面的 JSON） |
 | `project_comments` | 審閱留言（project_id / author_id / 內容 / 時間） |
 
 Schema 遷移由 `migrations.py` 在後端啟動時自動冪等執行。  

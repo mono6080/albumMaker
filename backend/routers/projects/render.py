@@ -42,7 +42,7 @@ def preview_project_page(
     page_index: int,
     db: Session = Depends(get_db),
 ):
-    """使用專案層級對印文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
+    """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
 
     page_layouts = get_template_page_layouts(project)

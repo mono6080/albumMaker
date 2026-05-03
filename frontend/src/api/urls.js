@@ -16,7 +16,7 @@ export const buildStickerUrl = (templateId, filename) =>
 
 // ── 專案相關 URL ──────────────────────────────────────────────────────────────
 
-/** 專案層級氣泡文字的頁面預覽端點 URL */
+/** 專案層級對應文字的頁面預覽端點 URL */
 export const buildProjectPagePreviewUrl = (projectId, pageIndex) =>
   `${API_BASE}/projects/${projectId}/preview/${pageIndex}`;
 

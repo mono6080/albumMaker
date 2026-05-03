@@ -44,13 +44,19 @@ Student page data schema (pages_data_json is a list, one item per page):
   {
     "page_index": 0,
     "photos": {
-      "1": "uploads/photos/xxx.jpg",
-      "2": "uploads/photos/yyy.jpg"
+      "1": "projects/proj1/photos/student2/p0_slot1_xxx.jpg",
+      "2": {
+        "path": "projects/proj1/photos/student2/p0_slot2_yyy.jpg",
+        "scale": 1.2,
+        "offset_x": -0.1,
+        "offset_y": 0.05
+      }
     },
     "label_texts": {
       "1": "筠喬笑得好開心呀！",
       "2": "充滿活力的橘色"
-    }
+    },
+    "skip": false
   }
 ]
 """

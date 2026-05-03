@@ -57,7 +57,7 @@ export default function ProjectReview() {
     loadComments();
   }, [id]);
 
-  /** 透過 apiClient 下載 blob 並觸發瀏覽器儲存，確保 Bearer token 隨請求傳送 */
+  /** 透過 apiClient 下載 blob 並觸發瀏覽器儲存，確保 HttpOnly Cookie 隨請求傳送 */
   const triggerBlobDownload = async (url, fallbackFilename) => {
     // urls.js 回傳的路徑已含 /api 前綴；apiClient.baseURL 也是 /api，需去掉重複的前綴
     const apiPath = url.startsWith("/api") ? url.slice(4) : url;

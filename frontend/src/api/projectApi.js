@@ -1,8 +1,8 @@
 // 專案 API 模組
 // 封裝所有與專案（Project）、學生（Student）、
-// 照片、氣泡文字、渲染及下載相關的 API 呼叫
+// 照片、對應文字、渲染及下載相關的 API 呼叫
 
-// 使用統一含 Bearer token interceptor 的 apiClient
+// 使用統一的 Cookie 認證 axios clients（含 401 interceptor）
 import { apiClient, renderClient } from "./authApi";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
@@ -71,17 +71,17 @@ export const updatePhotoMapping = (projectId, studentId, pagesMapping) =>
     { pages: pagesMapping }
   );
 
-// ── 對印文字 ──────────────────────────────────────────────────────────────────
+// ── 對應文字 ──────────────────────────────────────────────────────────────────
 
-/** 取得專案層級的對印文字設定 */
+/** 取得專案層級的對應文字設定 */
 export const fetchProjectLabelTexts = (projectId) =>
   apiClient.get(`/projects/${projectId}/label_texts`);
 
-/** 更新專案層級的對印文字設定 */
+/** 更新專案層級的對應文字設定 */
 export const updateProjectLabelTexts = (projectId, labelTextsPayload) =>
   apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload);
 
-/** 批次更新多位學生的對印文字 */
+/** 批次更新多位學生的對應文字 */
 export const batchUpdateStudentTexts = (projectId, studentsPayload) =>
   apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload);
 

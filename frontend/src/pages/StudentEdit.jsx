@@ -1,5 +1,5 @@
 // 學生個人編輯頁面
-// 提供單一學生的照片上傳、氣泡文字編輯與即時預覽，
+// 提供單一學生的照片上傳、對應文字編輯與即時預覽，
 // 文字變更後自動防抖儲存（500ms）
 
 import { useEffect, useState } from "react";
@@ -36,7 +36,7 @@ export default function StudentEdit() {
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
   const [skippedPages, setSkippedPages] = useState(new Set()); // 被刪除（跳過）的頁面索引
 
-  // ── 自動儲存對印文字（防抖 500ms） ────────────────────────────────────────
+  // ── 自動儲存對應文字（防抖 500ms） ────────────────────────────────────────
 
   const { scheduleSave, flushSave, isSaving } = useAutoSave(
     labelTexts,
@@ -81,7 +81,7 @@ export default function StudentEdit() {
       const templateResponse = await fetchTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
 
-      // 初始化對印文字狀態（從學生頁面資料讀取）
+      // 初始化對應文字狀態（從學生頁面資料讀取）
       const initialTexts = {};
       const initialSkipped = new Set();
       (foundStudent?.pages_data || []).forEach(pageData => {
@@ -97,7 +97,7 @@ export default function StudentEdit() {
 
   useEffect(() => { loadStudentData(); }, [projectId, studentId]);
 
-  // ── 對印文字操作 ──────────────────────────────────────────────────────────
+  // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
   const getLabelText = (pageIndex, labelId) =>
     labelTexts[pageIndex]?.[String(labelId)] ?? "";

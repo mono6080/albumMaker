@@ -155,7 +155,7 @@ def render_sticker(canvas: Image.Image, sticker: dict) -> None:
 
 
 def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, student_name: str) -> None:
-    """渲染對印文字方塊（無背景）。label_texts 提供專案 / 學生層級的文字覆蓋。"""
+    """渲染對應文字方塊（無背景）。label_texts 提供專案 / 學生層級的文字覆蓋。"""
     label_id = str(label.get("id", ""))
     raw_text = label_texts.get(label_id, label.get("text", ""))
     label_text = raw_text.replace("{name}", student_name)

@@ -1,5 +1,5 @@
 # 專案業務邏輯服務模組
-# 集中管理與「渲染學生相冊」、「合併氣泡文字」、「檔名處理」、
+# 集中管理與「渲染學生相冊」、「合併對應文字」、「檔名處理」、
 # 「HTTP 下載標頭」相關的業務邏輯，使路由層保持薄且清晰
 
 import io
@@ -45,17 +45,17 @@ def build_content_disposition_header(filename: str) -> str:
     return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}'
 
 
-# ── 對印文字合併 ───────────────────────────────────────────────────────────────
+# ── 對應文字合併 ───────────────────────────────────────────────────────────────
 
 def merge_project_label_texts_into_pages(
     student_pages_data: list,
     project_label_texts: dict
 ) -> list:
     """
-    將專案層級對印文字合併入學生頁面資料，作為學生未自訂時的預設值。
+    將專案層級對應文字合併入學生頁面資料，作為學生未自訂時的預設值。
 
     優先順序（高到低）：
-      學生個人對印文字 > 專案層級對印文字 > 模板預設文字（由 render_page 處理）
+      學生個人對應文字 > 專案層級對應文字 > 模板預設文字（由 render_page 處理）
 
     回傳新的 pages_data 列表，不修改原始物件。
     若學生尚無頁面資料（如剛建立的新學生），仍會補入專案層級文字，
@@ -69,7 +69,7 @@ def merge_project_label_texts_into_pages(
         page_index_key = str(page_data.get("page_index", 0))
         project_page_label_texts = project_label_texts.get(page_index_key, {})
         if project_page_label_texts:
-            # 學生的設定優先；專案設定補足尚未覆寫的對印文字
+            # 學生的設定優先；專案設定補足尚未覆寫的對應文字
             merged_label_texts = {**project_page_label_texts, **page_data.get("label_texts", {})}
             page_data = {**page_data, "label_texts": merged_label_texts}
         merged_pages.append(page_data)
@@ -115,7 +115,7 @@ def render_and_save_student_album(
 
     流程：
       1. 讀取模板佈局（可由外部傳入，批次渲染時共用避免重複查詢）
-      2. 將專案對印文字合併入學生頁面資料
+      2. 將專案對應文字合併入學生頁面資料
       3. 呼叫渲染引擎產生圖片
       4. 儲存列印用 PDF、螢幕用 PDF、單頁圖片
       5. 更新學生的輸出路徑記錄

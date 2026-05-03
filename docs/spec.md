@@ -41,13 +41,13 @@ PDF。老師建立模板（多頁版型 + 照片格 + 氣泡 + 貼圖）、批�
 | vite | ^8.0.4 | dev server / build |
 | @tailwindcss/vite | ^4.2.2 | Tailwind v4 vite 插件（不是 v3 PostCSS plugin） |
 | react-router-dom | ^7.14.0 | SPA 路由 |
-| axios | ^1.15.0 | HTTP；共用 `apiClient` 走 HttpOnly Cookie |
+| axios | ^1.15.0 | HTTP；`apiClient` / `renderClient` 走 HttpOnly Cookie，401 interceptor 共用 |
 | konva / react-konva | ^10.2.5 / ^19.2.3 | TemplateEditor 拖曳畫布（與 PIL 視覺對齊） |
 | vite-plugin-pwa | ^1.2.0 | autoUpdate Service Worker；與 vite 8 有 peer dep 衝突，
     Docker build 用 `npm ci --legacy-peer-deps`（`Dockerfile:7`） |
 | react-hot-toast | ^2.6.0 | toast |
 | lucide-react | ^1.8.0 | icons |
-| fabric / react-window | 已安裝但目前僅選用 | （見 §9） |
+| fabric / react-window | 已安裝但目前未使用 | 歷史依賴；TemplateEditor 目前走 react-konva（見 §9） |
 
 ### 資料庫
 
@@ -99,7 +99,7 @@ backend/routers/*.py     — 接 HTTP、解析 form/JSON、組 response
 pages/*.jsx     — 組合 + state + API 呼叫；每頁一個檔案
 components/     — 純顯示或受控；canvas/ 是 Konva 子集
 hooks/          — useAutoSave / usePermissions / useInlineEdit；無 JSX
-api/            — 只做 HTTP；共用 apiClient + interceptor
+api/            — 只做 HTTP；authApi.js export apiClient / renderClient + 共用 401 interceptor
 constants/      — 靜態資料（shapes / fonts），無邏輯
 utils/          — photoUtils / bubbleGeometry / apiError
 context/        — AuthContext（全域 currentUser）
@@ -130,11 +130,12 @@ Project (id, name, template_id FK, owner_id FK→User nullable, created_at, upda
   └─ comments  → ProjectComment[] (cascade delete-orphan)
 
 Student (id, project_id FK, name, order_index, pages_data_json TEXT, output_filename, created_at, updated_at)
+  └─ pages_data_json 內含 photos / label_texts / skip（skip=true 時渲染略過該頁）
 
 ProjectComment (id, project_id FK, author_id FK, content TEXT, created_at)
 ```
 
-### 對印文字（label_texts）3 層覆蓋
+### 對應文字（label_texts）3 層覆蓋
 
 低 → 高（高覆蓋低）：
 
@@ -178,7 +179,7 @@ ProjectComment (id, project_id FK, author_id FK, content TEXT, created_at)
 - **konva_v_offset = int(line_height_float / 2 - descent + la_offset)**
   （`element_renderers.py:201`）：補償 Konva `textBaseline='middle'` 相對 PIL
   視覺頂端的落差（msjh 28pt / lineHeight=1.4 約 18px）。
-  **違反**：對印文字在模板編輯器看起來置中、PDF 輸出卻偏上 / 偏下。
+  **違反**：對應文字在模板編輯器看起來置中、PDF 輸出卻偏上 / 偏下。
 - **逐字 anchor='la'**（`draw_helpers.py:241`）：每字繪製時用 ascender line
   anchor，並先用全字串 `textbbox(anchor='la')[1]` 校正 la_y。
   **違反**：用 `anchor='lt'` 會讓 `，`、`。` 等標點以自身 glyph 頂端對齊，
@@ -201,8 +202,9 @@ ProjectComment (id, project_id FK, author_id FK, content TEXT, created_at)
 
 ### 5.3 圖片端點不帶 auth
 
-`<img>` tag 是瀏覽器原生請求，不送 `Authorization: Bearer`。以下 6 個 GET
-端點不掛 `get_current_user`：
+`<img>` tag 是瀏覽器原生請求，不送 `Authorization: Bearer`；即使同站 Cookie
+可能自動帶上，圖片 serving 仍不依賴登入狀態。以下 6 個 GET 端點不掛
+`get_current_user`：
 
 - `GET /api/templates/{id}/pages/{page_id}/preview`（`templates.py:266`）
 - `GET /api/templates/{id}/pages/{page_id}/background`（`templates.py:213`）
@@ -281,14 +283,16 @@ table_info` / `sqlite_master` 檢查存在再操作。
 - **路由 ≤ 10 行**：CLAUDE.md 慣例。`render_all_students` 是合理例外。
 - **IME-aware 文字輸入用 `CompositionTextarea`**：grep 一般 `<textarea>` 在
   `pages/` 應只剩非中文輸入框（如批次新增學生姓名 textarea — 該處仍在使用）。
-- **共用 `apiClient`**（`api/authApi.js:7`）：所有 axios 請求都從這 export 出
-  發；不在他處 `axios.create({ baseURL: '/api' })` 第二次。
+- **共用 axios clients**（`api/authApi.js:7`）：一般 API 從 `apiClient` 發出，
+  渲染 API 從較長 timeout 的 `renderClient` 發出；不在他處另建
+  `axios.create({ baseURL: '/api' })`。
 - **共用 `useAutoSave`** 提供 debounce / abort / flush 統一語意；非 UI 元件不
   自寫 setTimeout 防抖。
 - **Storage key 是相對字串**：絕對路徑不出現在 DB（`output_filename`、
   `background_filename`）。
 - **JWT 經 HttpOnly Cookie 為主、Authorization Bearer 為輔**
-  （`auth.py:81`）：Cookie 優先，Bearer 給 API 工具用。
+  （`auth.py:81`）：Cookie 優先，Bearer 給 API 工具用；前端 axios clients
+  只設定 `withCredentials`，不注入 Bearer header。
 
 ## 7. External Boundaries
 
@@ -307,7 +311,7 @@ table_info` / `sqlite_master` 檢查存在再操作。
 - `:8765` — uvicorn（FastAPI + SPA + 圖片 GET）。Docker 模式下不對外暴露，
   經 Unix socket。
 - `:5173` — Vite dev server，proxy `/api` → `:8769`（**注意 §9，與後端
-  port 不一致**）。
+  單體 / Docker / start.bat 慣用 port 8765 不一致**）。
 - CORS allow_origins 由 `ALLOWED_ORIGINS` env 控制，預設 `localhost:5173 +
   127.0.0.1:5173`（`main.py:46`）。
 - Login `:10/minute` per IP（`routers/auth.py:25`）。
@@ -347,7 +351,7 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
   shadow/text 行為（§5.1）；換 fabric / Pixi 等於重做整層視覺對齊。
 - **切換 backend framework**：FastAPI Depends 注入鏈（`get_current_user` /
   `require_role`）滲透到每個路由。
-- **完整測試覆蓋**：見 §10，pytest / vitest 都尚未引入。
+- **完整測試覆蓋**：見 §10；目前只有後端 pytest smoke，沒有前端測試與 CI。
 
 ## 9. Known Unknowns / Open Questions
 
@@ -356,15 +360,15 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 ### 9.1 已存在的 DRIFT（先記、不修）
 
 - **vite dev proxy port 不對齊**（`vite.config.js:55`）：proxy 指
-  `http://localhost:8769`，但 backend dev 跑 `:8765`（CLAUDE.md / README.md
-  / `main.py`）。dev 模式的 `/api` 透過代理會打到不存在的 8769。如果有人
-  寫「用 vite dev 開發前端」這條路徑、需先確認此處更新。
+  `http://localhost:8769`，但 start.bat、Docker、backend-served app 模式都跑
+  `:8765`。若用 Vite HMR 開發前端，需讓後端跑 `8769`，或同步改
+  `frontend/vite.config.js`。
 - **runtimeCaching `^/uploads/`**（`vite.config.js:39`）：但實際照片 serving
   路徑是 `/api/projects/.../photos/...`，不在 `/uploads/` 下。此 cache rule
   目前是死 code（除非未來打算改 SPA 直接打 `/uploads/`）。
-- **fabric ^7.2.0 在 dependencies 但 import 不到**（`package.json:14`）：
-  TemplateEditor 已改用 react-konva，fabric 似乎是歷史遺留依賴。可移除以
-  縮 bundle，但屬於非必要清理。
+- **fabric ^7.2.0 / react-window ^2.2.7 在 dependencies 但未被 import**
+  （`package.json:14`、`:22`）：TemplateEditor 已改用 react-konva，這兩個
+  似乎是歷史遺留依賴。可移除以縮 bundle，但屬於非必要清理。
 - **`LocalStorageAdapter._path()` 用 str.startswith 判 traversal**
   （`storage.py:59`）：理論上 `base = /uploads`、`resolved = /uploads_evil/...`
   也會通過比對。實務上 `_base = UPLOADS_DIR` 是固定目錄、不會與其他目錄共
@@ -409,15 +413,21 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **現況**：
 
-- 無 pytest 測試檔（`backend/` 沒有 `tests/` 目錄、無 `*_test.py`）。
-- 無 vitest / RTL 測試。
-- 無 pre-commit hook、無 CI workflow。
-- 唯一自動化檢查是 `npm run lint`（eslint，`package.json:9`）。
-- `migrations.py` 自身的冪等性靠手動驗（每個函式先檢查欄位 / 表存在）。
+- 有後端 pytest smoke：`tests/test_auth.py`、`tests/test_migrations.py`、
+  `tests/test_storage.py`；`conftest.py` 會把測試 DB 指到 tmp 檔，避免污染
+  `backend/album_maker.db`。
+- `test_migrations.py` 已驗證 `init_db()` + `run_migrations()` 可重複執行，且
+  預設 admin 不重複建立。
+- 無 FastAPI `TestClient` API contract / preview smoke。
+- 無 vitest / RTL 前端測試，無 CI workflow。
+- 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
+  install hook 不由 repo 保證。
+- 前端自動化檢查仍是 `npm run lint` / `npm run build`。
 
 **Reviewer 短期內怎麼辦**：
 
-- 後端改動：手測 — `uvicorn --reload` 起後端，`curl` 打改動的 endpoint
+- 後端改動：先跑 `python -m pytest -q`（或 `.venv/Scripts/python.exe -m pytest -q`）；
+  涉及 API 行為時再用 `uvicorn --reload` 起後端，`curl` 打改動的 endpoint
   並比對 status / body；中文輸入用 Unicode escape 或 Playwright UI。
 - 前端改動：`cd frontend && npm run build` 必跑（CLAUDE.md 強制）；改後 `npm
   run lint` 確認 eslint 過；UI 行為用 Playwright（架構 spec 不要求 reviewer 必跑，
@@ -429,7 +439,7 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
-1. **pytest smoke**：開一個 `backend/tests/test_smoke.py` — 啟動 app、
+1. **FastAPI API smoke**：新增 `tests/test_api_smoke.py` — 啟動 app、
    `TestClient` 打 `/api/health`、login → me、create template → preview。
    光這一份就能擋 90% 啟動時的 import / migration 崩潰。
 2. **render parity test**：固定一份 layout fixture + 預期輸出 hash，PIL ⇄ Konva
@@ -437,4 +447,5 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 3. **API contract test**：對 `routers/` 每個端點驗 status + 必要欄位。
 4. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
    run lint` 在 PR 上跑，擋 dist 沒 build 就 merge。
-5. **migrations idempotency test**：跑兩次 `run_migrations()` 都不應拋例外。
+5. **storage traversal edge test**：補 `base=/uploads`、`resolved=/uploads_evil`
+   這類 shared-prefix escape regression，覆蓋 `_path()` 的理論邊界。

@@ -17,9 +17,12 @@ Claude Code 在此專案的工作指引。
 ## 啟動與建置
 
 ```bash
-# 開發模式（需兩個終端機）
+# 模式 A：後端直接提供 API 與已 build 的 frontend/dist
 cd backend && uvicorn main:app --host 0.0.0.0 --port 8765 --reload
-cd frontend && npm run dev   # port 5173，/api 自動代理至 8765
+
+# 模式 B：Vite HMR 前端（需兩個終端機）
+cd backend && uvicorn main:app --host 0.0.0.0 --port 8769 --reload
+cd frontend && npm run dev   # port 5173，/api 依 vite.config.js 代理至 8769
 
 # 前端正式建置（必須在修改前端後執行）
 cd frontend && npm run build
@@ -51,20 +54,20 @@ backend/
       schemas.py       # Pydantic response schema（ProjectDetail / StudentInProject / ...）
       crud.py          # 專案 CRUD 路由（列表、建立、刪除、學生管理）
       photos.py        # 照片上傳、讀取、欄位映射路由
-      texts.py         # 對印文字讀取 / 更新 / 批次更新路由
+      texts.py         # 對應文字讀取 / 更新 / 批次更新路由
       comments.py      # 審閱留言路由
       render.py        # 渲染 / PDF 輸出路由
   services/
     render_service.py    # 公開 API：render_page / render_album / save_album_pdf / save_album_images；持有 UPLOADS_DIR
     draw_helpers.py      # PIL 底層工具：字型載入、圖片合成、形狀繪製、文字換行
     element_renderers.py # 各元素類型渲染：render_photo_slot / render_sticker / render_text_label / render_text_bubble
-    project_service.py   # PDF 輸出、ZIP 打包、氣泡文字合併邏輯
+    project_service.py   # PDF 輸出、ZIP 打包、對應文字合併邏輯
     file_service.py      # Storage key 計算與上傳工具
     storage.py           # StorageAdapter 抽象層（LocalStorageAdapter / 未來可換 S3）
 
 frontend/src/
   api/
-    authApi.js         # 登入、fetchMe、使用者管理；定義共用 apiClient（含 Bearer interceptor）
+    authApi.js         # 登入、fetchMe、使用者管理；定義 apiClient / renderClient（Cookie 認證 + 401 interceptor）
     templateApi.js     # 模板相關 API 函式
     projectApi.js      # 專案 / 學生 / 照片 / 渲染 API 函式
     urls.js            # URL 建構函式（preview / download / sticker）
@@ -96,8 +99,8 @@ frontend/src/
     Login.jsx          # 登入頁（表單 + 角色導向）
     UserManagement.jsx # 使用者管理（admin only）
     TemplateEditor.jsx # 模板版型編輯器（react-konva Canvas 2D 拖曳畫布）
-    ProjectBatch.jsx   # 批次學生管理 + 全班氣泡文字
-    StudentEdit.jsx    # 單一學生照片 + 個別氣泡文字 + 產出並下載 PDF
+    ProjectBatch.jsx   # 批次學生管理 + 全班對應文字
+    StudentEdit.jsx    # 單一學生照片 + 個別對應文字 + 產出並下載 PDF
     ProjectReview.jsx  # 輸出審閱 + PDF 下載 + 留言
     TemplateList.jsx   # 模板清單
     ProjectList.jsx    # 專案清單（依角色過濾操作按鈕）
@@ -185,8 +188,8 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 ### 前端
 
 - **API 分層**：`templateApi.js` / `projectApi.js` / `urls.js` 分別管理，`api.js` 為向後相容層
-- **共用 apiClient**：所有 axios 請求從 `authApi.js` 的 `apiClient` 出發，interceptor 自動帶 Bearer token；401 自動跳登入頁
-- **自動儲存**：氣泡文字編輯使用 `useAutoSave` hook，防抖 500ms；渲染前呼叫 `flushSave()` 確保最新
+- **共用 axios clients**：一般請求走 `authApi.js` 的 `apiClient`，渲染請求走較長 timeout 的 `renderClient`；兩者用 `withCredentials` 自動帶 HttpOnly Cookie，401 自動跳登入頁。後端仍接受 Bearer token 作為 API 工具備用，前端不主動注入 Bearer header
+- **自動儲存**：對應文字編輯使用 `useAutoSave` hook，防抖 500ms；渲染前呼叫 `flushSave()` 確保最新
 - **BubbleSVG**：純顯示元件，幾何計算與後端 PIL 渲染保持一致（用於 ProjectReview）
 - **TemplateEditor Konva**：編輯器以 `react-konva` 取代 CSS div 渲染；`shadowBlur × 1.74` 補償 Canvas2D（sigma = shadowBlur/2）與 PIL GaussianBlur（sigma ≈ radius）的差異
 - **常數集中**：形狀清單、顏色預設、字型選項分別定義在 `constants/`
@@ -195,7 +198,7 @@ Service →  業務邏輯（合併、渲染、打包、路徑計算）
 
 ## 資料流
 
-### 對印文字優先序（低→高覆蓋）
+### 對應文字優先序（低→高覆蓋）
 
 ```
 模板預設（layout_json.text_labels[].text）
@@ -266,7 +269,7 @@ cd D:/projects/album_maker/frontend && npm run build
 - **render_service 分層**：`render_service.py` 只持有公開 API 與 `UPLOADS_DIR`（storage.py 從這裡 import 它，不能移走）；PIL 工具在 `draw_helpers.py`，元素渲染在 `element_renderers.py`
 - **PIL 中文標點對齊**：`draw_helpers.py` 的 `draw_line_with_spacing()` 以 `anchor='la'`（ascender line）逐字繪製；用 `anchor='lt'` 會讓每個字元以自身 glyph 頂端對齊，導致 `，`、`。` 等標點往上飄。全字串 `textbbox(anchor='la')[1]` 換算出 `la_y`，再對每個字元統一用 `anchor='la'` 確保同一 baseline
 - **PIL 文字垂直對齊與 Konva 一致**：`render_text_label`（`element_renderers.py`）的 `start_y` 加上 `konva_v_offset = int(line_height_float / 2 - descent + la_offset)`，補償 Konva `textBaseline='middle'` 相對於 PIL 視覺頂端的落差（msjh 28pt / lineHeight=1.4 約 18px）
-- **CompositionTextarea**：對印文字輸入框一律改用 `components/CompositionTextarea.jsx`，`onChange` 接收 `value` 字串（非 event），`onScheduleSave` 由元件在 compositionEnd 或非組字 onChange 時呼叫，避免 IME 輸入被 re-render 打斷
+- **CompositionTextarea**：對應文字輸入框一律改用 `components/CompositionTextarea.jsx`，`onChange` 接收 `value` 字串（非 event），`onScheduleSave` 由元件在 compositionEnd 或非組字 onChange 時呼叫，避免 IME 輸入被 re-render 打斷
 - **Pydantic v2 嚴格型別**：`dict[str, str]` 在 lax mode 下仍會拒絕 value 為 dict 的資料（回傳 422）。專案層級 label_texts 格式為 `{page_index: {label_id: text}}`，payload 型別必須宣告 `dict[str, Any]`（`texts.py` 的 `update_project_label_texts`）
 - **審閱意見角色**：`canComment`（admin / art_team / supervisor）可新增留言；teacher 僅能讀取留言清單（`ProjectReview.jsx` 用 `currentUser?.role === "teacher"` 單獨控制顯示）
 - **SQLite ADD COLUMN 限制**：`ALTER TABLE ADD COLUMN` 不支援非常數預設值（如 `CURRENT_TIMESTAMP`）。需先加 `DATETIME` 無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填（見 `migrations.py`）

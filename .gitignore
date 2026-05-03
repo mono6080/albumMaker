@@ -32,6 +32,7 @@ server.log
 .playwright-mcp/
 
 # Test / dev artifacts
+.tmp/
 ref_pages/
 backend/test_screenshots/
 backend/bg_*.png

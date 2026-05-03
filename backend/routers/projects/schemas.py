@@ -142,7 +142,7 @@ class OkResult(BaseModel):
 
 class BatchTextsPayload(BaseModel):
     """
-    批次更新多位學生對印文字的 payload。
+    批次更新多位學生對應文字的 payload。
 
     格式：
       students: {

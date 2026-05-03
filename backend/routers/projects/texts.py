@@ -1,5 +1,5 @@
-# 對印文字路由
-# 處理專案層級與學生個人的對印文字讀取、更新與批次更新
+# 對應文字路由
+# 處理專案層級與學生個人的對應文字讀取、更新與批次更新
 
 import json
 from typing import Any
@@ -28,7 +28,7 @@ def get_project_label_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """取得專案層級的對印文字設定。"""
+    """取得專案層級的對應文字設定。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     return _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
@@ -41,7 +41,7 @@ def update_project_label_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新專案層級的對印文字設定。格式：{page_index: {label_id: text}}"""
+    """更新專案層級的對應文字設定。格式：{page_index: {label_id: text}}"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     project.label_texts_json = json.dumps(payload)
@@ -58,7 +58,7 @@ def update_student_label_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新學生指定頁面的個人對印文字。"""
+    """更新學生指定頁面的個人對應文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
@@ -84,7 +84,7 @@ def batch_update_texts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """批次更新多位學生的對印文字。"""
+    """批次更新多位學生的對應文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     students_payload = payload.students
