@@ -426,8 +426,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
   footer 與 label override。
 - `frontend/src/utils/renderLayoutModel.js` 抽出 TemplateEditor 使用的座標縮放、
   z-index 排序與元素 display model；`npm run test:render-parity` 會用同一份
-  `render_smoke_layout.json` 檢查前端 stage model 與後端 regression fixture 的
-  A4 尺寸、照片框、氣泡、文字與 footer 契約。
+  `render_smoke_layout.json` 檢查前端 stage model，並透過 Konva canvas backend
+  實際 rasterize 前端畫布，驗 A4 尺寸、照片框、氣泡、文字與 footer 區域契約。
 - 無 vitest / RTL 前端測試，無 CI workflow。
 - 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
   install hook 不由 repo 保證。
@@ -450,8 +450,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
 1. **Playwright screenshot parity**：沿用 `render_smoke_layout.json`，啟動瀏覽器擷取
-   Konva 畫面，與 PIL 輸出做區域級像素比對；目前已有純 model parity，尚未到
-   canvas screenshot 級。
+   真實 TemplateEditor 畫面，與 PIL 輸出做區域級像素比對；目前已有 model parity
+   與 node-canvas/Konva raster parity，尚未到 browser screenshot 級。
 2. **API contract test 擴面**：把 `comments`、`photos`、PDF render/download 等
    尚未納入 smoke 的 endpoint 補必要 status / body 欄位驗證。
 3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
