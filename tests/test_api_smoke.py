@@ -4,13 +4,16 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BytesIO
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from auth import hash_password
 from database import SessionLocal, User
-from main import app
+from main import app, limiter as app_limiter
+from routers.auth import limiter as auth_limiter
 
 
 ADMIN_PASSWORD = "admin-password-123"
@@ -19,10 +22,18 @@ USER_PASSWORD = "user-password-123"
 
 @contextmanager
 def started_client() -> Iterator[TestClient]:
+    reset_rate_limits()
     with TestClient(app) as client:
         reset_admin_password()
         client.cookies.clear()
         yield client
+
+
+def reset_rate_limits() -> None:
+    for limiter in (app_limiter, auth_limiter):
+        storage = getattr(limiter, "_storage", None)
+        if storage is not None:
+            storage.reset()
 
 
 def reset_admin_password() -> None:
@@ -41,6 +52,19 @@ def unique_name(prefix: str) -> str:
 
 def assert_status(response, status_code: int) -> None:
     assert response.status_code == status_code, response.text
+
+
+def use_tmp_uploads(monkeypatch, tmp_path) -> None:
+    from services import render_service
+
+    monkeypatch.setattr(render_service, "UPLOADS_DIR", tmp_path / "uploads")
+
+
+def jpeg_bytes(color: tuple[int, int, int] = (240, 72, 72)) -> bytes:
+    image = Image.new("RGB", (96, 72), color)
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG")
+    return buffer.getvalue()
 
 
 def login(client: TestClient, username: str = "admin", password: str = ADMIN_PASSWORD) -> dict:
@@ -314,3 +338,129 @@ def test_public_preview_endpoints_do_not_require_auth():
         assert_status(project_preview, 200)
         assert project_preview.headers["content-type"].startswith("image/jpeg")
         assert project_preview.content.startswith(b"\xff\xd8")
+
+
+def test_project_comments_contracts():
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id)
+
+        admin_comment = client.post(f"/api/projects/{project_id}/comments", data={"content": "  Admin note  "})
+        assert_status(admin_comment, 201)
+        admin_comment_payload = admin_comment.json()
+        assert admin_comment_payload["content"] == "Admin note"
+        assert admin_comment_payload["author_name"] == "系統管理員"
+
+        empty_comment = client.post(f"/api/projects/{project_id}/comments", data={"content": "   "})
+        assert_status(empty_comment, 400)
+
+        art_team, art_team_password = create_user(client, "art_team")
+        supervisor, _ = create_user(client, "supervisor")
+        teacher, teacher_password = create_user(client, "teacher", supervisor_id=supervisor["id"])
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        teacher_comment = client.post(f"/api/projects/{project_id}/comments", data={"content": "blocked"})
+        assert_status(teacher_comment, 403)
+
+        client.cookies.clear()
+        login(client, art_team["username"], art_team_password)
+        art_comment = client.post(f"/api/projects/{project_id}/comments", data={"content": "Art note"})
+        assert_status(art_comment, 201)
+
+        comments = client.get(f"/api/projects/{project_id}/comments")
+        assert_status(comments, 200)
+        assert [comment["content"] for comment in comments.json()] == ["Admin note", "Art note"]
+
+        delete_other_comment = client.delete(f"/api/projects/{project_id}/comments/{admin_comment_payload['id']}")
+        assert_status(delete_other_comment, 403)
+        delete_own_comment = client.delete(f"/api/projects/{project_id}/comments/{art_comment.json()['id']}")
+        assert_status(delete_own_comment, 200)
+
+        client.cookies.clear()
+        login(client)
+        delete_remaining = client.delete(f"/api/projects/{project_id}/comments/{admin_comment_payload['id']}")
+        assert_status(delete_remaining, 200)
+
+
+def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("render_project"))
+
+        batch_response = client.post(f"/api/projects/{project_id}/students/batch", json=["Render Student"])
+        assert_status(batch_response, 200)
+        detail = client.get(f"/api/projects/{project_id}")
+        assert_status(detail, 200)
+        student_id = detail.json()["students"][0]["id"]
+
+        photo_upload = client.post(
+            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo_upload, 200)
+        uploaded_path = photo_upload.json()["path"]
+        assert uploaded_path.endswith("/p0_slot1_smoke.jpg")
+
+        get_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1")
+        assert_status(get_photo, 200)
+        assert get_photo.headers["content-type"].startswith("image/jpeg")
+        assert get_photo.content.startswith(b"\xff\xd8")
+
+        student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
+        assert_status(student_preview, 200)
+        assert student_preview.headers["content-type"].startswith("image/jpeg")
+
+        render_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
+        assert_status(render_response, 200)
+        render_payload = render_response.json()
+        assert render_payload["pages"] == 1
+        assert render_payload["pdf"].endswith(".pdf")
+
+        download_pdf = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf?mode=print")
+        assert_status(download_pdf, 200)
+        assert download_pdf.headers["content-type"].startswith("application/pdf")
+        assert download_pdf.headers["content-disposition"].startswith("attachment;")
+        assert download_pdf.content.startswith(b"%PDF")
+
+        render_all = client.post(f"/api/projects/{project_id}/render/all")
+        assert_status(render_all, 200)
+        assert render_all.json()["errors"] == []
+        assert render_all.json()["rendered"][0]["student"] == "Render Student"
+
+        download_all = client.get(f"/api/projects/{project_id}/download/all?mode=screen")
+        assert_status(download_all, 200)
+        assert download_all.headers["content-type"].startswith("application/zip")
+        assert download_all.headers["content-disposition"].startswith("attachment;")
+        assert download_all.content.startswith(b"PK")
+
+        mapping_response = client.put(
+            f"/api/projects/{project_id}/students/{student_id}/photos/mapping",
+            json={
+                "pages": {
+                    "0": {
+                        "2": {"path": uploaded_path, "scale": 1.25, "offset_x": 0.1, "offset_y": -0.1},
+                        "1": None,
+                    }
+                }
+            },
+        )
+        assert_status(mapping_response, 200)
+        renamed_path = mapping_response.json()["renames"]["0"]["2"]
+        assert renamed_path.endswith("/p0_slot2_smoke.jpg")
+
+        final_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(final_detail, 200)
+        photos = final_detail.json()["students"][0]["pages_data"][0]["photos"]
+        assert "1" not in photos
+        assert photos["2"]["path"] == renamed_path
+        assert photos["2"]["scale"] == 1.25
+
+        missing_old_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1")
+        assert_status(missing_old_photo, 404)
+        moved_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2")
+        assert_status(moved_photo, 200)

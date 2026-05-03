@@ -420,7 +420,9 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
   預設 admin 不重複建立。
 - `test_api_smoke.py` 已用 FastAPI `TestClient` 覆蓋 `/api/health`、login →
   me/logout cookie roundtrip、template/page/project/student、對應文字、role access
-  與 public preview JPEG。
+  comments、photo upload/get/mapping、student/project public preview JPEG、student render、
+  PDF download 與 ZIP download。每個 TestClient context 會 reset slowapi limiter
+  storage，避免 login rate-limit state 污染 smoke tests。
 - `test_render_regression.py` 使用 `tests/fixtures/render_smoke_layout.json` 固定版型，
   以寬鬆像素區域檢查 `render_page()` 尺寸、非空白、照片框、氣泡、對應文字、
   footer 與 label override。
@@ -452,8 +454,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 1. **Playwright screenshot parity**：沿用 `render_smoke_layout.json`，啟動瀏覽器擷取
    真實 TemplateEditor 畫面，與 PIL 輸出做區域級像素比對；目前已有 model parity
    與 node-canvas/Konva raster parity，尚未到 browser screenshot 級。
-2. **API contract test 擴面**：把 `comments`、`photos`、PDF render/download 等
-   尚未納入 smoke 的 endpoint 補必要 status / body 欄位驗證。
+2. **API negative/path-edge contracts**：針對已納入 smoke 的 endpoint 補 404/403/415/413、
+   storage missing、跨頁照片互換與 render failure 邊界。
 3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
    run lint` 在 PR 上跑，擋 dist 沒 build 就 merge。
 4. **storage traversal edge test**：補 `base=/uploads`、`resolved=/uploads_evil`
