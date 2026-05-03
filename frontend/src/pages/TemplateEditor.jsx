@@ -20,57 +20,25 @@ import BubbleKonvaShape from "../components/canvas/BubbleKonvaShape";
 import StickerNode from "../components/canvas/StickerNode";
 import PropertyPanel from "../components/PropertyPanel";
 import ConfirmModal from "../components/ConfirmModal";
-
-// ── 畫布與座標常數 ────────────────────────────────────────────────────────────
-const CANVAS_DISPLAY_WIDTH = 530;
-const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / 794;
-const CANVAS_DISPLAY_HEIGHT = Math.round(1123 * CANVAS_SCALE);
-
-function toDisplayCoord(realValue) {
-  return realValue * CANVAS_SCALE;
-}
-
-function toRealCoord(displayValue) {
-  return Math.round(displayValue / CANVAS_SCALE);
-}
+import {
+  CANVAS_DISPLAY_HEIGHT,
+  CANVAS_DISPLAY_WIDTH,
+  applyElementsToLayout,
+  getAllElementsSorted,
+  getNextZIndex,
+  getFooterModel,
+  toDisplayCoord,
+  toRealCoord,
+} from "../utils/renderLayoutModel";
 
 function clampValue(value, minValue, maxValue) {
   return Math.max(minValue, Math.min(maxValue, value));
 }
 
-function generateElementId() {
-  return Math.floor(Math.random() * 90000) + 10000;
-}
-
-const _Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
-
-// 元素類型 → layout 陣列欄位名稱
 const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
 
-function getAllElementsSorted(layout) {
-  if (!layout) return [];
-  return [
-    ...(layout.photo_slots  || []).map((e, i) => ({ type: "photo",   data: e, index: i, zDefault: _Z_BASE.photo   + i })),
-    ...(layout.text_bubbles || []).map((e, i) => ({ type: "bubble",  data: e, index: i, zDefault: _Z_BASE.bubble  + i })),
-    ...(layout.text_labels  || []).map((e, i) => ({ type: "text",    data: e, index: i, zDefault: _Z_BASE.text    + i })),
-    ...(layout.stickers     || []).map((e, i) => ({ type: "sticker", data: e, index: i, zDefault: _Z_BASE.sticker + i })),
-  ].sort((a, b) => (a.data.z_index ?? a.zDefault) - (b.data.z_index ?? b.zDefault));
-}
-
-function getNextZIndex(layout) {
-  const all = getAllElementsSorted(layout);
-  if (all.length === 0) return 0;
-  return Math.max(...all.map(e => e.data.z_index ?? e.zDefault)) + 1;
-}
-
-function applyElementsToLayout(layout, sortedElements) {
-  const keyMap = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
-  const newLayout = { ...layout };
-  for (const { type, data } of sortedElements) {
-    const key = keyMap[type];
-    newLayout[key] = (newLayout[key] || []).map(e => e.id === data.id ? data : e);
-  }
-  return newLayout;
+function generateElementId() {
+  return Math.floor(Math.random() * 90000) + 10000;
 }
 
 export default function TemplateEditor() {
@@ -602,6 +570,27 @@ export default function TemplateEditor() {
     );
   };
 
+  const renderFooterNode = (footer) => {
+    if (!footer?.text) return null;
+    const footerModel = getFooterModel(footer);
+    return (
+      <KonvaText
+        key="footer"
+        x={footerModel.box.x}
+        y={footerModel.box.y}
+        width={footerModel.box.width}
+        height={footerModel.box.height}
+        text={footerModel.text}
+        fontSize={footerModel.fontSize}
+        fill={footerModel.fontColor}
+        fontFamily={getFontCss(footer.font_family)}
+        fontStyle={isFontBold(footer.font_family) ? "bold" : "normal"}
+        verticalAlign="middle"
+        listening={false}
+      />
+    );
+  };
+
   return (
     <div className="flex flex-col">
       <ConfirmModal
@@ -794,6 +783,8 @@ export default function TemplateEditor() {
                   );
                   return null;
                 })}
+
+                {renderFooterNode(pageLayout?.footer)}
 
                 {/* Transformer：顯示縮放/旋轉把手 */}
                 <Transformer

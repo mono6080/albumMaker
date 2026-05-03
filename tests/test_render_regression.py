@@ -41,7 +41,7 @@ def test_render_page_smoke_fixture_draws_expected_regions():
         page_index=0,
     )
 
-    assert image.size == (420, 560)
+    assert image.size == (794, 1123)
     assert count_non_white_pixels(image) > 1500
 
     # Empty photo slots should render as a gray placeholder frame.
@@ -52,7 +52,7 @@ def test_render_page_smoke_fixture_draws_expected_regions():
 
     # Text label and footer regions should contain rendered glyph pixels.
     assert count_non_white_pixels(image, (58, 250, 358, 332)) > 20
-    assert count_non_white_pixels(image, (36, 496, 250, 540)) > 20
+    assert count_non_white_pixels(image, (36, 1058, 250, 1102)) > 20
 
 
 def test_render_page_label_text_override_changes_text_region():

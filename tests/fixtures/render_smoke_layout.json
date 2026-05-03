@@ -1,6 +1,6 @@
 {
-  "canvas_width": 420,
-  "canvas_height": 560,
+  "canvas_width": 794,
+  "canvas_height": 1123,
   "photo_slots": [
     {
       "id": 1,
@@ -50,7 +50,7 @@
   "footer": {
     "text": "Footer for {name}",
     "x": 40,
-    "y": 518,
+    "y": 1080,
     "font_size": 20,
     "font_color": "#2563EB"
   },

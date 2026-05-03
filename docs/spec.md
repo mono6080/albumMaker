@@ -172,7 +172,7 @@ ProjectComment (id, project_id FK, author_id FK, content TEXT, created_at)
 
 ### 5.1 PIL ⇄ Konva 視覺參數補償
 
-- **shadowBlur × 1.74**（`pages/TemplateEditor.jsx:478`）：HTML Canvas2D
+- **shadowBlur × 1.74**（`pages/TemplateEditor.jsx:447`）：HTML Canvas2D
   shadowBlur 的 sigma = blur / 2；PIL GaussianBlur(radius) 實測 sigma ≈ radius
   × 0.87；換算需 Canvas blur = pil_blur × 1.74 才視覺一致。
   **違反**：模板預覽與輸出 PDF 的陰影濃淡 / 範圍不一致 → 老師 WYSIWYG 失效。
@@ -424,10 +424,15 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 - `test_render_regression.py` 使用 `tests/fixtures/render_smoke_layout.json` 固定版型，
   以寬鬆像素區域檢查 `render_page()` 尺寸、非空白、照片框、氣泡、對應文字、
   footer 與 label override。
+- `frontend/src/utils/renderLayoutModel.js` 抽出 TemplateEditor 使用的座標縮放、
+  z-index 排序與元素 display model；`npm run test:render-parity` 會用同一份
+  `render_smoke_layout.json` 檢查前端 stage model 與後端 regression fixture 的
+  A4 尺寸、照片框、氣泡、文字與 footer 契約。
 - 無 vitest / RTL 前端測試，無 CI workflow。
 - 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
   install hook 不由 repo 保證。
-- 前端自動化檢查仍是 `npm run lint` / `npm run build`。
+- 前端自動化檢查為 `npm run lint` / `npm run build`，版型模型契約另跑
+  `npm run test:render-parity`。
 
 **Reviewer 短期內怎麼辦**：
 
@@ -444,8 +449,9 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
-1. **frontend/backend render parity**：沿用 `render_smoke_layout.json`，用 Playwright
-   擷取 Konva 畫面與 PIL 輸出做區域級比對，讓雙端參數漂移會失敗。
+1. **Playwright screenshot parity**：沿用 `render_smoke_layout.json`，啟動瀏覽器擷取
+   Konva 畫面，與 PIL 輸出做區域級像素比對；目前已有純 model parity，尚未到
+   canvas screenshot 級。
 2. **API contract test 擴面**：把 `comments`、`photos`、PDF render/download 等
    尚未納入 smoke 的 endpoint 補必要 status / body 欄位驗證。
 3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
