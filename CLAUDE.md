@@ -17,12 +17,11 @@ Claude Code 在此專案的工作指引。
 ## 啟動與建置
 
 ```bash
-# 模式 A：後端直接提供 API 與已 build 的 frontend/dist
+# 後端直接提供 API 與已 build 的 frontend/dist
 cd backend && uvicorn main:app --host 0.0.0.0 --port 8765 --reload
 
-# 模式 B：Vite HMR 前端（需兩個終端機）
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8769 --reload
-cd frontend && npm run dev   # port 5173，/api 依 vite.config.js 代理至 8769
+# Vite HMR 前端（port 5173，/api 依 vite.config.js 代理至 8765）
+cd frontend && npm run dev
 
 # 前端正式建置（必須在修改前端後執行）
 cd frontend && npm run build

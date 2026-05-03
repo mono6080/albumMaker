@@ -310,8 +310,8 @@ table_info` / `sqlite_master` 檢查存在再操作。
 
 - `:8765` — uvicorn（FastAPI + SPA + 圖片 GET）。Docker 模式下不對外暴露，
   經 Unix socket。
-- `:5173` — Vite dev server，proxy `/api` → `:8769`（**注意 §9，與後端
-  單體 / Docker / start.bat 慣用 port 8765 不一致**）。
+- `:5173` — Vite dev server，proxy `/api` → `:8765`，與本機後端預設 port
+  一致。
 - CORS allow_origins 由 `ALLOWED_ORIGINS` env 控制，預設 `localhost:5173 +
   127.0.0.1:5173`（`main.py:46`）。
 - Login `:10/minute` per IP（`routers/auth.py:25`）。
@@ -359,10 +359,6 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 ### 9.1 已存在的 DRIFT（先記、不修）
 
-- **vite dev proxy port 不對齊**（`vite.config.js:55`）：proxy 指
-  `http://localhost:8769`，但 start.bat、Docker、backend-served app 模式都跑
-  `:8765`。若用 Vite HMR 開發前端，需讓後端跑 `8769`，或同步改
-  `frontend/vite.config.js`。
 - **runtimeCaching `^/uploads/`**（`vite.config.js:39`）：但實際照片 serving
   路徑是 `/api/projects/.../photos/...`，不在 `/uploads/` 下。此 cache rule
   目前是死 code（除非未來打算改 SPA 直接打 `/uploads/`）。

@@ -100,15 +100,11 @@ npm install
 ### 開發模式
 
 ```bash
-# 模式 A：後端直接提供 API 與已 build 的 frontend/dist（port 8765）
+# 後端（port 8765；也可直接提供已 build 的 frontend/dist）
 cd backend
 uvicorn main:app --host 0.0.0.0 --port 8765 --reload
 
-# 模式 B：Vite HMR 前端（port 5173；目前 /api proxy → 8769）
-# 搭配此模式時，後端需跑在 8769，或同步調整 frontend/vite.config.js
-cd backend
-uvicorn main:app --host 0.0.0.0 --port 8769 --reload
-
+# 前端（port 5173；/api proxy → 8765）
 cd frontend
 npm run dev
 ```
