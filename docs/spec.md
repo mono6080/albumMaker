@@ -410,14 +410,20 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 **現況**：
 
 - 有後端 pytest smoke：`tests/test_auth.py`、`tests/test_migrations.py`、
-  `tests/test_storage.py`、`tests/test_api_smoke.py`；`conftest.py` 會把測試
+  `tests/test_storage.py`、`tests/test_api_smoke.py`、`tests/test_render_regression.py`；
+  `conftest.py` 會把測試
   DB 指到 repo 內 `.tmp/pytest`（可用 `ALBUM_MAKER_TEST_TMPDIR` 覆寫），避免污染
   `backend/album_maker.db` 且不依賴系統 TEMP 權限。
+- `pyproject.toml` 關閉 pytest cache provider；本 repo 的 Windows ACL 對
+  `.pytest_cache` / atomic cache temp dir 不穩，避免測試 gate 被 cache warning 污染。
 - `test_migrations.py` 已驗證 `init_db()` + `run_migrations()` 可重複執行，且
   預設 admin 不重複建立。
 - `test_api_smoke.py` 已用 FastAPI `TestClient` 覆蓋 `/api/health`、login →
   me/logout cookie roundtrip、template/page/project/student、對應文字、role access
   與 public preview JPEG。
+- `test_render_regression.py` 使用 `tests/fixtures/render_smoke_layout.json` 固定版型，
+  以寬鬆像素區域檢查 `render_page()` 尺寸、非空白、照片框、氣泡、對應文字、
+  footer 與 label override。
 - 無 vitest / RTL 前端測試，無 CI workflow。
 - 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
   install hook 不由 repo 保證。
@@ -438,8 +444,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
-1. **render parity test**：固定一份 layout fixture + 預期輸出 hash，PIL ⇄ Konva
-   參數動到時自動失敗。
+1. **frontend/backend render parity**：沿用 `render_smoke_layout.json`，用 Playwright
+   擷取 Konva 畫面與 PIL 輸出做區域級比對，讓雙端參數漂移會失敗。
 2. **API contract test 擴面**：把 `comments`、`photos`、PDF render/download 等
    尚未納入 smoke 的 endpoint 補必要 status / body 欄位驗證。
 3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm

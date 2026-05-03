@@ -50,4 +50,4 @@ disable_error_code = ["valid-type", "misc"]
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -p no:cacheprovider"
