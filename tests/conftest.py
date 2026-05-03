@@ -6,8 +6,16 @@ import os
 import tempfile
 from pathlib import Path
 
-# 為整個 test session 配置一個 tmp DB 檔案，避免污染 backend/album_maker.db
-_TEST_TMP_DIR = Path(tempfile.mkdtemp(prefix="album_maker_tests_"))
+# 為整個 test session 配置一個 repo 內 tmp DB 檔案，避免污染 backend/album_maker.db。
+# 預設不用系統 TEMP，讓 sandbox / CI 權限較受限時也能直接跑 pytest。
+_TEST_TMP_ROOT = Path(
+    os.environ.get(
+        "ALBUM_MAKER_TEST_TMPDIR",
+        Path(__file__).resolve().parents[1] / ".tmp" / "pytest",
+    )
+)
+_TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+_TEST_TMP_DIR = Path(tempfile.mkdtemp(prefix="album_maker_tests_", dir=str(_TEST_TMP_ROOT)))
 _TEST_DB_FILE = _TEST_TMP_DIR / "test.db"
 
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_FILE.as_posix()}")

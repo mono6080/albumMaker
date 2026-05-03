@@ -410,11 +410,14 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 **現況**：
 
 - 有後端 pytest smoke：`tests/test_auth.py`、`tests/test_migrations.py`、
-  `tests/test_storage.py`；`conftest.py` 會把測試 DB 指到 tmp 檔，避免污染
-  `backend/album_maker.db`。
+  `tests/test_storage.py`、`tests/test_api_smoke.py`；`conftest.py` 會把測試
+  DB 指到 repo 內 `.tmp/pytest`（可用 `ALBUM_MAKER_TEST_TMPDIR` 覆寫），避免污染
+  `backend/album_maker.db` 且不依賴系統 TEMP 權限。
 - `test_migrations.py` 已驗證 `init_db()` + `run_migrations()` 可重複執行，且
   預設 admin 不重複建立。
-- 無 FastAPI `TestClient` API contract / preview smoke。
+- `test_api_smoke.py` 已用 FastAPI `TestClient` 覆蓋 `/api/health`、login →
+  me/logout cookie roundtrip、template/page/project/student、對應文字、role access
+  與 public preview JPEG。
 - 無 vitest / RTL 前端測試，無 CI workflow。
 - 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
   install hook 不由 repo 保證。
@@ -435,13 +438,11 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
-1. **FastAPI API smoke**：新增 `tests/test_api_smoke.py` — 啟動 app、
-   `TestClient` 打 `/api/health`、login → me、create template → preview。
-   光這一份就能擋 90% 啟動時的 import / migration 崩潰。
-2. **render parity test**：固定一份 layout fixture + 預期輸出 hash，PIL ⇄ Konva
+1. **render parity test**：固定一份 layout fixture + 預期輸出 hash，PIL ⇄ Konva
    參數動到時自動失敗。
-3. **API contract test**：對 `routers/` 每個端點驗 status + 必要欄位。
-4. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
+2. **API contract test 擴面**：把 `comments`、`photos`、PDF render/download 等
+   尚未納入 smoke 的 endpoint 補必要 status / body 欄位驗證。
+3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
    run lint` 在 PR 上跑，擋 dist 沒 build 就 merge。
-5. **storage traversal edge test**：補 `base=/uploads`、`resolved=/uploads_evil`
+4. **storage traversal edge test**：補 `base=/uploads`、`resolved=/uploads_evil`
    這類 shared-prefix escape regression，覆蓋 `_path()` 的理論邊界。
