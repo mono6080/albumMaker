@@ -23,12 +23,12 @@ const PRESETS = [
  *   onChange : (hexString) => void
  *   label    : 選填標籤文字
  */
-export default function ColorPicker({ value, onChange, label }) {
+export default function ColorPicker({ value, onChange, label, guideId }) {
   const nativeRef = useRef(null);
   const safeValue = value || "#000000";
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-guide={guideId}>
       {label && (
         <span className="text-xs text-gray-500 block">{label}</span>
       )}

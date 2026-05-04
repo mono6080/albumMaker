@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>設計組模板製作使用教學</title>
+  <style>
+    @page { size: A4; margin: 14mm 13mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #1f2937; font-family: "Microsoft JhengHei", "Noto Sans CJK TC", Arial, sans-serif; line-height: 1.55; }
+    h1 { font-size: 30px; margin: 0 0 10px; color: #111827; }
+    h2 { font-size: 19px; margin: 18px 0 8px; color: #111827; border-bottom: 2px solid #e5e7eb; padding-bottom: 4px; }
+    h3 { font-size: 14px; margin: 12px 0 6px; color: #374151; }
+    p, li { font-size: 11.2px; }
+    ul, ol { padding-left: 20px; }
+    .cover { min-height: 245mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+    .eyebrow { color: #4f46e5; font-size: 13px; font-weight: 700; letter-spacing: .04em; margin-bottom: 12px; }
+    .subtitle { font-size: 16px; color: #4b5563; max-width: 620px; }
+    .meta { margin-top: 24px; color: #6b7280; font-size: 11px; }
+    .toc { margin-top: 30px; padding: 16px 18px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .toc li { margin: 4px 0; }
+    .page-break { page-break-before: always; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .note { padding: 10px 12px; background: #fff7ed; border-left: 4px solid #f59e0b; font-size: 11.5px; margin: 10px 0; }
+    .checklist li { margin-bottom: 4px; }
+    .step-intro { margin: 0 0 8px; color: #475569; }
+    .actions { margin-top: 6px; margin-bottom: 10px; }
+    .actions li { margin-bottom: 3px; }
+    .shot-set { margin: 10px 0 16px; }
+    .shot-caption { margin: 0 0 8px; font-size: 10.5px; color: #64748b; }
+    .shot { margin: 10px 0 14px; page-break-inside: avoid; }
+    .shot-frame { position: relative; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #f8fafc; }
+    .shot img { display: block; width: 100%; height: auto; }
+    .target-box { position: absolute; border: 3px solid #dc2626; border-radius: 8px; box-shadow: 0 0 0 2px rgba(255,255,255,.92), 0 0 0 5px rgba(220,38,38,.18); pointer-events: none; }
+    figcaption { display: flex; align-items: flex-start; gap: 6px; font-size: 10.8px; color: #334155; margin-top: 6px; padding: 7px 9px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+    .legend-num { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 999px; background: #dc2626; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 10px; line-height: 1; }
+    .kbd { font-family: Consolas, monospace; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 4px; }
+    .small { font-size: 10.5px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="eyebrow">ALBUM MAKER · DESIGN TEAM GUIDE</div>
+    <h1>設計組模板製作使用教學</h1>
+    <p class="subtitle">給負責版型與美術素材的設計人員使用。這份 PDF 以實際系統截圖說明如何建立模板、放置照片格、設定文字、使用雙頁預覽，並在交付前完成檢查。</p>
+    <p class="meta">產出檔案：<strong>template-design-guide-step-by-step-dom.pdf</strong><br>建議搭配系統中的「模板編輯器」同步操作。</p>
+    <div class="toc">
+      <h3>快速目錄</h3>
+      <ol>
+        <li>建立模板並確認照片總計</li>
+        <li>進入模板編輯器並認識工作區</li>
+        <li>設定頁面、背景與新增頁</li>
+        <li>連續新增照片格</li>
+        <li>調整照片格與翻轉長寬</li>
+        <li>新增文字與姓名變數</li>
+        <li>設定文字陰影</li>
+        <li>用雙頁預覽檢查左右頁</li>
+        <li>交付前檢查表</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>1. 建立模板並確認照片總計</h2>
+    <p class="step-intro">先在模板管理建立一個新的模板。模板卡片會顯示頁數與照片總數，設計完成前要用這裡確認規格是否正確。</p>
+    <ol class="actions">
+      <li>在「模板管理」輸入模板名稱，格式固定為 <span class="kbd">YYYY-MM {年級} {主題名稱}</span>，例如 <span class="kbd">2026-05 中班 感官世界</span>。</li>
+      <li>點「建立」後，系統會新增一張模板卡片。</li>
+      <li>看卡片上的「頁」與「張照片」數字，這是交付前檢查照片格數量的第一個位置。</li>
+      <li>點「編輯模板」進入模板編輯器。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 1：模板管理頁的建立入口與模板卡片。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/01-template-list.png" alt="步驟 1：模板管理頁的建立入口與模板卡片。">
+        <div class="target-box" style="left:20.07%;top:22.6%;width:52.64%;height:5%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>模板名稱輸入框。固定使用 YYYY-MM {年級} {主題名稱}。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/01-template-list.png" alt="步驟 1：模板管理頁的建立入口與模板卡片。">
+        <div class="target-box" style="left:72.99%;top:22.6%;width:6.94%;height:5%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>建立按鈕。點擊後會建立一份空模板。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/01-template-list.png" alt="步驟 1：模板管理頁的建立入口與模板卡片。">
+        <div class="target-box" style="left:18.61%;top:32.1%;width:20.56%;height:19.6%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>新模板卡片。確認你要編輯的是最新建立的模板。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/01-template-list.png" alt="步驟 1：模板管理頁的建立入口與模板卡片。">
+        <div class="target-box" style="left:20.07%;top:41.8%;width:17.64%;height:2.6%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>頁數與照片數。完成前要與企劃需求一致。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/01-template-list.png" alt="步驟 1：模板管理頁的建立入口與模板卡片。">
+        <div class="target-box" style="left:20.07%;top:45.2%;width:17.64%;height:4.4%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">5</span>
+        <span>編輯模板入口。點進去開始放背景、照片格與文字。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>2. 進入模板編輯器並認識工作區</h2>
+    <p class="step-intro">模板編輯器是主要工作區。製作順序建議固定為：頁面與背景、照片格、文字、貼圖、雙頁預覽、儲存。</p>
+    <ol class="actions">
+      <li>左側選工具與切換頁面；中央畫布負責排版；右側面板負責精準調整。</li>
+      <li>上方「照片總計」會統計整份模板，不只目前頁面。</li>
+      <li>做大幅調整前可以用「復原 / 重做」，完成一段後按「儲存」。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 2：模板編輯器主要區塊。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/02-editor-overview.png" alt="步驟 2：模板編輯器主要區塊。">
+        <div class="target-box" style="left:1.94%;top:13.3%;width:11.67%;height:14%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>工具列。先選工具，再到畫布操作。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/02-editor-overview.png" alt="步驟 2：模板編輯器主要區塊。">
+        <div class="target-box" style="left:26.02%;top:9.5%;width:7.85%;height:2.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>照片總計。用來核對整份模板的照片格數量。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/02-editor-overview.png" alt="步驟 2：模板編輯器主要區塊。">
+        <div class="target-box" style="left:14.17%;top:13.3%;width:37.5%;height:76%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>A4 畫布。背景、照片格、文字與貼圖都在這裡排版。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/02-editor-overview.png" alt="步驟 2：模板編輯器主要區塊。">
+        <div class="target-box" style="left:72.22%;top:8.9%;width:25.83%;height:4%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>製作教學、復原、重做、雙頁預覽、儲存。這些是製作時最常用的操作。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/02-editor-overview.png" alt="步驟 2：模板編輯器主要區塊。">
+        <div class="target-box" style="left:52.22%;top:13.3%;width:45.83%;height:75.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">5</span>
+        <span>屬性面板。點選不同元素後，這裡會顯示對應設定。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>3. 設定頁面、背景與新增頁</h2>
+    <p class="step-intro">每一頁都要有自己的背景。背景建議使用 A4 直式比例，避免重要圖案太靠近邊界。</p>
+    <ol class="actions">
+      <li>在左側「素材」點「上傳背景」，選擇該頁背景圖。</li>
+      <li>在裁切視窗調整背景位置與縮放，讓主要圖案完整落在 A4 範圍。</li>
+      <li>在左側「頁面」切換第 1 頁、第 2 頁；需要更多頁時點「新增頁」。</li>
+      <li>背景不要直接寫死學生姓名；會變動的姓名用文字元素 <span class="kbd">{name}</span>。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 3：頁面、背景與新增頁的位置。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/03-page-tools.png" alt="步驟 3：頁面、背景與新增頁的位置。">
+        <div class="target-box" style="left:1.94%;top:30.3%;width:11.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>上傳背景。每一頁都要各自上傳對應背景。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/03-page-tools.png" alt="步驟 3：頁面、背景與新增頁的位置。">
+        <div class="target-box" style="left:1.94%;top:39.1%;width:11.67%;height:50%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>頁面列表。切換不同頁面後，再編輯該頁內容。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/03-page-tools.png" alt="步驟 3：頁面、背景與新增頁的位置。">
+        <div class="target-box" style="left:1.94%;top:48.9%;width:11.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>新增頁。頁數不足時從這裡補頁。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/03-page-tools.png" alt="步驟 3：頁面、背景與新增頁的位置。">
+        <div class="target-box" style="left:26.02%;top:9.5%;width:7.85%;height:2.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>照片總計。切換頁面後也會維持整份模板統計。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>4. 連續新增照片格</h2>
+    <p class="step-intro">照片格是老師之後放照片的位置。現在選一次「照片格」後，可以在畫布上連續點擊新增，不需要每新增一個就重新選工具。</p>
+    <ol class="actions">
+      <li>左側工具選「照片格」。</li>
+      <li>在畫布上點擊要放照片的位置，點一次新增一個照片格。</li>
+      <li>同一頁需要多張照片時，繼續在畫布上點擊即可。</li>
+      <li>照片格放完後，切回「選取」再開始調整位置與尺寸。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 4：選擇照片格工具並在畫布連續新增。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/04-photo-tool.png" alt="步驟 4：選擇照片格工具並在畫布連續新增。">
+        <div class="target-box" style="left:1.94%;top:19.3%;width:11.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>照片格工具。選取後會保持在新增照片格模式。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/04-photo-tool.png" alt="步驟 4：選擇照片格工具並在畫布連續新增。">
+        <div class="target-box" style="left:21.6%;top:29.3%;width:7.5%;height:8.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>畫布點擊位置。每點一次會新增一個照片格。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/04-photo-tool.png" alt="步驟 4：選擇照片格工具並在畫布連續新增。">
+        <div class="target-box" style="left:26.02%;top:9.5%;width:7.85%;height:2.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>照片總計。新增後要用這裡核對總數。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/04-photo-tool.png" alt="步驟 4：選擇照片格工具並在畫布連續新增。">
+        <div class="target-box" style="left:1.94%;top:15.5%;width:11.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>調整照片格前切回選取工具，避免誤新增。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+    <div class="note">建議：照片格先粗放位置，再一次選取調整尺寸與旋轉。這樣比每放一格就精修更快。</div>
+  </section>
+
+  <section class="page-break">
+    <h2>5. 調整照片格與翻轉長寬</h2>
+    <p class="step-intro">照片格選取後，可以用畫布拖曳快速調整，也可以用右側屬性面板輸入精準數字。</p>
+    <ol class="actions">
+      <li>切回「選取」，點照片格。</li>
+      <li>拖曳照片格移動位置；拖曳角落調整大小；拖曳上方圓點旋轉。</li>
+      <li>右側 X / Y / 寬 / 高適合做精準對齊。</li>
+      <li>需要直式與橫式互換時，點「翻轉長寬」，系統會直接交換寬高。</li>
+      <li>最後調整外框、圓角與陰影，讓照片格在背景上清楚可見。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 5：照片格選取框與右側屬性面板。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/05-photo-properties.png" alt="步驟 5：照片格選取框與右側屬性面板。">
+        <div class="target-box" style="left:17.29%;top:25.8%;width:12.64%;height:14.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>照片格選取框。被選取的元素會出現藍色框與控制點。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/05-photo-properties.png" alt="步驟 5：照片格選取框與右側屬性面板。">
+        <div class="target-box" style="left:53.4%;top:25.2%;width:43.47%;height:15.4%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>位置與尺寸。可直接輸入數字，方便對齊多個照片格。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/05-photo-properties.png" alt="步驟 5：照片格選取框與右側屬性面板。">
+        <div class="target-box" style="left:91.81%;top:25.3%;width:5%;height:3.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>翻轉長寬。快速把橫式格改成直式格，或反過來。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/05-photo-properties.png" alt="步驟 5：照片格選取框與右側屬性面板。">
+        <div class="target-box" style="left:53.4%;top:64.8%;width:43.47%;height:25.7%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>外框、圓角、陰影。用來控制照片放進來後的視覺效果。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>6. 新增文字與姓名變數</h2>
+    <p class="step-intro">純文字適合標題、日期、頁尾與說明文字；氣泡框適合短句或對話。需要自動帶入學生姓名時，請使用 <span class="kbd">{name}</span>。</p>
+    <ol class="actions">
+      <li>左側工具選「純文字」。</li>
+      <li>在畫布上點擊新增文字框。</li>
+      <li>切回「選取」後點文字框，右側會出現文字屬性。</li>
+      <li>文字內容可輸入固定文案，也可使用 <span class="kbd">{name}</span> 代入學生姓名。</li>
+      <li>點「插入 {name}」可在目前游標位置一鍵插入姓名變數；選取文字時會直接取代選取範圍。</li>
+      <li>標題文字建議先確認是否會超出文字框，再調整字級與行距。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 6：文字內容與姓名變數插入。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/06-text-content.png" alt="步驟 6：文字內容與姓名變數插入。">
+        <div class="target-box" style="left:1.94%;top:23.1%;width:11.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>純文字工具。新增標題、日期、頁尾等可替換文字。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/06-text-content.png" alt="步驟 6：文字內容與姓名變數插入。">
+        <div class="target-box" style="left:18.06%;top:64%;width:29.31%;height:8.1%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>文字框位置。新增後切回選取工具，再點文字框調整內容。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/06-text-content.png" alt="步驟 6：文字內容與姓名變數插入。">
+        <div class="target-box" style="left:53.4%;top:48%;width:43.47%;height:10.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>文字內容輸入框。固定文案和 {name} 都在這裡編輯。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/06-text-content.png" alt="步驟 6：文字內容與姓名變數插入。">
+        <div class="target-box" style="left:90.52%;top:48.1%;width:6.28%;height:3.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>插入 {name}。點一下就會在游標位置插入姓名變數。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>7. 設定文字陰影</h2>
+    <p class="step-intro">背景較花、顏色較淡或文字壓在照片附近時，建議開啟文字陰影。陰影要讓文字更清楚，不要搶過文字本身。</p>
+    <ol class="actions">
+      <li>選取文字框。</li>
+      <li>在右側確認字體、字級、顏色與對齊。</li>
+      <li>勾選「文字陰影」。</li>
+      <li>調整陰影顏色、偏移 X/Y、模糊與不透明度。一般建議偏移 1 到 3、模糊 2 到 4。</li>
+      <li>確認陰影在背景上清楚，但不會讓字看起來髒或太重。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 7：文字屬性與文字陰影設定。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/07-text-shadow.png" alt="步驟 7：文字屬性與文字陰影設定。">
+        <div class="target-box" style="left:18.06%;top:64%;width:29.31%;height:8.1%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>被選取的文字框。可拖曳位置，也可調整寬高。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/07-text-shadow.png" alt="步驟 7：文字屬性與文字陰影設定。">
+        <div class="target-box" style="left:53.4%;top:4.8%;width:43.47%;height:12.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>字體與字級。先把文字大小調到版面合適。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/07-text-shadow.png" alt="步驟 7：文字屬性與文字陰影設定。">
+        <div class="target-box" style="left:53.4%;top:24.4%;width:43.47%;height:24.1%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>文字顏色。先選主文字顏色，再決定陰影顏色。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/07-text-shadow.png" alt="步驟 7：文字屬性與文字陰影設定。">
+        <div class="target-box" style="left:53.4%;top:49.3%;width:43.47%;height:49.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>文字陰影開關。勾選後才會顯示陰影細項。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/07-text-shadow.png" alt="步驟 7：文字屬性與文字陰影設定。">
+        <div class="target-box" style="left:53.4%;top:49.3%;width:43.47%;height:49.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">5</span>
+        <span>偏移與模糊。數值過大會讓文字變糊，交付前要檢查。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>8. 用雙頁預覽檢查左右頁</h2>
+    <p class="step-intro">單頁排好不代表整本好看。雙頁預覽可以看到左右頁放在一起的節奏、留白、照片數與主色是否平衡。</p>
+    <ol class="actions">
+      <li>點右上角「雙頁預覽」。</li>
+      <li>系統會先儲存目前草稿，再開啟左右頁合併預覽。</li>
+      <li>檢查左右頁照片數、主色、字級、留白、元素密度是否平衡。</li>
+      <li>使用「上一組」「下一組」切換第 1-2 頁、第 3-4 頁。</li>
+      <li>最後一頁若沒有下一頁，右側會以空白頁補齊。</li>
+    </ol>
+    
+    <div class="shot-set">
+      <p class="shot-caption">步驟 8：雙頁預覽檢查左右頁效果。</p>
+      
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/08-spread-preview.png" alt="步驟 8：雙頁預覽檢查左右頁效果。">
+        <div class="target-box" style="left:16.67%;top:6.4%;width:4.53%;height:2.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">1</span>
+        <span>頁碼範圍。確認目前看的是第幾頁到第幾頁。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/08-spread-preview.png" alt="步驟 8：雙頁預覽檢查左右頁效果。">
+        <div class="target-box" style="left:12.43%;top:11.5%;width:75.13%;height:76.8%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">2</span>
+        <span>左右頁合併預覽。用這裡檢查整體節奏。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/08-spread-preview.png" alt="步驟 8：雙頁預覽檢查左右頁效果。">
+        <div class="target-box" style="left:9.17%;top:90%;width:6.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">3</span>
+        <span>上一組。回到前兩頁做比較。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/08-spread-preview.png" alt="步驟 8：雙頁預覽檢查左右頁效果。">
+        <div class="target-box" style="left:84.17%;top:90%;width:6.67%;height:4.2%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">4</span>
+        <span>下一組。查看後兩頁。</span>
+      </figcaption>
+    </figure>
+  
+    <figure class="shot">
+      <div class="shot-frame">
+        <img src="assets/template-guide/08-spread-preview.png" alt="步驟 8：雙頁預覽檢查左右頁效果。">
+        <div class="target-box" style="left:88.06%;top:5.8%;width:2.78%;height:4%;"></div>
+      </div>
+      <figcaption>
+        <span class="legend-num">5</span>
+        <span>關閉。檢查完回到編輯器繼續調整。</span>
+      </figcaption>
+    </figure>
+  
+    </div>
+  
+  </section>
+
+  <section class="page-break">
+    <h2>9. 交付前檢查表</h2>
+    <div class="grid">
+      <ul class="checklist">
+        <li>□ 模板名稱正確，格式為 YYYY-MM {年級} {主題名稱}。</li>
+        <li>□ 每頁背景都已上傳。</li>
+        <li>□ 照片總計符合企劃需求。</li>
+        <li>□ 每個照片格尺寸、位置、旋轉角度合理。</li>
+        <li>□ 純文字與氣泡文字沒有超出框線。</li>
+        <li>□ 需要帶學生姓名的地方都有使用 {name}。</li>
+      </ul>
+      <ul class="checklist">
+        <li>□ 文字顏色與背景對比足夠。</li>
+        <li>□ 文字陰影不會太重或太模糊。</li>
+        <li>□ 貼圖沒有遮住照片格主要區域。</li>
+        <li>□ 層次正確，文字不會被照片或貼圖蓋住。</li>
+        <li>□ 已用雙頁預覽檢查每組左右頁。</li>
+        <li>□ 最後已按「儲存」。</li>
+      </ul>
+    </div>
+    <h2>常見問題</h2>
+    <h3>照片總計不對</h3>
+    <p>逐頁檢查是否多放或少放照片格。刪除多餘照片格後記得儲存。</p>
+    <h3>背景看起來被裁掉</h3>
+    <p>重新上傳背景，在裁切視窗調整位置與縮放。背景原圖若不是 A4 比例，一定會有局部裁切。</p>
+    <h3>文字在背景上不清楚</h3>
+    <p>調整文字顏色，或開啟文字陰影。背景太花時，也可以改用氣泡框承載文字。</p>
+    <h3>照片格方向放反</h3>
+    <p>選取照片格，在右側「位置與尺寸」點「翻轉長寬」。</p>
+    <p class="small">本文件由本機系統截圖產生，截圖素材位於 docs/assets/template-guide/。</p>
+  </section>
+</body>
+</html>

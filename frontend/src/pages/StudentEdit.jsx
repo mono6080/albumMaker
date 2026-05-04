@@ -11,11 +11,57 @@ import { fetchTemplate } from "../api/templateApi";
 import { buildDownloadPdfUrl } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
-import { ChevronRight, ChevronLeft, Download, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, CircleHelp, Download, Loader2 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
+import { startProductGuide } from "../utils/productGuide";
+
+const STUDENT_EDIT_GUIDE_STEPS = [
+  {
+    element: '[data-guide="student-preview-panel"]',
+    title: "預覽與頁面",
+    description: "左側會顯示目前學生的頁面預覽，可切頁、刪除此頁或還原。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="student-photo-manager"]',
+    title: "照片管理",
+    description: "在每個照片格上傳照片。已有照片時可調整位移縮放、更換或刪除。",
+    side: "left",
+    align: "start",
+  },
+  {
+    element: '[data-guide="student-multi-upload"]',
+    title: "多選上傳",
+    description: "可以一次選多張照片，系統會依照片格順序放入空格。",
+    side: "left",
+    align: "center",
+  },
+  {
+    element: '[data-guide="student-text-panel"]',
+    title: "個別文字",
+    description: "需要為單一學生覆寫文字時，在這裡輸入。清空會恢復專案共用文字或模板文字。",
+    side: "left",
+    align: "start",
+  },
+  {
+    element: '[data-guide="student-text-insert-name"]',
+    title: "插入 {name}",
+    description: "點一下就能在游標位置加入姓名變數，輸出時會替換成這位學生姓名。",
+    side: "top",
+    align: "end",
+  },
+  {
+    element: '[data-guide="student-download-button"]',
+    title: "產出並下載",
+    description: "照片和文字確認後，按這裡產生此學生的 PDF 並下載。",
+    side: "bottom",
+    align: "end",
+  },
+];
 
 // ── 主頁面元件 ────────────────────────────────────────────────────────────────
 
@@ -173,6 +219,10 @@ export default function StudentEdit() {
     setIsRendering(false);
   };
 
+  const startGuide = () => {
+    startProductGuide(STUDENT_EDIT_GUIDE_STEPS);
+  };
+
   // ── 載入中 / 錯誤狀態 ─────────────────────────────────────────────────────
 
   if (loadError) {
@@ -226,8 +276,18 @@ export default function StudentEdit() {
 
         <div className="ml-auto flex gap-2">
           <button
+            type="button"
+            onClick={startGuide}
+            className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors"
+          >
+            <CircleHelp className="w-4 h-4" />
+            <span className="hidden sm:inline">製作教學</span>
+            <span className="sm:hidden">教學</span>
+          </button>
+          <button
             onClick={handleRenderPdf}
             disabled={isRendering}
+            data-guide="student-download-button"
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm"
           >
             {isRendering
@@ -253,7 +313,7 @@ export default function StudentEdit() {
       {/* 桌面版：左側預覽 | 右側照片 + 文字；行動版：單頁面板切換 */}
       <div className="lg:flex lg:gap-6 lg:items-start">
         {/* 預覽面板 */}
-        <div className={`lg:block lg:flex-shrink-0 lg:w-1/3 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`}>
+        <div className={`lg:block lg:flex-shrink-0 lg:w-1/3 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`} data-guide="student-preview-panel">
           <StudentPreviewPanel
             activePage={activePage}
             pageCount={pageCount}
@@ -278,7 +338,7 @@ export default function StudentEdit() {
             onPhotoSaved={() => refreshAllPreviews()}
             onSaved={() => { loadStudentData(); refreshAllPreviews(); }}
           />
-          <div className="hidden lg:block">
+          <div className="hidden lg:block" data-guide="student-text-panel">
             <StudentTextPanel
               activePage={activePage}
               pageCount={pageCount}
@@ -294,7 +354,7 @@ export default function StudentEdit() {
         </div>
 
         {/* 行動版文字面板（獨立顯示） */}
-        <div className={`lg:hidden ${mobileTab === "text" ? "block" : "hidden"} w-full`}>
+        <div className={`lg:hidden ${mobileTab === "text" ? "block" : "hidden"} w-full`} data-guide="student-text-panel-mobile">
           <StudentTextPanel
             activePage={activePage}
             pageCount={pageCount}

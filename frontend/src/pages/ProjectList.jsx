@@ -3,13 +3,52 @@ import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { fetchAllProjects, createProject, deleteProject, renameProject } from "../api/projectApi";
 import { fetchAllTemplates } from "../api/templateApi";
-import { FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } from "lucide-react";
+import { CircleHelp, FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
 import { useInlineEdit } from "../hooks/useInlineEdit";
+import { startProductGuide } from "../utils/productGuide";
 
 // ── 專案卡片（memo 化，只在自身資料變動時重渲染）────────────────────────────
+
+const PROJECT_LIST_GUIDE_STEPS = [
+  {
+    element: '[data-guide="project-create-button"]',
+    title: "新建專案",
+    description: "每個班級每個月建立一個相本專案。先點這裡選模板並命名。",
+    side: "left",
+    align: "center",
+  },
+  {
+    element: '[data-guide="project-create-form"]',
+    title: "選模板與命名",
+    description: "選擇設計組提供的模板，輸入班級或月份補充名稱，系統會組成專案全名。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="project-card"]',
+    title: "專案卡片",
+    description: "卡片會顯示學生數與建立日期。建立後從這裡進入設定或編輯。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="project-settings-link"]',
+    title: "專案設定",
+    description: "先進入專案設定登記學生名單，並填整班共用文字。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="project-review-link"]',
+    title: "個人編輯與輸出",
+    description: "學生登記完成後，進入個人編輯逐位補照片、調整文字並輸出 PDF。",
+    side: "bottom",
+    align: "end",
+  },
+];
 
 const ProjectCard = memo(function ProjectCard({
   project,
@@ -26,7 +65,7 @@ const ProjectCard = memo(function ProjectCard({
   const isEditing = editingId === project.id;
 
   return (
-    <div className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden">
+    <div className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden" data-guide="project-card">
       <div className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -87,6 +126,7 @@ const ProjectCard = memo(function ProjectCard({
         {canEditProject(project.owner_id) && (
           <Link
             to={`/projects/${project.id}/batch`}
+            data-guide="project-settings-link"
             className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" />
@@ -95,6 +135,7 @@ const ProjectCard = memo(function ProjectCard({
         )}
         <Link
           to={`/projects/${project.id}/review`}
+          data-guide="project-review-link"
           className="flex items-center justify-center gap-1.5 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
@@ -118,6 +159,15 @@ export default function ProjectList() {
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
+
+  const startGuide = useCallback(() => {
+    if (canCreateProject && !showForm) {
+      setShowForm(true);
+      window.requestAnimationFrame(() => startProductGuide(PROJECT_LIST_GUIDE_STEPS));
+      return;
+    }
+    startProductGuide(PROJECT_LIST_GUIDE_STEPS);
+  }, [canCreateProject, showForm]);
 
   useEffect(() => {
     fetchAllProjects().then(r => setProjects(r.data));
@@ -202,20 +252,31 @@ export default function ProjectList() {
             <p className="text-sm text-gray-500">每個班級每個月一個專案</p>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={startGuide}
+            className="flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors"
+          >
+            <CircleHelp className="w-4 h-4" />
+            製作教學
+          </button>
         {canCreateProject && (
           <button
             onClick={() => setShowForm(v => !v)}
+            data-guide="project-create-button"
             className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
           >
             <Plus className="w-4 h-4" />
             新建專案
           </button>
         )}
+        </div>
       </div>
 
       {/* Create form */}
       {showForm && (
-        <div className="bg-white border border-indigo-100 rounded-2xl p-6 mb-8 shadow-sm">
+        <div className="bg-white border border-indigo-100 rounded-2xl p-6 mb-8 shadow-sm" data-guide="project-create-form">
           <h2 className="font-semibold text-gray-800 mb-4">新建相本專案</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>

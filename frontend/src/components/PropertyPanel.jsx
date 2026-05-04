@@ -1,9 +1,12 @@
 // PropertyPanel — 模板編輯器右側屬性面板
 // 依選取元素類型（照片格 / 氣泡框 / 純文字 / 貼圖）顯示對應屬性控制項
 
+import { useId, useRef } from "react";
+
 import ColorPicker from "./ColorPicker";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
+import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 
 // 滑桿 + 數字輸入的組合控制項
 function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
@@ -16,9 +19,9 @@ function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" })
 }
 
 // 字體選擇器格狀按鈕
-function FontPicker({ value, onChange }) {
+function FontPicker({ value, onChange, guideId }) {
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    <div className="grid grid-cols-2 gap-1.5" data-guide={guideId}>
       {FONT_OPTIONS.map(fontOption => (
         <button
           key={fontOption.value}
@@ -37,16 +40,61 @@ function FontPicker({ value, onChange }) {
   );
 }
 
+function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
+  const textareaId = useId();
+  const textareaRef = useRef(null);
+
+  const handleInsertName = () => {
+    const textarea = textareaRef.current;
+    const next = insertTextToken(
+      textarea?.value ?? value ?? "",
+      textarea?.selectionStart,
+      textarea?.selectionEnd,
+      NAME_VARIABLE,
+    );
+    onChange(next.text);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-1" data-guide={guideId}>
+      <span className="flex items-center justify-between gap-2">
+        <label htmlFor={textareaId} className="text-xs text-gray-500">{label}</label>
+        <button
+          type="button"
+          onClick={handleInsertName}
+          data-guide={guideId ? `${guideId}-insert-name` : undefined}
+          className="px-2 py-1 text-xs rounded border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+        >
+          插入 {NAME_VARIABLE}
+        </button>
+      </span>
+      <textarea
+        id={textareaId}
+        ref={textareaRef}
+        rows={rows}
+        value={value ?? ""}
+        onChange={event => onChange(event.target.value)}
+        className="border rounded px-2 py-1 text-sm"
+      />
+    </div>
+  );
+}
+
 function TextShadowControls({ elementData, onPropertyChange }) {
   const enabled = !!(elementData.text_shadow_enabled ?? false);
 
   return (
-    <div className="space-y-2 pt-1 border-t border-gray-100">
+    <div className="space-y-2 pt-1 border-t border-gray-100" data-guide="text-shadow-controls">
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
           checked={enabled}
           onChange={event => onPropertyChange({ text_shadow_enabled: event.target.checked })}
+          data-guide="text-shadow-toggle"
         />
         <span className="text-sm font-medium text-gray-700">文字陰影</span>
       </label>
@@ -104,7 +152,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
     : "💬 氣泡框屬性";
 
   return (
-    <div className="bg-white border rounded-lg p-4 space-y-4">
+    <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
       <h3 className="font-semibold">{panelTitle}</h3>
 
       {/* 通用：層次控制 */}
@@ -129,7 +177,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
       </div>
 
       {/* 通用：位置與尺寸 */}
-      <div>
+      <div data-guide="property-position-size">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-500">位置與尺寸</span>
           <button
@@ -138,6 +186,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
               width: elementData.height ?? 0,
               height: elementData.width ?? 0,
             })}
+            data-guide="flip-size"
             className="px-2 py-1 text-xs rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
           >
             翻轉長寬
@@ -209,7 +258,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
           </label>
 
           {/* 陰影設定 */}
-          <div className="space-y-2 pt-1 border-t border-gray-100">
+          <div className="space-y-2 pt-1 border-t border-gray-100" data-guide="photo-visual-style">
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -292,21 +341,19 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             onChange={colorValue => onPropertyChange({ fill: colorValue })}
           />
 
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">預設文字（可用 {"{name}"} 代入姓名）</span>
-            <textarea
-              rows={3}
-              value={elementData.text ?? ""}
-              onChange={event => onPropertyChange({ text: event.target.value })}
-              className="border rounded px-2 py-1 text-sm"
-            />
-          </label>
+          <VariableTextarea
+            label={`預設文字（可用 ${NAME_VARIABLE} 代入姓名）`}
+            value={elementData.text ?? ""}
+            onChange={textValue => onPropertyChange({ text: textValue })}
+            guideId="bubble-text-content"
+          />
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">字體</span>
             <FontPicker
               value={elementData.font_family}
               onChange={fontValue => onPropertyChange({ font_family: fontValue })}
+              guideId="bubble-font-picker"
             />
           </label>
 
@@ -323,6 +370,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             label="文字顏色"
             value={elementData.font_color ?? "#333333"}
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
+            guideId="bubble-text-color"
           />
 
           <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />
@@ -367,15 +415,12 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
       {/* 純文字專屬屬性 */}
       {isTextLabel && (
         <>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">文字內容（可用 {"{name}"} 代入姓名）</span>
-            <textarea
-              rows={3}
-              value={elementData.text ?? ""}
-              onChange={event => onPropertyChange({ text: event.target.value })}
-              className="border rounded px-2 py-1 text-sm"
-            />
-          </label>
+          <VariableTextarea
+            label={`文字內容（可用 ${NAME_VARIABLE} 代入姓名）`}
+            value={elementData.text ?? ""}
+            onChange={textValue => onPropertyChange({ text: textValue })}
+            guideId="text-content"
+          />
 
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">對齊</span>
@@ -405,6 +450,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             <FontPicker
               value={elementData.font_family}
               onChange={fontValue => onPropertyChange({ font_family: fontValue })}
+              guideId="text-font-picker"
             />
           </label>
 
@@ -421,6 +467,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             label="文字顏色"
             value={elementData.font_color ?? "#333333"}
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
+            guideId="text-color"
           />
 
           <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />

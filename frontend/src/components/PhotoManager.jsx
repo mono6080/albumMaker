@@ -541,7 +541,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
 
   return (
-    <div className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden">
+    <div className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden" data-guide="student-photo-manager">
       {/* Edit Modal */}
       {editModal && (
         <PhotoEditModal
@@ -575,6 +575,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         <div className="ml-auto flex gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
           <button
             onClick={() => multiRef.current?.click()}
+            data-guide="student-multi-upload"
             className="flex items-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -597,6 +598,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
       {/* Photo grid */}
       <div
+        data-guide="student-photo-grid"
         className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5 gap-3"
         onClick={e => {
           // Tap outside any cell deselects on touch

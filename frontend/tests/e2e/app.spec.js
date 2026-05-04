@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 
-const ADMIN_PASSWORD = "admin-password-123";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 
@@ -51,11 +51,26 @@ async function loadFixtureLayout() {
 
 
 async function saveTemplateLayout(page) {
+  const saveButton = page.getByRole("button", { name: "儲存" });
   const saveResponse = page.waitForResponse(
     response => response.url().includes("/layout") && response.request().method() === "PUT" && response.ok(),
   );
-  await page.getByRole("button", { name: "儲存" }).click();
+  await saveButton.click();
   await saveResponse;
+  await expect(saveButton).toBeEnabled();
+}
+
+
+async function closeProductGuide(page) {
+  await page.locator(".driver-popover-close-btn").click();
+  await expect(page.locator(".driver-popover")).toHaveCount(0);
+}
+
+
+async function waitForResponseAfter(page, predicate, action) {
+  const responsePromise = page.waitForResponse(predicate);
+  await action();
+  await responsePromise;
 }
 
 
@@ -85,6 +100,11 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await page.getByRole("button", { name: "新增第一頁" }).click();
   await expect(page.getByText("模板編輯器")).toBeVisible();
   await expect(page.getByRole("button", { name: /第 1 頁/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "製作教學" }).click();
+  await expect(page.locator(".driver-popover")).toContainText("照片總計");
+  await expect(page.locator(".driver-popover")).toContainText("整份模板的照片格總數");
+  await closeProductGuide(page);
 
   const canvas = page.locator(".konvajs-content canvas").first();
   await expect(canvas).toBeVisible();
@@ -120,10 +140,22 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   expect(layout.photo_slots).toHaveLength(1);
   expect(layout.text_labels).toHaveLength(1);
 
+  await page.getByRole("button", { name: /選取/ }).click();
+  await canvas.click({ position: { x: 270, y: 287 } });
+  await expect(page.getByText("純文字屬性")).toBeVisible();
+  const templateTextArea = page.locator("textarea").first();
+  await templateTextArea.fill("主角：");
+  await page.getByRole("button", { name: "插入 {name}" }).click();
+  await expect(templateTextArea).toHaveValue("主角：{name}");
+  await saveTemplateLayout(page);
+
+  layout = await fetchTemplatePageLayout(page, template.id);
+  expect(layout.text_labels[0].text).toBe("主角：{name}");
+
   await page.getByRole("button", { name: "雙頁預覽" }).click();
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toBeVisible();
   await expect(page.getByRole("img", { name: "雙頁合併預覽" })).toBeVisible();
-  await page.getByRole("button", { name: "關閉雙頁預覽" }).click();
+  await page.getByRole("button", { name: "關閉雙頁預覽" }).click({ force: true });
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toHaveCount(0);
 });
 
@@ -145,10 +177,36 @@ test("admin can create a project and batch students from the browser", async ({ 
   const projectName = `${templateName} ${projectSuffix}`;
   await expect(page.getByText(projectName)).toBeVisible();
 
+  await page.getByRole("button", { name: "製作教學" }).click();
+  await expect(page.locator(".driver-popover")).toContainText("新建專案");
+  await expect(page.locator(".driver-popover")).toContainText("每個班級每個月建立");
+  await closeProductGuide(page);
+
   await page.locator(".group").filter({ hasText: projectName }).first().getByRole("link", { name: "專案設定" }).click();
   await expect(page.getByText(projectName)).toBeVisible();
   await expect(page.getByText("新增學生名單")).toBeVisible();
 
+  await page.getByRole("button", { name: "製作教學" }).click();
+  await expect(page.locator(".driver-popover")).toContainText("新增學生名單");
+  await expect(page.locator(".driver-popover")).toContainText("一行一位");
+  await closeProductGuide(page);
+
+  await page.getByRole("button", { name: "文字" }).click();
+  await expect(page.getByText("樣版預覽")).toBeVisible();
+  const projectTextArea = page.locator('[data-guide="batch-text-fields"] textarea').first();
+  await expect(projectTextArea).toHaveValue("Default label");
+  await projectTextArea.fill("班級：");
+  await page.locator('[data-guide="batch-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
+  await expect(projectTextArea).toHaveValue("班級：{name}");
+  await projectTextArea.fill("");
+  await expect(projectTextArea).toHaveValue("Default label");
+  await waitForResponseAfter(
+    page,
+    response => response.url().includes("/label_texts") && response.request().method() === "PUT" && response.ok(),
+    () => projectTextArea.fill("共用 {name}"),
+  );
+
+  await page.getByRole("button", { name: "登記學生" }).click();
   await page.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
   await page.getByRole("button", { name: "新增" }).click();
   await expect(page.getByText("已登記學生（2 位）")).toBeVisible();
@@ -159,6 +217,32 @@ test("admin can create a project and batch students from the browser", async ({ 
   const projects = await projectsResponse.json();
   const project = projects.find(item => item.name === projectName);
   expect(project.student_count).toBe(2);
+
+  await page.getByRole("link", { name: /個人編輯/ }).click();
+  await expect(page.getByText("Alice", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "製作教學" }).click();
+  await expect(page.locator(".driver-popover")).toContainText("輸出進度");
+  await expect(page.locator(".driver-popover")).toContainText("已產生 PDF");
+  await closeProductGuide(page);
+
+  await page.locator('[data-guide="review-student-card"]').filter({ hasText: "Alice" }).getByRole("link", { name: "編輯" }).click();
+  await expect(page.getByText("照片管理")).toBeVisible();
+  await page.getByRole("button", { name: "製作教學" }).click();
+  await expect(page.locator(".driver-popover")).toContainText("預覽與頁面");
+  await expect(page.locator(".driver-popover")).toContainText("左側會顯示");
+  await closeProductGuide(page);
+
+  const studentTextArea = page.locator('[data-guide="student-text-fields"] textarea').first();
+  await studentTextArea.fill("學生：");
+  await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
+  await expect(studentTextArea).toHaveValue("學生：{name}");
+  await studentTextArea.fill("");
+  await expect(studentTextArea).toHaveValue("共用 {name}");
+  await waitForResponseAfter(
+    page,
+    response => response.url().includes("/batch/texts") && response.request().method() === "PUT" && response.ok(),
+    () => studentTextArea.fill("個人 {name}"),
+  );
 });
 
 

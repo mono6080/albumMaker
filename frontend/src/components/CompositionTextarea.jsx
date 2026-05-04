@@ -7,13 +7,16 @@
 //    任一條件成立即還原組字前的值
 // 3. 防抖存檔觸發 re-render 打斷輸入 → 組字中不呼叫 onScheduleSave
 
-import { useState, useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
-export default function CompositionTextarea({ value, onChange, onScheduleSave, ...props }) {
+const CompositionTextarea = forwardRef(function CompositionTextarea({ value, onChange, onScheduleSave, ...props }, forwardedRef) {
   const [localValue, setLocalValue] = useState(value ?? "");
+  const textareaRef = useRef(null);
   const isComposingRef = useRef(false);
   const preCompositionValueRef = useRef("");   // 組字開始前的完整文字
   const pageHiddenWhileComposingRef = useRef(false); // 組字中是否發生過頁面隱藏
+
+  useImperativeHandle(forwardedRef, () => textareaRef.current);
 
   // 父層值更新時（非組字中）同步本地顯示
   useEffect(() => {
@@ -37,13 +40,14 @@ export default function CompositionTextarea({ value, onChange, onScheduleSave, .
   return (
     <textarea
       {...props}
+      ref={textareaRef}
       value={localValue}
       onChange={event => {
         const val = event.target.value;
         setLocalValue(val);
         if (!isComposingRef.current) {
           onChange(val);
-          onScheduleSave();
+          onScheduleSave?.();
         }
       }}
       onCompositionStart={() => {
@@ -71,8 +75,10 @@ export default function CompositionTextarea({ value, onChange, onScheduleSave, .
 
         setLocalValue(val);
         onChange(val);
-        if (!isValueCorrupted) onScheduleSave(); // 損壞 = 組字被取消，值未真正變更
+        if (!isValueCorrupted) onScheduleSave?.(); // 損壞 = 組字被取消，值未真正變更
       }}
     />
   );
-}
+});
+
+export default CompositionTextarea;

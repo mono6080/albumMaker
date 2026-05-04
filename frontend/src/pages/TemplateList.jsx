@@ -66,12 +66,13 @@ export default function TemplateList() {
       </div>
 
       {/* Create card */}
-      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8 shadow-sm">
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8 shadow-sm" data-guide="template-create-card">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">建立新模板</h2>
         <div className="flex gap-3">
           <input
+            data-guide="template-name-input"
             className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
-            placeholder="模板名稱，例：感官世界 2026.01"
+            placeholder="模板名稱，例：2026-05 中班 感官世界"
             value={name}
             onChange={e => setName(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleCreate()}
@@ -79,6 +80,7 @@ export default function TemplateList() {
           <button
             onClick={handleCreate}
             disabled={creating || !name.trim()}
+            data-guide="template-create-button"
             className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -96,7 +98,7 @@ export default function TemplateList() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {templates.map(t => (
-            <div key={t.id} className="group bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
+            <div key={t.id} className="group bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all" data-guide="template-card">
               <div className="flex items-start justify-between mb-3">
                 <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center">
                   <BookOpen className="w-4 h-4 text-indigo-500" />
@@ -128,7 +130,7 @@ export default function TemplateList() {
                   </button>
                 </div>
               )}
-              <div className="text-xs text-gray-400 mb-4">
+              <div className="text-xs text-gray-400 mb-4" data-guide="template-card-counts">
                 <span>{t.page_count} 頁</span>
                 <span className="mx-1">·</span>
                 <span className="inline-flex items-center gap-1">
@@ -140,6 +142,7 @@ export default function TemplateList() {
               </div>
               <Link
                 to={`/templates/${t.id}/edit`}
+                data-guide="template-edit-link"
                 className="flex items-center justify-center gap-2 w-full bg-indigo-50 text-indigo-700 rounded-xl py-2 text-sm font-medium hover:bg-indigo-100 transition-colors"
               >
                 <Pencil className="w-3.5 h-3.5" />

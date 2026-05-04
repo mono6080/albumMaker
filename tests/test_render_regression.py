@@ -76,6 +76,26 @@ def test_render_page_label_text_override_changes_text_region():
     assert ImageChops.difference(short_text, long_text).getbbox() is not None
 
 
+def test_render_page_empty_label_text_falls_back_to_template_text():
+    layout = load_layout()
+    label_box = (58, 250, 358, 332)
+
+    inherited_text = render_page(
+        layout,
+        student_name="Ada",
+        page_data={},
+        page_index=0,
+    ).crop(label_box)
+    empty_override_text = render_page(
+        layout,
+        student_name="Ada",
+        page_data={"label_texts": {"1": ""}},
+        page_index=0,
+    ).crop(label_box)
+
+    assert ImageChops.difference(inherited_text, empty_override_text).getbbox() is None
+
+
 def test_render_page_text_shadow_changes_label_and_bubble_regions():
     layout = load_layout()
     shadow_layout = deepcopy(layout)

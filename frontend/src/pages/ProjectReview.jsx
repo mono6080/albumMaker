@@ -8,9 +8,62 @@ import { apiClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import {
-  ChevronRight, Download, Loader2, Eye, Pencil, Package,
+  ChevronRight, CircleHelp, Download, Loader2, Eye, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
 } from "lucide-react";
+import { startProductGuide } from "../utils/productGuide";
+
+const PROJECT_REVIEW_GUIDE_STEPS = [
+  {
+    element: '[data-guide="review-progress"]',
+    title: "輸出進度",
+    description: "這裡會顯示已產生 PDF 的學生數，方便確認還有誰沒完成。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="review-student-card"]',
+    title: "學生卡片",
+    description: "每張卡片是一位學生，可看縮圖、進入編輯、預覽或下載。",
+    side: "top",
+    align: "start",
+  },
+  {
+    element: '[data-guide="review-edit-student"]',
+    title: "編輯學生",
+    description: "進入個人編輯頁，上傳照片、覆寫文字並確認預覽。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="review-preview-student"]',
+    title: "快速預覽",
+    description: "不進入編輯頁也能快速打開此學生的頁面預覽。",
+    side: "bottom",
+    align: "center",
+  },
+  {
+    element: '[data-guide="review-download-student"]',
+    title: "下載單位學生",
+    description: "只產出並下載這位學生的 PDF。",
+    side: "bottom",
+    align: "end",
+  },
+  {
+    element: '[data-guide="review-download-all"]',
+    title: "下載全部 ZIP",
+    description: "所有學生確認完成後，用這裡批次產生並下載 ZIP。",
+    side: "bottom",
+    align: "end",
+  },
+  {
+    element: '[data-guide="review-comments"]',
+    title: "審閱意見",
+    description: "老師可以在這裡查看主管或設計端留下的審閱意見。",
+    side: "top",
+    align: "start",
+  },
+];
 
 export default function ProjectReview() {
   const { id } = useParams();
@@ -162,6 +215,10 @@ export default function ProjectReview() {
     }
   };
 
+  const startGuide = () => {
+    startProductGuide(PROJECT_REVIEW_GUIDE_STEPS);
+  };
+
   if (loadError) return (
     <div className="flex flex-col items-center justify-center h-64 gap-3">
       <p className="text-red-500 font-medium">{loadError}</p>
@@ -214,8 +271,17 @@ export default function ProjectReview() {
             </div>
           )}
           <button
+            type="button"
+            onClick={startGuide}
+            className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors shadow-sm flex-shrink-0"
+          >
+            <CircleHelp className="w-4 h-4" />
+            <span>製作教學</span>
+          </button>
+          <button
             onClick={handleDownloadAll}
             disabled={renderingAll || project.students.length === 0}
+            data-guide="review-download-all"
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
           >
             {renderingAll
@@ -234,7 +300,7 @@ export default function ProjectReview() {
 
       {/* Progress bar */}
       {project.students.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-6 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-6 shadow-sm" data-guide="review-progress">
           <div className="flex justify-between text-sm mb-2">
             <span className="text-gray-600">已產生</span>
             <span className="font-medium text-gray-900">{doneCount} / {project.students.length}</span>
@@ -321,6 +387,7 @@ export default function ProjectReview() {
             return (
               <div
                 key={student.id}
+                data-guide="review-student-card"
                 style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
                 className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all hover:shadow-md ${
                   isDone ? "border-emerald-100" : "border-gray-200"
@@ -368,6 +435,7 @@ export default function ProjectReview() {
                   <div className="flex gap-2">
                     <Link
                       to={`/projects/${id}/students/${student.id}/edit`}
+                      data-guide="review-edit-student"
                       className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
                     >
                       <Pencil className="w-3 h-3" />
@@ -375,6 +443,7 @@ export default function ProjectReview() {
                     </Link>
                     <button
                       onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
+                      data-guide="review-preview-student"
                       className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
                     >
                       <Eye className="w-3 h-3" />
@@ -383,6 +452,7 @@ export default function ProjectReview() {
                     <button
                       onClick={() => handleDownloadOne(student.id)}
                       disabled={isStudentRendering}
+                      data-guide="review-download-student"
                       className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors ml-auto"
                     >
                       {isStudentRendering
@@ -401,7 +471,7 @@ export default function ProjectReview() {
 
       {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
       {(canComment || currentUser?.role === "teacher") && (
-        <div className="mt-8 bg-white border border-gray-200 rounded-2xl shadow-sm p-5">
+        <div className="mt-8 bg-white border border-gray-200 rounded-2xl shadow-sm p-5" data-guide="review-comments">
           <div className="flex items-center gap-2 mb-4">
             <MessageCircle className="w-4 h-4 text-violet-500" />
             <h3 className="font-semibold text-gray-800 text-sm">審閱意見</h3>

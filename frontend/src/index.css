@@ -10,6 +10,34 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.driver-popover.album-guide-popover {
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.22);
+  font-family: system-ui, 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+}
+
+.driver-popover.album-guide-popover .driver-popover-title {
+  font-size: 15px;
+  color: #111827;
+}
+
+.driver-popover.album-guide-popover .driver-popover-description {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #475569;
+}
+
+.driver-popover.album-guide-popover .driver-popover-progress-text {
+  color: #64748b;
+}
+
+.driver-popover.album-guide-popover .driver-popover-next-btn,
+.driver-popover.album-guide-popover .driver-popover-prev-btn {
+  border-radius: 6px;
+  text-shadow: none;
+}
+
 /* iOS Safari：font-size < 16px 的輸入框會觸發頁面自動縮放，統一設為 16px 避免 */
 @supports (-webkit-touch-callout: none) {
   input, textarea, select {

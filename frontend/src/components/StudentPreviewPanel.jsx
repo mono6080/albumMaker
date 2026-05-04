@@ -18,9 +18,11 @@ export default function StudentPreviewPanel({
 }) {
   return (
     <div className="space-y-3">
-      <AlbumPageNav page={activePage} total={pageCount} onChange={onPageChange} />
+      <div data-guide="student-page-nav">
+        <AlbumPageNav page={activePage} total={pageCount} onChange={onPageChange} />
+      </div>
       {/* 刪除 / 還原頁面 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between" data-guide="student-page-skip">
         {isCurrentPageSkipped ? (
           <div className="flex items-center gap-2 flex-1">
             <span className="text-xs text-red-400 font-medium">此頁已刪除（不會出現在 PDF）</span>
@@ -40,7 +42,7 @@ export default function StudentPreviewPanel({
           </button>
         )}
       </div>
-      <div className={`relative ${isCurrentPageSkipped ? "opacity-40" : ""}`}>
+      <div className={`relative ${isCurrentPageSkipped ? "opacity-40" : ""}`} data-guide="student-page-preview">
         <PagePreview
           projectId={projectId}
           studentId={studentId}

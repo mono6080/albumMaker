@@ -14,14 +14,98 @@ import { fetchTemplate } from "../api/templateApi";
 import { buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
-  Users, Plus, ChevronRight, X, Type,
+  Users, Plus, ChevronRight, X, Type, CircleHelp,
   Eye, Loader2, RefreshCw, Pencil, Check,
 } from "lucide-react";
 import PanelSwitcher from "../components/PanelSwitcher";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import AlbumPageNav from "../components/AlbumPageNav";
 import ConfirmModal from "../components/ConfirmModal";
-import CompositionTextarea from "../components/CompositionTextarea";
+import TextVariableTextarea from "../components/TextVariableTextarea";
+import { startProductGuide } from "../utils/productGuide";
+
+const BATCH_STUDENT_GUIDE_STEPS = [
+  {
+    element: '[data-guide="batch-student-input"]',
+    title: "新增學生名單",
+    description: "把學生姓名貼在這裡，可以一行一位，也可以用逗號或頓號分隔。",
+    side: "right",
+    align: "start",
+  },
+  {
+    element: '[data-guide="batch-add-students"]',
+    title: "新增學生",
+    description: "按下新增後，系統會自動略過空白與重複姓名。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-student-list"]',
+    title: "已登記學生",
+    description: "新增後在這裡檢查人數、修改姓名或刪除不需要的學生。",
+    side: "right",
+    align: "start",
+  },
+  {
+    element: '[data-guide="batch-text-tab"]',
+    title: "整班共用文字",
+    description: "切到文字頁籤後，可以填每位學生共用的頁面文字。",
+    side: "bottom",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-review-link"]',
+    title: "進入個人編輯",
+    description: "學生名單與共用文字確認後，進入個人編輯逐位補照片與輸出。",
+    side: "left",
+    align: "center",
+  },
+];
+
+const BATCH_TEXT_GUIDE_STEPS = [
+  {
+    element: '[data-guide="batch-page-nav"]',
+    title: "切換頁面",
+    description: "切換不同頁面，逐頁檢查需要填的文字欄位。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="batch-text-fields"]',
+    title: "整班共用文字",
+    description: "這裡填入全班共用文案，清空時會恢復模板文字，{name} 會在輸出時自動替換姓名。",
+    side: "left",
+    align: "start",
+  },
+  {
+    element: '[data-guide="batch-text-insert-name"]',
+    title: "插入 {name}",
+    description: "點一下就能在游標位置加入姓名變數，不需要手動輸入大括號。",
+    side: "bottom",
+    align: "end",
+  },
+  {
+    element: '[data-guide="batch-preview-panel"]',
+    title: "樣版預覽",
+    description: "右側預覽會套用目前文字，確認文字位置與內容是否正確。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-students-tab"]',
+    title: "回到學生名單",
+    description: "需要新增或修改學生時，回到登記學生頁籤。",
+    side: "bottom",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-review-link"]',
+    title: "進入個人編輯",
+    description: "共用文字填完後，進入個人編輯逐位補照片、覆寫文字或輸出 PDF。",
+    side: "left",
+    align: "center",
+  },
+];
 
 export default function ProjectBatch() {
   const { id: projectId } = useParams();
@@ -36,6 +120,10 @@ export default function ProjectBatch() {
   const handleMobileTabChange = (selectedTab) => {
     setMobileTab(selectedTab);
     setDesktopTab(selectedTab === "students" ? "students" : "texts");
+  };
+
+  const startGuide = () => {
+    startProductGuide(desktopTab === "students" ? BATCH_STUDENT_GUIDE_STEPS : BATCH_TEXT_GUIDE_STEPS);
   };
 
   // 學生名單 tab 狀態
@@ -171,46 +259,52 @@ export default function ProjectBatch() {
 
   const editorPanel = (
     <div className="space-y-3">
-      <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
+      <div data-guide="batch-page-nav">
+        <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
+      </div>
 
       {activePageLayout?.text_labels?.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="batch-text-fields">
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
               文字 — 第 {activePage + 1} 頁
             </h3>
             <span className="text-xs text-gray-400 hidden sm:inline">
-              （{"{name}"} 會自動代入各學生姓名）
+              （{"{name}"} 會自動代入各學生姓名，清空會恢復模板文字）
             </span>
           </div>
           <div className="space-y-3">
-            {activePageLayout.text_labels.map(label => (
-              <div key={label.id} className="flex gap-3">
-                <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
-                  <span className="text-xs font-bold text-indigo-400">{label.id}</span>
-                </div>
-                <div className="flex-1">
-                  <CompositionTextarea
-                    rows={2}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
-                    value={getLabelText(activePage, label.id)}
-                    onChange={value => setLabelText(activePage, label.id, value)}
-                    onScheduleSave={scheduleSave}
-                    maxLength={200}
-                  />
-                  {(() => {
-                    const len = getLabelText(activePage, label.id).length;
-                    if (len === 0) return null;
-                    return (
+            {activePageLayout.text_labels.map(label => {
+              const templateDefaultText = label.text ?? "";
+              const currentValue = getLabelText(activePage, label.id);
+              const len = currentValue.length;
+              return (
+                <div key={label.id} className="flex gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
+                    <span className="text-xs font-bold text-indigo-400">{label.id}</span>
+                  </div>
+                  <div className="flex-1">
+                    <TextVariableTextarea
+                      rows={2}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
+                      value={currentValue}
+                      fallbackValue={templateDefaultText}
+                      defaultText={templateDefaultText}
+                      onChange={value => setLabelText(activePage, label.id, value)}
+                      onScheduleSave={scheduleSave}
+                      buttonGuideId="batch-text-insert-name"
+                      maxLength={200}
+                    />
+                    {len > 0 && (
                       <div className={`text-right text-xs mt-0.5 ${len >= 180 ? "text-red-500" : "text-gray-300"}`}>
                         {len}/200
                       </div>
-                    );
-                  })()}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : (
@@ -224,7 +318,7 @@ export default function ProjectBatch() {
   // ── 模板預覽面板 ──────────────────────────────────────────────────────────
 
   const previewPanel = (
-    <div className="space-y-3 sticky top-4">
+    <div className="space-y-3 sticky top-4" data-guide="batch-preview-panel">
       <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
       <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
         {/* 預覽標題列 */}
@@ -291,12 +385,22 @@ export default function ProjectBatch() {
         </div>
         <Link
           to={`/projects/${projectId}/review`}
+          data-guide="batch-review-link"
           className="ml-auto flex items-center gap-1 sm:gap-1.5 text-sm bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors flex-shrink-0"
         >
           <span className="hidden sm:inline">個人編輯</span>
           <span className="sm:hidden">編輯</span>
           <ChevronRight className="w-3.5 h-3.5" />
         </Link>
+        <button
+          type="button"
+          onClick={startGuide}
+          className="flex items-center gap-1 sm:gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 sm:px-4 py-2 rounded-xl hover:bg-indigo-100 transition-colors flex-shrink-0"
+        >
+          <CircleHelp className="w-4 h-4" />
+          <span className="hidden sm:inline">製作教學</span>
+          <span className="sm:hidden">教學</span>
+        </button>
       </div>
 
       {/* 行動版分頁切換器 */}
@@ -314,6 +418,7 @@ export default function ProjectBatch() {
       <div className="hidden lg:flex gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
         <button
           onClick={() => setDesktopTab("students")}
+          data-guide="batch-students-tab"
           className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
             desktopTab === "students"
               ? "bg-white text-indigo-700 shadow-sm"
@@ -325,6 +430,7 @@ export default function ProjectBatch() {
         </button>
         <button
           onClick={() => setDesktopTab("texts")}
+          data-guide="batch-text-tab"
           className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
             desktopTab === "texts"
               ? "bg-white text-indigo-700 shadow-sm"
@@ -351,6 +457,7 @@ export default function ProjectBatch() {
             <div className="flex gap-2 sm:gap-3">
               <textarea
                 rows={3}
+                data-guide="batch-student-input"
                 className="flex-1 border border-gray-200 rounded-xl px-3 sm:px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                 placeholder="每行一位，或用逗號 / 頓號分隔"
                 value={studentNamesInput}
@@ -359,6 +466,7 @@ export default function ProjectBatch() {
               <button
                 onClick={handleAddStudents}
                 disabled={isAddingStudents || !studentNamesInput.trim()}
+                data-guide="batch-add-students"
                 className="self-stretch flex items-center gap-2 bg-indigo-600 text-white px-4 sm:px-5 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
               >
                 <Plus className="w-4 h-4" />
@@ -369,7 +477,7 @@ export default function ProjectBatch() {
 
           {/* 已登記學生清單 */}
           {project.students.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+            <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="batch-student-list">
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
                 已登記學生（{project.students.length} 位）
               </div>

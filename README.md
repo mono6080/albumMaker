@@ -132,6 +132,16 @@ GitHub Actions 會在 push / pull request 自動跑同一組 gate。
 
 ---
 
+## 使用教學
+
+- [設計組模板製作使用教學 PDF](docs/template-design-guide-step-by-step-dom.pdf)
+- [設計組模板製作使用教學文字版](docs/template-design-guide.md)
+- [老師製作相冊使用教學 PDF](docs/teacher-album-guide-step-by-step.pdf)
+- [老師製作相冊使用教學網頁版](docs/teacher-album-guide.html)
+- [老師製作相冊使用教學文字版](docs/teacher-album-guide.md)
+
+---
+
 ## Docker 部署
 
 ### 本機測試

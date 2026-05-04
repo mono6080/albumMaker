@@ -47,6 +47,15 @@ def build_content_disposition_header(filename: str) -> str:
 
 # ── 對應文字合併 ───────────────────────────────────────────────────────────────
 
+def _inherited_label_texts(label_texts: dict) -> dict:
+    """空字串代表使用上一級文字，因此合併時不視為覆寫。"""
+    return {
+        str(label_id): text
+        for label_id, text in (label_texts or {}).items()
+        if text not in (None, "")
+    }
+
+
 def merge_project_label_texts_into_pages(
     student_pages_data: list,
     project_label_texts: dict
@@ -67,20 +76,22 @@ def merge_project_label_texts_into_pages(
     merged_pages = []
     for page_data in student_pages_data:
         page_index_key = str(page_data.get("page_index", 0))
-        project_page_label_texts = project_label_texts.get(page_index_key, {})
-        if project_page_label_texts:
+        project_page_label_texts = _inherited_label_texts(project_label_texts.get(page_index_key, {}))
+        student_page_label_texts = _inherited_label_texts(page_data.get("label_texts", {}))
+        if project_page_label_texts or student_page_label_texts:
             # 學生的設定優先；專案設定補足尚未覆寫的對應文字
-            merged_label_texts = {**project_page_label_texts, **page_data.get("label_texts", {})}
+            merged_label_texts = {**project_page_label_texts, **student_page_label_texts}
             page_data = {**page_data, "label_texts": merged_label_texts}
         merged_pages.append(page_data)
 
     # 補充：project_label_texts 中有但學生尚無頁面資料的頁面（如剛建立的學生）
     for page_index_key, page_label_texts in project_label_texts.items():
-        if page_index_key not in student_page_indices:
+        inherited_page_label_texts = _inherited_label_texts(page_label_texts)
+        if page_index_key not in student_page_indices and inherited_page_label_texts:
             merged_pages.append({
                 "page_index": int(page_index_key),
                 "photos": {},
-                "label_texts": page_label_texts,
+                "label_texts": inherited_page_label_texts,
             })
 
     return merged_pages

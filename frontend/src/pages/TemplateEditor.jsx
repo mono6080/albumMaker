@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Group, Transformer } from "react-konva";
-import { BookOpen, Camera, ChevronLeft, ChevronRight, Redo2, Undo2, X } from "lucide-react";
+import { BookOpen, Camera, ChevronLeft, ChevronRight, CircleHelp, Redo2, Undo2, X } from "lucide-react";
 
 import {
   fetchTemplate,
@@ -32,6 +32,7 @@ import {
   toRealCoord,
 } from "../utils/renderLayoutModel";
 import { buildTemplateSpreadPreviewUrl } from "../api/urls";
+import { startProductGuide } from "../utils/productGuide";
 
 function clampValue(value, minValue, maxValue) {
   return Math.max(minValue, Math.min(maxValue, value));
@@ -39,6 +40,65 @@ function clampValue(value, minValue, maxValue) {
 
 const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
 const MAX_LAYOUT_HISTORY = 100;
+
+const EDITOR_GUIDE_STEPS = [
+  {
+    element: '[data-guide="template-photo-count"]',
+    title: "照片總計",
+    description: "這裡統計整份模板的照片格總數，交付前要和企劃需求一致。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="tool-add-photo"]',
+    title: "連續新增照片格",
+    description: "選一次照片格後，可以在畫布上連續點擊新增，不需要每新增一格就重新選工具。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="canvas-frame"]',
+    title: "A4 畫布",
+    description: "背景、照片格、文字和貼圖都在這裡排版。新增元素後切回選取工具再調整。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="upload-background"]',
+    title: "上傳背景",
+    description: "每一頁都要各自上傳背景圖，建議使用 A4 直式比例。",
+    side: "right",
+    align: "center",
+  },
+  {
+    element: '[data-guide="page-list"]',
+    title: "頁面管理",
+    description: "在這裡切換頁面或新增頁。切到不同頁面後再編輯該頁內容。",
+    side: "right",
+    align: "start",
+  },
+  {
+    element: '[data-guide="history-actions"]',
+    title: "復原與重做",
+    description: "大幅調整前後可用復原、重做回到上一個版面狀態。",
+    side: "bottom",
+    align: "end",
+  },
+  {
+    element: '[data-guide="spread-preview"]',
+    title: "雙頁預覽",
+    description: "用左右頁合併預覽檢查整本節奏、留白、照片數與主色是否平衡。",
+    side: "bottom",
+    align: "end",
+  },
+  {
+    element: '[data-guide="property-region"]',
+    title: "屬性面板",
+    description: "點選畫布元素後，這裡會出現位置、尺寸、文字、陰影等精準設定。",
+    side: "left",
+    align: "center",
+  },
+];
 
 function generateElementId() {
   return Math.floor(Math.random() * 90000) + 10000;
@@ -183,11 +243,12 @@ export default function TemplateEditor() {
   const commitPageLayout = useCallback((layoutUpdater) => {
     if (!currentPage || !pageLayout) return;
     const pageId = currentPage.id;
-    const nextLayout = typeof layoutUpdater === "function" ? layoutUpdater(pageLayout) : layoutUpdater;
-    if (!nextLayout || layoutsEqual(pageLayout, nextLayout)) return;
+    const baseLayout = draftLayouts.current[pageId] ?? pageLayout;
+    const nextLayout = typeof layoutUpdater === "function" ? layoutUpdater(baseLayout) : layoutUpdater;
+    if (!nextLayout || layoutsEqual(baseLayout, nextLayout)) return;
 
     const history = getPageHistory(layoutHistories.current, pageId);
-    history.undo.push(cloneLayout(pageLayout));
+    history.undo.push(cloneLayout(baseLayout));
     if (history.undo.length > MAX_LAYOUT_HISTORY) history.undo.shift();
     history.redo = [];
 
@@ -227,6 +288,10 @@ export default function TemplateEditor() {
 
   const canUndo = historyAvailability.canUndo;
   const canRedo = historyAvailability.canRedo;
+
+  const startEditorGuide = useCallback(() => {
+    startProductGuide(EDITOR_GUIDE_STEPS);
+  }, []);
 
   // ── 頁面操作 ──────────────────────────────────────────────────────────────
 
@@ -773,13 +838,14 @@ export default function TemplateEditor() {
             <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
               <BookOpen className="w-5 h-5 text-indigo-600" />
               <h2 className="font-semibold">雙頁預覽</h2>
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-gray-500" data-guide="spread-page-range">
                 第 {spreadStartIndex + 1}{spreadEndIndex > spreadStartIndex ? `-${spreadEndIndex + 1}` : ""} 頁
               </span>
               <button
                 type="button"
                 onClick={() => setSpreadPreviewOpen(false)}
                 aria-label="關閉雙頁預覽"
+                data-guide="spread-close"
                 className="ml-auto w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
               >
                 <X className="w-4 h-4" />
@@ -791,6 +857,7 @@ export default function TemplateEditor() {
                 key={spreadPreviewUrl}
                 src={spreadPreviewUrl}
                 alt="雙頁合併預覽"
+                data-guide="spread-preview-image"
                 className="block mx-auto max-w-full max-h-[76vh] bg-white border border-gray-300"
               />
             </div>
@@ -803,6 +870,7 @@ export default function TemplateEditor() {
                   setSpreadPreviewTimestamp(Date.now());
                 }}
                 disabled={spreadStartIndex <= 0}
+                data-guide="spread-prev"
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -815,6 +883,7 @@ export default function TemplateEditor() {
                   setSpreadPreviewTimestamp(Date.now());
                 }}
                 disabled={spreadStartIndex >= lastSpreadStartIndex}
+                data-guide="spread-next"
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
               >
                 下一組
@@ -825,17 +894,26 @@ export default function TemplateEditor() {
         </div>
       )}
       {/* 頂部標題列 */}
-      <div className="flex items-center gap-3 mb-3 flex-shrink-0">
+      <div className="flex items-center gap-3 mb-3 flex-shrink-0" data-guide="editor-header">
         <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
           ← 返回
         </button>
         <h1 className="text-lg font-bold">{template.name}</h1>
         <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">模板編輯器</span>
-        <span className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
+        <span data-guide="template-photo-count" className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
           <Camera className="w-3 h-3" />
           照片總計 {totalPhotoCount} 張
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2" data-guide="top-actions">
+          <button
+            type="button"
+            onClick={startEditorGuide}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+          >
+            <CircleHelp className="w-4 h-4" />
+            製作教學
+          </button>
+          <span className="inline-flex items-center gap-2" data-guide="history-actions">
           <button
             type="button"
             onClick={undoLayout}
@@ -856,10 +934,12 @@ export default function TemplateEditor() {
           >
             <Redo2 className="w-4 h-4" />
           </button>
+          </span>
           <button
             type="button"
             onClick={handleOpenSpreadPreview}
             disabled={isSaving || template.pages.length === 0}
+            data-guide="spread-preview"
             className="inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             <BookOpen className="w-4 h-4" />
@@ -876,6 +956,7 @@ export default function TemplateEditor() {
           <button
             onClick={handleSaveLayout}
             disabled={isSaving}
+            data-guide="save-template"
             className="px-4 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {isSaving ? "儲存中..." : "儲存"}
@@ -899,7 +980,7 @@ export default function TemplateEditor() {
         {/* 左側工具欄 */}
         <div className="flex-shrink-0 w-40 flex flex-col gap-4" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
           {/* 工具 */}
-          <div>
+          <div data-guide="tool-panel">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">工具</p>
             <div className="flex flex-col gap-1">
               {[
@@ -910,6 +991,7 @@ export default function TemplateEditor() {
                 <button
                   key={tool.key}
                   onClick={() => setActiveTool(tool.key)}
+                  data-guide={`tool-${tool.key === "addPhoto" ? "add-photo" : tool.key === "addText" ? "add-text" : "select"}`}
                   className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
                     activeTool === tool.key
                       ? "bg-indigo-600 text-white border-indigo-600"
@@ -926,7 +1008,7 @@ export default function TemplateEditor() {
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">素材</p>
             <div className="flex flex-col gap-1">
-              <label className="px-3 py-1.5 rounded text-sm text-left border bg-white hover:bg-gray-50 cursor-pointer text-gray-700 border-gray-200 transition-colors">
+              <label data-guide="upload-background" className="px-3 py-1.5 rounded text-sm text-left border bg-white hover:bg-gray-50 cursor-pointer text-gray-700 border-gray-200 transition-colors">
                 ↑ 上傳背景
                 <input type="file" accept="image/*" className="hidden" onChange={handleBackgroundSelect} />
               </label>
@@ -947,7 +1029,7 @@ export default function TemplateEditor() {
           </div>
 
           {/* 頁面 */}
-          <div className="flex flex-col flex-1 min-h-0">
+          <div className="flex flex-col flex-1 min-h-0" data-guide="page-list">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">頁面</p>
             <div className="flex flex-col gap-1 overflow-y-auto flex-1">
               {template.pages.map((templatePage, pageTabIndex) => (
@@ -965,6 +1047,7 @@ export default function TemplateEditor() {
               ))}
               <button
                 onClick={handleAddPage}
+                data-guide="add-page"
                 className="px-3 py-1.5 rounded text-sm text-left border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 transition-colors"
               >
                 ＋ 新增頁
@@ -984,6 +1067,7 @@ export default function TemplateEditor() {
           <div
             style={{ cursor: activeTool === "select" ? "default" : "crosshair" }}
             className="border border-gray-300 rounded overflow-hidden bg-white select-none"
+            data-guide="canvas-frame"
           >
             <Stage
               ref={stageRef}
@@ -1079,7 +1163,7 @@ export default function TemplateEditor() {
         </div>
 
         {/* 右側：屬性面板 */}
-        <div className="flex-1 min-w-0 overflow-y-auto" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
+        <div className="flex-1 min-w-0 overflow-y-auto" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }} data-guide="property-region">
           {selectedElement && selectedItem ? (
             <PropertyPanel
               selectedElement={selectedElement}
