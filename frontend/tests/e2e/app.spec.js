@@ -134,11 +134,11 @@ test("admin can create a project and batch students from the browser", async ({ 
   const projectSuffix = `蘋果班 ${Date.now()}`;
 
   await loginViaApi(page);
-  await createTemplateWithLayout(page, templateName, layout);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
 
   await page.goto("/projects");
   await page.getByRole("button", { name: "新建專案" }).click();
-  await page.locator("select").selectOption({ label: templateName });
+  await page.locator("select").selectOption(String(templateId));
   await page.getByPlaceholder("例：蘋果班 2026.01").fill(projectSuffix);
   await page.getByRole("button", { name: "建立" }).click();
 
