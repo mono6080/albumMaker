@@ -62,6 +62,7 @@ Student page data schema (pages_data_json is a list, one item per page):
 """
 
 import io
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -75,7 +76,7 @@ from services.element_renderers import (
 )
 
 BACKEND_DIR = Path(__file__).parent.parent
-UPLOADS_DIR = BACKEND_DIR / "uploads"
+UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uploads"))
 
 # 各元素類型未設定 z_index 時的預設基底（維持向後相容的渲染順序）
 _TYPE_Z_BASE = {"photo": 0, "bubble": 100, "text": 200, "sticker": 300}

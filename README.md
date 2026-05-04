@@ -111,6 +111,25 @@ npm run dev
 
 Windows 可直接雙擊 `start.bat` 啟動後端。
 
+### 測試與品質檢查
+
+```bash
+# 後端測試 / lint / typecheck
+python -m pytest -q
+python -m ruff check backend tests
+python -m mypy backend tests
+
+# 前端 lint / render parity / production build
+cd frontend
+npm run lint
+npm run test:unit
+npm run test:render-parity
+npm run test:e2e
+npm run build
+```
+
+GitHub Actions 會在 push / pull request 自動跑同一組 gate。
+
 ---
 
 ## Docker 部署
@@ -188,6 +207,7 @@ docker compose up -d --build
 | POST | `/api/templates/{id}/stickers` | 上傳貼圖素材（admin / art_team） |
 | GET 🔓 | `/api/templates/{id}/stickers/{filename}` | 貼圖檔案 |
 | GET 🔓 | `/api/templates/{id}/pages/{page_id}/preview` | 頁面預覽圖 |
+| GET 🔓 | `/api/templates/{id}/spread-preview/{start_page_index}` | 雙頁合併預覽圖 |
 
 ### 專案 / 學生
 

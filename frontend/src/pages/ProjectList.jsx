@@ -227,7 +227,9 @@ export default function ProjectList() {
               >
                 <option value="">請選擇...</option>
                 {templates.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
+                  <option key={t.id} value={t.id}>
+                    {t.name}（{t.page_count} 頁 / {t.photo_count ?? 0} 張照片）
+                  </option>
                 ))}
               </select>
             </div>

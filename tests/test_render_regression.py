@@ -3,6 +3,7 @@
 # hash, so the test catches blank/missing regions without becoming font brittle.
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from PIL import ImageChops
@@ -73,3 +74,31 @@ def test_render_page_label_text_override_changes_text_region():
     ).crop(label_box)
 
     assert ImageChops.difference(short_text, long_text).getbbox() is not None
+
+
+def test_render_page_text_shadow_changes_label_and_bubble_regions():
+    layout = load_layout()
+    shadow_layout = deepcopy(layout)
+    shadow_fields = {
+        "text_shadow_enabled": True,
+        "text_shadow_color": "#FF0000",
+        "text_shadow_opacity": 220,
+        "text_shadow_offset_x": 7,
+        "text_shadow_offset_y": 6,
+        "text_shadow_blur": 0,
+    }
+    shadow_layout["text_labels"][0].update(shadow_fields)
+    shadow_layout["text_bubbles"][0].update(shadow_fields)
+
+    page_data = {"label_texts": {"1": "Shadow label"}}
+    plain = render_page(layout, student_name="Ada", page_data=page_data, page_index=0)
+    shadowed = render_page(shadow_layout, student_name="Ada", page_data=page_data, page_index=0)
+
+    assert ImageChops.difference(
+        plain.crop((58, 250, 380, 350)),
+        shadowed.crop((58, 250, 380, 350)),
+    ).getbbox() is not None
+    assert ImageChops.difference(
+        plain.crop((246, 58, 390, 150)),
+        shadowed.crop((246, 58, 390, 150)),
+    ).getbbox() is not None

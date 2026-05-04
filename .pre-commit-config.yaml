@@ -9,7 +9,7 @@ repos:
     rev: v1.11.2
     hooks:
       - id: mypy
-        args: ["--config-file=pyproject.toml"]
+        args: ["--config-file=pyproject.toml", "backend", "tests"]
         additional_dependencies:
           - fastapi
           - sqlalchemy
@@ -21,4 +21,4 @@ repos:
           - httpx
           - python-multipart
         pass_filenames: false
-        files: ^backend/
+        files: ^(backend|tests)/

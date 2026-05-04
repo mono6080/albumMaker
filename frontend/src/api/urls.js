@@ -10,6 +10,10 @@ const API_BASE = "/api";
 export const buildTemplatePagePreviewUrl = (templateId, pageId) =>
   `${API_BASE}/templates/${templateId}/pages/${pageId}/preview`;
 
+/** 模板雙頁合併預覽端點 URL */
+export const buildTemplateSpreadPreviewUrl = (templateId, startPageIndex) =>
+  `${API_BASE}/templates/${templateId}/spread-preview/${startPageIndex}`;
+
 /** 模板貼圖素材的存取 URL */
 export const buildStickerUrl = (templateId, filename) =>
   `${API_BASE}/templates/${templateId}/stickers/${filename}`;

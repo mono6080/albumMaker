@@ -35,6 +35,8 @@ server.log
 .tmp/
 ref_pages/
 backend/test_screenshots/
+frontend/test-results/
+frontend/playwright-report/
 backend/bg_*.png
 backend/color_test_*.jpg
 backend/final_preview_*.jpg

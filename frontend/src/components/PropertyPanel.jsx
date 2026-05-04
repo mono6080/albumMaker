@@ -37,6 +37,61 @@ function FontPicker({ value, onChange }) {
   );
 }
 
+function TextShadowControls({ elementData, onPropertyChange }) {
+  const enabled = !!(elementData.text_shadow_enabled ?? false);
+
+  return (
+    <div className="space-y-2 pt-1 border-t border-gray-100">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={event => onPropertyChange({ text_shadow_enabled: event.target.checked })}
+        />
+        <span className="text-sm font-medium text-gray-700">文字陰影</span>
+      </label>
+
+      {enabled && (
+        <div className="space-y-2 pl-1">
+          <ColorPicker
+            label="陰影顏色"
+            value={elementData.text_shadow_color ?? "#000000"}
+            onChange={colorValue => onPropertyChange({ text_shadow_color: colorValue })}
+          />
+
+          {[
+            { key: "text_shadow_offset_x", label: "偏移 X", defaultValue: 3, min: -30, max: 30 },
+            { key: "text_shadow_offset_y", label: "偏移 Y", defaultValue: 3, min: -30, max: 30 },
+            { key: "text_shadow_blur",     label: "模糊",   defaultValue: 4, min: 0,   max: 40 },
+          ].map(shadowField => (
+            <label key={shadowField.key} className="flex flex-col gap-0.5">
+              <span className="text-xs text-gray-500">{shadowField.label}</span>
+              <SliderInput
+                min={shadowField.min}
+                max={shadowField.max}
+                value={elementData[shadowField.key] ?? shadowField.defaultValue}
+                onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
+              />
+            </label>
+          ))}
+
+          <label className="flex flex-col gap-0.5">
+            <span className="text-xs text-gray-500">不透明度（%）</span>
+            <SliderInput
+              min={0}
+              max={100}
+              value={Math.round(((elementData.text_shadow_opacity ?? 120) / 255) * 100)}
+              onChange={event => onPropertyChange({
+                text_shadow_opacity: Math.round(Number(event.target.value) / 100 * 255),
+              })}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayerChange }) {
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
@@ -74,23 +129,38 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
       </div>
 
       {/* 通用：位置與尺寸 */}
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          { key: "x",      label: "X 位置" },
-          { key: "y",      label: "Y 位置" },
-          { key: "width",  label: "寬度" },
-          { key: "height", label: "高度" },
-        ].map(field => (
-          <label key={field.key} className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">{field.label}</span>
-            <input
-              type="number"
-              value={elementData[field.key] ?? 0}
-              onChange={event => onPropertyChange({ [field.key]: Number(event.target.value) })}
-              className="border rounded px-2 py-1 text-sm"
-            />
-          </label>
-        ))}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-gray-500">位置與尺寸</span>
+          <button
+            type="button"
+            onClick={() => onPropertyChange({
+              width: elementData.height ?? 0,
+              height: elementData.width ?? 0,
+            })}
+            className="px-2 py-1 text-xs rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+          >
+            翻轉長寬
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { key: "x",      label: "X 位置" },
+            { key: "y",      label: "Y 位置" },
+            { key: "width",  label: "寬度" },
+            { key: "height", label: "高度" },
+          ].map(field => (
+            <label key={field.key} className="flex flex-col gap-1">
+              <span className="text-xs text-gray-500">{field.label}</span>
+              <input
+                type="number"
+                value={elementData[field.key] ?? 0}
+                onChange={event => onPropertyChange({ [field.key]: Number(event.target.value) })}
+                className="border rounded px-2 py-1 text-sm"
+              />
+            </label>
+          ))}
+        </div>
       </div>
 
       {/* 通用：旋轉角度 */}
@@ -255,6 +325,8 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
           />
 
+          <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />
+
           <div className="space-y-2 pt-1 border-t border-gray-100">
             <span className="text-xs text-gray-500 block">外框</span>
             <div className="flex items-center gap-3">
@@ -350,6 +422,8 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             value={elementData.font_color ?? "#333333"}
             onChange={colorValue => onPropertyChange({ font_color: colorValue })}
           />
+
+          <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />
 
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-500">行距</span>

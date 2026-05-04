@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { fetchAllTemplates, createTemplate, deleteTemplate, renameTemplate } from "../api/templateApi";
-import { LayoutTemplate, Plus, Pencil, Trash2, BookOpen, Check, X } from "lucide-react";
+import { LayoutTemplate, Plus, Pencil, Trash2, BookOpen, Check, Images, X } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 
@@ -129,7 +129,14 @@ export default function TemplateList() {
                 </div>
               )}
               <div className="text-xs text-gray-400 mb-4">
-                {t.page_count} 頁 · {new Date(t.created_at).toLocaleDateString("zh-TW")}
+                <span>{t.page_count} 頁</span>
+                <span className="mx-1">·</span>
+                <span className="inline-flex items-center gap-1">
+                  <Images className="w-3 h-3" />
+                  {t.photo_count ?? 0} 張照片
+                </span>
+                <span className="mx-1">·</span>
+                <span>{new Date(t.created_at).toLocaleDateString("zh-TW")}</span>
               </div>
               <Link
                 to={`/templates/${t.id}/edit`}

@@ -3,8 +3,8 @@
 # DATABASE_URL 並建立 engine，conftest 是唯一保證早於測試模組 import 的時機。
 
 import os
-import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 # 為整個 test session 配置一個 repo 內 tmp DB 檔案，避免污染 backend/album_maker.db。
 # 預設不用系統 TEMP，讓 sandbox / CI 權限較受限時也能直接跑 pytest。
@@ -15,7 +15,8 @@ _TEST_TMP_ROOT = Path(
     )
 )
 _TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
-_TEST_TMP_DIR = Path(tempfile.mkdtemp(prefix="album_maker_tests_", dir=str(_TEST_TMP_ROOT)))
+_TEST_TMP_DIR = _TEST_TMP_ROOT / f"album_maker_tests_{uuid4().hex}"
+_TEST_TMP_DIR.mkdir(parents=True, exist_ok=False)
 _TEST_DB_FILE = _TEST_TMP_DIR / "test.db"
 
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_FILE.as_posix()}")

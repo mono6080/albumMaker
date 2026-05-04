@@ -5,8 +5,9 @@
 import io
 import json
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
@@ -17,6 +18,21 @@ from services.render_service import render_page
 from services.storage import get_storage
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
+
+
+def _jpeg_response(image: Image.Image, quality: int = 80) -> StreamingResponse:
+    image_buffer = io.BytesIO()
+    image.convert("RGB").save(image_buffer, format="JPEG", quality=quality)
+    image_buffer.seek(0)
+    return StreamingResponse(image_buffer, media_type="image/jpeg")
+
+
+def _count_template_photo_slots(template: Template) -> int:
+    total = 0
+    for page in template.pages:
+        layout = json.loads(page.layout_json)
+        total += len(layout.get("photo_slots") or [])
+    return total
 
 
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
@@ -34,6 +50,7 @@ def list_templates(
             "name": template.name,
             "created_at": template.created_at,
             "page_count": len(template.pages),
+            "photo_count": _count_template_photo_slots(template),
         }
         for template in all_templates
     ]
@@ -79,6 +96,7 @@ def get_template(
         "id": template.id,
         "name": template.name,
         "created_at": template.created_at,
+        "photo_count": _count_template_photo_slots(template),
         "pages": [
             {
                 "id": page.id,
@@ -255,7 +273,6 @@ def get_sticker(
     storage = get_storage()
     key = get_sticker_key(template_id, filename)
     if not storage.exists(key):
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="找不到貼圖")
     return storage.serve(key)
 
@@ -279,8 +296,42 @@ def preview_template_page(
         page_index=template_page.page_number,
     )
 
-    # 將圖片編碼為 JPEG 串流回傳
-    image_buffer = io.BytesIO()
-    preview_image.save(image_buffer, format="JPEG", quality=80)
-    image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/jpeg")
+    return _jpeg_response(preview_image, quality=80)
+
+
+@router.get("/{template_id}/spread-preview/{start_page_index}")
+def preview_template_spread(
+    template_id: int,
+    start_page_index: int,
+    db: Session = Depends(get_db),
+):
+    """將模板中連續兩頁合併為橫向預覽圖，回傳 JPEG。"""
+    template = get_template_or_404(template_id, db)
+    pages = list(template.pages)
+    if start_page_index < 0 or start_page_index >= len(pages):
+        raise HTTPException(status_code=404, detail="頁面索引超出範圍")
+
+    rendered_pages = []
+    for offset in range(2):
+        page_index = start_page_index + offset
+        if page_index >= len(pages):
+            rendered_pages.append(Image.new("RGB", rendered_pages[0].size, "white"))
+            continue
+
+        template_page = pages[page_index]
+        page_layout = json.loads(template_page.layout_json)
+        rendered_pages.append(
+            render_page(
+                page_layout,
+                "（姓名）",
+                {},
+                page_index=template_page.page_number,
+            ).convert("RGB")
+        )
+
+    page_width, page_height = rendered_pages[0].size
+    spread_image = Image.new("RGB", (page_width * 2, page_height), "white")
+    spread_image.paste(rendered_pages[0], (0, 0))
+    spread_image.paste(rendered_pages[1], (page_width, 0))
+
+    return _jpeg_response(spread_image, quality=82)

@@ -51,4 +51,5 @@ export {
   buildDownloadPdfUrl as downloadPdf,
   buildDownloadAllZipUrl as downloadAllZip,
   buildTemplatePagePreviewUrl as templatePagePreviewUrl,
+  buildTemplateSpreadPreviewUrl as templateSpreadPreviewUrl,
 } from "./api/urls";

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Group, Transformer } from "react-konva";
+import { BookOpen, Camera, ChevronLeft, ChevronRight, Redo2, Undo2, X } from "lucide-react";
 
 import {
   fetchTemplate,
@@ -30,15 +31,45 @@ import {
   toDisplayCoord,
   toRealCoord,
 } from "../utils/renderLayoutModel";
+import { buildTemplateSpreadPreviewUrl } from "../api/urls";
 
 function clampValue(value, minValue, maxValue) {
   return Math.max(minValue, Math.min(maxValue, value));
 }
 
 const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
+const MAX_LAYOUT_HISTORY = 100;
 
 function generateElementId() {
   return Math.floor(Math.random() * 90000) + 10000;
+}
+
+function cloneLayout(layout) {
+  return JSON.parse(JSON.stringify(layout));
+}
+
+function layoutsEqual(leftLayout, rightLayout) {
+  return JSON.stringify(leftLayout) === JSON.stringify(rightLayout);
+}
+
+function getPageHistory(historyStore, pageId) {
+  if (!historyStore[pageId]) {
+    historyStore[pageId] = { undo: [], redo: [] };
+  }
+  return historyStore[pageId];
+}
+
+function isKeyboardInputTarget(target) {
+  const tagName = target?.tagName;
+  return target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+}
+
+function countTemplatePhotoSlots(template, draftLayouts) {
+  if (!template?.pages) return 0;
+  return template.pages.reduce((total, page) => {
+    const layout = draftLayouts[page.id] ?? page.layout;
+    return total + (layout?.photo_slots?.length ?? 0);
+  }, 0);
 }
 
 export default function TemplateEditor() {
@@ -55,11 +86,29 @@ export default function TemplateEditor() {
   const [isSaving, setIsSaving] = useState(false);
   const [bgCropFile, setBgCropFile] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
+  const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
+  const [spreadStartIndex, setSpreadStartIndex] = useState(0);
+  const [spreadPreviewTimestamp, setSpreadPreviewTimestamp] = useState(0);
+  const [totalPhotoCount, setTotalPhotoCount] = useState(0);
 
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
   const stickerFileInputRef = useRef(null);
   const draftLayouts = useRef({});
+  const layoutHistories = useRef({});
+  const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+
+  const refreshHistoryAvailability = useCallback((pageId) => {
+    if (!pageId) {
+      setHistoryAvailability({ canUndo: false, canRedo: false });
+      return;
+    }
+    const history = getPageHistory(layoutHistories.current, pageId);
+    setHistoryAvailability({
+      canUndo: history.undo.length > 0,
+      canRedo: history.redo.length > 0,
+    });
+  }, []);
 
   // ── 背景圖載入 ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -91,13 +140,15 @@ export default function TemplateEditor() {
 
   // 套用單一頁面的 layout 與背景圖，供 loadTemplate 和頁碼切換共用
   const applyPageDisplay = useCallback((page) => {
-    setPageLayout(draftLayouts.current[page.id] ?? page.layout);
+    getPageHistory(layoutHistories.current, page.id);
+    setPageLayout(cloneLayout(draftLayouts.current[page.id] ?? page.layout));
+    refreshHistoryAvailability(page.id);
     setBackgroundUrl(
       page.background_filename
         ? `/api/templates/${templateId}/pages/${page.id}/background?t=${Date.now()}`
         : null
     );
-  }, [templateId]);
+  }, [refreshHistoryAvailability, templateId]);
 
   const loadTemplate = useCallback(() => {
     fetchTemplate(templateId).then(response => {
@@ -122,34 +173,110 @@ export default function TemplateEditor() {
   const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
 
   useEffect(() => {
-    if (currentPage && pageLayout) {
-      draftLayouts.current[currentPage.id] = pageLayout;
+    if (!template) {
+      setTotalPhotoCount(0);
+      return;
     }
-  }, [pageLayout, currentPage]);
+    setTotalPhotoCount(countTemplatePhotoSlots(template, draftLayouts.current));
+  }, [pageLayout, template]);
+
+  const commitPageLayout = useCallback((layoutUpdater) => {
+    if (!currentPage || !pageLayout) return;
+    const pageId = currentPage.id;
+    const nextLayout = typeof layoutUpdater === "function" ? layoutUpdater(pageLayout) : layoutUpdater;
+    if (!nextLayout || layoutsEqual(pageLayout, nextLayout)) return;
+
+    const history = getPageHistory(layoutHistories.current, pageId);
+    history.undo.push(cloneLayout(pageLayout));
+    if (history.undo.length > MAX_LAYOUT_HISTORY) history.undo.shift();
+    history.redo = [];
+
+    const nextSnapshot = cloneLayout(nextLayout);
+    draftLayouts.current[pageId] = nextSnapshot;
+    setPageLayout(nextSnapshot);
+    refreshHistoryAvailability(pageId);
+  }, [currentPage, pageLayout, refreshHistoryAvailability]);
+
+  const undoLayout = useCallback(() => {
+    if (!currentPage || !pageLayout) return;
+    const history = getPageHistory(layoutHistories.current, currentPage.id);
+    if (history.undo.length === 0) return;
+
+    const previousLayout = history.undo.pop();
+    history.redo.push(cloneLayout(pageLayout));
+    const previousSnapshot = cloneLayout(previousLayout);
+    draftLayouts.current[currentPage.id] = previousSnapshot;
+    setPageLayout(previousSnapshot);
+    setSelectedElement(null);
+    refreshHistoryAvailability(currentPage.id);
+  }, [currentPage, pageLayout, refreshHistoryAvailability]);
+
+  const redoLayout = useCallback(() => {
+    if (!currentPage || !pageLayout) return;
+    const history = getPageHistory(layoutHistories.current, currentPage.id);
+    if (history.redo.length === 0) return;
+
+    const nextLayout = history.redo.pop();
+    history.undo.push(cloneLayout(pageLayout));
+    const nextSnapshot = cloneLayout(nextLayout);
+    draftLayouts.current[currentPage.id] = nextSnapshot;
+    setPageLayout(nextSnapshot);
+    setSelectedElement(null);
+    refreshHistoryAvailability(currentPage.id);
+  }, [currentPage, pageLayout, refreshHistoryAvailability]);
+
+  const canUndo = historyAvailability.canUndo;
+  const canRedo = historyAvailability.canRedo;
 
   // ── 頁面操作 ──────────────────────────────────────────────────────────────
 
-  const handleSaveLayout = async () => {
-    if (!template) return;
+  const handleSaveLayout = async ({ showToast = true } = {}) => {
+    if (!template) return false;
     setIsSaving(true);
     try {
       const dirtyPageIds = Object.keys(draftLayouts.current).map(Number);
       if (dirtyPageIds.length === 0) {
-        toast.success("已儲存");
+        if (showToast) toast.success("已儲存");
         setIsSaving(false);
-        return;
+        return true;
       }
+      const savedLayouts = Object.fromEntries(
+        dirtyPageIds.map(pageId => [pageId, cloneLayout(draftLayouts.current[pageId])])
+      );
       await Promise.all(
         template.pages
           .filter(page => dirtyPageIds.includes(page.id))
-          .map(page => updatePageLayout(templateId, page.id, draftLayouts.current[page.id]))
+          .map(page => updatePageLayout(templateId, page.id, savedLayouts[page.id]))
+      );
+      setTemplate(currentTemplate => currentTemplate
+        ? {
+            ...currentTemplate,
+            pages: currentTemplate.pages.map(page => (
+              savedLayouts[page.id]
+                ? { ...page, layout: cloneLayout(savedLayouts[page.id]) }
+                : page
+            )),
+          }
+        : currentTemplate
       );
       dirtyPageIds.forEach(pageId => { delete draftLayouts.current[pageId]; });
-      toast.success("已儲存");
+      if (showToast) toast.success("已儲存");
+      setIsSaving(false);
+      return true;
     } catch {
       toast.error("儲存失敗");
+      setIsSaving(false);
+      return false;
     }
-    setIsSaving(false);
+  };
+
+  const handleOpenSpreadPreview = async () => {
+    if (!template?.pages.length) return;
+    const saved = await handleSaveLayout({ showToast: false });
+    if (!saved) return;
+    setSpreadStartIndex(Math.floor(currentPageIndex / 2) * 2);
+    setSpreadPreviewTimestamp(Date.now());
+    setSpreadPreviewOpen(true);
   };
 
   const handleAddPage = async () => {
@@ -164,6 +291,8 @@ export default function TemplateEditor() {
     setConfirmModal({
       message: "確定刪除此頁？",
       onConfirm: async () => {
+        delete draftLayouts.current[currentPage.id];
+        delete layoutHistories.current[currentPage.id];
         await deleteTemplatePage(templateId, currentPage.id);
         setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
         await loadTemplate();
@@ -201,7 +330,7 @@ export default function TemplateEditor() {
         width: 150, height: 150,
         rotation: 0,
       };
-      setPageLayout(currentLayout => ({
+      commitPageLayout(currentLayout => ({
         ...currentLayout,
         stickers: [...(currentLayout.stickers || []), newSticker],
       }));
@@ -225,7 +354,7 @@ export default function TemplateEditor() {
 
   const updateElement = (elementType, elementId, propertyUpdates) => {
     const arrayKey = ELEMENT_ARRAY_KEY[elementType];
-    setPageLayout(currentLayout => ({
+    commitPageLayout(currentLayout => ({
       ...currentLayout,
       [arrayKey]: (currentLayout[arrayKey] || []).map(
         element => element.id === elementId ? { ...element, ...propertyUpdates } : element
@@ -236,16 +365,16 @@ export default function TemplateEditor() {
   const deleteSelectedElement = useCallback(() => {
     if (!selectedElement) return;
     const arrayKey = ELEMENT_ARRAY_KEY[selectedElement.type];
-    setPageLayout(currentLayout => ({
+    commitPageLayout(currentLayout => ({
       ...currentLayout,
       [arrayKey]: (currentLayout[arrayKey] || []).filter(element => element.id !== selectedElement.id),
     }));
     setSelectedElement(null);
-  }, [selectedElement]);
+  }, [commitPageLayout, selectedElement]);
 
   const handleLayerChange = useCallback((direction) => {
     if (!selectedElement) return;
-    setPageLayout(currentLayout => {
+    commitPageLayout(currentLayout => {
       const sorted = getAllElementsSorted(currentLayout);
       sorted.forEach((item, i) => { item.data = { ...item.data, z_index: i }; });
       const selectedIdx = sorted.findIndex(
@@ -273,19 +402,32 @@ export default function TemplateEditor() {
 
       return applyElementsToLayout(currentLayout, sorted);
     });
-  }, [selectedElement]);
+  }, [commitPageLayout, selectedElement]);
 
-  // Delete / Backspace 鍵盤快捷鍵
+  // Delete / Backspace / Undo / Redo 鍵盤快捷鍵
   useEffect(() => {
     const handleKeyDown = (keyEvent) => {
+      if (isKeyboardInputTarget(document.activeElement)) return;
+      const isUndo = (keyEvent.ctrlKey || keyEvent.metaKey) && !keyEvent.shiftKey && keyEvent.key.toLowerCase() === "z";
+      const isRedo =
+        ((keyEvent.ctrlKey || keyEvent.metaKey) && keyEvent.key.toLowerCase() === "y") ||
+        ((keyEvent.ctrlKey || keyEvent.metaKey) && keyEvent.shiftKey && keyEvent.key.toLowerCase() === "z");
+      if (isUndo) {
+        keyEvent.preventDefault();
+        undoLayout();
+        return;
+      }
+      if (isRedo) {
+        keyEvent.preventDefault();
+        redoLayout();
+        return;
+      }
       if (keyEvent.key !== "Delete" && keyEvent.key !== "Backspace") return;
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       deleteSelectedElement();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [deleteSelectedElement]);
+  }, [deleteSelectedElement, redoLayout, undoLayout]);
 
   // ── Konva Stage 事件：放置元素 or 取消選取 ───────────────────────────────
 
@@ -303,11 +445,10 @@ export default function TemplateEditor() {
         border: true, border_width: 8,
         z_index: getNextZIndex(pageLayout),
       };
-      setPageLayout(currentLayout => ({
+      commitPageLayout(currentLayout => ({
         ...currentLayout,
-        photo_slots: [...currentLayout.photo_slots, newSlot],
+        photo_slots: [...currentLayout.photo_slots, { ...newSlot, z_index: getNextZIndex(currentLayout) }],
       }));
-      setActiveTool("select");
       setSelectedElement({ type: "photo", id: newSlot.id });
       return;
     }
@@ -324,11 +465,10 @@ export default function TemplateEditor() {
         font_family: "msjh", tail_side: "right",
         z_index: getNextZIndex(pageLayout),
       };
-      setPageLayout(currentLayout => ({
+      commitPageLayout(currentLayout => ({
         ...currentLayout,
-        text_bubbles: [...currentLayout.text_bubbles, newBubble],
+        text_bubbles: [...currentLayout.text_bubbles, { ...newBubble, z_index: getNextZIndex(currentLayout) }],
       }));
-      setActiveTool("select");
       setSelectedElement({ type: "bubble", id: newBubble.id });
       return;
     }
@@ -347,11 +487,10 @@ export default function TemplateEditor() {
         line_height: 1.4,
         z_index: getNextZIndex(pageLayout),
       };
-      setPageLayout(currentLayout => ({
+      commitPageLayout(currentLayout => ({
         ...currentLayout,
-        text_labels: [...(currentLayout.text_labels || []), newTextLabel],
+        text_labels: [...(currentLayout.text_labels || []), { ...newTextLabel, z_index: getNextZIndex(currentLayout) }],
       }));
-      setActiveTool("select");
       setSelectedElement({ type: "text", id: newTextLabel.id });
       return;
     }
@@ -422,6 +561,10 @@ export default function TemplateEditor() {
     return (
       <div>
         <h1 className="text-2xl font-bold mb-4">編輯模板：{template.name}</h1>
+        <div className="inline-flex items-center gap-1 text-sm text-gray-500 mb-4">
+          <Camera className="w-4 h-4" />
+          照片總計 0 張
+        </div>
         <button onClick={handleAddPage} className="bg-indigo-600 text-white px-4 py-2 rounded">
           新增第一頁
         </button>
@@ -432,6 +575,20 @@ export default function TemplateEditor() {
   const selectedItem = selectedElement ? getElement(selectedElement) : null;
 
   // ── Stage 元素渲染函式（閉包存取 toDisplayCoord / currentPageIndex 等） ─────
+
+  const getTextShadowProps = (data) => {
+    const shadowEnabled = !!(data.text_shadow_enabled ?? false);
+    if (!shadowEnabled) return {};
+
+    return {
+      shadowEnabled: true,
+      shadowColor: data.text_shadow_color ?? "#000000",
+      shadowOpacity: (data.text_shadow_opacity ?? 120) / 255,
+      shadowOffsetX: toDisplayCoord(data.text_shadow_offset_x ?? 3),
+      shadowOffsetY: toDisplayCoord(data.text_shadow_offset_y ?? 3),
+      shadowBlur: toDisplayCoord(data.text_shadow_blur ?? 4) * 1.74,
+    };
+  };
 
   const renderPhotoSlotNode = (data, elemIndex, isSelected, groupProps) => {
     const displayW = toDisplayCoord(data.width);
@@ -519,6 +676,7 @@ export default function TemplateEditor() {
           align="center"
           verticalAlign="middle"
           wrap="word"
+          {...getTextShadowProps(data)}
           listening={false}
         />
         {isSelected && (
@@ -562,6 +720,7 @@ export default function TemplateEditor() {
           wrap="word"
           lineHeight={data.line_height ?? 1.4}
           letterSpacing={toDisplayCoord(data.letter_spacing ?? 0)}
+          {...getTextShadowProps(data)}
           listening={false}
         />
         {/* 透明點擊感應區 */}
@@ -591,6 +750,10 @@ export default function TemplateEditor() {
     );
   };
 
+  const lastSpreadStartIndex = Math.max(0, Math.floor((template.pages.length - 1) / 2) * 2);
+  const spreadEndIndex = Math.min(spreadStartIndex + 1, template.pages.length - 1);
+  const spreadPreviewUrl = `${buildTemplateSpreadPreviewUrl(templateId, spreadStartIndex)}?t=${spreadPreviewTimestamp}`;
+
   return (
     <div className="flex flex-col">
       <ConfirmModal
@@ -599,6 +762,68 @@ export default function TemplateEditor() {
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
+      {spreadPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="雙頁預覽"
+            className="w-[min(96vw,1200px)] max-h-[92vh] bg-white rounded-lg shadow-xl flex flex-col overflow-hidden"
+          >
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
+              <BookOpen className="w-5 h-5 text-indigo-600" />
+              <h2 className="font-semibold">雙頁預覽</h2>
+              <span className="text-sm text-gray-500">
+                第 {spreadStartIndex + 1}{spreadEndIndex > spreadStartIndex ? `-${spreadEndIndex + 1}` : ""} 頁
+              </span>
+              <button
+                type="button"
+                onClick={() => setSpreadPreviewOpen(false)}
+                aria-label="關閉雙頁預覽"
+                className="ml-auto w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-gray-100 p-3 overflow-auto">
+              <img
+                key={spreadPreviewUrl}
+                src={spreadPreviewUrl}
+                alt="雙頁合併預覽"
+                className="block mx-auto max-w-full max-h-[76vh] bg-white border border-gray-300"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setSpreadStartIndex(index => Math.max(0, index - 2));
+                  setSpreadPreviewTimestamp(Date.now());
+                }}
+                disabled={spreadStartIndex <= 0}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                上一組
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSpreadStartIndex(index => Math.min(lastSpreadStartIndex, index + 2));
+                  setSpreadPreviewTimestamp(Date.now());
+                }}
+                disabled={spreadStartIndex >= lastSpreadStartIndex}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              >
+                下一組
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 頂部標題列 */}
       <div className="flex items-center gap-3 mb-3 flex-shrink-0">
         <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
@@ -606,7 +831,40 @@ export default function TemplateEditor() {
         </button>
         <h1 className="text-lg font-bold">{template.name}</h1>
         <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">模板編輯器</span>
+        <span className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
+          <Camera className="w-3 h-3" />
+          照片總計 {totalPhotoCount} 張
+        </span>
         <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={undoLayout}
+            disabled={!canUndo}
+            aria-label="復原"
+            title="復原 (Ctrl+Z)"
+            className="w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35 disabled:hover:bg-white"
+          >
+            <Undo2 className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={redoLayout}
+            disabled={!canRedo}
+            aria-label="重做"
+            title="重做 (Ctrl+Y / Ctrl+Shift+Z)"
+            className="w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35 disabled:hover:bg-white"
+          >
+            <Redo2 className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenSpreadPreview}
+            disabled={isSaving || template.pages.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <BookOpen className="w-4 h-4" />
+            雙頁預覽
+          </button>
           {selectedElement && (
             <button
               onClick={deleteSelectedElement}
@@ -766,6 +1024,7 @@ export default function TemplateEditor() {
                 )}
 
                 {/* 所有元素依 z_index 統一排序渲染 */}
+                {/* eslint-disable-next-line react-hooks/refs */}
                 {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
                   const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
                   const groupProps = makeGroupProps(type, data);

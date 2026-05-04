@@ -351,7 +351,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
   shadow/text 行為（§5.1）；換 fabric / Pixi 等於重做整層視覺對齊。
 - **切換 backend framework**：FastAPI Depends 注入鏈（`get_current_user` /
   `require_role`）滲透到每個路由。
-- **完整測試覆蓋**：見 §10；目前只有後端 pytest smoke，沒有前端測試與 CI。
+- **完整測試覆蓋**：見 §10；目前有後端 pytest smoke/edge、前端 unit、
+  render parity、Playwright E2E 與 CI gate；仍沒有 vitest / RTL 元件測試。
 
 ## 9. Known Unknowns / Open Questions
 
@@ -430,7 +431,8 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
   z-index 排序與元素 display model；`npm run test:render-parity` 會用同一份
   `render_smoke_layout.json` 檢查前端 stage model，並透過 Konva canvas backend
   實際 rasterize 前端畫布，驗 A4 尺寸、照片框、氣泡、文字與 footer 區域契約。
-- 無 vitest / RTL 前端測試，無 CI workflow。
+- 無 vitest / RTL 前端元件測試；CI workflow 已覆蓋 backend pytest / ruff /
+  mypy 與 frontend lint / unit / render parity / Playwright E2E / build。
 - 有 `.pre-commit-config.yaml`（ruff check/format + mypy），但是否已在本機
   install hook 不由 repo 保證。
 - 前端自動化檢查為 `npm run lint` / `npm run build`，版型模型契約另跑
@@ -451,12 +453,12 @@ family=None)` 找不到任何路徑時 `ImageFont.load_default()`（會 fallback
 
 **未來 architect cascade 該補的 gate**（從高 leverage 到低）：
 
-1. **Playwright screenshot parity**：沿用 `render_smoke_layout.json`，啟動瀏覽器擷取
-   真實 TemplateEditor 畫面，與 PIL 輸出做區域級像素比對；目前已有 model parity
-   與 node-canvas/Konva raster parity，尚未到 browser screenshot 級。
-2. **API negative/path-edge contracts**：針對已納入 smoke 的 endpoint 補 404/403/415/413、
-   storage missing、跨頁照片互換與 render failure 邊界。
-3. **frontend-build CI**：`npm ci --legacy-peer-deps && npm run build && npm
-   run lint` 在 PR 上跑，擋 dist 沒 build 就 merge。
-4. **storage traversal edge test**：補 `base=/uploads`、`resolved=/uploads_evil`
-   這類 shared-prefix escape regression，覆蓋 `_path()` 的理論邊界。
+1. **Playwright browser parity**：已沿用 `render_smoke_layout.json`，啟動真實
+   TemplateEditor，將 browser canvas 與 PIL preview 做穩定區域像素比對。
+   未來若要更嚴格，可升級成 full-page screenshot diff。
+2. **API negative/path-edge contracts**：已補 401/404/413/415/422、storage
+   missing、render failure、照片互換、corrupt JSON 與第一批角色矩陣負向案例；
+   仍需持續擴充 malformed payload 與更多 endpoint-specific 403/404 邊界。
+3. **storage traversal edge test**：已補 `base=/uploads`、
+   `resolved=/uploads_evil` 這類 shared-prefix escape regression，覆蓋 `_path()`
+   的理論邊界；未來若新增 storage backend，要保留同等契約測試。

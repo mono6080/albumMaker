@@ -2,7 +2,7 @@
 
 import math
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageColor, ImageDraw, ImageFilter
 
 from services.draw_helpers import (
     get_font, load_key, paste_rotated,
@@ -10,6 +10,45 @@ from services.draw_helpers import (
     draw_speech_bubble, wrap_text,
     _line_width_with_spacing, draw_line_with_spacing,
 )
+
+
+def _clamp_int(value, default: int, min_value: int, max_value: int) -> int:
+    try:
+        number = int(round(float(value)))
+    except (TypeError, ValueError):
+        number = default
+    return max(min_value, min(number, max_value))
+
+
+def _text_shadow_settings(element: dict) -> dict | None:
+    if not element.get("text_shadow_enabled"):
+        return None
+
+    opacity = _clamp_int(element.get("text_shadow_opacity", 120), 120, 0, 255)
+    if opacity <= 0:
+        return None
+
+    try:
+        rgb = ImageColor.getrgb(str(element.get("text_shadow_color") or "#000000"))
+        red, green, blue = rgb[:3]
+    except (TypeError, ValueError):
+        red, green, blue = 0, 0, 0
+
+    return {
+        "color": (red, green, blue, opacity),
+        "offset_x": _clamp_int(element.get("text_shadow_offset_x", 3), 3, -200, 200),
+        "offset_y": _clamp_int(element.get("text_shadow_offset_y", 3), 3, -200, 200),
+        "blur": _clamp_int(element.get("text_shadow_blur", 4), 4, 0, 200),
+    }
+
+
+def _composite_rgba_layer(target: Image.Image, layer: Image.Image) -> None:
+    if layer.getbbox() is None:
+        return
+    if target.mode == "RGBA":
+        target.alpha_composite(layer)
+        return
+    target.paste(layer, (0, 0), layer)
 
 
 def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int, slot_index: int = 0) -> None:
@@ -169,19 +208,20 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
     lw, lh = int(label["width"]), int(label["height"])
     rotation = label.get("rotation", 0)
     text_align = label.get("text_align", "center")
+    shadow = _text_shadow_settings(label)
     draw = ImageDraw.Draw(canvas, "RGBA")
     lines = wrap_text(label_text, font, lw, draw, letter_spacing)
     total_h = len(lines) * line_height_px
 
-    def _draw_line(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, line: str) -> None:
+    def _draw_line(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, line: str, fill) -> None:
         """依對齊方式計算起始 x 並逐字繪製（含字間距）。"""
         if letter_spacing == 0:
             if text_align == "left":
-                target_draw.text((tx, ty), line, fill=font_color, font=font, anchor="lt")
+                target_draw.text((tx, ty), line, fill=fill, font=font, anchor="lt")
             elif text_align == "right":
-                target_draw.text((tx + lw, ty), line, fill=font_color, font=font, anchor="rt")
+                target_draw.text((tx + lw, ty), line, fill=fill, font=font, anchor="rt")
             else:
-                target_draw.text((tx + lw // 2, ty), line, fill=font_color, font=font, anchor="mt")
+                target_draw.text((tx + lw // 2, ty), line, fill=fill, font=font, anchor="mt")
         else:
             line_w = _line_width_with_spacing(target_draw, line, font, letter_spacing)
             if text_align == "left":
@@ -190,7 +230,26 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
                 start_x = tx + lw - line_w
             else:
                 start_x = tx + (lw - line_w) // 2
-            draw_line_with_spacing(target_draw, start_x, ty, line, font, font_color, letter_spacing)
+            draw_line_with_spacing(target_draw, start_x, ty, line, font, fill, letter_spacing)
+
+    def _draw_lines(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, fill) -> None:
+        for line_index, line in enumerate(lines):
+            _draw_line(target_draw, tx, ty + line_index * line_height_px, line, fill)
+
+    def _draw_shadow(target: Image.Image, tx: int, ty: int) -> None:
+        if not shadow:
+            return
+        shadow_layer = Image.new("RGBA", target.size, (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow_layer, "RGBA")
+        _draw_lines(
+            shadow_draw,
+            tx + shadow["offset_x"],
+            ty + shadow["offset_y"],
+            shadow["color"],
+        )
+        if shadow["blur"] > 0:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow["blur"]))
+        _composite_rgba_layer(target, shadow_layer)
 
     # 與 Konva textBaseline='middle' 對齊：補償 em-box 中點 vs 視覺頂端的落差
     ascent_val, descent_val = font.getmetrics()
@@ -204,16 +263,17 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
         diag = int(math.sqrt(lw**2 + lh**2)) + 4
         pad = (diag - min(lw, lh)) // 2 + 2
         tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
-        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
         tmp_y = pad + (lh - total_h) // 2 + konva_v_offset
-        for i, line in enumerate(lines):
-            _draw_line(tmp_draw, pad, tmp_y + i * line_height_px, line)
+        _draw_shadow(tmp, pad, tmp_y)
+        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+        _draw_lines(tmp_draw, pad, tmp_y, font_color)
         paste_rotated(canvas, tmp, label["x"] + lw / 2, label["y"] + lh / 2, rotation)
         return
 
     start_y = label["y"] + (lh - total_h) // 2 + konva_v_offset
-    for i, line in enumerate(lines):
-        _draw_line(draw, label["x"], start_y + i * line_height_px, line)
+    _draw_shadow(canvas, label["x"], start_y)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    _draw_lines(draw, label["x"], start_y, font_color)
 
 
 def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> None:
@@ -226,7 +286,35 @@ def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> 
     font = get_font(font_size, bubble.get("font_family"))
     line_height = int(font_size * bubble.get("line_height", 1.4))
     bw_px, bh_px = int(bubble["width"]), int(bubble["height"])
+    shadow = _text_shadow_settings(bubble)
     draw = ImageDraw.Draw(canvas, "RGBA")
+
+    def _draw_bubble_text(target_draw: ImageDraw.ImageDraw, center_x: int, ty: int,
+                          lines: list[str], fill) -> None:
+        for line_index, line in enumerate(lines):
+            target_draw.text(
+                (center_x, ty + line_index * line_height),
+                line,
+                fill=fill,
+                font=font,
+                anchor="mt",
+            )
+
+    def _draw_bubble_text_shadow(target: Image.Image, center_x: int, ty: int, lines: list[str]) -> None:
+        if not shadow:
+            return
+        shadow_layer = Image.new("RGBA", target.size, (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow_layer, "RGBA")
+        _draw_bubble_text(
+            shadow_draw,
+            center_x + shadow["offset_x"],
+            ty + shadow["offset_y"],
+            lines,
+            shadow["color"],
+        )
+        if shadow["blur"] > 0:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow["blur"]))
+        _composite_rgba_layer(target, shadow_layer)
 
     if rotation:
         diag = int(math.sqrt(bw_px**2 + bh_px**2)) + 4
@@ -240,9 +328,9 @@ def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> 
         lines = wrap_text(text, font, bw_px - txt_pad * 2, tmp_draw)
         total_h = len(lines) * line_height
         ty = pad_img + (bh_px - total_h) // 2
-        for i, line in enumerate(lines):
-            tmp_draw.text((pad_img + bw_px // 2, ty + i * line_height), line,
-                          fill=font_color, font=font, anchor="mt")
+        _draw_bubble_text_shadow(tmp, pad_img + bw_px // 2, ty, lines)
+        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+        _draw_bubble_text(tmp_draw, pad_img + bw_px // 2, ty, lines, font_color)
         paste_rotated(canvas, tmp, bubble["x"] + bw_px / 2, bubble["y"] + bh_px / 2, rotation)
         return
 
@@ -252,6 +340,6 @@ def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> 
     lines = wrap_text(text, font, max_text_w, draw)
     total_text_h = len(lines) * line_height
     text_start_y = bubble["y"] + (bubble["height"] - total_text_h) // 2
-    for i, line in enumerate(lines):
-        draw.text((bubble["x"] + bubble["width"] // 2, text_start_y + i * line_height),
-                  line, fill=font_color, font=font, anchor="mt")
+    _draw_bubble_text_shadow(canvas, bubble["x"] + bubble["width"] // 2, text_start_y, lines)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    _draw_bubble_text(draw, bubble["x"] + bubble["width"] // 2, text_start_y, lines, font_color)

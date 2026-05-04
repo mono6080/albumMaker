@@ -78,7 +78,7 @@ def login(client: TestClient, username: str = "admin", password: str = ADMIN_PAS
 
 def create_user(client: TestClient, role: str, supervisor_id: int | None = None) -> tuple[dict, str]:
     username = unique_name(role)
-    payload = {
+    payload: dict[str, object] = {
         "username": username,
         "display_name": f"{role} user",
         "password": USER_PASSWORD,
@@ -148,7 +148,7 @@ def create_template_with_page(client: TestClient, name: str | None = None) -> tu
 def create_project(client: TestClient, template_id: int, name: str | None = None) -> int:
     response = client.post(
         "/api/projects/",
-        data={"name": name or unique_name("project"), "template_id": template_id},
+        data={"name": name or unique_name("project"), "template_id": str(template_id)},
     )
     assert_status(response, 201)
     return response.json()["id"]
@@ -188,10 +188,16 @@ def test_template_project_student_and_text_contracts():
 
         templates = client.get("/api/templates/")
         assert_status(templates, 200)
-        assert any(template["id"] == template_id and template["page_count"] == 1 for template in templates.json())
+        assert any(
+            template["id"] == template_id
+            and template["page_count"] == 1
+            and template["photo_count"] == 1
+            for template in templates.json()
+        )
 
         template_detail = client.get(f"/api/templates/{template_id}")
         assert_status(template_detail, 200)
+        assert template_detail.json()["photo_count"] == 1
         assert template_detail.json()["pages"][0]["layout"]["text_labels"][0]["id"] == 1
 
         project_id = create_project(client, template_id)
@@ -333,6 +339,13 @@ def test_public_preview_endpoints_do_not_require_auth():
         assert_status(template_preview, 200)
         assert template_preview.headers["content-type"].startswith("image/jpeg")
         assert template_preview.content.startswith(b"\xff\xd8")
+
+        spread_preview = client.get(f"/api/templates/{template_id}/spread-preview/0")
+        assert_status(spread_preview, 200)
+        assert spread_preview.headers["content-type"].startswith("image/jpeg")
+        assert spread_preview.content.startswith(b"\xff\xd8")
+        with Image.open(BytesIO(spread_preview.content)) as spread_image:
+            assert spread_image.size == (1588, 1123)
 
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)

@@ -24,3 +24,15 @@ def test_local_storage_path_traversal_blocked(tmp_path):
     adapter = LocalStorageAdapter(tmp_path)
     with pytest.raises(ValueError):
         adapter.put("../../etc/passwd", b"x")
+
+
+def test_local_storage_shared_prefix_escape_blocked(tmp_path):
+    """shared-prefix sibling 目錄不可繞過 base_dir 檢查。"""
+    base_dir = tmp_path / "uploads"
+    sibling_dir = tmp_path / "uploads_evil"
+    adapter = LocalStorageAdapter(base_dir)
+
+    with pytest.raises(ValueError):
+        adapter.put("../uploads_evil/pwned.txt", b"x")
+
+    assert not (sibling_dir / "pwned.txt").exists()
