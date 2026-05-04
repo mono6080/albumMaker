@@ -38,7 +38,9 @@ def list_projects(
         pass  # 看全部（唯讀）
     elif current_user.role == "supervisor":
         subordinate_ids = get_subordinate_user_ids(current_user.id, db)
-        query = query.filter(Project.owner_id.in_(subordinate_ids))
+        visible_owner_ids = set(subordinate_ids)
+        visible_owner_ids.add(current_user.id)
+        query = query.filter(Project.owner_id.in_(visible_owner_ids))
     elif current_user.role == "teacher":
         query = query.filter(Project.owner_id == current_user.id)
     else:
@@ -64,7 +66,7 @@ def create_project(
     name: str = Form(..., max_length=100),
     template_id: int = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "teacher")),
+    current_user: User = Depends(require_role("admin", "teacher", "supervisor")),
 ):
     """建立新專案，需指定使用的模板，自動設定所有者為當前使用者。"""
     template = db.query(Template).filter(Template.id == template_id).first()

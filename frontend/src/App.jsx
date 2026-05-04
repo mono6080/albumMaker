@@ -18,7 +18,7 @@ import './App.css';
 const ROLE_LABELS = {
   admin: "管理員",
   art_team: "設計",
-  supervisor: "帶班主管",
+  supervisor: "主管",
   teacher: "帶班老師",
   none: "無權限",
 };
@@ -130,7 +130,7 @@ export default function App() {
               </PrivateRoute>
             } />
             <Route path="/projects/:id/batch" element={
-              <PrivateRoute allowedRoles={["admin", "teacher"]}>
+              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
                 <ProjectBatch />
               </PrivateRoute>
             } />
@@ -140,7 +140,7 @@ export default function App() {
               </PrivateRoute>
             } />
             <Route path="/projects/:projectId/students/:studentId/edit" element={
-              <PrivateRoute allowedRoles={["admin", "teacher"]}>
+              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
                 <StudentEdit />
               </PrivateRoute>
             } />

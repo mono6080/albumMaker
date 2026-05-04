@@ -3,7 +3,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from database import User
+from database import User, teacher_supervisors
 
 
 def get_user_or_404(user_id: int, db: Session) -> User:
@@ -21,5 +21,19 @@ def get_user_by_username(username: str, db: Session) -> User | None:
 
 def get_subordinate_user_ids(supervisor_id: int, db: Session) -> list[int]:
     """取得指定主管的所有下屬老師 ID 清單。"""
-    subordinate_users = db.query(User.id).filter(User.supervisor_id == supervisor_id).all()
-    return [row[0] for row in subordinate_users]
+    assigned_teacher_ids = {
+        row[0]
+        for row in db.query(teacher_supervisors.c.teacher_id)
+        .join(User, User.id == teacher_supervisors.c.teacher_id)
+        .filter(teacher_supervisors.c.supervisor_id == supervisor_id)
+        .filter(User.role == "teacher")
+        .all()
+    }
+    legacy_teacher_ids = {
+        row[0]
+        for row in db.query(User.id)
+        .filter(User.supervisor_id == supervisor_id)
+        .filter(User.role == "teacher")
+        .all()
+    }
+    return sorted(assigned_teacher_ids | legacy_teacher_ids)

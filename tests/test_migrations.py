@@ -14,6 +14,22 @@ def test_migrations_idempotent():
     init_db()
     run_migrations()
 
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO users (username, display_name, hashed_password, role)
+            VALUES ('migration_supervisor', 'Migration Supervisor', 'hashed', 'supervisor')
+        """))
+        supervisor_id = conn.execute(
+            text("SELECT id FROM users WHERE username = 'migration_supervisor'")
+        ).scalar_one()
+        conn.execute(
+            text("""
+                INSERT INTO users (username, display_name, hashed_password, role, supervisor_id)
+                VALUES ('migration_teacher', 'Migration Teacher', 'hashed', 'teacher', :supervisor_id)
+            """),
+            {"supervisor_id": supervisor_id},
+        )
+
     # 第二次執行：所有 migration 都應冪等
     init_db()
     run_migrations()
@@ -33,3 +49,13 @@ def test_migrations_idempotent():
         tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
         assert "users" in tables
         assert "projects" in tables
+        assert "teacher_supervisors" in tables
+
+        migrated_assignment = conn.execute(text("""
+            SELECT ts.supervisor_id
+            FROM teacher_supervisors ts
+            JOIN users teacher ON teacher.id = ts.teacher_id
+            WHERE teacher.username = 'migration_teacher'
+        """)).fetchone()
+        assert migrated_assignment is not None
+        assert migrated_assignment[0] == supervisor_id

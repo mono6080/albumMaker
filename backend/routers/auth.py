@@ -73,10 +73,14 @@ def logout(response: Response):
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     """回傳當前登入使用者的基本資訊。"""
+    supervisor_ids = [supervisor.id for supervisor in current_user.supervisors]
+    if not supervisor_ids and current_user.supervisor_id:
+        supervisor_ids = [current_user.supervisor_id]
     return {
         "id": current_user.id,
         "username": current_user.username,
         "display_name": current_user.display_name,
         "role": current_user.role,
         "supervisor_id": current_user.supervisor_id,
+        "supervisor_ids": supervisor_ids,
     }

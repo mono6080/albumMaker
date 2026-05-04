@@ -11,8 +11,10 @@ def run_migrations():
     with engine.connect() as connection:
         _add_bubble_texts_json_column(connection)
         _add_users_table(connection)
+        _add_teacher_supervisors_table(connection)
         _add_owner_id_to_projects(connection)
         _add_project_comments_table(connection)
+        _migrate_single_supervisors_to_many(connection)
         _assign_historical_projects_to_admin(connection)
         _rename_bubble_texts_to_label_texts(connection)
         _add_foreign_key_indexes(connection)
@@ -74,6 +76,23 @@ def _add_users_table(connection):
         print(f"  密碼：{initial_password}")
         print(f"  請立即登入後至使用者管理修改密碼！")
         print("=" * 60)
+
+
+def _add_teacher_supervisors_table(connection):
+    """建立老師與主管的多對多關聯表。"""
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "teacher_supervisors" not in existing_tables:
+        connection.execute(text("""
+            CREATE TABLE teacher_supervisors (
+                teacher_id INTEGER NOT NULL REFERENCES users(id),
+                supervisor_id INTEGER NOT NULL REFERENCES users(id),
+                PRIMARY KEY (teacher_id, supervisor_id)
+            )
+        """))
+        connection.commit()
 
 
 def _add_owner_id_to_projects(connection):
@@ -138,6 +157,7 @@ def _add_foreign_key_indexes(connection):
         ("idx_project_comments_project_id","CREATE INDEX idx_project_comments_project_id ON project_comments(project_id)"),
         ("idx_project_comments_author_id", "CREATE INDEX idx_project_comments_author_id ON project_comments(author_id)"),
         ("idx_template_pages_template_id", "CREATE INDEX idx_template_pages_template_id ON template_pages(template_id)"),
+        ("idx_teacher_supervisors_supervisor_id", "CREATE INDEX idx_teacher_supervisors_supervisor_id ON teacher_supervisors(supervisor_id)"),
     ]
     for index_name, create_sql in indexes_to_create:
         if index_name not in existing_indexes:
@@ -223,6 +243,34 @@ def _drop_bubble_texts_json_column(connection):
         "CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id)"
     ))
     connection.execute(text("PRAGMA foreign_keys = ON"))
+    connection.commit()
+
+
+def _migrate_single_supervisors_to_many(connection):
+    """將 users.supervisor_id 既有資料同步到 teacher_supervisors 關聯表。"""
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "teacher_supervisors" not in existing_tables:
+        return
+
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(users)"))
+    }
+    if "supervisor_id" not in existing_columns:
+        return
+
+    connection.execute(text("""
+        INSERT OR IGNORE INTO teacher_supervisors (teacher_id, supervisor_id)
+        SELECT teacher.id, teacher.supervisor_id
+        FROM users AS teacher
+        JOIN users AS supervisor ON supervisor.id = teacher.supervisor_id
+        WHERE teacher.role = 'teacher'
+          AND supervisor.role = 'supervisor'
+          AND teacher.supervisor_id IS NOT NULL
+    """))
     connection.commit()
 
 

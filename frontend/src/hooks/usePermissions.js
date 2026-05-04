@@ -15,11 +15,11 @@ export function usePermissions() {
     canManageTemplates: role === "admin" || role === "art_team",
 
     /** 可建立新專案 */
-    canCreateProject: role === "admin" || role === "teacher",
+    canCreateProject: role === "admin" || role === "teacher" || role === "supervisor",
 
     /** 可編輯指定專案（需傳入 owner_id 判斷所有權） */
     canEditProject: (ownerUserId) =>
-      role === "admin" || (role === "teacher" && currentUser?.id === ownerUserId),
+      role === "admin" || (["teacher", "supervisor"].includes(role) && currentUser?.id === ownerUserId),
 
     /** 可下載完整畫質 PDF（僅 admin） */
     canDownloadPrint: role === "admin",

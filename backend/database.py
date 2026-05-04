@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -19,6 +19,13 @@ _sa_event.listen(engine, "connect", _set_sqlite_pragmas)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+teacher_supervisors = Table(
+    "teacher_supervisors",
+    Base.metadata,
+    Column("teacher_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("supervisor_id", Integer, ForeignKey("users.id"), primary_key=True),
+)
+
 
 class User(Base):
     __tablename__ = "users"
@@ -28,12 +35,26 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     # 角色：admin | art_team | supervisor | teacher | none
     role = Column(String, nullable=False, default="none")
-    # 帶班老師的直屬主管（supervisor 角色使用者），其他角色為 null
+    # 舊版單一主管欄位；新版多主管資料存在 teacher_supervisors，保留此欄位相容舊資料/API
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     supervisor = relationship("User", remote_side="User.id", foreign_keys=[supervisor_id], back_populates="subordinates")
     subordinates = relationship("User", foreign_keys=[supervisor_id], back_populates="supervisor")
+    supervisors = relationship(
+        "User",
+        secondary=teacher_supervisors,
+        primaryjoin=id == teacher_supervisors.c.teacher_id,
+        secondaryjoin=id == teacher_supervisors.c.supervisor_id,
+        back_populates="managed_teachers",
+    )
+    managed_teachers = relationship(
+        "User",
+        secondary=teacher_supervisors,
+        primaryjoin=id == teacher_supervisors.c.supervisor_id,
+        secondaryjoin=id == teacher_supervisors.c.teacher_id,
+        back_populates="supervisors",
+    )
     owned_projects = relationship("Project", back_populates="owner", foreign_keys="Project.owner_id")
     comments = relationship("ProjectComment", back_populates="author")
 

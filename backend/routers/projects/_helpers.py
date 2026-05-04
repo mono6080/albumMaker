@@ -34,7 +34,7 @@ def assert_project_readable(
 
     - admin：可讀全部
     - art_team：可讀全部（唯讀）
-    - supervisor：只能讀自己管轄老師的專案
+    - supervisor：只能讀自己的專案與自己管轄老師的專案
     - teacher：只能讀自己的專案
 
     subordinate_ids 可由外部傳入（已查好時），避免同一 request 重複查詢。
@@ -44,6 +44,8 @@ def assert_project_readable(
     if current_user.role == "art_team":
         return
     if current_user.role == "supervisor":
+        if project.owner_id == current_user.id:
+            return
         if subordinate_ids is None:
             subordinate_ids = get_subordinate_user_ids(current_user.id, db)
         if project.owner_id in subordinate_ids:
@@ -67,11 +69,11 @@ def assert_project_writable(project: Project, current_user: User):
     確認目前使用者有權限修改此專案，否則拋出 403。
 
     - admin：可修改全部
-    - teacher：只能修改自己的專案
+    - teacher / supervisor：只能修改自己的專案
     - 其他角色：禁止
     """
     if current_user.role == "admin":
         return
-    if current_user.role == "teacher" and project.owner_id == current_user.id:
+    if current_user.role in ("teacher", "supervisor") and project.owner_id == current_user.id:
         return
     raise HTTPException(status_code=403, detail="無此專案的編輯權限")

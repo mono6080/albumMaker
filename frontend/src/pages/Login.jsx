@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 const ROLE_LABELS = {
   admin: "管理員",
   art_team: "設計",
-  supervisor: "帶班主管",
+  supervisor: "主管",
   teacher: "帶班老師",
   none: "無權限",
 };

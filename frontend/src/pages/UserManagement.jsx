@@ -15,7 +15,7 @@ import {
 const ROLE_OPTIONS = [
   { value: "admin",      label: "管理員" },
   { value: "art_team",   label: "設計" },
-  { value: "supervisor", label: "帶班主管" },
+  { value: "supervisor", label: "主管" },
   { value: "teacher",    label: "帶班老師" },
   { value: "none",       label: "無權限" },
 ];
@@ -28,6 +28,30 @@ const ROLE_BADGE_STYLE = {
   none:       "bg-gray-100 text-gray-500",
 };
 
+function getSupervisorIds(user) {
+  return user.supervisor_ids ?? (user.supervisor_id ? [user.supervisor_id] : []);
+}
+
+function getSupervisorNames(user) {
+  return user.supervisor_names ?? (user.supervisor_name ? [user.supervisor_name] : []);
+}
+
+function getSupervisorSummary(user) {
+  const names = getSupervisorNames(user);
+  if (names.length === 0) return "未指定";
+  if (names.length <= 2) return names.join("、");
+  return `${names.slice(0, 2).join("、")} +${names.length - 2}`;
+}
+
+function getErrorMessage(error, fallback) {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail.map(item => item.msg || String(item)).join("；");
+  }
+  return fallback;
+}
+
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [supervisors, setSupervisors] = useState([]);
@@ -37,7 +61,7 @@ export default function UserManagement() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("teacher");
-  const [newSupervisorId, setNewSupervisorId] = useState("");
+  const [newSupervisorIds, setNewSupervisorIds] = useState([]);
   const [isCreating, setIsCreating] = useState(false);
 
   // 密碼重設狀態：{ [userId]: string }
@@ -45,8 +69,10 @@ export default function UserManagement() {
 
   // inline 編輯狀態：{ userId, field: 'display_name'|'username', value }
   const [editingField, setEditingField] = useState(null);
+  const [supervisorEditorUserId, setSupervisorEditorUserId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const editInputRef = useRef(null);
+  const supervisorEditorUser = users.find((user) => user.id === supervisorEditorUserId);
 
   const loadUsers = async () => {
     try {
@@ -63,6 +89,10 @@ export default function UserManagement() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
+    if (newRole === "teacher" && newSupervisorIds.length === 0) {
+      toast.error("請至少指定一位主管");
+      return;
+    }
     setIsCreating(true);
     try {
       const params = {
@@ -70,15 +100,15 @@ export default function UserManagement() {
         display_name: newDisplayName,
         password: newPassword,
         role: newRole,
-        ...(newRole === "teacher" && newSupervisorId ? { supervisor_id: newSupervisorId } : {}),
+        ...(newRole === "teacher" ? { supervisor_ids: newSupervisorIds } : {}),
       };
       await createUser(params);
       toast.success("使用者已建立");
       setNewUsername(""); setNewDisplayName(""); setNewPassword("");
-      setNewRole("teacher"); setNewSupervisorId("");
+      setNewRole("teacher"); setNewSupervisorIds([]);
       await loadUsers();
     } catch (error) {
-      toast.error(error.response?.data?.detail || "建立失敗");
+      toast.error(getErrorMessage(error, "建立失敗"));
     } finally {
       setIsCreating(false);
     }
@@ -90,22 +120,33 @@ export default function UserManagement() {
       toast.success("角色已更新");
       await loadUsers();
     } catch (error) {
-      toast.error(error.response?.data?.detail || "更新失敗");
+      toast.error(getErrorMessage(error, "更新失敗"));
     }
   };
 
-  const handleSupervisorChange = async (userId, supervisorIdValue) => {
+  const handleSupervisorToggle = async (user, supervisorId, checked) => {
+    const currentSupervisorIds = getSupervisorIds(user);
+    if (!checked && currentSupervisorIds.length <= 1) {
+      toast.error("請至少保留一位主管");
+      return;
+    }
+    const nextSupervisorIds = checked
+      ? [...new Set([...currentSupervisorIds, supervisorId])]
+      : currentSupervisorIds.filter(id => id !== supervisorId);
     try {
-      if (supervisorIdValue === "") {
-        await updateUser(userId, { clear_supervisor: true });
-      } else {
-        await updateUser(userId, { supervisor_id: supervisorIdValue });
-      }
+      await updateUser(user.id, { supervisor_ids: nextSupervisorIds });
       toast.success("主管已更新");
       await loadUsers();
     } catch (error) {
-      toast.error(error.response?.data?.detail || "更新失敗");
+      toast.error(getErrorMessage(error, "更新失敗"));
     }
+  };
+
+  const toggleNewSupervisor = (supervisorId, checked) => {
+    setNewSupervisorIds(prev => checked
+      ? [...new Set([...prev, supervisorId])]
+      : prev.filter(id => id !== supervisorId)
+    );
   };
 
   const handleResetPassword = async (userId) => {
@@ -116,7 +157,7 @@ export default function UserManagement() {
       toast.success("密碼已重設");
       setResetPasswords((prev) => ({ ...prev, [userId]: "" }));
     } catch (error) {
-      toast.error(error.response?.data?.detail || "重設失敗");
+      toast.error(getErrorMessage(error, "重設失敗"));
     }
   };
 
@@ -137,7 +178,7 @@ export default function UserManagement() {
       setEditingField(null);
       await loadUsers();
     } catch (error) {
-      toast.error(error.response?.data?.detail || "更新失敗");
+      toast.error(getErrorMessage(error, "更新失敗"));
     }
   };
 
@@ -155,7 +196,7 @@ export default function UserManagement() {
           toast.success("使用者已刪除");
           await loadUsers();
         } catch (error) {
-          toast.error(error.response?.data?.detail || "刪除失敗");
+          toast.error(getErrorMessage(error, "刪除失敗"));
         }
       },
     });
@@ -169,6 +210,56 @@ export default function UserManagement() {
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
+      {supervisorEditorUser && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-200">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div>
+                <div className="font-semibold text-gray-900 text-sm">編輯主管</div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {supervisorEditorUser.display_name} · 已選 {getSupervisorIds(supervisorEditorUser).length} 位
+                </div>
+              </div>
+              <button
+                onClick={() => setSupervisorEditorUserId(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                title="關閉"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 max-h-80 overflow-y-auto">
+              {supervisors.length === 0 ? (
+                <div className="text-sm text-gray-400 text-center py-8">尚無主管</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {supervisors.map((supervisor) => {
+                    const supervisorIds = getSupervisorIds(supervisorEditorUser);
+                    return (
+                      <label key={supervisor.id} className="inline-flex items-center gap-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={supervisorIds.includes(supervisor.id)}
+                          onChange={(e) => handleSupervisorToggle(supervisorEditorUser, supervisor.id, e.target.checked)}
+                        />
+                        <span className="truncate">{supervisor.display_name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => setSupervisorEditorUserId(null)}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-900 text-white hover:bg-gray-800"
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <h1 className="text-xl font-bold text-gray-900">使用者管理</h1>
 
       {/* 新增使用者表單 */}
@@ -202,7 +293,11 @@ export default function UserManagement() {
           />
           <select
             value={newRole}
-            onChange={(e) => setNewRole(e.target.value)}
+            onChange={(e) => {
+              const role = e.target.value;
+              setNewRole(role);
+              if (role !== "teacher") setNewSupervisorIds([]);
+            }}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
           >
             {ROLE_OPTIONS.map((opt) => (
@@ -211,18 +306,25 @@ export default function UserManagement() {
           </select>
         </div>
         {newRole === "teacher" && (
-          <select
-            value={newSupervisorId}
-            onChange={(e) => setNewSupervisorId(e.target.value)}
-            className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 w-full sm:w-64"
-          >
-            <option value="">（不指定主管）</option>
-            {supervisors.map((supervisor) => (
-              <option key={supervisor.id} value={supervisor.id}>
-                {supervisor.display_name}
-              </option>
-            ))}
-          </select>
+          <div className="border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
+            <div className="text-xs font-medium text-gray-500 mb-2">主管（可多選）</div>
+            {supervisors.length === 0 ? (
+              <div className="text-xs text-gray-400">尚無主管</div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-36 overflow-y-auto pr-1">
+                {supervisors.map((supervisor) => (
+                  <label key={supervisor.id} className="inline-flex items-center gap-1.5 text-xs text-gray-700 bg-white border border-gray-200 rounded-lg px-2 py-1">
+                    <input
+                      type="checkbox"
+                      checked={newSupervisorIds.includes(supervisor.id)}
+                      onChange={(e) => toggleNewSupervisor(supervisor.id, e.target.checked)}
+                    />
+                    <span className="truncate">{supervisor.display_name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <button
           type="submit"
@@ -309,18 +411,24 @@ export default function UserManagement() {
                 </td>
                 <td className="px-4 py-3">
                   {user.role === "teacher" ? (
-                    <select
-                      value={user.supervisor_id ?? ""}
-                      onChange={(e) => handleSupervisorChange(user.id, e.target.value)}
-                      className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-gray-50 focus:outline-none"
-                    >
-                      <option value="">未指定</option>
-                      {supervisors.map((supervisor) => (
-                        <option key={supervisor.id} value={supervisor.id}>
-                          {supervisor.display_name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-2 max-w-56">
+                      {supervisors.length === 0 ? (
+                        <span className="text-xs text-gray-300">未指定</span>
+                      ) : (
+                        <>
+                          <span className="text-xs text-gray-600 truncate" title={getSupervisorNames(user).join("、")}>
+                            {getSupervisorSummary(user)}
+                          </span>
+                          <button
+                            onClick={() => setSupervisorEditorUserId(user.id)}
+                            className="p-1 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 flex-shrink-0"
+                            title="編輯主管"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-gray-300">—</span>
                   )}

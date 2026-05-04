@@ -9,7 +9,7 @@
 PDF。老師建立模板（多頁版型 + 照片格 + 氣泡 + 貼圖）、批次匯入學生、上傳照片、
 按角色權限產出 PDF / ZIP。
 
-- 使用者：admin / art_team（美學組）/ supervisor（帶班主管）/ teacher（帶班老師）
+- 使用者：admin / art_team（美學組）/ supervisor（主管）/ teacher（帶班老師）
   / none，5 種角色。
 - 部署形態：單機容器 — Docker Compose multi-stage build（Node 編前端 → Python
   serve 後端與前端 dist），對外不暴露 port，透過 Unix socket 接 nginx

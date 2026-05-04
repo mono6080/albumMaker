@@ -76,7 +76,12 @@ def login(client: TestClient, username: str = "admin", password: str = ADMIN_PAS
     return response.json()
 
 
-def create_user(client: TestClient, role: str, supervisor_id: int | None = None) -> tuple[dict, str]:
+def create_user(
+    client: TestClient,
+    role: str,
+    supervisor_id: int | None = None,
+    supervisor_ids: list[int] | None = None,
+) -> tuple[dict, str]:
     username = unique_name(role)
     payload: dict[str, object] = {
         "username": username,
@@ -84,6 +89,8 @@ def create_user(client: TestClient, role: str, supervisor_id: int | None = None)
         "password": USER_PASSWORD,
         "role": role,
     }
+    if supervisor_ids is not None:
+        payload["supervisor_ids"] = supervisor_ids
     if supervisor_id is not None:
         payload["supervisor_id"] = supervisor_id
 
@@ -266,6 +273,106 @@ def test_template_project_student_and_text_contracts():
         assert renamed_student["pages_data"][0]["label_texts"] == {"1": "Batch label text"}
 
 
+def test_user_management_allows_multiple_teacher_supervisors():
+    with started_client() as client:
+        login(client)
+        first_supervisor, _ = create_user(client, "supervisor")
+        second_supervisor, _ = create_user(client, "supervisor")
+        teacher, _ = create_user(
+            client,
+            "teacher",
+            supervisor_ids=[first_supervisor["id"], second_supervisor["id"]],
+        )
+
+        assert teacher["supervisor_id"] == first_supervisor["id"]
+        assert teacher["supervisor_ids"] == [first_supervisor["id"], second_supervisor["id"]]
+        assert teacher["supervisor_names"] == [
+            first_supervisor["display_name"],
+            second_supervisor["display_name"],
+        ]
+
+        users_response = client.get("/api/users/")
+        assert_status(users_response, 200)
+        listed_teacher = next(user for user in users_response.json() if user["id"] == teacher["id"])
+        assert listed_teacher["supervisor_ids"] == [first_supervisor["id"], second_supervisor["id"]]
+
+        third_supervisor, _ = create_user(client, "supervisor")
+        update_response = client.patch(
+            f"/api/users/{teacher['id']}",
+            json={"supervisor_ids": [second_supervisor["id"], third_supervisor["id"]]},
+        )
+        assert_status(update_response, 200)
+        updated_teacher = update_response.json()
+        assert updated_teacher["supervisor_id"] == second_supervisor["id"]
+        assert updated_teacher["supervisor_ids"] == [second_supervisor["id"], third_supervisor["id"]]
+
+        legacy_update = client.patch(
+            f"/api/users/{teacher['id']}",
+            json={"supervisor_id": first_supervisor["id"]},
+        )
+        assert_status(legacy_update, 200)
+        assert legacy_update.json()["supervisor_ids"] == [first_supervisor["id"]]
+
+        invalid_supervisor = client.patch(
+            f"/api/users/{teacher['id']}",
+            json={"supervisor_ids": [teacher["id"]]},
+        )
+        assert_status(invalid_supervisor, 400)
+
+        restore_multiple = client.patch(
+            f"/api/users/{teacher['id']}",
+            json={"supervisor_ids": [first_supervisor["id"], second_supervisor["id"]]},
+        )
+        assert_status(restore_multiple, 200)
+        demote_first_supervisor = client.patch(
+            f"/api/users/{first_supervisor['id']}",
+            json={"role": "none"},
+        )
+        assert_status(demote_first_supervisor, 200)
+        after_demote_users = client.get("/api/users/")
+        assert_status(after_demote_users, 200)
+        teacher_after_demote = next(user for user in after_demote_users.json() if user["id"] == teacher["id"])
+        assert teacher_after_demote["supervisor_ids"] == [second_supervisor["id"]]
+
+
+def test_admin_can_reset_user_password_to_short_value():
+    with started_client() as client:
+        login(client)
+        art_team, _ = create_user(client, "art_team")
+
+        reset_response = client.patch(
+            f"/api/users/{art_team['id']}",
+            json={"new_password": "admin"},
+        )
+        assert_status(reset_response, 200)
+
+        client.cookies.clear()
+        login_payload = login(client, art_team["username"], "admin")
+        assert login_payload["username"] == art_team["username"]
+        assert login_payload["role"] == "art_team"
+
+
+def test_admin_can_create_user_with_short_initial_password():
+    with started_client() as client:
+        login(client)
+        username = unique_name("short_password_user")
+        create_response = client.post(
+            "/api/users/",
+            json={
+                "username": username,
+                "display_name": "Short Password User",
+                "password": "admin",
+                "role": "art_team",
+            },
+        )
+        assert_status(create_response, 201)
+
+        client.cookies.clear()
+        login_payload = login(client, username, "admin")
+        assert login_payload["username"] == username
+        assert login_payload["role"] == "art_team"
+
+
 def test_role_access_and_none_login_contracts():
     with started_client() as client:
         login(client)
@@ -273,7 +380,12 @@ def test_role_access_and_none_login_contracts():
         admin_project_id = create_project(client, template_id, name=unique_name("admin_project"))
 
         supervisor, supervisor_password = create_user(client, "supervisor")
-        teacher, teacher_password = create_user(client, "teacher", supervisor_id=supervisor["id"])
+        second_supervisor, second_supervisor_password = create_user(client, "supervisor")
+        teacher, teacher_password = create_user(
+            client,
+            "teacher",
+            supervisor_ids=[supervisor["id"], second_supervisor["id"]],
+        )
         art_team, art_team_password = create_user(client, "art_team")
         none_user, none_password = create_user(client, "none")
 
@@ -312,6 +424,36 @@ def test_role_access_and_none_login_contracts():
         assert_status(supervisor_reads_teacher, 200)
         supervisor_writes_teacher = client.patch(f"/api/projects/{teacher_project_id}", data={"name": "blocked"})
         assert_status(supervisor_writes_teacher, 403)
+        supervisor_own_project_id = create_project(client, template_id, name=unique_name("supervisor_project"))
+        supervisor_writes_own = client.patch(
+            f"/api/projects/{supervisor_own_project_id}",
+            data={"name": "supervisor updated"},
+        )
+        assert_status(supervisor_writes_own, 200)
+        supervisor_adds_own_students = client.post(
+            f"/api/projects/{supervisor_own_project_id}/students/batch",
+            json=["Supervisor Student"],
+        )
+        assert_status(supervisor_adds_own_students, 200)
+
+        client.cookies.clear()
+        login(client, second_supervisor["username"], second_supervisor_password)
+        second_supervisor_projects = client.get("/api/projects/")
+        assert_status(second_supervisor_projects, 200)
+        second_supervisor_project_ids = {project["id"] for project in second_supervisor_projects.json()}
+        assert teacher_project_id in second_supervisor_project_ids
+        assert supervisor_own_project_id not in second_supervisor_project_ids
+        second_supervisor_reads_teacher = client.get(f"/api/projects/{teacher_project_id}")
+        assert_status(second_supervisor_reads_teacher, 200)
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        teacher_projects_after_supervisor_create = client.get("/api/projects/")
+        assert_status(teacher_projects_after_supervisor_create, 200)
+        teacher_project_ids_after_supervisor_create = {
+            project["id"] for project in teacher_projects_after_supervisor_create.json()
+        }
+        assert supervisor_own_project_id not in teacher_project_ids_after_supervisor_create
 
         client.cookies.clear()
         login(client, art_team["username"], art_team_password)
