@@ -502,6 +502,60 @@ def test_public_preview_endpoints_do_not_require_auth():
         assert project_preview.content.startswith(b"\xff\xd8")
 
 
+def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client)
+        blank_layout = {
+            "canvas_width": 794,
+            "canvas_height": 1123,
+            "photo_slots": [],
+            "text_bubbles": [],
+            "text_labels": [],
+            "stickers": [],
+            "footer": None,
+            "logo": None,
+        }
+        layout_response = client.put(
+            f"/api/templates/{template_id}/pages/{page_id}/layout",
+            json=blank_layout,
+        )
+        assert_status(layout_response, 200)
+
+        background_upload = client.post(
+            f"/api/templates/{template_id}/pages/{page_id}/background",
+            files={"file": ("red.png", png_bytes((20, 20), (230, 20, 20, 255)), "image/png")},
+        )
+        assert_status(background_upload, 200)
+
+        # 模擬 TemplateEditor 後續儲存版面時只送元素 layout，導致 layout_json 不含 background_filename。
+        layout_without_background = client.put(
+            f"/api/templates/{template_id}/pages/{page_id}/layout",
+            json=blank_layout,
+        )
+        assert_status(layout_without_background, 200)
+
+        client.cookies.clear()
+        template_preview = client.get(f"/api/templates/{template_id}/pages/{page_id}/preview")
+        assert_status(template_preview, 200)
+        spread_preview = client.get(f"/api/templates/{template_id}/spread-preview/0")
+        assert_status(spread_preview, 200)
+
+        with Image.open(BytesIO(template_preview.content)) as preview_image:
+            red, green, blue = preview_image.getpixel((10, 10))
+            assert red > 180
+            assert green < 80
+            assert blue < 80
+
+        with Image.open(BytesIO(spread_preview.content)) as spread_image:
+            red, green, blue = spread_image.getpixel((10, 10))
+            assert red > 180
+            assert green < 80
+            assert blue < 80
+
+
 def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
     use_tmp_uploads(monkeypatch, tmp_path)
 

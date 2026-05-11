@@ -35,6 +35,14 @@ def _count_template_photo_slots(template: Template) -> int:
     return total
 
 
+def _template_page_layout_with_background(template_page: TemplatePage) -> dict:
+    """回傳渲染用 layout；背景圖以資料庫欄位為準，避免版面儲存覆蓋掉底圖。"""
+    page_layout = json.loads(template_page.layout_json)
+    if template_page.background_filename:
+        page_layout["background_filename"] = template_page.background_filename
+    return page_layout
+
+
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
 
 @router.get("/")
@@ -298,7 +306,7 @@ def preview_template_page(
     """渲染模板頁面預覽圖（以「姓名」佔位符代替學生姓名），回傳 JPEG。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
 
-    page_layout = json.loads(template_page.layout_json)
+    page_layout = _template_page_layout_with_background(template_page)
     preview_image = render_page(
         page_layout,
         "（姓名）",
@@ -329,7 +337,7 @@ def preview_template_spread(
             continue
 
         template_page = pages[page_index]
-        page_layout = json.loads(template_page.layout_json)
+        page_layout = _template_page_layout_with_background(template_page)
         rendered_pages.append(
             render_page(
                 page_layout,
