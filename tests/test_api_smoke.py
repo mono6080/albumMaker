@@ -67,6 +67,13 @@ def jpeg_bytes(color: tuple[int, int, int] = (240, 72, 72)) -> bytes:
     return buffer.getvalue()
 
 
+def png_bytes(size: tuple[int, int], color: tuple[int, int, int, int] = (240, 72, 72, 255)) -> bytes:
+    image = Image.new("RGBA", size, color)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def login(client: TestClient, username: str = "admin", password: str = ADMIN_PASSWORD) -> dict:
     response = client.post(
         "/api/auth/login",
@@ -493,6 +500,32 @@ def test_public_preview_endpoints_do_not_require_auth():
         assert_status(project_preview, 200)
         assert project_preview.headers["content-type"].startswith("image/jpeg")
         assert project_preview.content.startswith(b"\xff\xd8")
+
+
+def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+
+        upload = client.post(
+            f"/api/templates/{template_id}/stickers",
+            files={"file": ("wide.png", png_bytes((320, 120)), "image/png")},
+        )
+        assert_status(upload, 200)
+        payload = upload.json()
+        assert payload == {
+            "path": f"templates/tmpl{template_id}/stickers/wide.png",
+            "filename": "wide.png",
+            "width": 320,
+            "height": 120,
+        }
+
+        sticker = client.get(f"/api/templates/{template_id}/stickers/wide.png")
+        assert_status(sticker, 200)
+        with Image.open(BytesIO(sticker.content)) as sticker_image:
+            assert sticker_image.size == (320, 120)
 
 
 def test_project_comments_contracts():

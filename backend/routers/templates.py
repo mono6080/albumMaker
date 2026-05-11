@@ -7,7 +7,7 @@ import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from PIL import Image
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
@@ -258,10 +258,20 @@ async def upload_sticker(
 ):
     """上傳貼圖素材至模板專屬目錄。"""
     file_bytes = await read_and_validate_image(file, max_mb=10)
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as uploaded_image:
+            image_width, image_height = ImageOps.exif_transpose(uploaded_image).size
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
 
     key = get_sticker_key(template_id, file.filename)
     get_storage().put(key, file_bytes)
-    return {"path": key, "filename": file.filename}
+    return {
+        "path": key,
+        "filename": file.filename,
+        "width": image_width,
+        "height": image_height,
+    }
 
 
 @router.get("/{template_id}/stickers/{filename}")

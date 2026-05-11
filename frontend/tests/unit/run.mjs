@@ -18,6 +18,7 @@ import {
   buildRenderLayoutModel,
   getAllElementsSorted,
   getDisplayBox,
+  getInitialStickerSize,
   getNextZIndex,
   toDisplayCoord,
   toRealCoord,
@@ -99,6 +100,14 @@ test("render layout coordinate helpers keep the A4 display scale stable", () => 
   assert.equal(CANVAS_REAL_WIDTH, 794);
   assert.equal(toDisplayCoord(794), 530);
   assert.equal(toRealCoord(530), 794);
+});
+
+
+test("sticker initial sizing preserves uploaded image aspect ratio", () => {
+  assert.deepEqual(getInitialStickerSize(600, 300), { width: 150, height: 75 });
+  assert.deepEqual(getInitialStickerSize(300, 600), { width: 75, height: 150 });
+  assert.deepEqual(getInitialStickerSize(120, 120), { width: 150, height: 150 });
+  assert.deepEqual(getInitialStickerSize(null, 0), { width: 150, height: 150 });
 });
 
 

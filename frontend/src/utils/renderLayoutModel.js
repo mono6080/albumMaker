@@ -3,6 +3,7 @@ export const CANVAS_REAL_HEIGHT = 1123;
 export const CANVAS_DISPLAY_WIDTH = 530;
 export const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH;
 export const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_REAL_HEIGHT * CANVAS_SCALE);
+export const STICKER_DEFAULT_MAX_SIDE = 150;
 
 const Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
 
@@ -12,6 +13,17 @@ export function toDisplayCoord(realValue) {
 
 export function toRealCoord(displayValue) {
   return Math.round(displayValue / CANVAS_SCALE);
+}
+
+export function getInitialStickerSize(imageWidth, imageHeight, maxSide = STICKER_DEFAULT_MAX_SIDE) {
+  if (!imageWidth || !imageHeight) {
+    return { width: maxSide, height: maxSide };
+  }
+  const scale = maxSide / Math.max(imageWidth, imageHeight);
+  return {
+    width: Math.max(1, Math.round(imageWidth * scale)),
+    height: Math.max(1, Math.round(imageHeight * scale)),
+  };
 }
 
 export function getAllElementsSorted(layout) {

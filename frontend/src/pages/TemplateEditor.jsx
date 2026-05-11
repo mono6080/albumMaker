@@ -26,6 +26,7 @@ import {
   CANVAS_DISPLAY_WIDTH,
   applyElementsToLayout,
   getAllElementsSorted,
+  getInitialStickerSize,
   getNextZIndex,
   getFooterModel,
   toDisplayCoord,
@@ -386,13 +387,20 @@ export default function TemplateEditor() {
     if (!stickerFile) return;
     try {
       const response = await uploadSticker(templateId, stickerFile);
-      const { path: stickerPath, filename: stickerFilename } = response.data;
+      const {
+        path: stickerPath,
+        filename: stickerFilename,
+        width: stickerImageWidth,
+        height: stickerImageHeight,
+      } = response.data;
+      const stickerSize = getInitialStickerSize(stickerImageWidth, stickerImageHeight);
       const newSticker = {
         id: generateElementId(),
         path: stickerPath,
         filename: stickerFilename,
         x: 50, y: 50,
-        width: 150, height: 150,
+        width: stickerSize.width,
+        height: stickerSize.height,
         rotation: 0,
       };
       commitPageLayout(currentLayout => ({
