@@ -57,9 +57,13 @@ def test_auth_missing_resource_and_validation_edges():
 
         invalid_pdf_mode = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf?mode=web")
         assert_status(invalid_pdf_mode, 422)
+        invalid_image_mode = client.get(f"/api/projects/{project_id}/students/{student_id}/images?mode=web")
+        assert_status(invalid_image_mode, 422)
 
         pdf_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf")
         assert_status(pdf_before_render, 404)
+        images_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/images")
+        assert_status(images_before_render, 404)
 
 
 def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):

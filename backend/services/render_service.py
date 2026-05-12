@@ -177,11 +177,22 @@ def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
     return img2pdf.convert(pages_bytes)
 
 
-def save_album_images(images: list[Image.Image], student_name: str) -> dict[str, bytes]:
-    """將每頁轉為 JPEG bytes，回傳 {檔名: bytes} 字典。"""
+def save_album_images(images: list[Image.Image], student_name: str, mode: str = "print") -> dict[str, bytes]:
+    """將每頁轉為 JPEG bytes，回傳 {檔名: bytes} 字典。
+
+    mode='print'  — 放大至 A4@150dpi（1240×1754），JPEG quality=95
+    mode='screen' — 維持原始尺寸（794×1123），JPEG quality=72
+    """
     result = {}
     for i, img in enumerate(images):
         buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=92, dpi=(150, 150))
-        result[f"{student_name}_page{i + 1}.jpg"] = buf.getvalue()
+        if mode == "screen":
+            output_image = img.convert("RGB")
+            output_image.save(buf, format="JPEG", quality=72, dpi=(96, 96))
+            suffix = "_screen"
+        else:
+            output_image = img.convert("RGB").resize((1240, 1754), Image.LANCZOS)
+            output_image.save(buf, format="JPEG", quality=95, dpi=(150, 150))
+            suffix = ""
+        result[f"{student_name}{suffix}_page{i + 1}.jpg"] = buf.getvalue()
     return result

@@ -37,13 +37,13 @@ export const buildDownloadPdfUrl = (projectId, studentId, outputMode = "print") 
   `${API_BASE}/projects/${projectId}/students/${studentId}/pdf?mode=${outputMode}`;
 
 /** 學生個人單頁圖片 ZIP 下載 URL */
-export const buildDownloadImagesZipUrl = (projectId, studentId) =>
-  `${API_BASE}/projects/${projectId}/students/${studentId}/images`;
+export const buildDownloadImagesZipUrl = (projectId, studentId, outputMode = "print") =>
+  `${API_BASE}/projects/${projectId}/students/${studentId}/images?mode=${outputMode}`;
 
 /** 整個專案所有 PDF 打包下載 URL（含輸出模式）*/
 export const buildDownloadAllZipUrl = (projectId, outputMode = "print") =>
   `${API_BASE}/projects/${projectId}/download/all?mode=${outputMode}`;
 
 /** 整個專案所有單頁圖片打包下載 URL */
-export const buildDownloadAllImagesZipUrl = (projectId) =>
-  `${API_BASE}/projects/${projectId}/download/all/images`;
+export const buildDownloadAllImagesZipUrl = (projectId, outputMode = "print") =>
+  `${API_BASE}/projects/${projectId}/download/all/images?mode=${outputMode}`;

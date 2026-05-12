@@ -182,8 +182,9 @@ export default function ProjectReview() {
       await renderStudent(id, studentId);
       await loadProject();
       setTs(Date.now());
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await triggerBlobDownload(
-        downloadImagesZip(id, studentId),
+        downloadImagesZip(id, studentId, effectiveMode),
         "album-images.zip",
       );
     } catch { showRetryToast("產生圖片失敗", () => handleDownloadOneImages(studentId)); }
@@ -224,8 +225,9 @@ export default function ProjectReview() {
       }
       await loadProject();
       setTs(Date.now());
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await triggerBlobDownload(
-        downloadAllImagesZip(id),
+        downloadAllImagesZip(id, effectiveMode),
         "album-images.zip",
       );
     } catch { showRetryToast("批次產生圖片失敗", handleDownloadAllImages); }

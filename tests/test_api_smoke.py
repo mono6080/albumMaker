@@ -679,7 +679,19 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             image_names = image_zip.namelist()
             assert len(image_names) == 1
             assert image_names[0].endswith("_page1.jpg")
-            assert image_zip.read(image_names[0]).startswith(b"\xff\xd8")
+            image_bytes = image_zip.read(image_names[0])
+            assert image_bytes.startswith(b"\xff\xd8")
+            with Image.open(BytesIO(image_bytes)) as exported_image:
+                assert exported_image.size == (1240, 1754)
+
+        download_screen_images = client.get(f"/api/projects/{project_id}/students/{student_id}/images?mode=screen")
+        assert_status(download_screen_images, 200)
+        with ZipFile(BytesIO(download_screen_images.content)) as image_zip:
+            image_names = image_zip.namelist()
+            assert len(image_names) == 1
+            assert image_names[0].endswith("_screen_page1.jpg")
+            with Image.open(BytesIO(image_zip.read(image_names[0]))) as exported_image:
+                assert exported_image.size == (794, 1123)
 
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)
@@ -692,7 +704,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert download_all.headers["content-disposition"].startswith("attachment;")
         assert download_all.content.startswith(b"PK")
 
-        download_all_images = client.get(f"/api/projects/{project_id}/download/all/images")
+        download_all_images = client.get(f"/api/projects/{project_id}/download/all/images?mode=screen")
         assert_status(download_all_images, 200)
         assert download_all_images.headers["content-type"].startswith("application/zip")
         assert download_all_images.headers["content-disposition"].startswith("attachment;")
@@ -701,7 +713,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             all_image_names = all_image_zip.namelist()
             assert len(all_image_names) == 1
             assert all_image_names[0].count("/") == 1
-            assert all_image_names[0].endswith("_page1.jpg")
+            assert all_image_names[0].endswith("_screen_page1.jpg")
 
         mapping_response = client.put(
             f"/api/projects/{project_id}/students/{student_id}/photos/mapping",

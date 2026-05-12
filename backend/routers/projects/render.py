@@ -208,26 +208,30 @@ def download_student_pdf(
 def download_student_images_as_zip(
     project_id: int,
     student_id: int,
+    mode: str = Query("print", pattern="^(print|screen)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """下載學生個人相冊的單頁 JPG 圖片 ZIP。"""
+    """下載學生個人相冊的單頁 JPG 圖片 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
+    effective_mode = mode if current_user.role == "admin" else "screen"
+
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
 
-    image_entries = get_student_image_entries(project, student)
+    image_entries = get_student_image_entries(project, student, effective_mode)
     if not image_entries:
         raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
 
     combined_stem = build_combined_stem(project.name, student.name)
-    content_disposition = build_content_disposition_header(f"{combined_stem}_images.zip")
+    screen_suffix = "_screen" if effective_mode == "screen" else ""
+    content_disposition = build_content_disposition_header(f"{combined_stem}{screen_suffix}_images.zip")
 
     return StreamingResponse(
-        io.BytesIO(build_zip_of_student_images(project, student, image_entries)),
+        io.BytesIO(build_zip_of_student_images(project, student, effective_mode, image_entries)),
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )
@@ -261,16 +265,20 @@ def download_all_pdfs_as_zip(
 @router.get("/{project_id}/download/all/images")
 def download_all_images_as_zip(
     project_id: int,
+    mode: str = Query("print", pattern="^(print|screen)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。"""
+    """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
 
-    zip_bytes = build_zip_of_all_student_images(project)
+    effective_mode = mode if current_user.role == "admin" else "screen"
 
-    zip_filename = f"{project.name}_images.zip"
+    zip_bytes = build_zip_of_all_student_images(project, effective_mode)
+
+    screen_suffix = "_screen" if effective_mode == "screen" else ""
+    zip_filename = f"{project.name}{screen_suffix}_images.zip"
     content_disposition = build_content_disposition_header(zip_filename)
 
     return StreamingResponse(

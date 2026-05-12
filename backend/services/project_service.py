@@ -157,8 +157,9 @@ def render_and_save_student_album(
     storage.delete_prefix(f"{output_prefix}/{combined_stem}")
     storage.put(print_key, save_album_pdf(rendered_images, mode="print"))
     storage.put(screen_key, save_album_pdf(rendered_images, mode="screen"))
-    for filename, img_bytes in save_album_images(rendered_images, combined_stem).items():
-        storage.put(f"{output_prefix}/{combined_stem}/{filename}", img_bytes)
+    for output_mode in ("print", "screen"):
+        for filename, img_bytes in save_album_images(rendered_images, combined_stem, mode=output_mode).items():
+            storage.put(f"{output_prefix}/{combined_stem}/images/{output_mode}/{filename}", img_bytes)
 
     student.output_filename = print_key
     db.commit()
@@ -196,7 +197,7 @@ def build_zip_of_all_student_pdfs(project: Project, output_mode: str) -> bytes:
     return output_buffer.read()
 
 
-def get_student_image_entries(project: Project, student: Student) -> list[tuple[str, bytes]]:
+def get_student_image_entries(project: Project, student: Student, output_mode: str) -> list[tuple[str, bytes]]:
     """讀取已渲染的學生單頁 JPG，回傳 ZIP 內檔名與 bytes。"""
     if not student.output_filename:
         return []
@@ -205,24 +206,29 @@ def get_student_image_entries(project: Project, student: Student) -> list[tuple[
     rendered_prefix = student.output_filename[:-4]
     rendered_stem = rendered_prefix.rsplit("/", 1)[-1]
     download_stem = build_combined_stem(project.name, student.name)
+    mode_suffix = "_screen" if output_mode == "screen" else ""
 
     entries = []
     for page_number in range(1, len(project.template.pages) + 1):
-        image_key = f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg"
+        image_key = f"{rendered_prefix}/images/{output_mode}/{rendered_stem}{mode_suffix}_page{page_number}.jpg"
+        if not storage.exists(image_key):
+            # 舊版渲染只存一套 JPG 在 output/{stem}/{stem}_pageN.jpg。
+            image_key = f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg"
         if not storage.exists(image_key):
             continue
-        entries.append((f"{download_stem}_page{page_number}.jpg", storage.get_bytes(image_key)))
+        entries.append((f"{download_stem}{mode_suffix}_page{page_number}.jpg", storage.get_bytes(image_key)))
     return entries
 
 
 def build_zip_of_student_images(
     project: Project,
     student: Student,
+    output_mode: str,
     image_entries: list[tuple[str, bytes]] | None = None,
 ) -> bytes:
     """將單一學生已渲染的頁面 JPG 打包成 ZIP。"""
     if image_entries is None:
-        image_entries = get_student_image_entries(project, student)
+        image_entries = get_student_image_entries(project, student, output_mode)
 
     output_buffer = io.BytesIO()
     with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
@@ -232,13 +238,13 @@ def build_zip_of_student_images(
     return output_buffer.read()
 
 
-def build_zip_of_all_student_images(project: Project) -> bytes:
+def build_zip_of_all_student_images(project: Project, output_mode: str) -> bytes:
     """將專案中所有已渲染學生的頁面 JPG 打包成 ZIP。"""
     output_buffer = io.BytesIO()
     with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
         for student in project.students:
             folder_name = build_combined_stem(project.name, student.name)
-            for filename, image_bytes in get_student_image_entries(project, student):
+            for filename, image_bytes in get_student_image_entries(project, student, output_mode):
                 zip_archive.writestr(f"{folder_name}/{filename}", image_bytes)
     output_buffer.seek(0)
     return output_buffer.read()
