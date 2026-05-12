@@ -37,6 +37,7 @@ from .schemas import RenderAllResult, RenderStudentResult
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+PREVIEW_JPEG_QUALITY = 72
 
 
 @router.get("/{project_id}/preview/{page_index}")
@@ -63,7 +64,7 @@ def preview_project_page(
     )
 
     image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=85)
+    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
     image_buffer.seek(0)
     return StreamingResponse(image_buffer, media_type="image/jpeg")
 
@@ -103,7 +104,7 @@ def preview_student_page(
     )
 
     image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=85)
+    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
     image_buffer.seek(0)
     return StreamingResponse(image_buffer, media_type="image/jpeg")
 

@@ -155,7 +155,7 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await page.getByRole("button", { name: "雙頁預覽" }).click();
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toBeVisible();
   await expect(page.getByRole("img", { name: "雙頁合併預覽" })).toBeVisible();
-  await page.getByRole("button", { name: "關閉雙頁預覽" }).click({ force: true });
+  await page.getByRole("button", { name: "關閉雙頁預覽" }).click();
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toHaveCount(0);
 });
 

@@ -19,8 +19,10 @@ from services.storage import get_storage
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
+PREVIEW_JPEG_QUALITY = 72
 
-def _jpeg_response(image: Image.Image, quality: int = 80) -> StreamingResponse:
+
+def _jpeg_response(image: Image.Image, quality: int = PREVIEW_JPEG_QUALITY) -> StreamingResponse:
     image_buffer = io.BytesIO()
     image.convert("RGB").save(image_buffer, format="JPEG", quality=quality)
     image_buffer.seek(0)
@@ -314,7 +316,7 @@ def preview_template_page(
         page_index=template_page.page_number,
     )
 
-    return _jpeg_response(preview_image, quality=80)
+    return _jpeg_response(preview_image)
 
 
 @router.get("/{template_id}/spread-preview/{start_page_index}")
@@ -352,4 +354,4 @@ def preview_template_spread(
     spread_image.paste(rendered_pages[0], (0, 0))
     spread_image.paste(rendered_pages[1], (page_width, 0))
 
-    return _jpeg_response(spread_image, quality=82)
+    return _jpeg_response(spread_image)
