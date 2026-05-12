@@ -9,6 +9,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 from PIL import Image
 
 from auth import hash_password
@@ -72,6 +73,16 @@ def png_bytes(size: tuple[int, int], color: tuple[int, int, int, int] = (240, 72
     image = Image.new("RGBA", size, color)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def workbook_bytes(rows: list[list[object]]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    buffer = BytesIO()
+    workbook.save(buffer)
     return buffer.getvalue()
 
 
@@ -341,6 +352,55 @@ def test_user_management_allows_multiple_teacher_supervisors():
         assert_status(after_demote_users, 200)
         teacher_after_demote = next(user for user in after_demote_users.json() if user["id"] == teacher["id"])
         assert teacher_after_demote["supervisor_ids"] == [second_supervisor["id"]]
+
+
+def test_admin_can_import_users_from_excel():
+    with started_client() as client:
+        login(client)
+        supervisor_username = unique_name("bulk_supervisor")
+        teacher_username = unique_name("bulk_teacher")
+        bad_teacher_username = unique_name("bad_teacher")
+
+        excel_payload = workbook_bytes([
+            ["帳號", "顯示名稱", "初始密碼", "角色", "主管帳號"],
+            [supervisor_username, "匯入主管", "supervisor-pass", "主管", ""],
+            [teacher_username, "匯入老師", "teacher-pass", "帶班老師", supervisor_username],
+            ["admin", "Existing Admin", "password", "管理員", ""],
+            [supervisor_username, "Duplicate Supervisor", "password", "主管", ""],
+            [bad_teacher_username, "錯誤老師", "teacher-pass", "老師", "missing_supervisor"],
+        ])
+
+        response = client.post(
+            "/api/users/import",
+            files={
+                "file": (
+                    "users.xlsx",
+                    excel_payload,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert_status(response, 201)
+        payload = response.json()
+        assert payload["created_count"] == 2
+        assert payload["skipped_count"] == 2
+        assert payload["error_count"] == 1
+        assert {item["username"] for item in payload["skipped"]} == {"admin", supervisor_username}
+        assert payload["errors"][0]["username"] == bad_teacher_username
+        assert "找不到主管" in payload["errors"][0]["error"]
+
+        users_response = client.get("/api/users/")
+        assert_status(users_response, 200)
+        users_by_username = {user["username"]: user for user in users_response.json()}
+        supervisor = users_by_username[supervisor_username]
+        teacher = users_by_username[teacher_username]
+        assert supervisor["role"] == "supervisor"
+        assert teacher["role"] == "teacher"
+        assert teacher["supervisor_ids"] == [supervisor["id"]]
+
+        client.cookies.clear()
+        login_payload = login(client, teacher_username, "teacher-pass")
+        assert login_payload["role"] == "teacher"
 
 
 def test_admin_can_reset_user_password_to_short_value():

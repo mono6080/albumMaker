@@ -3,11 +3,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Trash2, UserPlus, KeyRound, Pencil, Check, X } from "lucide-react";
+import { Trash2, UserPlus, KeyRound, Pencil, Check, X, FileSpreadsheet, Upload } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
 import {
   fetchAllUsers,
   createUser,
+  importUsersFromExcel,
   updateUser,
   deleteUser,
 } from "../api/authApi";
@@ -63,6 +64,9 @@ export default function UserManagement() {
   const [newRole, setNewRole] = useState("teacher");
   const [newSupervisorIds, setNewSupervisorIds] = useState([]);
   const [isCreating, setIsCreating] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   // 密碼重設狀態：{ [userId]: string }
   const [resetPasswords, setResetPasswords] = useState({});
@@ -72,6 +76,7 @@ export default function UserManagement() {
   const [supervisorEditorUserId, setSupervisorEditorUserId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const editInputRef = useRef(null);
+  const importFileRef = useRef(null);
   const supervisorEditorUser = users.find((user) => user.id === supervisorEditorUserId);
 
   const loadUsers = async () => {
@@ -111,6 +116,27 @@ export default function UserManagement() {
       toast.error(getErrorMessage(error, "建立失敗"));
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleImport = async (event) => {
+    event.preventDefault();
+    if (!importFile) {
+      toast.error("請選擇 Excel 檔");
+      return;
+    }
+    setIsImporting(true);
+    try {
+      const response = await importUsersFromExcel(importFile);
+      setImportResult(response.data);
+      toast.success(`已建立 ${response.data.created_count} 位使用者`);
+      setImportFile(null);
+      if (importFileRef.current) importFileRef.current.value = "";
+      await loadUsers();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "匯入失敗"));
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -261,6 +287,50 @@ export default function UserManagement() {
         </div>
       )}
       <h1 className="text-xl font-bold text-gray-900">使用者管理</h1>
+
+      <form
+        onSubmit={handleImport}
+        className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4"
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <h2 className="font-semibold text-gray-800 text-sm">Excel 批次建立</h2>
+          </div>
+          <div className="text-xs text-gray-400">
+            欄位：username、display_name、password、role、supervisor_username
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            ref={importFileRef}
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+            className="block min-w-0 flex-1 text-sm text-gray-600 file:mr-3 file:rounded-xl file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-gray-700 hover:file:bg-gray-200"
+          />
+          <button
+            type="submit"
+            disabled={isImporting || !importFile}
+            className="inline-flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            {isImporting ? "匯入中..." : "匯入"}
+          </button>
+        </div>
+        {importResult && (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 space-y-1">
+            <div>
+              建立 {importResult.created_count} 位，略過 {importResult.skipped_count} 位，錯誤 {importResult.error_count} 筆
+            </div>
+            {importResult.errors?.slice(0, 3).map((item) => (
+              <div key={`${item.row}-${item.username}`} className="text-red-600">
+                第 {item.row} 列 {item.username || "未填帳號"}：{item.error}
+              </div>
+            ))}
+          </div>
+        )}
+      </form>
 
       {/* 新增使用者表單 */}
       <form

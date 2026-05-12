@@ -60,6 +60,16 @@ export const fetchAllUsers = () =>
 export const createUser = (params) =>
   apiClient.post("/users/", params);
 
+/** 從 Excel 批次建立使用者 */
+export const importUsersFromExcel = (file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiClient.post("/users/import", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 60000,
+  });
+};
+
 /** 修改使用者資料 */
 export const updateUser = (userId, params) =>
   apiClient.patch(`/users/${userId}`, params);
