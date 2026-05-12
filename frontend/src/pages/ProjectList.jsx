@@ -295,10 +295,10 @@ export default function ProjectList() {
               </select>
             </div>
             <div>
-              <label className="text-xs text-gray-500 mb-1 block">自訂名稱（加在模板名後）</label>
+              <label className="text-xs text-gray-500 mb-1 block">自訂名稱 (分校) (班級)</label>
               <input
                 className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
-                placeholder="例：蘋果班 2026.01"
+                placeholder="例：東區校 10階A"
                 value={form.customName}
                 onChange={e => setForm(f => ({ ...f, customName: e.target.value }))}
               />
