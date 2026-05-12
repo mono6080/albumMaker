@@ -2,7 +2,7 @@
 
 import math
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from services.draw_helpers import (
     get_font, load_key, paste_rotated,
@@ -49,6 +49,19 @@ def _composite_rgba_layer(target: Image.Image, layer: Image.Image) -> None:
         target.alpha_composite(layer)
         return
     target.paste(layer, (0, 0), layer)
+
+
+def _visual_line_vertical_offset(
+    draw: ImageDraw.ImageDraw,
+    lines: list[str],
+    font: ImageFont.FreeTypeFont,
+    line_height_px: int,
+) -> int:
+    """補償 PIL anchor top 與 Konva verticalAlign='middle' 的視覺置中差異。"""
+    ref_text = next((line for line in lines if line), "A")
+    bbox = draw.textbbox((0, 0), ref_text, font=font, anchor="lt")
+    visual_height = bbox[3] - bbox[1]
+    return int(round((line_height_px - visual_height) / 2))
 
 
 def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int, slot_index: int = 0) -> None:
@@ -253,26 +266,20 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow["blur"]))
         _composite_rgba_layer(target, shadow_layer)
 
-    # 與 Konva textBaseline='middle' 對齊：補償 em-box 中點 vs 視覺頂端的落差
-    ascent_val, descent_val = font.getmetrics()
-    line_height_float = font_size * label.get("line_height", 1.4)
-    ref_text = lines[0] if lines else "A"
-    ref_la_bbox = draw.textbbox((0, 0), ref_text, font=font, anchor="la")
-    la_offset = ref_la_bbox[1]
-    konva_v_offset = int(line_height_float / 2 - descent_val + la_offset)
+    visual_v_offset = _visual_line_vertical_offset(draw, lines, font, line_height_px)
 
     if rotation:
         diag = int(math.sqrt(lw**2 + lh**2)) + 4
         pad = (diag - min(lw, lh)) // 2 + 2
         tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
-        tmp_y = pad + (lh - total_h) // 2 + konva_v_offset
+        tmp_y = pad + (lh - total_h) // 2 + visual_v_offset
         _draw_shadow(tmp, pad, tmp_y)
         tmp_draw = ImageDraw.Draw(tmp, "RGBA")
         _draw_lines(tmp_draw, pad, tmp_y, font_color)
         paste_rotated(canvas, tmp, label["x"] + lw / 2, label["y"] + lh / 2, rotation)
         return
 
-    start_y = label["y"] + (lh - total_h) // 2 + konva_v_offset
+    start_y = label["y"] + (lh - total_h) // 2 + visual_v_offset
     _draw_shadow(canvas, label["x"], start_y)
     draw = ImageDraw.Draw(canvas, "RGBA")
     _draw_lines(draw, label["x"], start_y, font_color)

@@ -6,7 +6,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-from PIL import ImageChops
+from PIL import Image, ImageChops
 
 from services.render_service import render_page
 
@@ -74,6 +74,38 @@ def test_render_page_label_text_override_changes_text_region():
     ).crop(label_box)
 
     assert ImageChops.difference(short_text, long_text).getbbox() is not None
+
+
+def test_render_page_label_text_is_visually_centered_in_box():
+    layout = load_layout()
+    layout["text_labels"] = [
+        {
+            "id": 99,
+            "x": 96,
+            "y": 340,
+            "width": 180,
+            "height": 110,
+            "text": "（姓名）的文字裡面要打孩子學習狀況的描述",
+            "font_size": 20,
+            "font_color": "#111827",
+            "font_family": "msjh",
+            "line_height": 1.4,
+            "text_align": "center",
+        }
+    ]
+    layout["text_bubbles"] = []
+    layout["photo_slots"] = []
+    layout["footer"] = None
+
+    image = render_page(layout, student_name="姓名", page_data={}, page_index=0)
+    crop = image.crop((96, 340, 276, 450)).convert("RGB")
+    diff = ImageChops.difference(crop, Image.new("RGB", crop.size, WHITE))
+    bbox = diff.getbbox()
+
+    assert bbox is not None
+    text_center_y = (bbox[1] + bbox[3]) / 2
+    box_center_y = crop.height / 2
+    assert abs(text_center_y - box_center_y) <= 6
 
 
 def test_render_page_empty_label_text_falls_back_to_template_text():
