@@ -8,10 +8,10 @@ import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
-import { buildDownloadPdfUrl } from "../api/urls";
+import { buildDownloadImagesZipUrl, buildDownloadPdfUrl } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
-import { ChevronRight, ChevronLeft, CircleHelp, Download, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, CircleHelp, Download, ImageDown, Loader2 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
@@ -57,7 +57,7 @@ const STUDENT_EDIT_GUIDE_STEPS = [
   {
     element: '[data-guide="student-download-button"]',
     title: "產出並下載",
-    description: "照片和文字確認後，按這裡產生此學生的 PDF 並下載。",
+    description: "照片和文字確認後，按這裡產生此學生的 PDF；旁邊可下載單頁圖片 ZIP。",
     side: "bottom",
     align: "end",
   },
@@ -76,6 +76,7 @@ export default function StudentEdit() {
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
+  const [isImageRendering, setIsImageRendering] = useState(false);
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
@@ -193,6 +194,25 @@ export default function StudentEdit() {
 
   // ── 渲染（含前置強制儲存） ────────────────────────────────────────────────
 
+  const triggerBlobDownload = async (downloadPath, fallbackFilename) => {
+    const apiPath = downloadPath.replace(/^\/api/, "");
+    const response = await apiClient.get(apiPath, { responseType: "blob" });
+    const disposition = response.headers["content-disposition"] ?? "";
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const asciiMatch = disposition.match(/filename="([^"]+)"/i);
+    const filename = utf8Match
+      ? decodeURIComponent(utf8Match[1])
+      : asciiMatch
+        ? asciiMatch[1]
+        : fallbackFilename;
+    const blobUrl = URL.createObjectURL(response.data);
+    const anchor = document.createElement("a");
+    anchor.href = blobUrl;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(blobUrl);
+  };
+
   const handleRenderPdf = async () => {
     // 先強制同步儲存，確保渲染使用最新文字
     await flushSave();
@@ -203,20 +223,28 @@ export default function StudentEdit() {
       await loadStudentData();
       refreshAllPreviews();
       // 渲染完成後自動下載
-      const downloadPath = buildDownloadPdfUrl(projectId, studentId);
-      const apiPath = downloadPath.replace(/^\/api/, "");
-      const response = await apiClient.get(apiPath, { responseType: "blob" });
-      const blobUrl = URL.createObjectURL(response.data);
-      const anchor = document.createElement("a");
-      anchor.href = blobUrl;
-      anchor.download = `${student.name}.pdf`;
-      anchor.click();
-      URL.revokeObjectURL(blobUrl);
+      await triggerBlobDownload(buildDownloadPdfUrl(projectId, studentId), `${student.name}.pdf`);
       toast.success("PDF 已下載");
     } catch {
       toast.error("產生失敗");
     }
     setIsRendering(false);
+  };
+
+  const handleRenderImages = async () => {
+    await flushSave();
+
+    setIsImageRendering(true);
+    try {
+      await renderStudent(projectId, studentId);
+      await loadStudentData();
+      refreshAllPreviews();
+      await triggerBlobDownload(buildDownloadImagesZipUrl(projectId, studentId), `${student.name}_images.zip`);
+      toast.success("圖片 ZIP 已下載");
+    } catch {
+      toast.error("產生圖片失敗");
+    }
+    setIsImageRendering(false);
   };
 
   const startGuide = () => {
@@ -249,6 +277,7 @@ export default function StudentEdit() {
   // ── 共用面板內容 ──────────────────────────────────────────────────────────
 
   const isCurrentPageSkipped = skippedPages.has(activePage);
+  const isOutputBusy = isRendering || isImageRendering;
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
@@ -286,15 +315,26 @@ export default function StudentEdit() {
           </button>
           <button
             onClick={handleRenderPdf}
-            disabled={isRendering}
+            disabled={isOutputBusy}
             data-guide="student-download-button"
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm"
           >
             {isRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <Download className="w-4 h-4" />}
-            <span className="hidden sm:inline">{isRendering ? "產生中..." : "產出並下載"}</span>
-            <span className="sm:hidden">{isRendering ? "..." : "下載"}</span>
+            <span className="hidden sm:inline">{isRendering ? "產生中..." : "下載 PDF"}</span>
+            <span className="sm:hidden">{isRendering ? "..." : "PDF"}</span>
+          </button>
+          <button
+            onClick={handleRenderImages}
+            disabled={isOutputBusy}
+            className="flex items-center gap-1.5 bg-sky-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm"
+          >
+            {isImageRendering
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <ImageDown className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isImageRendering ? "產生中..." : "下載圖片"}</span>
+            <span className="sm:hidden">{isImageRendering ? "..." : "圖片"}</span>
           </button>
         </div>
       </div>

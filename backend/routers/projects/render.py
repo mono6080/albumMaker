@@ -16,7 +16,10 @@ from database import User, get_db
 from services.project_service import (
     build_combined_stem,
     build_content_disposition_header,
+    build_zip_of_all_student_images,
     build_zip_of_all_student_pdfs,
+    build_zip_of_student_images,
+    get_student_image_entries,
     get_template_page_layouts,
     merge_project_label_texts_into_pages,
     render_and_save_student_album,
@@ -201,6 +204,35 @@ def download_student_pdf(
     )
 
 
+@router.get("/{project_id}/students/{student_id}/images")
+def download_student_images_as_zip(
+    project_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """下載學生個人相冊的單頁 JPG 圖片 ZIP。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+    student = get_student_or_404(student_id, project_id, db)
+
+    if not student.output_filename:
+        raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
+
+    image_entries = get_student_image_entries(project, student)
+    if not image_entries:
+        raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
+
+    combined_stem = build_combined_stem(project.name, student.name)
+    content_disposition = build_content_disposition_header(f"{combined_stem}_images.zip")
+
+    return StreamingResponse(
+        io.BytesIO(build_zip_of_student_images(project, student, image_entries)),
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
 @router.get("/{project_id}/download/all")
 def download_all_pdfs_as_zip(
     project_id: int,
@@ -217,6 +249,28 @@ def download_all_pdfs_as_zip(
     zip_bytes = build_zip_of_all_student_pdfs(project, effective_mode)
 
     zip_filename = f"{project.name}.zip"
+    content_disposition = build_content_disposition_header(zip_filename)
+
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
+@router.get("/{project_id}/download/all/images")
+def download_all_images_as_zip(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+
+    zip_bytes = build_zip_of_all_student_images(project)
+
+    zip_filename = f"{project.name}_images.zip"
     content_disposition = build_content_disposition_header(zip_filename)
 
     return StreamingResponse(

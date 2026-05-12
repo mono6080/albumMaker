@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from uuid import uuid4
+from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -669,6 +670,17 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert download_pdf.headers["content-disposition"].startswith("attachment;")
         assert download_pdf.content.startswith(b"%PDF")
 
+        download_images = client.get(f"/api/projects/{project_id}/students/{student_id}/images")
+        assert_status(download_images, 200)
+        assert download_images.headers["content-type"].startswith("application/zip")
+        assert download_images.headers["content-disposition"].startswith("attachment;")
+        assert download_images.content.startswith(b"PK")
+        with ZipFile(BytesIO(download_images.content)) as image_zip:
+            image_names = image_zip.namelist()
+            assert len(image_names) == 1
+            assert image_names[0].endswith("_page1.jpg")
+            assert image_zip.read(image_names[0]).startswith(b"\xff\xd8")
+
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)
         assert render_all.json()["errors"] == []
@@ -679,6 +691,17 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert download_all.headers["content-type"].startswith("application/zip")
         assert download_all.headers["content-disposition"].startswith("attachment;")
         assert download_all.content.startswith(b"PK")
+
+        download_all_images = client.get(f"/api/projects/{project_id}/download/all/images")
+        assert_status(download_all_images, 200)
+        assert download_all_images.headers["content-type"].startswith("application/zip")
+        assert download_all_images.headers["content-disposition"].startswith("attachment;")
+        assert download_all_images.content.startswith(b"PK")
+        with ZipFile(BytesIO(download_all_images.content)) as all_image_zip:
+            all_image_names = all_image_zip.namelist()
+            assert len(all_image_names) == 1
+            assert all_image_names[0].count("/") == 1
+            assert all_image_names[0].endswith("_page1.jpg")
 
         mapping_response = client.put(
             f"/api/projects/{project_id}/students/{student_id}/photos/mapping",

@@ -3,12 +3,18 @@ import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { fetchProject as getProject, renderStudent } from "../api/projectApi";
 import { fetchTemplate as getTemplate } from "../api/templateApi";
-import { buildStudentPagePreviewUrl as previewUrl, buildDownloadPdfUrl as downloadPdf, buildDownloadAllZipUrl as downloadAllZip } from "../api/urls";
+import {
+  buildStudentPagePreviewUrl as previewUrl,
+  buildDownloadPdfUrl as downloadPdf,
+  buildDownloadImagesZipUrl as downloadImagesZip,
+  buildDownloadAllZipUrl as downloadAllZip,
+  buildDownloadAllImagesZipUrl as downloadAllImagesZip,
+} from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import {
-  ChevronRight, CircleHelp, Download, Loader2, Eye, Pencil, Package,
+  ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
@@ -45,14 +51,14 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-download-student"]',
     title: "下載單位學生",
-    description: "只產出並下載這位學生的 PDF。",
+    description: "只產出並下載這位學生的 PDF；旁邊可下載單頁圖片 ZIP。",
     side: "bottom",
     align: "end",
   },
   {
     element: '[data-guide="review-download-all"]',
     title: "下載全部 ZIP",
-    description: "所有學生確認完成後，用這裡批次產生並下載 ZIP。",
+    description: "所有學生確認完成後，用這裡批次產生並下載 PDF ZIP；旁邊可下載圖片 ZIP。",
     side: "bottom",
     align: "end",
   },
@@ -74,9 +80,12 @@ export default function ProjectReview() {
   const [template, setTemplate] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [rendering, setRendering] = useState({});
+  const [renderingImages, setRenderingImages] = useState({});
   const [renderingAll, setRenderingAll] = useState(false);
+  const [renderingAllImages, setRenderingAllImages] = useState(false);
   // { current: number, total: number } | null
   const [renderAllProgress, setRenderAllProgress] = useState(null);
+  const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   const [preview, setPreview] = useState(null);
   const [ts, setTs] = useState(0);
   // 非 admin 固定使用 screen 模式
@@ -167,6 +176,20 @@ export default function ProjectReview() {
     setRendering(prev => ({ ...prev, [studentId]: false }));
   };
 
+  const handleDownloadOneImages = async (studentId) => {
+    setRenderingImages(prev => ({ ...prev, [studentId]: true }));
+    try {
+      await renderStudent(id, studentId);
+      await loadProject();
+      setTs(Date.now());
+      await triggerBlobDownload(
+        downloadImagesZip(id, studentId),
+        "album-images.zip",
+      );
+    } catch { showRetryToast("產生圖片失敗", () => handleDownloadOneImages(studentId)); }
+    setRenderingImages(prev => ({ ...prev, [studentId]: false }));
+  };
+
   const handleDownloadAll = async () => {
     const students = project.students;
     if (!students.length) return;
@@ -187,6 +210,27 @@ export default function ProjectReview() {
     } catch { showRetryToast("批次產生失敗", handleDownloadAll); }
     setRenderingAll(false);
     setRenderAllProgress(null);
+  };
+
+  const handleDownloadAllImages = async () => {
+    const students = project.students;
+    if (!students.length) return;
+    setRenderingAllImages(true);
+    setRenderAllImagesProgress({ current: 0, total: students.length });
+    try {
+      for (let i = 0; i < students.length; i++) {
+        setRenderAllImagesProgress({ current: i + 1, total: students.length });
+        await renderStudent(id, students[i].id);
+      }
+      await loadProject();
+      setTs(Date.now());
+      await triggerBlobDownload(
+        downloadAllImagesZip(id),
+        "album-images.zip",
+      );
+    } catch { showRetryToast("批次產生圖片失敗", handleDownloadAllImages); }
+    setRenderingAllImages(false);
+    setRenderAllImagesProgress(null);
   };
 
   const handleSubmitComment = async () => {
@@ -232,6 +276,7 @@ export default function ProjectReview() {
 
   const pageCount = template.pages.length;
   const doneCount = project.students.filter(s => s.output_filename).length;
+  const isBatchRendering = renderingAll || renderingAllImages;
 
   return (
     <div className="w-full">
@@ -280,7 +325,7 @@ export default function ProjectReview() {
           </button>
           <button
             onClick={handleDownloadAll}
-            disabled={renderingAll || project.students.length === 0}
+            disabled={isBatchRendering || project.students.length === 0}
             data-guide="review-download-all"
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
           >
@@ -292,7 +337,23 @@ export default function ProjectReview() {
                     : <span className="hidden sm:inline">產生中...</span>
                   }
                 </>
-              : <><Package className="w-4 h-4" /><span>下載全部 ZIP</span></>
+              : <><Package className="w-4 h-4" /><span>PDF ZIP</span></>
+            }
+          </button>
+          <button
+            onClick={handleDownloadAllImages}
+            disabled={isBatchRendering || project.students.length === 0}
+            className="flex items-center gap-1.5 bg-sky-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
+          >
+            {renderingAllImages
+              ? <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {renderAllImagesProgress
+                    ? <span>{renderAllImagesProgress.current}/{renderAllImagesProgress.total}</span>
+                    : <span className="hidden sm:inline">產生中...</span>
+                  }
+                </>
+              : <><ImageDown className="w-4 h-4" /><span>全部圖片</span></>
             }
           </button>
         </div>
@@ -381,6 +442,8 @@ export default function ProjectReview() {
           {project.students.map(student => {
             const isDone = !!student.output_filename;
             const isStudentRendering = rendering[student.id];
+            const isStudentImageRendering = renderingImages[student.id];
+            const isStudentBusy = isStudentRendering || isStudentImageRendering;
             const studentSkippedPages = new Set(
               (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
             );
@@ -424,7 +487,7 @@ export default function ProjectReview() {
                       <div className="font-semibold text-gray-900">{student.name}</div>
                       <div className={`flex items-center gap-1 text-xs mt-0.5 ${isDone ? "text-emerald-600" : "text-gray-400"}`}>
                         {isDone
-                          ? <><CheckCircle2 className="w-3 h-3" />已產生 PDF</>
+                          ? <><CheckCircle2 className="w-3 h-3" />已產生輸出</>
                           : <><Clock className="w-3 h-3" />尚未產生</>
                         }
                       </div>
@@ -451,7 +514,7 @@ export default function ProjectReview() {
                     </button>
                     <button
                       onClick={() => handleDownloadOne(student.id)}
-                      disabled={isStudentRendering}
+                      disabled={isStudentBusy}
                       data-guide="review-download-student"
                       className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors ml-auto"
                     >
@@ -459,7 +522,18 @@ export default function ProjectReview() {
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Download className="w-3 h-3" />
                       }
-                      {isStudentRendering ? "產生中..." : "下載"}
+                      {isStudentRendering ? "產生中..." : "PDF"}
+                    </button>
+                    <button
+                      onClick={() => handleDownloadOneImages(student.id)}
+                      disabled={isStudentBusy}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 disabled:opacity-40 transition-colors"
+                    >
+                      {isStudentImageRendering
+                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                        : <ImageDown className="w-3 h-3" />
+                      }
+                      {isStudentImageRendering ? "產生中..." : "圖片"}
                     </button>
                   </div>
                 </div>

@@ -194,3 +194,51 @@ def build_zip_of_all_student_pdfs(project: Project, output_mode: str) -> bytes:
             zip_archive.writestr(f"{combined_stem}{suffix}.pdf", storage.get_bytes(pdf_key))
     output_buffer.seek(0)
     return output_buffer.read()
+
+
+def get_student_image_entries(project: Project, student: Student) -> list[tuple[str, bytes]]:
+    """讀取已渲染的學生單頁 JPG，回傳 ZIP 內檔名與 bytes。"""
+    if not student.output_filename:
+        return []
+
+    storage = get_storage()
+    rendered_prefix = student.output_filename[:-4]
+    rendered_stem = rendered_prefix.rsplit("/", 1)[-1]
+    download_stem = build_combined_stem(project.name, student.name)
+
+    entries = []
+    for page_number in range(1, len(project.template.pages) + 1):
+        image_key = f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg"
+        if not storage.exists(image_key):
+            continue
+        entries.append((f"{download_stem}_page{page_number}.jpg", storage.get_bytes(image_key)))
+    return entries
+
+
+def build_zip_of_student_images(
+    project: Project,
+    student: Student,
+    image_entries: list[tuple[str, bytes]] | None = None,
+) -> bytes:
+    """將單一學生已渲染的頁面 JPG 打包成 ZIP。"""
+    if image_entries is None:
+        image_entries = get_student_image_entries(project, student)
+
+    output_buffer = io.BytesIO()
+    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
+        for filename, image_bytes in image_entries:
+            zip_archive.writestr(filename, image_bytes)
+    output_buffer.seek(0)
+    return output_buffer.read()
+
+
+def build_zip_of_all_student_images(project: Project) -> bytes:
+    """將專案中所有已渲染學生的頁面 JPG 打包成 ZIP。"""
+    output_buffer = io.BytesIO()
+    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
+        for student in project.students:
+            folder_name = build_combined_stem(project.name, student.name)
+            for filename, image_bytes in get_student_image_entries(project, student):
+                zip_archive.writestr(f"{folder_name}/{filename}", image_bytes)
+    output_buffer.seek(0)
+    return output_buffer.read()

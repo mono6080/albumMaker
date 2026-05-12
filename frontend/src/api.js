@@ -49,7 +49,9 @@ export {
   buildProjectPagePreviewUrl as projectPreviewUrl,
   buildStudentPagePreviewUrl as previewUrl,
   buildDownloadPdfUrl as downloadPdf,
+  buildDownloadImagesZipUrl as downloadImagesZip,
   buildDownloadAllZipUrl as downloadAllZip,
+  buildDownloadAllImagesZipUrl as downloadAllImagesZip,
   buildTemplatePagePreviewUrl as templatePagePreviewUrl,
   buildTemplateSpreadPreviewUrl as templateSpreadPreviewUrl,
 } from "./api/urls";
