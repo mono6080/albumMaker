@@ -2,6 +2,8 @@
 # 處理頁面預覽圖生成、相冊 PDF 渲染（單生 / 全班）、PDF 與 ZIP 下載
 
 import io
+import hashlib
+import json
 import logging
 import time
 
@@ -39,16 +41,63 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 PREVIEW_JPEG_QUALITY = 72
 PREVIEW_CACHE_HEADERS = {"Cache-Control": "private, max-age=300"}
+PREVIEW_CACHE_VERSION = "project-preview-v1"
 
 
-def _preview_jpeg_response(image) -> StreamingResponse:
+def _preview_scale_key(scale: float) -> str:
+    return f"{scale:.3f}".replace(".", "_")
+
+
+def _preview_payload_hash(payload: dict) -> str:
+    payload_json = json.dumps(
+        {"version": PREVIEW_CACHE_VERSION, **payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()[:24]
+
+
+def _render_preview_jpeg_bytes(layout: dict, student_name: str, page_data: dict, page_index: int, scale: float) -> bytes:
+    preview_image = render_preview_page(
+        layout,
+        student_name,
+        page_data,
+        page_index=page_index,
+        scale=scale,
+    )
     image_buffer = io.BytesIO()
-    image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
-    image_buffer.seek(0)
-    return StreamingResponse(
-        image_buffer,
+    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
+    return image_buffer.getvalue()
+
+
+def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes):
+    storage = get_storage()
+    cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
+    headers = {**PREVIEW_CACHE_HEADERS, "X-Preview-Cache-Key": cache_key}
+
+    try:
+        if storage.exists(cache_key):
+            return Response(
+                content=storage.get_bytes(cache_key),
+                media_type="image/jpeg",
+                headers={**headers, "X-Preview-Cache": "HIT"},
+            )
+    except Exception as cache_error:
+        logger.warning("讀取預覽快取失敗 key=%s error=%s", cache_key, cache_error)
+
+    image_bytes = render_bytes()
+    try:
+        storage.delete_prefix(cache_prefix)
+        storage.put(cache_key, image_bytes)
+    except Exception as cache_error:
+        logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
+
+    return Response(
+        content=image_bytes,
         media_type="image/jpeg",
-        headers=PREVIEW_CACHE_HEADERS,
+        headers={**headers, "X-Preview-Cache": "MISS"},
     )
 
 
@@ -57,6 +106,7 @@ def preview_project_page(
     project_id: int,
     page_index: int,
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
+    t: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
@@ -68,16 +118,25 @@ def preview_project_page(
 
     project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
     page_label_texts = project_label_texts.get(str(page_index), {})
-
-    preview_image = render_preview_page(
-        page_layouts[page_index],
-        "（姓名）",
-        {"label_texts": page_label_texts},
-        page_index=page_index,
-        scale=scale,
+    page_data = {"label_texts": page_label_texts}
+    page_layout = page_layouts[page_index]
+    cache_prefix = (
+        f"projects/proj{project_id}/previews/project/"
+        f"page{page_index}/scale{_preview_scale_key(scale)}"
     )
-
-    return _preview_jpeg_response(preview_image)
+    return _stored_preview_response(
+        cache_prefix,
+        {
+            "kind": "project",
+            "project_updated_at": project.updated_at,
+            "page_index": page_index,
+            "scale": scale,
+            "t": t,
+            "layout": page_layout,
+            "page_data": page_data,
+        },
+        lambda: _render_preview_jpeg_bytes(page_layout, "（姓名）", page_data, page_index, scale),
+    )
 
 
 @router.get("/{project_id}/students/{student_id}/preview/{page_index}")
@@ -86,6 +145,7 @@ def preview_student_page(
     student_id: int,
     page_index: int,
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
+    t: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """渲染學生個人頁面預覽，回傳 JPEG。"""
@@ -108,16 +168,26 @@ def preview_student_page(
         for page_data in student_pages_data
     }
     current_page_data = page_data_by_index.get(page_index, {})
-
-    preview_image = render_preview_page(
-        page_layouts[page_index],
-        student.name,
-        current_page_data,
-        page_index=page_index,
-        scale=scale,
+    page_layout = page_layouts[page_index]
+    cache_prefix = (
+        f"projects/proj{project_id}/previews/students/student{student_id}/"
+        f"page{page_index}/scale{_preview_scale_key(scale)}"
     )
-
-    return _preview_jpeg_response(preview_image)
+    return _stored_preview_response(
+        cache_prefix,
+        {
+            "kind": "student",
+            "project_updated_at": project.updated_at,
+            "student_updated_at": student.updated_at,
+            "student_name": student.name,
+            "page_index": page_index,
+            "scale": scale,
+            "t": t,
+            "layout": page_layout,
+            "page_data": current_page_data,
+        },
+        lambda: _render_preview_jpeg_bytes(page_layout, student.name, current_page_data, page_index, scale),
+    )
 
 
 @router.post("/{project_id}/students/{student_id}/render", response_model=RenderStudentResult)

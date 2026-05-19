@@ -752,6 +752,9 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
+        assert project_blank_preview.headers["x-preview-cache"] == "MISS"
+        project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
+        assert (tmp_path / "uploads" / project_preview_key).exists()
         with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
             assert preview_image.size == (476, 674)
             assert count_non_whiteish_pixels(
@@ -759,14 +762,27 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
                 scale_box_for_image((96, 340, 456, 436), preview_image),
             ) < 5
 
+        project_blank_preview_cached = client.get(f"/api/projects/{project_id}/preview/0")
+        assert_status(project_blank_preview_cached, 200)
+        assert project_blank_preview_cached.headers["x-preview-cache"] == "HIT"
+        assert project_blank_preview_cached.content == project_blank_preview.content
+
         student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview, 200)
+        assert student_blank_preview.headers["x-preview-cache"] == "MISS"
+        student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
+        assert (tmp_path / "uploads" / student_preview_key).exists()
         with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
             assert preview_image.size == (476, 674)
             assert count_non_whiteish_pixels(
                 preview_image,
                 scale_box_for_image((96, 340, 456, 436), preview_image),
             ) < 5
+
+        student_blank_preview_cached = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
+        assert_status(student_blank_preview_cached, 200)
+        assert student_blank_preview_cached.headers["x-preview-cache"] == "HIT"
+        assert student_blank_preview_cached.content == student_blank_preview.content
 
         render_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
         assert_status(render_response, 200)
