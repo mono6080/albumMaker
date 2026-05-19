@@ -24,7 +24,7 @@ from services.project_service import (
     merge_project_label_texts_into_pages,
     render_and_save_student_album,
 )
-from services.render_service import render_page
+from services.render_service import PREVIEW_RENDER_SCALE, render_preview_page
 from services.storage import get_storage
 
 from ._helpers import (
@@ -38,12 +38,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 PREVIEW_JPEG_QUALITY = 72
+PREVIEW_CACHE_HEADERS = {"Cache-Control": "private, max-age=300"}
+
+
+def _preview_jpeg_response(image) -> StreamingResponse:
+    image_buffer = io.BytesIO()
+    image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
+    image_buffer.seek(0)
+    return StreamingResponse(
+        image_buffer,
+        media_type="image/jpeg",
+        headers=PREVIEW_CACHE_HEADERS,
+    )
 
 
 @router.get("/{project_id}/preview/{page_index}")
 def preview_project_page(
     project_id: int,
     page_index: int,
+    scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     db: Session = Depends(get_db),
 ):
     """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
@@ -56,17 +69,15 @@ def preview_project_page(
     project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
     page_label_texts = project_label_texts.get(str(page_index), {})
 
-    preview_image = render_page(
+    preview_image = render_preview_page(
         page_layouts[page_index],
         "（姓名）",
         {"label_texts": page_label_texts},
         page_index=page_index,
+        scale=scale,
     )
 
-    image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
-    image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/jpeg")
+    return _preview_jpeg_response(preview_image)
 
 
 @router.get("/{project_id}/students/{student_id}/preview/{page_index}")
@@ -74,6 +85,7 @@ def preview_student_page(
     project_id: int,
     student_id: int,
     page_index: int,
+    scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     db: Session = Depends(get_db),
 ):
     """渲染學生個人頁面預覽，回傳 JPEG。"""
@@ -97,17 +109,15 @@ def preview_student_page(
     }
     current_page_data = page_data_by_index.get(page_index, {})
 
-    preview_image = render_page(
+    preview_image = render_preview_page(
         page_layouts[page_index],
         student.name,
         current_page_data,
         page_index=page_index,
+        scale=scale,
     )
 
-    image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
-    image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/jpeg")
+    return _preview_jpeg_response(preview_image)
 
 
 @router.post("/{project_id}/students/{student_id}/render", response_model=RenderStudentResult)

@@ -85,6 +85,17 @@ def count_non_whiteish_pixels(image: Image.Image, box: tuple[int, int, int, int]
     )
 
 
+def scale_box_for_image(box: tuple[int, int, int, int], image: Image.Image) -> tuple[int, int, int, int]:
+    scale_x = image.width / 794
+    scale_y = image.height / 1123
+    return (
+        round(box[0] * scale_x),
+        round(box[1] * scale_y),
+        round(box[2] * scale_x),
+        round(box[3] * scale_y),
+    )
+
+
 def workbook_bytes(rows: list[list[object]]) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
@@ -742,12 +753,20 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
         with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
-            assert count_non_whiteish_pixels(preview_image, (96, 340, 456, 436)) < 5
+            assert preview_image.size == (476, 674)
+            assert count_non_whiteish_pixels(
+                preview_image,
+                scale_box_for_image((96, 340, 456, 436), preview_image),
+            ) < 5
 
         student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview, 200)
         with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
-            assert count_non_whiteish_pixels(preview_image, (96, 340, 456, 436)) < 5
+            assert preview_image.size == (476, 674)
+            assert count_non_whiteish_pixels(
+                preview_image,
+                scale_box_for_image((96, 340, 456, 436), preview_image),
+            ) < 5
 
         render_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
         assert_status(render_response, 200)

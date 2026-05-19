@@ -3,6 +3,7 @@
 import io
 import math
 import os
+from functools import lru_cache
 from typing import Optional
 
 from PIL import Image, ImageCms, ImageDraw, ImageFilter, ImageFont
@@ -65,6 +66,7 @@ def load_key(key: str) -> Optional[Image.Image]:
     return to_srgb(storage.open_image(key))
 
 
+@lru_cache(maxsize=128)
 def get_font(size: int, family: str = None) -> ImageFont.FreeTypeFont:
     """Return a FreeType font at `size` pts. If `family` is specified, use FONT_MAP lookup."""
     candidates = []

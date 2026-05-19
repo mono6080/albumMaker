@@ -63,6 +63,7 @@ Student page data schema (pages_data_json is a list, one item per page):
 
 import io
 import os
+from copy import deepcopy
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -80,6 +81,74 @@ UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uplo
 
 # 各元素類型未設定 z_index 時的預設基底（維持向後相容的渲染順序）
 _TYPE_Z_BASE = {"photo": 0, "bubble": 100, "text": 200, "sticker": 300}
+_PREVIEW_NUMERIC_KEYS = {
+    "x",
+    "y",
+    "width",
+    "height",
+    "font_size",
+    "border_width",
+    "border_radius",
+    "shadow_offset_x",
+    "shadow_offset_y",
+    "shadow_blur",
+    "text_shadow_offset_x",
+    "text_shadow_offset_y",
+    "text_shadow_blur",
+    "letter_spacing",
+}
+PREVIEW_RENDER_SCALE = 0.6
+
+
+def _scale_number(value, scale: float):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(round(value * scale))
+    if isinstance(value, float):
+        return value * scale
+    return value
+
+
+def _scale_layout_item(item: dict, scale: float) -> dict:
+    return {
+        key: _scale_number(value, scale) if key in _PREVIEW_NUMERIC_KEYS else value
+        for key, value in item.items()
+    }
+
+
+def scale_layout_for_preview(layout: dict, scale: float = PREVIEW_RENDER_SCALE) -> dict:
+    """Return a scaled copy of a layout for fast browser previews."""
+    if scale >= 0.999:
+        return deepcopy(layout)
+
+    scaled_layout = deepcopy(layout)
+    scaled_layout["canvas_width"] = max(1, int(round(layout.get("canvas_width", 794) * scale)))
+    scaled_layout["canvas_height"] = max(1, int(round(layout.get("canvas_height", 1123) * scale)))
+
+    for collection_key in ("photo_slots", "text_bubbles", "text_labels", "stickers"):
+        scaled_layout[collection_key] = [
+            _scale_layout_item(item, scale)
+            for item in layout.get(collection_key, [])
+        ]
+
+    if layout.get("footer"):
+        scaled_layout["footer"] = _scale_layout_item(layout["footer"], scale)
+    if layout.get("logo"):
+        scaled_layout["logo"] = _scale_layout_item(layout["logo"], scale)
+
+    return scaled_layout
+
+
+def render_preview_page(
+    layout: dict,
+    student_name: str,
+    page_data: dict,
+    page_index: int = 0,
+    scale: float = PREVIEW_RENDER_SCALE,
+) -> Image.Image:
+    """Render a lower-resolution page image for interactive browser previews."""
+    return render_page(scale_layout_for_preview(layout, scale), student_name, page_data, page_index=page_index)
 
 
 def render_page(layout: dict, student_name: str, page_data: dict, output_size: tuple = (794, 1123), page_index: int = 0) -> Image.Image:
