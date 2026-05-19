@@ -1,3 +1,5 @@
+import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
+
 export const CANVAS_REAL_WIDTH = 794;
 export const CANVAS_REAL_HEIGHT = 1123;
 export const CANVAS_DISPLAY_WIDTH = 530;
@@ -128,6 +130,8 @@ export function getTextLabelModel(data) {
   return {
     type: "text",
     id: data.id,
+    textRole: getTextLabelRole(data),
+    isFillable: isFillableTextLabel(data),
     box: getDisplayBox(data),
     stroke: "#AAAAAA",
     text: (data.text ?? "").substring(0, 60),

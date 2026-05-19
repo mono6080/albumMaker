@@ -4,6 +4,7 @@
 import { Type } from "lucide-react";
 import AlbumPageNav from "./AlbumPageNav";
 import TextVariableTextarea from "./TextVariableTextarea";
+import { getFillableTextLabels } from "../utils/textLabelRoles";
 
 export default function StudentTextPanel({
   activePage,
@@ -18,12 +19,14 @@ export default function StudentTextPanel({
   onRestoreDefault = () => {},
   onScheduleSave,
 }) {
+  const fillableTextLabels = getFillableTextLabels(activePageLayout);
+
   return (
     <div className="space-y-4">
       <div data-guide="student-text-page-nav">
         <AlbumPageNav page={activePage} total={pageCount} onChange={onPageChange} />
       </div>
-      {activePageLayout?.text_labels?.length > 0 ? (
+      {fillableTextLabels.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="student-text-fields">
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
@@ -35,7 +38,7 @@ export default function StudentTextPanel({
             </span>
           </div>
           <div className="space-y-3">
-            {activePageLayout.text_labels.map(label => {
+            {fillableTextLabels.map(label => {
               const rawDefaultText =
                 projectLabelTexts[String(activePage)]?.[String(label.id)] ?? label.text ?? "";
               const displayDefaultText = rawDefaultText.replace("{name}", student.name);
@@ -73,7 +76,7 @@ export default function StudentTextPanel({
           </div>
         </div>
       ) : (
-        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有文字方塊</div>
+        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有可填文字</div>
       )}
     </div>
   );

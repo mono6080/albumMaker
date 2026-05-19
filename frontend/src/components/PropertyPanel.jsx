@@ -7,6 +7,7 @@ import ColorPicker from "./ColorPicker";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
 import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
+import { TEXT_LABEL_ROLES, getTextLabelRole } from "../utils/textLabelRoles";
 
 // 滑桿 + 數字輸入的組合控制項
 function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
@@ -415,8 +416,34 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
       {/* 純文字專屬屬性 */}
       {isTextLabel && (
         <>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500">文字用途</span>
+            <div className="grid grid-cols-2 gap-1">
+              {[
+                { value: TEXT_LABEL_ROLES.FILLABLE, label: "可填文字" },
+                { value: TEXT_LABEL_ROLES.STATIC, label: "固定文字" },
+              ].map(roleOption => (
+                <button
+                  key={roleOption.value}
+                  type="button"
+                  aria-pressed={getTextLabelRole(elementData) === roleOption.value}
+                  onClick={() => onPropertyChange({ text_role: roleOption.value })}
+                  className={`px-2 py-1.5 rounded border text-sm transition-colors ${
+                    getTextLabelRole(elementData) === roleOption.value
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-600 hover:bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  {roleOption.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <VariableTextarea
-            label={`文字內容（可用 ${NAME_VARIABLE} 代入姓名）`}
+            label={getTextLabelRole(elementData) === TEXT_LABEL_ROLES.STATIC
+              ? "固定文字內容"
+              : `文字內容（可用 ${NAME_VARIABLE} 代入姓名）`}
             value={elementData.text ?? ""}
             onChange={textValue => onPropertyChange({ text: textValue })}
             guideId="text-content"

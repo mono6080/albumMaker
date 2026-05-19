@@ -32,6 +32,7 @@ import {
   toDisplayCoord,
   toRealCoord,
 } from "../utils/renderLayoutModel";
+import { TEXT_LABEL_ROLES, isFillableTextLabel } from "../utils/textLabelRoles";
 import { buildTemplateSpreadPreviewUrl } from "../api/urls";
 import { startProductGuide } from "../utils/productGuide";
 
@@ -553,6 +554,7 @@ export default function TemplateEditor() {
         width: 240, height: 80,
         rotation: 0,
         text: "{name}的文字標題",
+        text_role: TEXT_LABEL_ROLES.FILLABLE,
         font_size: 28,
         font_color: "#3B6B8C",
         font_family: "msjh",
@@ -770,14 +772,15 @@ export default function TemplateEditor() {
     const displayW = toDisplayCoord(data.width);
     const displayH = toDisplayCoord(data.height);
     const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
+    const isFillable = isFillableTextLabel(data);
     return (
       <Group key={`text-${data.id}`} {...groupProps}>
         <Rect
           width={displayW} height={displayH}
           fill="transparent"
-          stroke={isSelected ? "#4F46E5" : "#AAAAAA"}
+          stroke={isSelected ? "#4F46E5" : isFillable ? "#AAAAAA" : "#6B7280"}
           strokeWidth={isSelected ? 2 : 1}
-          dash={isSelected ? [] : [4, 3]}
+          dash={isSelected ? [] : isFillable ? [4, 3] : []}
           listening={false}
         />
         <KonvaText

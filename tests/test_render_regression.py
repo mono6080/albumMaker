@@ -128,6 +128,35 @@ def test_render_page_empty_label_text_outputs_blank_text():
     assert ImageChops.difference(inherited_text, empty_override_text).getbbox() is not None
 
 
+def test_render_page_static_text_label_ignores_label_text_override():
+    layout = load_layout()
+    static_layout = deepcopy(layout)
+    static_layout["text_labels"][0]["text_role"] = "static"
+    label_box = (58, 250, 358, 332)
+
+    template_text = render_page(
+        static_layout,
+        student_name="Ada",
+        page_data={},
+        page_index=0,
+    ).crop(label_box)
+    ignored_override = render_page(
+        static_layout,
+        student_name="Ada",
+        page_data={"label_texts": {"1": "Student override should not render"}},
+        page_index=0,
+    ).crop(label_box)
+    fillable_override = render_page(
+        layout,
+        student_name="Ada",
+        page_data={"label_texts": {"1": "Student override should render"}},
+        page_index=0,
+    ).crop(label_box)
+
+    assert ImageChops.difference(template_text, ignored_override).getbbox() is None
+    assert ImageChops.difference(template_text, fillable_override).getbbox() is not None
+
+
 def test_render_page_text_shadow_changes_label_and_bubble_regions():
     layout = load_layout()
     shadow_layout = deepcopy(layout)

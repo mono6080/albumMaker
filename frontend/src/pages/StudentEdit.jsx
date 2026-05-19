@@ -17,6 +17,7 @@ import PanelSwitcher from "../components/PanelSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
 import { startProductGuide } from "../utils/productGuide";
+import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import {
   createFileFromBlob,
   downloadApiBlob,
@@ -131,16 +132,20 @@ export default function StudentEdit() {
         return;
       }
       setStudent(foundStudent);
-      setProjectLabelTexts(projectResponse.data.label_texts || {});
 
       const templateResponse = await fetchTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
+      setProjectLabelTexts(projectResponse.data.label_texts || {});
 
-      // 初始化對應文字狀態（從學生頁面資料讀取）
+      // 初始化對應文字狀態：只保留可填文字，固定文字永遠使用模板內容。
       const initialTexts = {};
       const initialSkipped = new Set();
       (foundStudent?.pages_data || []).forEach(pageData => {
-        initialTexts[pageData.page_index] = pageData.label_texts || {};
+        const pageLayout = templateResponse.data.pages[pageData.page_index]?.layout;
+        initialTexts[pageData.page_index] = filterFillableLabelTexts(
+          pageLayout?.text_labels || [],
+          pageData.label_texts || {}
+        );
         if (pageData.skip) initialSkipped.add(pageData.page_index);
       });
       setLabelTexts(initialTexts);

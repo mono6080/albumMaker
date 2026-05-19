@@ -206,10 +206,17 @@ def render_sticker(canvas: Image.Image, sticker: dict) -> None:
         return
 
 
+def _text_label_is_fillable(label: dict) -> bool:
+    role = label.get("text_role", label.get("textRole"))
+    if role == "static" or label.get("editable") is False:
+        return False
+    return True
+
+
 def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, student_name: str) -> None:
-    """渲染對應文字方塊（無背景）。label_texts 提供專案 / 學生層級的文字覆蓋。"""
+    """渲染文字方塊（無背景）；固定文字會忽略專案 / 學生覆寫。"""
     label_id = str(label.get("id", ""))
-    raw_text = label_texts.get(label_id)
+    raw_text = label_texts.get(label_id) if _text_label_is_fillable(label) else None
     if raw_text is None:
         raw_text = label.get("text", "")
     label_text = raw_text.replace("{name}", student_name)

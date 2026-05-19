@@ -23,6 +23,7 @@ import AlbumPageNav from "../components/AlbumPageNav";
 import ConfirmModal from "../components/ConfirmModal";
 import TextVariableTextarea from "../components/TextVariableTextarea";
 import { startProductGuide } from "../utils/productGuide";
+import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 
 const BATCH_STUDENT_GUIDE_STEPS = [
   {
@@ -167,8 +168,11 @@ export default function ProjectBatch() {
       // 初始化對應文字狀態：只保存專案覆寫；未覆寫時由預覽/渲染使用模板預設。
       const savedProjectLabelTexts = projectResponse.data.label_texts || {};
       const initialLabelTexts = {};
-      templateResponse.data.pages.forEach((_templatePage, pageIndex) => {
-        initialLabelTexts[pageIndex] = { ...(savedProjectLabelTexts[String(pageIndex)] || {}) };
+      templateResponse.data.pages.forEach((templatePage, pageIndex) => {
+        initialLabelTexts[pageIndex] = filterFillableLabelTexts(
+          templatePage.layout?.text_labels || [],
+          savedProjectLabelTexts[String(pageIndex)] || {}
+        );
       });
       setLabelTexts(initialLabelTexts);
     } catch {
@@ -261,6 +265,7 @@ export default function ProjectBatch() {
 
   const templatePages = template.pages;
   const activePageLayout = templatePages[activePage]?.layout;
+  const activePageTextLabels = getFillableTextLabels(activePageLayout);
 
   // ── 對應文字編輯面板 ──────────────────────────────────────────────────────
 
@@ -270,7 +275,7 @@ export default function ProjectBatch() {
         <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
       </div>
 
-      {activePageLayout?.text_labels?.length > 0 ? (
+      {activePageTextLabels.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="batch-text-fields">
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
@@ -282,7 +287,7 @@ export default function ProjectBatch() {
             </span>
           </div>
           <div className="space-y-3">
-            {activePageLayout.text_labels.map(label => {
+            {activePageTextLabels.map(label => {
               const templateDefaultText = label.text ?? "";
               const currentValue = getLabelText(activePage, label.id);
               const hasOverride = hasLabelTextOverride(activePage, label.id);
@@ -319,7 +324,7 @@ export default function ProjectBatch() {
         </div>
       ) : (
         <div className="flex items-center justify-center py-10 text-gray-400 text-sm">
-          此頁沒有文字方塊
+          此頁沒有可填文字
         </div>
       )}
     </div>

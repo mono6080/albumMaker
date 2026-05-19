@@ -28,6 +28,13 @@ import {
   toRealCoord,
 } from "../../src/utils/renderLayoutModel.js";
 import { insertTextToken } from "../../src/utils/textVariables.js";
+import {
+  TEXT_LABEL_ROLES,
+  filterFillableLabelTexts,
+  getFillableTextLabels,
+  getTextLabelRole,
+  isFillableTextLabel,
+} from "../../src/utils/textLabelRoles.js";
 
 
 const tests = [];
@@ -172,7 +179,29 @@ test("render layout updates and display models stay stable", () => {
   assert.deepEqual(model.elements.map(element => element.type), ["photo", "bubble", "text", "footer"]);
   assert.equal(model.elements[0].placeholderText, "P2·1");
   assert.equal(model.elements[2].text, "Label");
+  assert.equal(model.elements[2].textRole, TEXT_LABEL_ROLES.FILLABLE);
+  assert.equal(model.elements[2].isFillable, true);
   assert.equal(model.elements[3].text, "Footer");
+});
+
+
+test("text label roles keep static labels out of fillable payloads", () => {
+  const layout = {
+    text_labels: [
+      { id: 1, text: "Old label without role" },
+      { id: 2, text: "Fixed heading", text_role: TEXT_LABEL_ROLES.STATIC },
+      { id: 3, text: "Legacy locked label", editable: false },
+    ],
+  };
+
+  assert.equal(getTextLabelRole(layout.text_labels[0]), TEXT_LABEL_ROLES.FILLABLE);
+  assert.equal(getTextLabelRole(layout.text_labels[1]), TEXT_LABEL_ROLES.STATIC);
+  assert.equal(isFillableTextLabel(layout.text_labels[2]), false);
+  assert.deepEqual(getFillableTextLabels(layout).map(label => label.id), [1]);
+  assert.deepEqual(
+    filterFillableLabelTexts(layout.text_labels, { 1: "Class text", 2: "Ignored", 3: "Ignored" }),
+    { 1: "Class text" },
+  );
 });
 
 
