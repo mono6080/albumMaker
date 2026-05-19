@@ -15,7 +15,7 @@ import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
-  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2, Share2,
+  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
 import {
@@ -23,6 +23,7 @@ import {
   downloadApiBlob,
   fetchApiBlob,
   getShareFailureMessage,
+  isMobileDevice,
   shareFiles,
 } from "../utils/browserFiles";
 
@@ -51,21 +52,21 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-preview-student"]',
     title: "快速預覽",
-    description: "不進入編輯頁也能快速打開此學生的頁面預覽，手機可在預覽視窗分享圖片。",
+    description: "不進入編輯頁也能快速打開此學生的頁面預覽。",
     side: "bottom",
     align: "center",
   },
   {
     element: '[data-guide="review-download-student"]',
     title: "下載單位學生",
-    description: "只產出並下載這位學生的 PDF；旁邊可下載單頁圖片 ZIP。",
+    description: "只產出並下載這位學生的 PDF；圖片按鈕在電腦下載 ZIP，手機開啟分享。",
     side: "bottom",
     align: "end",
   },
   {
     element: '[data-guide="review-download-all"]',
     title: "下載全部 ZIP",
-    description: "所有學生確認完成後，用這裡批次產生並下載 PDF ZIP；旁邊可下載圖片 ZIP。",
+    description: "所有學生確認完成後，用這裡批次產生並下載 PDF ZIP；全部圖片在電腦下載 ZIP，手機開啟分享。",
     side: "bottom",
     align: "end",
   },
@@ -94,7 +95,6 @@ export default function ProjectReview() {
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [sharingPreview, setSharingPreview] = useState(false);
   const [ts, setTs] = useState(0);
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
@@ -172,9 +172,51 @@ export default function ProjectReview() {
     setRendering(prev => ({ ...prev, [studentId]: false }));
   };
 
+  const buildShareImageFiles = async (students, requestTs, onProgress) => {
+    const files = [];
+    for (let studentIndex = 0; studentIndex < students.length; studentIndex++) {
+      const studentRecord = students[studentIndex];
+      onProgress?.(studentIndex + 1, students.length);
+
+      const visiblePageIndexes = getVisiblePageIndexes(studentRecord);
+      for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
+        const { blob } = await fetchApiBlob(
+          apiClient,
+          `${previewUrl(id, studentRecord.id, pageIndex)}?t=${requestTs}`,
+        );
+        const file = createFileFromBlob(
+          blob,
+          `${studentRecord.name}_page${visibleIndex + 1}.jpg`,
+          "image/jpeg",
+        );
+        if (file) files.push(file);
+      }
+    }
+    return files;
+  };
+
   const handleDownloadOneImages = async (studentId) => {
     setRenderingImages(prev => ({ ...prev, [studentId]: true }));
     try {
+      const studentRecord = project.students.find(student => student.id === studentId);
+      if (!studentRecord) return;
+
+      if (isMobileDevice()) {
+        const files = await buildShareImageFiles([studentRecord], Date.now());
+        if (!files.length) {
+          toast.error("沒有可分享的頁面");
+          return;
+        }
+
+        const shareResult = await shareFiles(files, `${studentRecord.name} 相冊圖片`);
+        if (shareResult === "shared") {
+          toast.success("已開啟分享");
+        } else if (shareResult !== "cancelled") {
+          toast.error(getShareFailureMessage(shareResult));
+        }
+        return;
+      }
+
       await renderStudent(id, studentId);
       await loadProject();
       setTs(Date.now());
@@ -185,7 +227,9 @@ export default function ProjectReview() {
         "album-images.zip",
       );
     } catch { showRetryToast("產生圖片失敗", () => handleDownloadOneImages(studentId)); }
-    setRenderingImages(prev => ({ ...prev, [studentId]: false }));
+    finally {
+      setRenderingImages(prev => ({ ...prev, [studentId]: false }));
+    }
   };
 
   const handleDownloadAll = async () => {
@@ -217,6 +261,26 @@ export default function ProjectReview() {
     setRenderingAllImages(true);
     setRenderAllImagesProgress({ current: 0, total: students.length });
     try {
+      if (isMobileDevice()) {
+        const files = await buildShareImageFiles(
+          students,
+          Date.now(),
+          (current, total) => setRenderAllImagesProgress({ current, total }),
+        );
+        if (!files.length) {
+          toast.error("沒有可分享的頁面");
+          return;
+        }
+
+        const shareResult = await shareFiles(files, `${project.name} 全部圖片`);
+        if (shareResult === "shared") {
+          toast.success("已開啟分享");
+        } else if (shareResult !== "cancelled") {
+          toast.error(getShareFailureMessage(shareResult));
+        }
+        return;
+      }
+
       for (let i = 0; i < students.length; i++) {
         setRenderAllImagesProgress({ current: i + 1, total: students.length });
         await renderStudent(id, students[i].id);
@@ -230,45 +294,9 @@ export default function ProjectReview() {
         "album-images.zip",
       );
     } catch { showRetryToast("批次產生圖片失敗", handleDownloadAllImages); }
-    setRenderingAllImages(false);
-    setRenderAllImagesProgress(null);
-  };
-
-  const handleSharePreviewImages = async () => {
-    if (!preview) return;
-
-    const previewStudent = project.students.find(student => student.id === preview.studentId);
-    if (!previewStudent) return;
-
-    setSharingPreview(true);
-    try {
-      const visiblePageIndexes = getVisiblePageIndexes(previewStudent);
-      if (!visiblePageIndexes.length) {
-        toast.error("沒有可分享的頁面");
-        return;
-      }
-
-      const requestTs = Date.now();
-      const files = [];
-      for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
-        const { blob } = await fetchApiBlob(
-          apiClient,
-          `${previewUrl(id, previewStudent.id, pageIndex)}?t=${requestTs}`,
-        );
-        const file = createFileFromBlob(blob, `${previewStudent.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
-        if (file) files.push(file);
-      }
-
-      const shareResult = await shareFiles(files, `${previewStudent.name} 相冊圖片`);
-      if (shareResult === "shared") {
-        toast.success("已開啟分享");
-      } else if (shareResult !== "cancelled") {
-        toast.error(getShareFailureMessage(shareResult));
-      }
-    } catch {
-      toast.error("分享圖片失敗");
-    } finally {
-      setSharingPreview(false);
+    finally {
+      setRenderingAllImages(false);
+      setRenderAllImagesProgress(null);
     }
   };
 
@@ -431,25 +459,12 @@ export default function ProjectReview() {
                 </div>
                 <div className="text-xs text-gray-400">第 {preview.pageIndex + 1} 頁預覽</div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleSharePreviewImages}
-                  disabled={sharingPreview}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs bg-violet-50 text-violet-700 rounded-xl hover:bg-violet-100 disabled:opacity-40 transition-colors"
-                >
-                  {sharingPreview
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    : <Share2 className="w-3.5 h-3.5" />}
-                  {sharingPreview ? "準備中..." : "分享圖片"}
-                </button>
-                <button
-                  onClick={() => setPreview(null)}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
+              <button
+                onClick={() => setPreview(null)}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+              >
+                ✕
+              </button>
             </div>
             <img
               src={`${previewUrl(id, preview.studentId, preview.pageIndex)}?t=${ts}`}

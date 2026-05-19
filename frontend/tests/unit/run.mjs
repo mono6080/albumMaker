@@ -13,7 +13,7 @@ import {
   buildTemplatePagePreviewUrl,
   buildTemplateSpreadPreviewUrl,
 } from "../../src/api/urls.js";
-import { getApiPath, getFilenameFromDisposition } from "../../src/utils/browserFiles.js";
+import { getApiPath, getFilenameFromDisposition, isMobileDevice } from "../../src/utils/browserFiles.js";
 import { buildItems, clampPan, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
 import {
   CANVAS_DISPLAY_WIDTH,
@@ -68,6 +68,7 @@ test("browser file helpers normalize API paths and download filenames", () => {
     "album.jpg",
   );
   assert.equal(getFilenameFromDisposition("", "fallback.jpg"), "fallback.jpg");
+  assert.equal(isMobileDevice(), false);
 });
 
 

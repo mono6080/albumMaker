@@ -40,6 +40,24 @@ export const createFileFromBlob = (blob, filename, fallbackType = "application/o
   return new File([blob], filename, { type: blob.type || fallbackType });
 };
 
+export const isMobileDevice = () => {
+  if (typeof window === "undefined") return false;
+
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent ?? "";
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform ?? "";
+  const maxTouchPoints = typeof navigator === "undefined" ? 0 : navigator.maxTouchPoints ?? 0;
+  const hasCoarsePointerOnly = (
+    window.matchMedia?.("(pointer: coarse)")?.matches &&
+    !window.matchMedia?.("(pointer: fine)")?.matches
+  );
+
+  return (
+    /Android|iPhone|iPad|iPod/i.test(userAgent) ||
+    (platform === "MacIntel" && maxTouchPoints > 1) ||
+    hasCoarsePointerOnly
+  );
+};
+
 export const shareFiles = async (files, title) => {
   if (typeof window !== "undefined" && window.isSecureContext === false) {
     return "insecure";
