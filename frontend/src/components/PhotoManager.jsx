@@ -1,12 +1,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { uploadPhoto, updatePhotoMapping } from "../api";
-import SlotFramePreview from "./SlotFramePreview";
+import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan } from "../utils/photoUtils";
-
-const photoApiUrl = (projectId, studentId, pi, slotId) =>
-  `/api/projects/${projectId}/students/${studentId}/pages/${pi}/photos/${slotId}`;
 
 
 // ── 照片編輯 Modal ────────────────────────────────────────────────────────────
@@ -373,7 +370,14 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const displayUrl = (it) => {
     if (it.previewUrl) return it.previewUrl;
     if (it.serverPath !== null && it.origPi !== null)
-      return photoApiUrl(projectId, studentId, it.origPi, it.origSlotId);
+      return buildPhotoUrl(projectId, studentId, it.origPi, it.origSlotId);
+    return null;
+  };
+
+  const thumbnailUrl = (it) => {
+    if (it.previewUrl) return it.previewUrl;
+    if (it.serverPath !== null && it.origPi !== null)
+      return buildPhotoThumbnailUrl(projectId, studentId, it.origPi, it.origSlotId);
     return null;
   };
 
@@ -562,21 +566,21 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       )}
 
       {/* Header */}
-      <div className="flex items-center gap-2 mb-4">
-        <Images className="w-4 h-4 text-amber-500" />
-        <h3 className="font-semibold text-gray-800 text-sm">照片管理</h3>
-        <span className="text-xs text-gray-400">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <Images className="w-4 h-4 text-amber-500 flex-shrink-0" />
+        <h3 className="font-semibold text-gray-800 text-sm flex-shrink-0">照片管理</h3>
+        <span className="text-xs text-gray-400 min-w-0">
           {filledCount} / {allSlots.length} 格
           {uploadProgress !== null
             ? <span className="text-indigo-600 ml-1">↑ 上傳中 {uploadProgress}%</span>
             : hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>
           }
         </span>
-        <div className="ml-auto flex gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
+        <div className="ml-auto flex flex-shrink-0 gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
           <button
             onClick={() => multiRef.current?.click()}
             data-guide="student-multi-upload"
-            className="flex items-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium"
+            className="flex items-center justify-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium whitespace-nowrap"
           >
             <Upload className="w-3.5 h-3.5" />
             多選上傳
@@ -607,6 +611,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       >
         {items.map((it, idx) => {
           const url = displayUrl(it);
+          const thumbUrl = thumbnailUrl(it);
           const dirty = isDirty(it);
           const rk = `${it.pi}_${it.slotId}`;
           const isDragOver = dragOverIdx === idx && dragIdxRef.current !== idx;
@@ -644,7 +649,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             >
               {/* Pure display */}
               <PhotoSlotCard
-                it={it} url={url} nat={nat} disabled={isItemDisabled}
+                it={it} url={thumbUrl} nat={nat} disabled={isItemDisabled}
                 onImgLoad={e => setAspectMap(prev => ({ ...prev, [rk]: e.target.naturalWidth / e.target.naturalHeight }))}
                 imgRefCallback={el => { thumbImgRefs.current[rk] = el; }}
               />

@@ -56,10 +56,8 @@ def login(
         path="/",
     )
     return {
-        "role": target_user.role,
-        "display_name": target_user.display_name,
+        **_serialize_current_user(target_user),
         "user_id": target_user.id,
-        "username": target_user.username,
     }
 
 
@@ -73,14 +71,19 @@ def logout(response: Response):
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     """回傳當前登入使用者的基本資訊。"""
-    supervisor_ids = [supervisor.id for supervisor in current_user.supervisors]
-    if not supervisor_ids and current_user.supervisor_id:
-        supervisor_ids = [current_user.supervisor_id]
+    return _serialize_current_user(current_user)
+
+
+def _serialize_current_user(user: User) -> dict:
+    supervisor_ids = [supervisor.id for supervisor in user.supervisors]
+    if not supervisor_ids and user.supervisor_id:
+        supervisor_ids = [user.supervisor_id]
     return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "display_name": current_user.display_name,
-        "role": current_user.role,
-        "supervisor_id": current_user.supervisor_id,
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "supervisor_id": user.supervisor_id,
         "supervisor_ids": supervisor_ids,
+        "ui_font_scale": float(user.ui_font_scale or 1.0),
     }

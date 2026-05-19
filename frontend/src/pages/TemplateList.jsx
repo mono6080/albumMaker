@@ -4,6 +4,10 @@ import toast from "react-hot-toast";
 import { fetchAllTemplates, createTemplate, deleteTemplate, renameTemplate } from "../api/templateApi";
 import { LayoutTemplate, Plus, Pencil, Trash2, BookOpen, Check, Images, X } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
+import {
+  mobileVisibleHoverActionClass,
+  mobileVisibleNamedHoverActionClass,
+} from "../components/ResponsiveActionGroup";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 
 export default function TemplateList() {
@@ -68,15 +72,21 @@ export default function TemplateList() {
       {/* Create card */}
       <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8 shadow-sm" data-guide="template-create-card">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">建立新模板</h2>
-        <div className="flex gap-3">
-          <input
-            data-guide="template-name-input"
-            className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
-            placeholder="模板名稱，例：2026-05 中班 感官世界"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleCreate()}
-          />
+        <div className="flex items-end gap-3">
+          <div className="flex-1">
+            <label className="text-xs text-gray-500 mb-1 block" htmlFor="template-name">
+              模板名稱 (年)-(月) (階級) (主題)
+            </label>
+            <input
+              id="template-name"
+              data-guide="template-name-input"
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
+              placeholder="2026-05 12階 感官世界"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleCreate()}
+            />
+          </div>
           <button
             onClick={handleCreate}
             disabled={creating || !name.trim()}
@@ -105,7 +115,7 @@ export default function TemplateList() {
                 </div>
                 <button
                   onClick={e => handleDelete(t.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                  className={`${mobileVisibleHoverActionClass} p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all`}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -125,7 +135,7 @@ export default function TemplateList() {
               ) : (
                 <div className="flex items-center gap-1 mb-1 group/name">
                   <span className="font-semibold text-gray-900">{t.name}</span>
-                  <button onClick={() => startEdit(t.id, t.name)} className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity">
+                  <button onClick={() => startEdit(t.id, t.name)} className={`${mobileVisibleNamedHoverActionClass} p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity`}>
                     <Pencil className="w-3 h-3" />
                   </button>
                 </div>

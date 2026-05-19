@@ -32,6 +32,10 @@ export const buildStudentPagePreviewUrl = (projectId, studentId, pageIndex) =>
 export const buildPhotoUrl = (projectId, studentId, pageIndex, slotId) =>
   `${API_BASE}/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}`;
 
+/** 學生個人照片縮圖的存取 URL */
+export const buildPhotoThumbnailUrl = (projectId, studentId, pageIndex, slotId) =>
+  `${buildPhotoUrl(projectId, studentId, pageIndex, slotId)}/thumbnail`;
+
 /** 學生個人 PDF 下載 URL（含輸出模式）*/
 export const buildDownloadPdfUrl = (projectId, studentId, outputMode = "print") =>
   `${API_BASE}/projects/${projectId}/students/${studentId}/pdf?mode=${outputMode}`;

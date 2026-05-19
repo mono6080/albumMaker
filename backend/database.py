@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Table
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Table, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -35,6 +35,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     # 角色：admin | art_team | supervisor | teacher | none
     role = Column(String, nullable=False, default="none")
+    ui_font_scale = Column(Float, nullable=False, default=1.0, server_default="1.0")
     # 舊版單一主管欄位；新版多主管資料存在 teacher_supervisors，保留此欄位相容舊資料/API
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

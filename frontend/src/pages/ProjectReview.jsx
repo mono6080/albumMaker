@@ -13,6 +13,7 @@ import {
 import { apiClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
+import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import {
   ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
@@ -385,13 +386,13 @@ export default function ProjectReview() {
           <span className="font-semibold text-gray-900 truncate">{project.name}</span>
           <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex-shrink-0">輸出</span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+        <ResponsiveActionGroup mobileColumns={3}>
           {/* 完整畫質切換：僅 admin 可見 */}
           {canDownloadPrint && (
-            <div className="flex items-center bg-gray-100 rounded-xl p-0.5 text-xs font-medium flex-shrink-0">
+            <div className="col-span-3 grid grid-cols-2 bg-gray-100 rounded-xl p-0.5 text-xs font-medium sm:flex sm:flex-shrink-0">
               <button
                 onClick={() => setOutputMode("print")}
-                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
+                className={`min-w-0 justify-center flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
                   outputMode === "print" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
                 }`}
               >
@@ -400,7 +401,7 @@ export default function ProjectReview() {
               </button>
               <button
                 onClick={() => setOutputMode("screen")}
-                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
+                className={`min-w-0 justify-center flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
                   outputMode === "screen" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
                 }`}
               >
@@ -412,16 +413,16 @@ export default function ProjectReview() {
           <button
             type="button"
             onClick={startGuide}
-            className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors shadow-sm flex-shrink-0"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors shadow-sm sm:flex-shrink-0`}
           >
             <CircleHelp className="w-4 h-4" />
-            <span>製作教學</span>
+            <span className="truncate">製作教學</span>
           </button>
           <button
             onClick={handleDownloadAll}
             disabled={isBatchRendering || project.students.length === 0}
             data-guide="review-download-all"
-            className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-emerald-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm sm:flex-shrink-0`}
           >
             {renderingAll
               ? <>
@@ -437,7 +438,7 @@ export default function ProjectReview() {
           <button
             onClick={handleDownloadAllImages}
             disabled={isBatchRendering || project.students.length === 0}
-            className="flex items-center gap-1.5 bg-sky-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm flex-shrink-0"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-sky-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm sm:flex-shrink-0`}
           >
             {renderingAllImages
               ? <>
@@ -450,7 +451,7 @@ export default function ProjectReview() {
               : <><ImageDown className="w-4 h-4" /><span>{isAllImagesShareReady ? "開始分享" : "全部圖片"}</span></>
             }
           </button>
-        </div>
+        </ResponsiveActionGroup>
       </div>
 
       {/* Progress bar */}
@@ -574,9 +575,9 @@ export default function ProjectReview() {
 
                 {/* Student info */}
                 <div className="p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="font-semibold text-gray-900">{student.name}</div>
+                  <div className="flex items-center justify-between mb-3 min-w-0">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-gray-900 truncate">{student.name}</div>
                       <div className={`flex items-center gap-1 text-xs mt-0.5 ${isDone ? "text-emerald-600" : "text-gray-400"}`}>
                         {isDone
                           ? <><CheckCircle2 className="w-3 h-3" />已產生輸出</>
@@ -587,11 +588,11 @@ export default function ProjectReview() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex gap-2">
+                  <ResponsiveActionGroup mobileColumns={4} desktop="grid">
                     <Link
                       to={`/projects/${id}/students/${student.id}/edit`}
                       data-guide="review-edit-student"
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
+                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors`}
                     >
                       <Pencil className="w-3 h-3" />
                       編輯
@@ -599,7 +600,7 @@ export default function ProjectReview() {
                     <button
                       onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
                       data-guide="review-preview-student"
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
+                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors`}
                     >
                       <Eye className="w-3 h-3" />
                       預覽
@@ -608,26 +609,26 @@ export default function ProjectReview() {
                       onClick={() => handleDownloadOne(student.id)}
                       disabled={isStudentBusy}
                       data-guide="review-download-student"
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors ml-auto"
+                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors`}
                     >
                       {isStudentRendering
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Download className="w-3 h-3" />
                       }
-                      {isStudentRendering ? "產生中..." : "PDF"}
+                      {isStudentRendering ? "..." : "PDF"}
                     </button>
                     <button
                       onClick={() => handleDownloadOneImages(student.id)}
                       disabled={isStudentBusy}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 disabled:opacity-40 transition-colors"
+                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 disabled:opacity-40 transition-colors`}
                     >
                       {isStudentImageRendering
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <ImageDown className="w-3 h-3" />
                       }
-                      {isStudentImageRendering ? "準備中..." : isStudentImageShareReady ? "分享" : "圖片"}
+                      {isStudentImageRendering ? "..." : isStudentImageShareReady ? "分享" : "圖片"}
                     </button>
-                  </div>
+                  </ResponsiveActionGroup>
                 </div>
               </div>
             );
@@ -686,13 +687,13 @@ export default function ProjectReview() {
           {/* 新增留言（老師唯讀，不顯示輸入區） */}
           {canComment && (
             <>
-              <div className="flex gap-2">
+              <div className="flex gap-2 min-w-0">
                 <textarea
                   rows={2}
                   value={newCommentText}
                   onChange={(e) => setNewCommentText(e.target.value)}
                   placeholder="輸入審閱意見..."
-                  className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
+                  className="min-w-0 flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
                   }}
@@ -700,7 +701,7 @@ export default function ProjectReview() {
                 <button
                   onClick={handleSubmitComment}
                   disabled={isSubmittingComment || !newCommentText.trim()}
-                  className="self-end flex items-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                  className="self-end flex flex-shrink-0 items-center justify-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">送出</span>

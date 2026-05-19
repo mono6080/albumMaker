@@ -24,11 +24,11 @@ export default function StudentPreviewPanel({
       {/* 刪除 / 還原頁面 */}
       <div className="flex items-center justify-between" data-guide="student-page-skip">
         {isCurrentPageSkipped ? (
-          <div className="flex items-center gap-2 flex-1">
-            <span className="text-xs text-red-400 font-medium">此頁已刪除（不會出現在 PDF）</span>
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+            <span className="min-w-0 text-xs text-red-400 font-medium">此頁已刪除（不會出現在 PDF）</span>
             <button
               onClick={() => onPageSkip(activePage, false)}
-              className="flex items-center gap-1 text-xs text-indigo-600 border border-indigo-300 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors ml-auto"
+              className="ml-auto flex flex-shrink-0 items-center gap-1 text-xs text-indigo-600 border border-indigo-300 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors whitespace-nowrap"
             >
               <RotateCcw className="w-3 h-3" />還原此頁
             </button>
@@ -36,7 +36,7 @@ export default function StudentPreviewPanel({
         ) : (
           <button
             onClick={() => onPageSkip(activePage, true)}
-            className="flex items-center gap-1 text-xs text-red-500 border border-red-200 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors ml-auto"
+            className="ml-auto flex flex-shrink-0 items-center gap-1 text-xs text-red-500 border border-red-200 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap"
           >
             <Trash2 className="w-3 h-3" />刪除此頁
           </button>
@@ -58,7 +58,7 @@ export default function StudentPreviewPanel({
       <div className="flex justify-center">
         <button
           onClick={onRefresh}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 py-1.5 px-3 rounded-lg hover:bg-gray-100 transition-colors"
+          className="flex items-center justify-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 py-1.5 px-3 rounded-lg hover:bg-gray-100 transition-colors whitespace-nowrap"
         >
           <RefreshCw className="w-3 h-3" />重新整理預覽
         </button>

@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import CompositionTextarea from "./CompositionTextarea";
+import ResponsiveActionGroup, { responsiveActionItemClass } from "./ResponsiveActionGroup";
 import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 
 export default function TextVariableTextarea({
@@ -51,21 +52,21 @@ export default function TextVariableTextarea({
   };
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2">
+    <div className="space-y-1 min-w-0">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
         {defaultText ? (
-          <div className="text-xs text-gray-400 truncate">
+          <div className="min-w-0 text-xs text-gray-400 truncate">
             {statusText} · 預設：{defaultText.substring(0, 25)}
           </div>
         ) : (
-          <div className="text-xs text-gray-400">{statusText}</div>
+          <div className="min-w-0 text-xs text-gray-400">{statusText}</div>
         )}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <ResponsiveActionGroup mobileColumns={2} className="gap-1.5 sm:flex-shrink-0">
           {hasOverride ? (
             <button
               type="button"
               onClick={handleRestoreDefault}
-              className="px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors"
+              className={`${responsiveActionItemClass} px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors whitespace-nowrap`}
             >
               恢復預設
             </button>
@@ -73,7 +74,7 @@ export default function TextVariableTextarea({
             <button
               type="button"
               onClick={handleSetBlank}
-              className="px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors"
+              className={`${responsiveActionItemClass} px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors whitespace-nowrap`}
             >
               設為空白
             </button>
@@ -82,11 +83,11 @@ export default function TextVariableTextarea({
             type="button"
             onClick={handleInsertName}
             data-guide={buttonGuideId}
-            className="px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+            className={`${responsiveActionItemClass} px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors whitespace-nowrap`}
           >
             插入 {NAME_VARIABLE}
           </button>
-        </div>
+        </ResponsiveActionGroup>
       </div>
       <CompositionTextarea
         {...textareaRestProps}

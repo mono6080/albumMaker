@@ -50,6 +50,8 @@ def test_migrations_idempotent():
         assert "users" in tables
         assert "projects" in tables
         assert "teacher_supervisors" in tables
+        user_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+        assert "ui_font_scale" in user_columns
 
         migrated_assignment = conn.execute(text("""
             SELECT ts.supervisor_id

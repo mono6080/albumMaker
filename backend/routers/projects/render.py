@@ -39,9 +39,9 @@ from .schemas import RenderAllResult, RenderStudentResult
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-PREVIEW_JPEG_QUALITY = 72
+PREVIEW_JPEG_QUALITY = 80
 PREVIEW_CACHE_HEADERS = {"Cache-Control": "private, max-age=300"}
-PREVIEW_CACHE_VERSION = "project-preview-v1"
+PREVIEW_CACHE_VERSION = "project-preview-v2"
 
 
 def _preview_scale_key(scale: float) -> str:

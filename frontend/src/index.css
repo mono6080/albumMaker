@@ -10,6 +10,20 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.nav-scroll-x {
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.nav-scroll-x::-webkit-scrollbar {
+  height: 4px;
+}
+
+.nav-scroll-x::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
 .driver-popover.album-guide-popover {
   border-radius: 8px;
   border: 1px solid #cbd5e1;
@@ -42,5 +56,6 @@ body {
 @supports (-webkit-touch-callout: none) {
   input, textarea, select {
     font-size: 16px;
+    font-size: max(16px, 0.875rem);
   }
 }

@@ -5,37 +5,72 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { fetchMe, login as apiLogin, logout as apiLogout } from "../api/authApi";
+import {
+  applyAndStoreUiFontScale,
+  normalizeUiFontScale,
+  resetStoredUiFontScale,
+} from "../utils/uiPreferences";
 
 const AuthContext = createContext(null);
+
+function normalizeUserPayload(data) {
+  if (!data) return null;
+  return {
+    ...data,
+    id: data.id ?? data.user_id,
+    ui_font_scale: normalizeUiFontScale(data.ui_font_scale),
+  };
+}
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   // loading：true 表示尚在向後端確認 Cookie session，避免閃爍跳轉
   const [isLoading, setIsLoading] = useState(true);
 
+  const applyAuthenticatedUser = useCallback((userData) => {
+    const normalizedUser = normalizeUserPayload(userData);
+    if (normalizedUser) {
+      applyAndStoreUiFontScale(normalizedUser.ui_font_scale);
+    }
+    setCurrentUser(normalizedUser);
+    return normalizedUser;
+  }, []);
+
+  const updateCurrentUser = useCallback((patch) => {
+    setCurrentUser((previousUser) => {
+      const nextUser = normalizeUserPayload(
+        typeof patch === "function" ? patch(previousUser) : { ...previousUser, ...patch },
+      );
+      if (nextUser) {
+        applyAndStoreUiFontScale(nextUser.ui_font_scale);
+      }
+      return nextUser;
+    });
+  }, []);
+
   // ── 頁面載入時嘗試還原 session（Cookie 由瀏覽器自動帶） ──────────────────
 
   useEffect(() => {
     fetchMe()
-      .then((response) => setCurrentUser(response.data))
+      .then((response) => applyAuthenticatedUser(response.data))
       .catch((error) => {
         // 只在 401 時確認未登入；網路錯誤不清除 session
         if (error.response?.status === 401) {
           setCurrentUser(null);
+          resetStoredUiFontScale();
         }
       })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [applyAuthenticatedUser]);
 
   // ── 登入 ──────────────────────────────────────────────────────────────────
 
   const login = useCallback(async (username, password) => {
     const response = await apiLogin(username, password);
-    const { role, display_name, user_id, username: uname } = response.data;
     // Cookie 由後端 Set-Cookie 寫入，前端只保存使用者資訊到 state
-    setCurrentUser({ id: user_id, username: uname, display_name, role });
+    applyAuthenticatedUser(response.data);
     return response.data;
-  }, []);
+  }, [applyAuthenticatedUser]);
 
   // ── 登出 ──────────────────────────────────────────────────────────────────
 
@@ -46,10 +81,11 @@ export function AuthProvider({ children }) {
       // 網路錯誤時仍清除本地 state，確保 UI 跳回登入頁
     }
     setCurrentUser(null);
+    resetStoredUiFontScale();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ currentUser, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ currentUser, isLoading, login, logout, updateCurrentUser }}>
       {children}
     </AuthContext.Provider>
   );

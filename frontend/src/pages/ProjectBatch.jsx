@@ -21,6 +21,10 @@ import PanelSwitcher from "../components/PanelSwitcher";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import AlbumPageNav from "../components/AlbumPageNav";
 import ConfirmModal from "../components/ConfirmModal";
+import ResponsiveActionGroup, {
+  mobileVisibleHoverActionClass,
+  responsiveActionItemClass,
+} from "../components/ResponsiveActionGroup";
 import TextVariableTextarea from "../components/TextVariableTextarea";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
@@ -293,11 +297,11 @@ export default function ProjectBatch() {
               const hasOverride = hasLabelTextOverride(activePage, label.id);
               const len = currentValue.length;
               return (
-                <div key={label.id} className="flex gap-3">
+                <div key={label.id} className="flex gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-1">
                     <span className="text-xs font-bold text-indigo-400">{label.id}</span>
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <TextVariableTextarea
                       rows={2}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
@@ -384,14 +388,14 @@ export default function ProjectBatch() {
         onCancel={() => setConfirmModal(null)}
       />
       {/* 頂部標頭 */}
-      <div className="flex items-center gap-2 sm:gap-3 mb-5 sm:mb-6">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-5 sm:mb-6">
         <Link
           to="/projects"
           className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
         >
           <ChevronRight className="w-4 h-4 rotate-180" />
         </Link>
-        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
           <span className="text-gray-400 text-sm hidden sm:inline">相本專案</span>
           <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
           <span className="font-semibold text-gray-900 truncate">{project.name}</span>
@@ -399,24 +403,26 @@ export default function ProjectBatch() {
             專案設定
           </span>
         </div>
-        <Link
-          to={`/projects/${projectId}/review`}
-          data-guide="batch-review-link"
-          className="ml-auto flex items-center gap-1 sm:gap-1.5 text-sm bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors flex-shrink-0"
-        >
-          <span className="hidden sm:inline">個人編輯</span>
-          <span className="sm:hidden">編輯</span>
-          <ChevronRight className="w-3.5 h-3.5" />
-        </Link>
-        <button
-          type="button"
-          onClick={startGuide}
-          className="flex items-center gap-1 sm:gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 sm:px-4 py-2 rounded-xl hover:bg-indigo-100 transition-colors flex-shrink-0"
-        >
-          <CircleHelp className="w-4 h-4" />
-          <span className="hidden sm:inline">製作教學</span>
-          <span className="sm:hidden">教學</span>
-        </button>
+        <ResponsiveActionGroup mobileColumns={2} className="sm:ml-auto">
+          <Link
+            to={`/projects/${projectId}/review`}
+            data-guide="batch-review-link"
+            className={`${responsiveActionItemClass} flex items-center gap-1 text-sm bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors sm:gap-1.5 sm:px-4`}
+          >
+            <span className="hidden sm:inline">個人編輯</span>
+            <span className="sm:hidden">編輯</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+          <button
+            type="button"
+            onClick={startGuide}
+            className={`${responsiveActionItemClass} flex items-center gap-1 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl hover:bg-indigo-100 transition-colors sm:gap-1.5 sm:px-4`}
+          >
+            <CircleHelp className="w-4 h-4" />
+            <span className="hidden sm:inline">製作教學</span>
+            <span className="sm:hidden">教學</span>
+          </button>
+        </ResponsiveActionGroup>
       </div>
 
       {/* 行動版分頁切換器 */}
@@ -470,11 +476,11 @@ export default function ProjectBatch() {
                 （已有 {project.students.length} 位）
               </span>
             </div>
-            <div className="flex gap-2 sm:gap-3">
+            <div className="flex gap-2 sm:gap-3 min-w-0">
               <textarea
                 rows={3}
                 data-guide="batch-student-input"
-                className="flex-1 border border-gray-200 rounded-xl px-3 sm:px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
+                className="min-w-0 flex-1 border border-gray-200 rounded-xl px-3 sm:px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                 placeholder="每行一位，或用逗號 / 頓號分隔"
                 value={studentNamesInput}
                 onChange={event => setStudentNamesInput(event.target.value)}
@@ -483,7 +489,7 @@ export default function ProjectBatch() {
                 onClick={handleAddStudents}
                 disabled={isAddingStudents || !studentNamesInput.trim()}
                 data-guide="batch-add-students"
-                className="self-stretch flex items-center gap-2 bg-indigo-600 text-white px-4 sm:px-5 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                className="self-stretch flex flex-shrink-0 items-center justify-center gap-2 bg-indigo-600 text-white px-4 sm:px-5 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 <span className="hidden sm:inline">新增</span>
@@ -501,7 +507,7 @@ export default function ProjectBatch() {
                 {project.students.map((student, studentIndex) => (
                   <div
                     key={student.id}
-                    className="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors"
+                    className="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors min-w-0"
                   >
                     <span className="text-xs w-5 h-5 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center font-medium flex-shrink-0">
                       {studentIndex + 1}
@@ -511,7 +517,7 @@ export default function ProjectBatch() {
                       <>
                         <input
                           autoFocus
-                          className="flex-1 border border-indigo-300 rounded-lg px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                          className="min-w-0 flex-1 border border-indigo-300 rounded-lg px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                           value={editingStudentName}
                           onChange={event => setEditingStudentName(event.target.value)}
                           onKeyDown={event => {
@@ -534,18 +540,18 @@ export default function ProjectBatch() {
                       </>
                     ) : (
                       <>
-                        <span className="flex-1 text-sm text-gray-800 font-medium">
+                        <span className="min-w-0 flex-1 text-sm text-gray-800 font-medium truncate">
                           {student.name}
                         </span>
                         <button
                           onClick={() => startEditStudent(student.id, student.name)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-gray-400 hover:text-indigo-600 rounded-lg"
+                          className={`${mobileVisibleHoverActionClass} transition-opacity p-1 text-gray-400 hover:text-indigo-600 rounded-lg flex-shrink-0`}
                         >
                           <Pencil className="w-3 h-3" />
                         </button>
                         <button
                           onClick={clickEvent => handleDeleteStudent(student.id, clickEvent)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-gray-400 hover:text-red-500 rounded-lg"
+                          className={`${mobileVisibleHoverActionClass} transition-opacity p-1 text-gray-400 hover:text-red-500 rounded-lg flex-shrink-0`}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>

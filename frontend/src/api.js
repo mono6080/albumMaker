@@ -48,6 +48,7 @@ export {
   buildStickerUrl as stickerUrl,
   buildProjectPagePreviewUrl as projectPreviewUrl,
   buildStudentPagePreviewUrl as previewUrl,
+  buildPhotoThumbnailUrl as photoThumbnailUrl,
   buildDownloadPdfUrl as downloadPdf,
   buildDownloadImagesZipUrl as downloadImagesZip,
   buildDownloadAllZipUrl as downloadAllZip,

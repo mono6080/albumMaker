@@ -50,6 +50,10 @@ export const logout = () =>
 export const fetchMe = () =>
   apiClient.get("/auth/me");
 
+/** 更新目前登入使用者自己的 UI 偏好 */
+export const updateMySettings = (params) =>
+  apiClient.patch("/users/me/settings", params);
+
 // ── 使用者管理 API（admin only）───────────────────────────────────────────────
 
 /** 取得所有使用者清單 */

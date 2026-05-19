@@ -14,6 +14,7 @@ import { useAutoSave } from "../hooks/useAutoSave";
 import { ChevronRight, ChevronLeft, CircleHelp, Download, ImageDown, Loader2 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
+import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
 import { startProductGuide } from "../utils/productGuide";
@@ -355,20 +356,20 @@ export default function StudentEdit() {
         <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
         <Link
           to={`/projects/${projectId}/review`}
-          className="text-gray-400 hover:text-gray-600 transition-colors"
+          className="min-w-0 text-gray-400 hover:text-gray-600 transition-colors"
         >
           <ChevronLeft className="w-3.5 h-3.5 inline sm:hidden" />
-          <span>{project.name}</span>
+          <span className="inline-block max-w-[11rem] truncate align-bottom sm:max-w-none">{project.name}</span>
         </Link>
         <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
         <span className="font-semibold text-gray-900">{student.name}</span>
         <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">個別編輯</span>
 
-        <div className="ml-auto flex gap-2">
+        <ResponsiveActionGroup mobileColumns={3} className="sm:ml-auto">
           <button
             type="button"
             onClick={startGuide}
-            className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors`}
           >
             <CircleHelp className="w-4 h-4" />
             <span className="hidden sm:inline">製作教學</span>
@@ -378,7 +379,7 @@ export default function StudentEdit() {
             onClick={handleRenderPdf}
             disabled={isOutputBusy}
             data-guide="student-download-button"
-            className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-emerald-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm`}
           >
             {isRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -389,7 +390,7 @@ export default function StudentEdit() {
           <button
             onClick={handleRenderImages}
             disabled={isOutputBusy}
-            className="flex items-center gap-1.5 bg-sky-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm"
+            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-sky-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm`}
           >
             {isImageRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -397,7 +398,7 @@ export default function StudentEdit() {
             <span className="hidden sm:inline">{isImageRendering ? "準備中..." : isImageShareReady ? "開始分享" : "下載圖片"}</span>
             <span className="sm:hidden">{isImageRendering ? "..." : isImageShareReady ? "分享" : "圖片"}</span>
           </button>
-        </div>
+        </ResponsiveActionGroup>
       </div>
 
       {/* 行動裝置分頁切換 */}

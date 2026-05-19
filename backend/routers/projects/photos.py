@@ -1,10 +1,14 @@
 # 照片路由
-# 處理照片上傳、讀取與欄位對應關係更新
+# 處理照片上傳、縮圖、讀取與欄位對應關係更新
 
+import io
 import json
+from pathlib import PurePosixPath
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi import HTTPException
+from fastapi.responses import Response
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
@@ -17,6 +21,76 @@ from ._helpers import _parse_json_field, assert_project_writable
 from .schemas import PhotoMappingPayload, PhotoMappingResult, PhotoUploadResult
 
 router = APIRouter()
+
+PHOTO_THUMBNAIL_SIZE = 360
+PHOTO_THUMBNAIL_QUALITY = 78
+PHOTO_THUMBNAIL_HEADERS = {"Cache-Control": "private, max-age=86400"}
+
+
+def _thumbnail_key(photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> str:
+    photo_path = PurePosixPath(photo_key)
+    return f"{photo_path.parent.as_posix()}/thumbnails/{size}/{photo_path.name}.jpg"
+
+
+def _delete_photo_thumbnails(storage, photo_key: str) -> None:
+    photo_path = PurePosixPath(photo_key)
+    storage.delete_prefix(f"{photo_path.parent.as_posix()}/thumbnails")
+
+
+def _jpeg_thumbnail_bytes(storage, photo_key: str, size: int) -> bytes:
+    image = storage.open_image(photo_key)
+    try:
+        image.load()
+        thumbnail = image.copy()
+    finally:
+        image.close()
+
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    thumbnail.thumbnail((size, size), resample=resample)
+    if thumbnail.mode in {"RGBA", "LA"} or "transparency" in thumbnail.info:
+        rgba = thumbnail.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        thumbnail = background
+    else:
+        thumbnail = thumbnail.convert("RGB")
+
+    buffer = io.BytesIO()
+    thumbnail.save(buffer, format="JPEG", quality=PHOTO_THUMBNAIL_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+def _get_photo_key_or_404(
+    project_id: int,
+    student_id: int,
+    page_index: int,
+    slot_id: int,
+    db: Session,
+) -> str:
+    get_project_or_404(project_id, db)
+    student = get_student_or_404(student_id, project_id, db)
+
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
+    if page_index >= len(pages_data):
+        raise HTTPException(status_code=404, detail="找不到頁面")
+
+    photo_record = pages_data[page_index].get("photos", {}).get(str(slot_id))
+    if not photo_record:
+        raise HTTPException(status_code=404, detail="找不到照片")
+
+    photo_key = (
+        photo_record
+        if isinstance(photo_record, str)
+        else photo_record.get("path", "")
+    )
+    if not photo_key:
+        raise HTTPException(status_code=404, detail="找不到照片")
+
+    storage = get_storage()
+    if not storage.exists(photo_key):
+        raise HTTPException(status_code=404, detail="找不到照片")
+
+    return photo_key
 
 
 @router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
@@ -49,7 +123,9 @@ async def upload_photo(
     old_record = pages_data[page_index]["photos"].get(str(slot_id))
     if old_record:
         old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
-        storage.delete(old_key)
+        if old_key:
+            _delete_photo_thumbnails(storage, old_key)
+            storage.delete(old_key)
 
     key = get_photo_key(project_id, student_id, page_index, slot_id, file.filename)
     storage.put(key, file_bytes)  # 直接使用已讀取的 bytes，避免二次讀取
@@ -75,30 +151,47 @@ def get_photo(
     db: Session = Depends(get_db),
 ):
     """回傳學生指定欄位的照片檔案。"""
-    get_project_or_404(project_id, db)
-    student = get_student_or_404(student_id, project_id, db)
-
-    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-    if page_index >= len(pages_data):
-        raise HTTPException(status_code=404, detail="找不到頁面")
-
-    photo_record = pages_data[page_index].get("photos", {}).get(str(slot_id))
-    if not photo_record:
-        raise HTTPException(status_code=404, detail="找不到照片")
-
-    photo_key = (
-        photo_record
-        if isinstance(photo_record, str)
-        else photo_record.get("path", "")
-    )
-    if not photo_key:
-        raise HTTPException(status_code=404, detail="找不到照片")
-
+    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db)
     storage = get_storage()
-    if not storage.exists(photo_key):
-        raise HTTPException(status_code=404, detail="找不到照片")
-
     return storage.serve(photo_key)
+
+
+@router.get("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}/thumbnail")
+def get_photo_thumbnail(
+    project_id: int,
+    student_id: int,
+    page_index: int,
+    slot_id: int,
+    size: int = Query(PHOTO_THUMBNAIL_SIZE, ge=80, le=1200),
+    db: Session = Depends(get_db),
+):
+    """回傳學生照片縮圖，供照片管理列表使用。"""
+    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db)
+    storage = get_storage()
+    thumbnail_key = _thumbnail_key(photo_key, size)
+    headers = {**PHOTO_THUMBNAIL_HEADERS, "X-Photo-Thumbnail-Key": thumbnail_key}
+
+    try:
+        if storage.exists(thumbnail_key):
+            return Response(
+                content=storage.get_bytes(thumbnail_key),
+                media_type="image/jpeg",
+                headers={**headers, "X-Photo-Thumbnail": "HIT"},
+            )
+    except Exception:
+        pass
+
+    thumbnail_bytes = _jpeg_thumbnail_bytes(storage, photo_key, size)
+    try:
+        storage.put(thumbnail_key, thumbnail_bytes)
+    except Exception:
+        pass
+
+    return Response(
+        content=thumbnail_bytes,
+        media_type="image/jpeg",
+        headers={**headers, "X-Photo-Thumbnail": "MISS"},
+    )
 
 
 @router.put("/{project_id}/students/{student_id}/photos/mapping", response_model=PhotoMappingResult)
@@ -132,6 +225,7 @@ def update_photo_mapping(
     all_pages = payload.pages
 
     # 跨頁統一收集所有「即將被寫入」的路徑，防止跨頁互換時先刪後找不到
+    storage = get_storage()
     incoming_paths: set[str] = set()
     for slot_updates in all_pages.values():
         for photo_path in slot_updates.values():
@@ -153,19 +247,21 @@ def update_photo_mapping(
             if photo_path is None:
                 continue
             if isinstance(photo_path, dict) and photo_path.get("path"):
+                original_path = photo_path["path"]
                 new_path_str = rename_photo_to_slot(
-                    photo_path["path"], page_index, int(slot_id_str)
+                    original_path, page_index, int(slot_id_str)
                 )
                 # 同步更新 incoming_paths，讓後續 null 清除知道新路徑
-                if new_path_str != photo_path["path"]:
-                    incoming_paths.discard(photo_path["path"])
+                if new_path_str != original_path:
+                    _delete_photo_thumbnails(storage, original_path)
+                    _delete_photo_thumbnails(storage, new_path_str)
+                    incoming_paths.discard(original_path)
                     incoming_paths.add(new_path_str)
                     renames.setdefault(page_index_str, {})[slot_id_str] = new_path_str
                 photo_path = {**photo_path, "path": new_path_str}
             pages_data[page_index]["photos"][slot_id_str] = photo_path
 
     # 第二步：所有頁面的 null 項目統一清除，只刪除未被移走的檔案
-    storage = get_storage()
     for page_index_str, slot_updates in all_pages.items():
         page_index = int(page_index_str)
         for slot_id_str, photo_path in slot_updates.items():
@@ -175,6 +271,7 @@ def update_photo_mapping(
             if old_record:
                 old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
                 if old_key and old_key not in incoming_paths:
+                    _delete_photo_thumbnails(storage, old_key)
                     storage.delete(old_key)
             pages_data[page_index]["photos"].pop(slot_id_str, None)
 

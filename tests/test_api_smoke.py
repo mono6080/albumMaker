@@ -212,11 +212,24 @@ def test_health_and_auth_cookie_roundtrip():
         login_payload = login(client)
         assert login_payload["username"] == "admin"
         assert login_payload["role"] == "admin"
+        assert login_payload["ui_font_scale"] == 1.0
         assert client.cookies.get("access_token")
 
         me = client.get("/api/auth/me")
         assert_status(me, 200)
         assert me.json()["username"] == "admin"
+        assert me.json()["ui_font_scale"] == 1.0
+
+        settings = client.patch("/api/users/me/settings", json={"ui_font_scale": 1.15})
+        assert_status(settings, 200)
+        assert settings.json()["ui_font_scale"] == 1.15
+
+        updated_me = client.get("/api/auth/me")
+        assert_status(updated_me, 200)
+        assert updated_me.json()["ui_font_scale"] == 1.15
+
+        invalid_settings = client.patch("/api/users/me/settings", json={"ui_font_scale": 1.8})
+        assert_status(invalid_settings, 422)
 
         logout = client.post("/api/auth/logout")
         assert_status(logout, 200)
@@ -756,7 +769,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / project_preview_key).exists()
         with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
-            assert preview_image.size == (476, 674)
+            assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,
                 scale_box_for_image((96, 340, 456, 436), preview_image),
@@ -773,7 +786,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / student_preview_key).exists()
         with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
-            assert preview_image.size == (476, 674)
+            assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,
                 scale_box_for_image((96, 340, 456, 436), preview_image),

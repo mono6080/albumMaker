@@ -82,6 +82,8 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
 
         missing_photo = client.get(photo_url)
         assert_status(missing_photo, 404)
+        missing_thumbnail = client.get(f"{photo_url}/thumbnail")
+        assert_status(missing_thumbnail, 404)
 
         unsupported_type = client.post(
             photo_url,
@@ -100,6 +102,19 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
             files={"file": ("edge.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(valid_upload, 200)
+
+        thumbnail = client.get(f"{photo_url}/thumbnail")
+        assert_status(thumbnail, 200)
+        assert thumbnail.headers["content-type"].startswith("image/jpeg")
+        assert thumbnail.headers["x-photo-thumbnail"] == "MISS"
+        thumbnail_key = thumbnail.headers["x-photo-thumbnail-key"]
+        assert (tmp_path / "uploads" / thumbnail_key).exists()
+        assert thumbnail.content.startswith(b"\xff\xd8")
+
+        cached_thumbnail = client.get(f"{photo_url}/thumbnail")
+        assert_status(cached_thumbnail, 200)
+        assert cached_thumbnail.headers["x-photo-thumbnail"] == "HIT"
+        assert cached_thumbnail.content == thumbnail.content
 
         missing_page = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/99/photos/1")
         assert_status(missing_page, 404)

@@ -97,7 +97,7 @@ _PREVIEW_NUMERIC_KEYS = {
     "text_shadow_blur",
     "letter_spacing",
 }
-PREVIEW_RENDER_SCALE = 0.6
+PREVIEW_RENDER_SCALE = 0.7
 
 
 def _scale_number(value, scale: float):

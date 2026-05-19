@@ -7,6 +7,11 @@ import { CircleHelp, FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } fr
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
+import ResponsiveActionGroup, {
+  mobileVisibleHoverActionClass,
+  mobileVisibleNamedHoverActionClass,
+  responsiveActionItemClass,
+} from "../components/ResponsiveActionGroup";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
 
@@ -67,13 +72,13 @@ const ProjectCard = memo(function ProjectCard({
   return (
     <div className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden" data-guide="project-card">
       <div className="p-5">
-        <div className="flex items-start justify-between mb-3">
-          <div>
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <div className="min-w-0 flex-1">
             {isEditing ? (
-              <div className="flex items-center gap-1 mb-1">
+              <div className="flex items-center gap-1 mb-1 min-w-0">
                 <input
                   autoFocus
-                  className="border border-indigo-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-semibold"
+                  className="min-w-0 flex-1 border border-indigo-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-semibold"
                   value={editingName}
                   onChange={e => onEditNameChange(e.target.value)}
                   onKeyDown={e => {
@@ -89,19 +94,19 @@ const ProjectCard = memo(function ProjectCard({
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-1 group/name">
-                <div className="font-semibold text-gray-900 text-lg">{project.name}</div>
+              <div className="flex items-center gap-1 group/name min-w-0">
+                <div className="font-semibold text-gray-900 text-lg truncate">{project.name}</div>
                 {canEditProject(project.owner_id) && (
                   <button
                     onClick={() => onEditStart(project.id, project.name)}
-                    className="opacity-0 group-hover/name:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity"
+                    className={`${mobileVisibleNamedHoverActionClass} p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity flex-shrink-0`}
                   >
                     <Pencil className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
             )}
-            <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-0.5">
               <Users className="w-3 h-3" />
               {project.student_count} 位學生 · {new Date(project.created_at).toLocaleDateString("zh-TW")}
               {showOwner && project.owner_name && (
@@ -115,7 +120,7 @@ const ProjectCard = memo(function ProjectCard({
           {canEditProject(project.owner_id) && (
             <button
               onClick={() => onDelete(project.id)}
-              className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+              className={`flex-shrink-0 ${mobileVisibleHoverActionClass} p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all`}
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -127,7 +132,7 @@ const ProjectCard = memo(function ProjectCard({
           <Link
             to={`/projects/${project.id}/batch`}
             data-guide="project-settings-link"
-            className="flex items-center justify-center gap-1.5 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
+            className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" />
             專案設定
@@ -136,7 +141,7 @@ const ProjectCard = memo(function ProjectCard({
         <Link
           to={`/projects/${project.id}/review`}
           data-guide="project-review-link"
-          className="flex items-center justify-center gap-1.5 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
+          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
           個人編輯
@@ -242,21 +247,21 @@ export default function ProjectList() {
         onCancel={() => setConfirmModal(null)}
       />
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex flex-shrink-0 items-center justify-center">
             <FolderOpen className="w-5 h-5 text-emerald-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-gray-900">相本專案</h1>
             <p className="text-sm text-gray-500">每個班級每個月一個專案</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <ResponsiveActionGroup mobileColumns={canCreateProject ? 2 : 1}>
           <button
             type="button"
             onClick={startGuide}
-            className="flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors"
+            className={`${responsiveActionItemClass} flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 sm:px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors`}
           >
             <CircleHelp className="w-4 h-4" />
             製作教學
@@ -265,13 +270,13 @@ export default function ProjectList() {
           <button
             onClick={() => setShowForm(v => !v)}
             data-guide="project-create-button"
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+            className={`${responsiveActionItemClass} flex items-center gap-2 bg-indigo-600 text-white px-3 sm:px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm`}
           >
             <Plus className="w-4 h-4" />
             新建專案
           </button>
         )}
-        </div>
+        </ResponsiveActionGroup>
       </div>
 
       {/* Create form */}
@@ -305,11 +310,11 @@ export default function ProjectList() {
             </div>
           </div>
           {composedName && (
-            <div className="text-xs text-gray-500 mb-4">
+            <div className="text-xs text-gray-500 mb-4 break-words">
               專案全名：<span className="font-medium text-gray-800">{composedName}</span>
             </div>
           )}
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <button
               onClick={handleCreate}
               disabled={creating}

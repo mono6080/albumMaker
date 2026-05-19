@@ -11,6 +11,7 @@ def run_migrations():
     with engine.connect() as connection:
         _add_bubble_texts_json_column(connection)
         _add_users_table(connection)
+        _add_user_preferences_columns(connection)
         _add_teacher_supervisors_table(connection)
         _add_owner_id_to_projects(connection)
         _add_project_comments_table(connection)
@@ -50,6 +51,7 @@ def _add_users_table(connection):
                 display_name TEXT NOT NULL,
                 hashed_password TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'none',
+                ui_font_scale REAL NOT NULL DEFAULT 1.0,
                 supervisor_id INTEGER REFERENCES users(id),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -66,7 +68,10 @@ def _add_users_table(connection):
         initial_password = secrets.token_urlsafe(12)
         hashed = _bcrypt.hashpw(initial_password.encode(), _bcrypt.gensalt()).decode()
         connection.execute(
-            text("INSERT INTO users (username, display_name, hashed_password, role) VALUES ('admin', '系統管理員', :hashed, 'admin')"),
+            text("""
+                INSERT INTO users (username, display_name, hashed_password, role, ui_font_scale)
+                VALUES ('admin', '系統管理員', :hashed, 'admin', 1.0)
+            """),
             {"hashed": hashed}
         )
         connection.commit()
@@ -76,6 +81,19 @@ def _add_users_table(connection):
         print(f"  密碼：{initial_password}")
         print(f"  請立即登入後至使用者管理修改密碼！")
         print("=" * 60)
+
+
+def _add_user_preferences_columns(connection):
+    """為使用者表補上個人 UI 偏好欄位。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(users)"))
+    }
+    if "ui_font_scale" not in existing_columns:
+        connection.execute(
+            text("ALTER TABLE users ADD COLUMN ui_font_scale REAL NOT NULL DEFAULT 1.0")
+        )
+        connection.commit()
 
 
 def _add_teacher_supervisors_table(connection):

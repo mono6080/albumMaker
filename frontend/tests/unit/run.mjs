@@ -6,6 +6,7 @@ import {
   buildDownloadImageUrl,
   buildDownloadImagesZipUrl,
   buildDownloadPdfUrl,
+  buildPhotoThumbnailUrl,
   buildPhotoUrl,
   buildProjectPagePreviewUrl,
   buildStickerUrl,
@@ -29,6 +30,12 @@ import {
 } from "../../src/utils/renderLayoutModel.js";
 import { insertTextToken } from "../../src/utils/textVariables.js";
 import {
+  DEFAULT_UI_FONT_SCALE,
+  UI_FONT_SCALE_MAX,
+  UI_FONT_SCALE_MIN,
+  normalizeUiFontScale,
+} from "../../src/utils/uiPreferences.js";
+import {
   TEXT_LABEL_ROLES,
   filterFillableLabelTexts,
   getFillableTextLabels,
@@ -51,6 +58,7 @@ test("API URL builders keep route contracts stable", () => {
   assert.equal(buildProjectPagePreviewUrl(3, 0), "/api/projects/3/preview/0");
   assert.equal(buildStudentPagePreviewUrl(3, 4, 1), "/api/projects/3/students/4/preview/1");
   assert.equal(buildPhotoUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9");
+  assert.equal(buildPhotoThumbnailUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9/thumbnail");
   assert.equal(buildDownloadPdfUrl(3, 4), "/api/projects/3/students/4/pdf?mode=print");
   assert.equal(buildDownloadPdfUrl(3, 4, "screen"), "/api/projects/3/students/4/pdf?mode=screen");
   assert.equal(buildDownloadImagesZipUrl(3, 4), "/api/projects/3/students/4/images?mode=print");
@@ -209,6 +217,14 @@ test("text variable insertion respects caret and selected ranges", () => {
   assert.deepEqual(insertTextToken("今天很棒", 2, 2), { text: "今天{name}很棒", caret: 8 });
   assert.deepEqual(insertTextToken("姓名：___", 3, 6), { text: "姓名：{name}", caret: 9 });
   assert.deepEqual(insertTextToken("開頭", undefined, undefined), { text: "開頭{name}", caret: 8 });
+});
+
+
+test("UI font scale settings clamp to the supported range", () => {
+  assert.equal(normalizeUiFontScale("bad"), DEFAULT_UI_FONT_SCALE);
+  assert.equal(normalizeUiFontScale(0.5), UI_FONT_SCALE_MIN);
+  assert.equal(normalizeUiFontScale(2), UI_FONT_SCALE_MAX);
+  assert.equal(normalizeUiFontScale(1.126), 1.13);
 });
 
 

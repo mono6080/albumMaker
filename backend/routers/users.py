@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 
-from auth import hash_password, require_role
+from auth import get_current_user, hash_password, require_role
 from crud.user_crud import get_user_or_404
 from database import Project, User, get_db, teacher_supervisors
 
@@ -72,6 +72,10 @@ class UpdateUserBody(BaseModel):
     supervisor_ids: list[int] | None = None
     new_password: str | None = Field(None, min_length=1, max_length=100)
     clear_supervisor: bool = False
+
+
+class UpdateMySettingsBody(BaseModel):
+    ui_font_scale: float = Field(..., ge=0.9, le=1.25)
 
 
 @router.get("/")
@@ -190,6 +194,19 @@ async def import_users_from_excel(
         "skipped": skipped,
         "errors": errors,
     }
+
+
+@router.patch("/me/settings")
+def update_my_settings(
+    body: UpdateMySettingsBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新目前登入使用者自己的 UI 偏好。"""
+    current_user.ui_font_scale = round(float(body.ui_font_scale), 2)
+    db.commit()
+    db.refresh(current_user)
+    return _serialize_user_settings(current_user)
 
 
 def _create_user_record(
@@ -348,7 +365,23 @@ def _serialize_user(user: User) -> dict:
         "supervisor_ids": supervisor_ids,
         "supervisor_name": "、".join(supervisor_names) if supervisor_names else None,
         "supervisor_names": supervisor_names,
+        "ui_font_scale": float(user.ui_font_scale or 1.0),
         "created_at": user.created_at,
+    }
+
+
+def _serialize_user_settings(user: User) -> dict:
+    supervisor_ids = [supervisor.id for supervisor in user.supervisors]
+    if not supervisor_ids and user.supervisor_id:
+        supervisor_ids = [user.supervisor_id]
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "supervisor_id": user.supervisor_id,
+        "supervisor_ids": supervisor_ids,
+        "ui_font_scale": float(user.ui_font_scale or 1.0),
     }
 
 
