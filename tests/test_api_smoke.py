@@ -4,6 +4,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from io import BytesIO
 from uuid import uuid4
 from zipfile import ZipFile
@@ -13,7 +14,7 @@ from openpyxl import Workbook
 from PIL import Image
 
 from auth import hash_password
-from database import SessionLocal, User
+from database import Project, SessionLocal, User
 from main import app, limiter as app_limiter
 from routers.auth import limiter as auth_limiter
 
@@ -385,6 +386,57 @@ def test_user_management_allows_multiple_teacher_supervisors():
         assert_status(after_demote_users, 200)
         teacher_after_demote = next(user for user in after_demote_users.json() if user["id"] == teacher["id"])
         assert teacher_after_demote["supervisor_ids"] == [second_supervisor["id"]]
+
+
+def test_project_delete_archives_and_restore_recovers():
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("archive_project"))
+
+        delete_response = client.delete(f"/api/projects/{project_id}")
+        assert_status(delete_response, 200)
+        delete_payload = delete_response.json()
+        assert delete_payload["ok"] is True
+        assert delete_payload["archive_expires_at"]
+
+        active_projects = client.get("/api/projects/")
+        assert_status(active_projects, 200)
+        assert project_id not in {project["id"] for project in active_projects.json()}
+
+        direct_read = client.get(f"/api/projects/{project_id}")
+        assert_status(direct_read, 404)
+
+        archived_projects = client.get("/api/projects/archive")
+        assert_status(archived_projects, 200)
+        archived = next(project for project in archived_projects.json() if project["id"] == project_id)
+        assert archived["deleted_at"]
+        assert archived["archive_expires_at"]
+
+        restore_response = client.post(f"/api/projects/{project_id}/restore")
+        assert_status(restore_response, 200)
+        assert restore_response.json() == {"ok": True}
+
+        restored_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(restored_detail, 200)
+        assert restored_detail.json()["id"] == project_id
+
+        delete_again = client.delete(f"/api/projects/{project_id}")
+        assert_status(delete_again, 200)
+        db = SessionLocal()
+        try:
+            archived_project = db.query(Project).filter(Project.id == project_id).one()
+            archived_project.archive_expires_at = datetime.utcnow() - timedelta(days=1)
+            db.commit()
+        finally:
+            db.close()
+
+        expired_archive = client.get("/api/projects/archive")
+        assert_status(expired_archive, 200)
+        assert project_id not in {project["id"] for project in expired_archive.json()}
+
+        expired_restore = client.post(f"/api/projects/{project_id}/restore")
+        assert_status(expired_restore, 410)
 
 
 def test_admin_can_import_users_from_excel():

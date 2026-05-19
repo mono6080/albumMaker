@@ -26,6 +26,15 @@ import ResponsiveActionGroup, {
   responsiveActionItemClass,
 } from "../components/ResponsiveActionGroup";
 import TextVariableTextarea from "../components/TextVariableTextarea";
+import {
+  Badge,
+  Button,
+  IconButton,
+  PageHeader,
+  SegmentedControl,
+  Surface,
+  fieldControlClass,
+} from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 
@@ -280,7 +289,7 @@ export default function ProjectBatch() {
       </div>
 
       {activePageTextLabels.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="batch-text-fields">
+        <Surface data-guide="batch-text-fields">
           <div className="flex items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
@@ -304,7 +313,7 @@ export default function ProjectBatch() {
                   <div className="flex-1 min-w-0">
                     <TextVariableTextarea
                       rows={2}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
+                      className={`${fieldControlClass} resize-none`}
                       placeholder={templateDefaultText}
                       value={currentValue}
                       defaultText={templateDefaultText}
@@ -326,7 +335,7 @@ export default function ProjectBatch() {
               );
             })}
           </div>
-        </div>
+        </Surface>
       ) : (
         <div className="flex items-center justify-center py-10 text-gray-400 text-sm">
           此頁沒有可填文字
@@ -340,7 +349,7 @@ export default function ProjectBatch() {
   const previewPanel = (
     <div className="space-y-3 sticky top-4" data-guide="batch-preview-panel">
       <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
-      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+      <Surface padding="none" className="overflow-hidden">
         {/* 預覽標題列 */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
           <div className="flex items-center gap-1.5">
@@ -348,13 +357,14 @@ export default function ProjectBatch() {
             <span className="text-sm font-semibold text-gray-800">樣版預覽</span>
             <span className="text-xs text-gray-400">第 {activePage + 1} 頁</span>
           </div>
-          <button
+          <IconButton
+            label="重新渲染預覽"
             onClick={() => { setPreviewTimestamp(Date.now()); setIsPreviewLoading(true); }}
-            title="重新渲染"
-            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+            variant="primary"
+            size="xs"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-          </button>
+          </IconButton>
         </div>
 
         {/* 預覽圖區域 */}
@@ -373,7 +383,7 @@ export default function ProjectBatch() {
             onError={() => setIsPreviewLoading(false)}
           />
         </div>
-      </div>
+      </Surface>
     </div>
   );
 
@@ -387,88 +397,73 @@ export default function ProjectBatch() {
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
-      {/* 頂部標頭 */}
-      <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-5 sm:mb-6">
-        <Link
-          to="/projects"
-          className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
-        >
-          <ChevronRight className="w-4 h-4 rotate-180" />
-        </Link>
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
-          <span className="text-gray-400 text-sm hidden sm:inline">相本專案</span>
-          <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
-          <span className="font-semibold text-gray-900 truncate">{project.name}</span>
-          <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full flex-shrink-0">
-            專案設定
-          </span>
-        </div>
-        <ResponsiveActionGroup mobileColumns={2} className="sm:ml-auto">
-          <Link
+      <PageHeader
+        title={project.name}
+        badge={<Badge tone="primary">專案設定</Badge>}
+        meta={(
+          <>
+            <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
+              <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
+              <span className="hidden sm:inline">相本專案</span>
+            </Button>
+          </>
+        )}
+        actions={(
+        <ResponsiveActionGroup mobileColumns={2}>
+          <Button
+            as={Link}
             to={`/projects/${projectId}/review`}
             data-guide="batch-review-link"
-            className={`${responsiveActionItemClass} flex items-center gap-1 text-sm bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors sm:gap-1.5 sm:px-4`}
+            variant="success"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             <span className="hidden sm:inline">個人編輯</span>
             <span className="sm:hidden">編輯</span>
             <ChevronRight className="w-3.5 h-3.5" />
-          </Link>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={startGuide}
-            className={`${responsiveActionItemClass} flex items-center gap-1 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl hover:bg-indigo-100 transition-colors sm:gap-1.5 sm:px-4`}
+            variant="secondary"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             <CircleHelp className="w-4 h-4" />
             <span className="hidden sm:inline">製作教學</span>
             <span className="sm:hidden">教學</span>
-          </button>
+          </Button>
         </ResponsiveActionGroup>
-      </div>
+        )}
+      />
 
       {/* 行動版分頁切換器 */}
       <PanelSwitcher
         value={mobileTab}
         onChange={handleMobileTabChange}
         tabs={[
-          { value: "students", label: "👥 登記" },
-          { value: "edit",     label: "✏️ 文字" },
-          { value: "preview",  label: "👁 預覽" },
+          { value: "students", label: "登記", icon: Users },
+          { value: "edit",     label: "文字", icon: Type },
+          { value: "preview",  label: "預覽", icon: Eye },
         ]}
       />
 
       {/* 桌面版 Pill 分頁 */}
-      <div className="hidden lg:flex gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
-        <button
-          onClick={() => setDesktopTab("students")}
-          data-guide="batch-students-tab"
-          className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
-            desktopTab === "students"
-              ? "bg-white text-indigo-700 shadow-sm"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          登記學生
-        </button>
-        <button
-          onClick={() => setDesktopTab("texts")}
-          data-guide="batch-text-tab"
-          className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
-            desktopTab === "texts"
-              ? "bg-white text-indigo-700 shadow-sm"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Type className="w-4 h-4" />
-          文字
-        </button>
-      </div>
+      <SegmentedControl
+        value={desktopTab}
+        onChange={setDesktopTab}
+        options={[
+          { value: "students", label: "登記學生", icon: Users, guideId: "batch-students-tab" },
+          { value: "texts", label: "文字", icon: Type, guideId: "batch-text-tab" },
+        ]}
+        className="mb-5 hidden w-fit lg:grid"
+      />
 
       {/* Tab 1：登記學生 */}
       {desktopTab === "students" && (
         <div className="max-w-xl space-y-5">
           {/* 新增學生輸入區 */}
-          <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+          <Surface>
             <div className="flex items-center gap-2 mb-3">
               <Users className="w-4 h-4 text-indigo-500" />
               <h2 className="font-semibold text-gray-800 text-sm">新增學生名單</h2>
@@ -480,26 +475,27 @@ export default function ProjectBatch() {
               <textarea
                 rows={3}
                 data-guide="batch-student-input"
-                className="min-w-0 flex-1 border border-gray-200 rounded-xl px-3 sm:px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
+                className={`${fieldControlClass} flex-1 resize-none sm:px-4 sm:py-2.5`}
                 placeholder="每行一位，或用逗號 / 頓號分隔"
                 value={studentNamesInput}
                 onChange={event => setStudentNamesInput(event.target.value)}
               />
-              <button
+              <Button
                 onClick={handleAddStudents}
                 disabled={isAddingStudents || !studentNamesInput.trim()}
                 data-guide="batch-add-students"
-                className="self-stretch flex flex-shrink-0 items-center justify-center gap-2 bg-indigo-600 text-white px-4 sm:px-5 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                variant="primary"
+                className="self-stretch"
               >
                 <Plus className="w-4 h-4" />
                 <span className="hidden sm:inline">新增</span>
-              </button>
+              </Button>
             </div>
-          </div>
+          </Surface>
 
           {/* 已登記學生清單 */}
           {project.students.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="batch-student-list">
+            <Surface data-guide="batch-student-list">
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
                 已登記學生（{project.students.length} 位）
               </div>
@@ -517,7 +513,7 @@ export default function ProjectBatch() {
                       <>
                         <input
                           autoFocus
-                          className="min-w-0 flex-1 border border-indigo-300 rounded-lg px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                          className={`${fieldControlClass} flex-1 py-0.5`}
                           value={editingStudentName}
                           onChange={event => setEditingStudentName(event.target.value)}
                           onKeyDown={event => {
@@ -525,42 +521,51 @@ export default function ProjectBatch() {
                             if (event.key === "Escape") cancelEditStudent();
                           }}
                         />
-                        <button
+                        <IconButton
+                          label="儲存學生名稱"
                           onClick={() => saveEditStudent(student.id)}
-                          className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
+                          variant="success"
+                          size="xs"
                         >
                           <Check className="w-3.5 h-3.5" />
-                        </button>
-                        <button
+                        </IconButton>
+                        <IconButton
+                          label="取消編輯學生名稱"
                           onClick={cancelEditStudent}
-                          className="p-1 text-gray-400 hover:bg-gray-100 rounded"
+                          size="xs"
                         >
                           <X className="w-3.5 h-3.5" />
-                        </button>
+                        </IconButton>
                       </>
                     ) : (
                       <>
                         <span className="min-w-0 flex-1 text-sm text-gray-800 font-medium truncate">
                           {student.name}
                         </span>
-                        <button
+                        <IconButton
+                          label="編輯學生名稱"
                           onClick={() => startEditStudent(student.id, student.name)}
-                          className={`${mobileVisibleHoverActionClass} transition-opacity p-1 text-gray-400 hover:text-indigo-600 rounded-lg flex-shrink-0`}
+                          variant="primary"
+                          size="xs"
+                          className={mobileVisibleHoverActionClass}
                         >
                           <Pencil className="w-3 h-3" />
-                        </button>
-                        <button
+                        </IconButton>
+                        <IconButton
+                          label="刪除學生"
                           onClick={clickEvent => handleDeleteStudent(student.id, clickEvent)}
-                          className={`${mobileVisibleHoverActionClass} transition-opacity p-1 text-gray-400 hover:text-red-500 rounded-lg flex-shrink-0`}
+                          variant="danger"
+                          size="xs"
+                          className={mobileVisibleHoverActionClass}
                         >
                           <X className="w-3.5 h-3.5" />
-                        </button>
+                        </IconButton>
                       </>
                     )}
                   </div>
                 ))}
               </div>
-            </div>
+            </Surface>
           )}
 
           {project.students.length === 0 && (

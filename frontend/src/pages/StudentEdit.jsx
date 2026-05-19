@@ -11,12 +11,23 @@ import { fetchTemplate } from "../api/templateApi";
 import { buildDownloadImagesZipUrl, buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
-import { ChevronRight, ChevronLeft, CircleHelp, Download, ImageDown, Loader2 } from "lucide-react";
+import {
+  Camera,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Download,
+  Eye,
+  ImageDown,
+  Loader2,
+  Type,
+} from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
+import { Badge, Button, PageHeader } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import {
@@ -345,70 +356,79 @@ export default function StudentEdit() {
 
   return (
     <div className="w-full">
-      {/* 麵包屑導覽列 + 動作按鈕 */}
-      <div className="flex flex-wrap items-center gap-2 mb-4 sm:mb-6 text-sm">
-        <Link
-          to="/projects"
-          className="text-gray-400 hover:text-gray-600 transition-colors hidden sm:inline"
-        >
-          相本專案
-        </Link>
-        <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
-        <Link
-          to={`/projects/${projectId}/review`}
-          className="min-w-0 text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <ChevronLeft className="w-3.5 h-3.5 inline sm:hidden" />
-          <span className="inline-block max-w-[11rem] truncate align-bottom sm:max-w-none">{project.name}</span>
-        </Link>
-        <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block" />
-        <span className="font-semibold text-gray-900">{student.name}</span>
-        <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">個別編輯</span>
-
-        <ResponsiveActionGroup mobileColumns={3} className="sm:ml-auto">
-          <button
+      <PageHeader
+        title={student.name}
+        badge={<Badge tone="review">個別編輯</Badge>}
+        meta={(
+          <>
+            <Button as={Link} to="/projects" variant="ghost" size="xs" className="hidden text-gray-400 sm:inline-flex">
+              相本專案
+            </Button>
+            <ChevronRight className="hidden h-3.5 w-3.5 flex-shrink-0 text-gray-300 sm:block" />
+            <Button
+              as={Link}
+              to={`/projects/${projectId}/review`}
+              variant="ghost"
+              size="xs"
+              className="min-w-0 text-gray-400"
+            >
+              <ChevronLeft className="inline h-3.5 w-3.5 sm:hidden" />
+              <span className="inline-block max-w-[14rem] truncate align-bottom sm:max-w-none">{project.name}</span>
+            </Button>
+          </>
+        )}
+        actions={(
+        <ResponsiveActionGroup mobileColumns={3}>
+          <Button
             type="button"
             onClick={startGuide}
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors`}
+            variant="secondary"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             <CircleHelp className="w-4 h-4" />
             <span className="hidden sm:inline">製作教學</span>
             <span className="sm:hidden">教學</span>
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleRenderPdf}
             disabled={isOutputBusy}
             data-guide="student-download-button"
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-emerald-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm`}
+            variant="success"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             {isRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <Download className="w-4 h-4" />}
             <span className="hidden sm:inline">{isRendering ? "產生中..." : "下載 PDF"}</span>
             <span className="sm:hidden">{isRendering ? "..." : "PDF"}</span>
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleRenderImages}
             disabled={isOutputBusy}
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-sky-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm`}
+            variant="info"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             {isImageRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <ImageDown className="w-4 h-4" />}
             <span className="hidden sm:inline">{isImageRendering ? "準備中..." : isImageShareReady ? "開始分享" : "下載圖片"}</span>
             <span className="sm:hidden">{isImageRendering ? "..." : isImageShareReady ? "分享" : "圖片"}</span>
-          </button>
+          </Button>
         </ResponsiveActionGroup>
-      </div>
+        )}
+      />
 
       {/* 行動裝置分頁切換 */}
       <PanelSwitcher
         value={mobileTab}
         onChange={setMobileTab}
         tabs={[
-          { value: "photo",   label: "📷 照片" },
-          { value: "text",    label: "💬 文字" },
-          { value: "preview", label: "👁 預覽" },
+          { value: "photo",   label: "照片", icon: Camera },
+          { value: "text",    label: "文字", icon: Type },
+          { value: "preview", label: "預覽", icon: Eye },
         ]}
       />
 

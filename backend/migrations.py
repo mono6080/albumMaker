@@ -21,6 +21,7 @@ def run_migrations():
         _add_foreign_key_indexes(connection)
         _add_template_page_unique_constraint(connection)
         _add_timestamp_columns(connection)
+        _add_project_archive_columns(connection)
         _drop_bubble_texts_json_column(connection)
 
 
@@ -220,6 +221,20 @@ def _add_timestamp_columns(connection):
     connection.commit()
 
 
+def _add_project_archive_columns(connection):
+    """為 projects 補上 30 天封存/復原用欄位。"""
+    existing = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    for col in ("deleted_at", "archive_expires_at"):
+        if col not in existing:
+            connection.execute(text(
+                f"ALTER TABLE projects ADD COLUMN {col} DATETIME"
+            ))
+    connection.commit()
+
+
 def _drop_bubble_texts_json_column(connection):
     """
     移除 projects.bubble_texts_json 舊欄位（已由 label_texts_json 取代）。
@@ -246,12 +261,19 @@ def _drop_bubble_texts_json_column(connection):
             owner_id    INTEGER REFERENCES users(id),
             created_at  DATETIME,
             updated_at  DATETIME,
+            deleted_at  DATETIME,
+            archive_expires_at DATETIME,
             label_texts_json TEXT NOT NULL DEFAULT '{}'
         )
     """))
     connection.execute(text("""
-        INSERT INTO projects_new (id, name, template_id, owner_id, created_at, updated_at, label_texts_json)
-        SELECT id, name, template_id, owner_id, created_at, updated_at, label_texts_json
+        INSERT INTO projects_new (
+            id, name, template_id, owner_id, created_at, updated_at,
+            deleted_at, archive_expires_at, label_texts_json
+        )
+        SELECT
+            id, name, template_id, owner_id, created_at, updated_at,
+            deleted_at, archive_expires_at, label_texts_json
         FROM projects
     """))
     connection.execute(text("DROP TABLE projects"))

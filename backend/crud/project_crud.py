@@ -8,9 +8,12 @@ from sqlalchemy.orm import Session
 from database import Project, Student
 
 
-def get_project_or_404(project_id: int, db: Session) -> Project:
-    """查詢指定專案，若不存在則拋出 404。"""
-    project = db.query(Project).filter(Project.id == project_id).first()
+def get_project_or_404(project_id: int, db: Session, *, include_archived: bool = False) -> Project:
+    """查詢指定專案，若不存在則拋出 404。預設排除已封存專案。"""
+    query = db.query(Project).filter(Project.id == project_id)
+    if not include_archived:
+        query = query.filter(Project.deleted_at.is_(None))
+    project = query.first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project

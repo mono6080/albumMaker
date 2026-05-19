@@ -1,9 +1,29 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { fetchAllProjects, createProject, deleteProject, renameProject } from "../api/projectApi";
+import {
+  fetchAllProjects,
+  fetchArchivedProjects,
+  createProject,
+  deleteProject,
+  renameProject,
+  restoreProject,
+} from "../api/projectApi";
 import { fetchAllTemplates } from "../api/templateApi";
-import { CircleHelp, FolderOpen, Plus, Users, Eye, Pencil, Trash2, Check, X } from "lucide-react";
+import {
+  ArchiveRestore,
+  CalendarClock,
+  Check,
+  CircleHelp,
+  Eye,
+  FolderOpen,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Users,
+  X,
+} from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
@@ -12,6 +32,15 @@ import ResponsiveActionGroup, {
   mobileVisibleNamedHoverActionClass,
   responsiveActionItemClass,
 } from "../components/ResponsiveActionGroup";
+import {
+  Badge,
+  Button,
+  FormField,
+  IconButton,
+  PageHeader,
+  Surface,
+  fieldControlClass,
+} from "../components/ui";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
 
@@ -70,7 +99,11 @@ const ProjectCard = memo(function ProjectCard({
   const isEditing = editingId === project.id;
 
   return (
-    <div className="group bg-white border border-gray-200 rounded-2xl shadow-sm hover:shadow-md hover:border-indigo-200 transition-all overflow-hidden" data-guide="project-card">
+    <Surface
+      padding="none"
+      className="group overflow-hidden transition-all hover:border-indigo-200 hover:shadow-md"
+      data-guide="project-card"
+    >
       <div className="p-5">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="min-w-0 flex-1">
@@ -78,7 +111,7 @@ const ProjectCard = memo(function ProjectCard({
               <div className="flex items-center gap-1 mb-1 min-w-0">
                 <input
                   autoFocus
-                  className="min-w-0 flex-1 border border-indigo-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-semibold"
+                  className={`${fieldControlClass} flex-1 py-1 font-semibold`}
                   value={editingName}
                   onChange={e => onEditNameChange(e.target.value)}
                   onKeyDown={e => {
@@ -86,23 +119,26 @@ const ProjectCard = memo(function ProjectCard({
                     if (e.key === "Escape") onEditCancel();
                   }}
                 />
-                <button onClick={() => onEditSave(project.id)} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded">
+                <IconButton label="儲存專案名稱" variant="success" onClick={() => onEditSave(project.id)}>
                   <Check className="w-3.5 h-3.5" />
-                </button>
-                <button onClick={onEditCancel} className="p-1 text-gray-400 hover:bg-gray-100 rounded">
+                </IconButton>
+                <IconButton label="取消編輯專案名稱" onClick={onEditCancel}>
                   <X className="w-3.5 h-3.5" />
-                </button>
+                </IconButton>
               </div>
             ) : (
               <div className="flex items-center gap-1 group/name min-w-0">
                 <div className="font-semibold text-gray-900 text-lg truncate">{project.name}</div>
                 {canEditProject(project.owner_id) && (
-                  <button
+                  <IconButton
+                    label="編輯專案名稱"
                     onClick={() => onEditStart(project.id, project.name)}
-                    className={`${mobileVisibleNamedHoverActionClass} p-0.5 text-gray-400 hover:text-indigo-600 rounded transition-opacity flex-shrink-0`}
+                    variant="primary"
+                    size="xs"
+                    className={mobileVisibleNamedHoverActionClass}
                   >
                     <Pencil className="w-3.5 h-3.5" />
-                  </button>
+                  </IconButton>
                 )}
               </div>
             )}
@@ -118,12 +154,14 @@ const ProjectCard = memo(function ProjectCard({
             </div>
           </div>
           {canEditProject(project.owner_id) && (
-            <button
+            <IconButton
+              label="封存專案"
               onClick={() => onDelete(project.id)}
-              className={`flex-shrink-0 ${mobileVisibleHoverActionClass} p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all`}
+              variant="danger"
+              className={mobileVisibleHoverActionClass}
             >
               <Trash2 className="w-4 h-4" />
-            </button>
+            </IconButton>
           )}
         </div>
       </div>
@@ -147,6 +185,52 @@ const ProjectCard = memo(function ProjectCard({
           個人編輯
         </Link>
       </div>
+    </Surface>
+  );
+});
+
+const ArchivedProjectRow = memo(function ArchivedProjectRow({
+  project,
+  showOwner,
+  canEditProject,
+  onRestore,
+  isRestoring,
+}) {
+  const expiresAt = project.archive_expires_at ? new Date(project.archive_expires_at) : null;
+  const daysLeft = expiresAt
+    ? Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+    : 0;
+
+  return (
+    <div className="grid grid-cols-1 gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+      <div className="min-w-0">
+        <div className="font-medium text-gray-900 truncate">{project.name}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+          <Users className="w-3 h-3" />
+          {project.student_count} 位學生
+          {showOwner && project.owner_name && (
+            <>
+              <span className="text-gray-300">·</span>
+              <span>{project.owner_name}</span>
+            </>
+          )}
+          <span className="text-gray-300">·</span>
+          <CalendarClock className="w-3 h-3" />
+          <span>{daysLeft} 天內可復原</span>
+        </div>
+      </div>
+      {canEditProject(project.owner_id) && (
+        <Button
+          type="button"
+          onClick={() => onRestore(project.id)}
+          disabled={isRestoring}
+          variant="successSoft"
+          size="md"
+        >
+          <RotateCcw className="w-4 h-4" />
+          {isRestoring ? "復原中" : "復原"}
+        </Button>
+      )}
     </div>
   );
 });
@@ -159,10 +243,13 @@ export default function ProjectList() {
   // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
   const showOwner = currentUser?.role !== "teacher";
   const [projects, setProjects] = useState([]);
+  const [archivedProjects, setArchivedProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [form, setForm] = useState({ customName: "", template_id: "" });
   const [showForm, setShowForm] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
 
   const startGuide = useCallback(() => {
@@ -176,6 +263,7 @@ export default function ProjectList() {
 
   useEffect(() => {
     fetchAllProjects().then(r => setProjects(r.data));
+    fetchArchivedProjects().then(r => setArchivedProjects(r.data));
     fetchAllTemplates().then(r => setTemplates(r.data));
   }, []);
 
@@ -223,20 +311,47 @@ export default function ProjectList() {
   // ── 刪除（樂觀更新）
   const handleDelete = useCallback((id) => {
     setConfirmModal({
-      message: "確定刪除此專案？所有學生資料將一併刪除。",
+      message: "確定將此專案移到封存？30 天內可從「封存復原」找回，期間一般列表不會顯示。",
+      confirmLabel: "移到封存",
+      confirmVariant: "archive",
       onConfirm: async () => {
         const prev = projects;
         setProjects(p => p.filter(x => x.id !== id));
         try {
           await deleteProject(id);
-          toast.success("已刪除");
+          toast.success("已移到封存，30 天內可復原");
+          try {
+            const archived = await fetchArchivedProjects();
+            setArchivedProjects(archived.data);
+          } catch {
+            // 封存已成功，封存清單稍後可手動重新整理。
+          }
         } catch {
           setProjects(prev);
-          toast.error("刪除失敗");
+          toast.error("封存失敗");
         }
       },
     });
   }, [projects]);
+
+  const handleRestore = useCallback(async (id) => {
+    setRestoringId(id);
+    try {
+      await restoreProject(id);
+      const [active, archived] = await Promise.all([
+        fetchAllProjects(),
+        fetchArchivedProjects(),
+      ]);
+      setProjects(active.data);
+      setArchivedProjects(archived.data);
+      toast.success("專案已復原");
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "復原失敗");
+    } finally {
+      setRestoringId(null);
+    }
+  }, []);
 
   return (
     <div className="w-full">
@@ -245,49 +360,102 @@ export default function ProjectList() {
         message={confirmModal?.message}
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
+        confirmLabel={confirmModal?.confirmLabel}
+        confirmVariant={confirmModal?.confirmVariant}
       />
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-100 rounded-xl flex flex-shrink-0 items-center justify-center">
-            <FolderOpen className="w-5 h-5 text-emerald-600" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-gray-900">相本專案</h1>
-            <p className="text-sm text-gray-500">每個班級每個月一個專案</p>
-          </div>
-        </div>
-        <ResponsiveActionGroup mobileColumns={canCreateProject ? 2 : 1}>
-          <button
+      <PageHeader
+        icon={FolderOpen}
+        iconTone="success"
+        title="相本專案"
+        subtitle="每個班級每個月一個專案"
+        actions={(
+        <ResponsiveActionGroup mobileColumns={2}>
+          <Button
             type="button"
             onClick={startGuide}
-            className={`${responsiveActionItemClass} flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 sm:px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors`}
+            variant="secondary"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             <CircleHelp className="w-4 h-4" />
-            製作教學
-          </button>
+            <span className="whitespace-nowrap">製作教學</span>
+          </Button>
+          <Button
+            type="button"
+            onClick={() => setShowArchive(v => !v)}
+            variant="archive"
+            size="touch"
+            className={responsiveActionItemClass}
+          >
+            <ArchiveRestore className="w-4 h-4" />
+            <span className="whitespace-nowrap">封存復原</span>
+            {archivedProjects.length > 0 && (
+              <Badge tone="archive" className="ml-0.5 bg-slate-200">
+                {archivedProjects.length}
+              </Badge>
+            )}
+          </Button>
         {canCreateProject && (
-          <button
+          <Button
             onClick={() => setShowForm(v => !v)}
             data-guide="project-create-button"
-            className={`${responsiveActionItemClass} flex items-center gap-2 bg-indigo-600 text-white px-3 sm:px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm`}
+            variant="primary"
+            size="touch"
+            className={`${responsiveActionItemClass} col-span-2 sm:col-span-1`}
           >
             <Plus className="w-4 h-4" />
-            新建專案
-          </button>
+            <span className="whitespace-nowrap">新建專案</span>
+          </Button>
         )}
         </ResponsiveActionGroup>
-      </div>
+        )}
+      />
+
+      {showArchive && (
+        <Surface as="section" padding="none" className="mb-8 overflow-hidden border-slate-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+            <div>
+              <h2 className="font-semibold text-gray-800 text-sm">封存復原</h2>
+              <p className="text-xs text-gray-500">專案移到封存後保留 30 天，可在期限內復原。</p>
+            </div>
+            <Button
+              type="button"
+              onClick={() => fetchArchivedProjects().then(r => setArchivedProjects(r.data))}
+              variant="archive"
+              size="xs"
+            >
+              重新整理
+            </Button>
+          </div>
+          {archivedProjects.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-400">
+              目前沒有可復原的封存專案
+            </div>
+          ) : (
+            <div>
+              {archivedProjects.map(project => (
+                <ArchivedProjectRow
+                  key={project.id}
+                  project={project}
+                  showOwner={showOwner}
+                  canEditProject={canEditProject}
+                  onRestore={handleRestore}
+                  isRestoring={restoringId === project.id}
+                />
+              ))}
+            </div>
+          )}
+        </Surface>
+      )}
 
       {/* Create form */}
       {showForm && (
-        <div className="bg-white border border-indigo-100 rounded-2xl p-6 mb-8 shadow-sm" data-guide="project-create-form">
+        <Surface className="mb-8 border-indigo-100" padding="lg" data-guide="project-create-form">
           <h2 className="font-semibold text-gray-800 mb-4">新建相本專案</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">選擇模板</label>
+            <FormField label="選擇模板">
               <select
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
+                className={fieldControlClass}
                 value={form.template_id}
                 onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
               >
@@ -298,16 +466,15 @@ export default function ProjectList() {
                   </option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">自訂名稱 (分校) (班級)</label>
+            </FormField>
+            <FormField label="自訂名稱 (分校) (班級)">
               <input
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
+                className={fieldControlClass}
                 placeholder="例：東區校 10階A"
                 value={form.customName}
                 onChange={e => setForm(f => ({ ...f, customName: e.target.value }))}
               />
-            </div>
+            </FormField>
           </div>
           {composedName && (
             <div className="text-xs text-gray-500 mb-4 break-words">
@@ -315,21 +482,14 @@ export default function ProjectList() {
             </div>
           )}
           <div className="flex flex-wrap gap-3">
-            <button
-              onClick={handleCreate}
-              disabled={creating}
-              className="bg-indigo-600 text-white px-5 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors"
-            >
+            <Button onClick={handleCreate} disabled={creating} variant="primary">
               {creating ? "建立中..." : "建立"}
-            </button>
-            <button
-              onClick={() => setShowForm(false)}
-              className="text-gray-500 px-5 py-2 rounded-xl text-sm hover:bg-gray-100 transition-colors"
-            >
+            </Button>
+            <Button onClick={() => setShowForm(false)} variant="ghost">
               取消
-            </button>
+            </Button>
           </div>
-        </div>
+        </Surface>
       )}
 
       {projects.length === 0 ? (

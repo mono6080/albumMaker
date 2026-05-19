@@ -88,6 +88,8 @@ class Project(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True)
+    archive_expires_at = Column(DateTime, nullable=True)
     label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
     students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")

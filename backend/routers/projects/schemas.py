@@ -16,6 +16,8 @@ class ProjectSummary(BaseModel):
     student_count: int
     owner_id: Optional[int] = None
     owner_name: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    archive_expires_at: Optional[datetime] = None
 
 
 class StudentInProject(BaseModel):
@@ -34,6 +36,8 @@ class ProjectDetail(BaseModel):
     template_id: int
     created_at: Optional[datetime] = None
     owner_id: Optional[int] = None
+    deleted_at: Optional[datetime] = None
+    archive_expires_at: Optional[datetime] = None
     label_texts: Any
     students: list[StudentInProject]
 

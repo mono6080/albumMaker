@@ -15,6 +15,15 @@ import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import {
+  Badge,
+  Button,
+  IconButton,
+  PageHeader,
+  SegmentedControl,
+  Surface,
+  fieldControlClass,
+} from "../components/ui";
+import {
   ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
 } from "lucide-react";
@@ -375,54 +384,47 @@ export default function ProjectReview() {
 
   return (
     <div className="w-full">
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-2 mb-6">
-        <Link to="/projects" className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0">
-          <ChevronRight className="w-4 h-4 rotate-180" />
-        </Link>
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="text-gray-400 text-sm hidden sm:inline flex-shrink-0">相本專案</span>
-          <ChevronRight className="w-3.5 h-3.5 text-gray-300 hidden sm:block flex-shrink-0" />
-          <span className="font-semibold text-gray-900 truncate">{project.name}</span>
-          <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex-shrink-0">輸出</span>
-        </div>
+      <PageHeader
+        title={project.name}
+        badge={<Badge tone="success">輸出</Badge>}
+        meta={(
+          <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
+            <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
+            <span className="hidden sm:inline">相本專案</span>
+          </Button>
+        )}
+        actions={(
         <ResponsiveActionGroup mobileColumns={3}>
           {/* 完整畫質切換：僅 admin 可見 */}
           {canDownloadPrint && (
-            <div className="col-span-3 grid grid-cols-2 bg-gray-100 rounded-xl p-0.5 text-xs font-medium sm:flex sm:flex-shrink-0">
-              <button
-                onClick={() => setOutputMode("print")}
-                className={`min-w-0 justify-center flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
-                  outputMode === "print" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">完整畫質</span>
-              </button>
-              <button
-                onClick={() => setOutputMode("screen")}
-                className={`min-w-0 justify-center flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors ${
-                  outputMode === "screen" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Monitor className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">螢幕顯示</span>
-              </button>
-            </div>
+            <SegmentedControl
+              value={outputMode}
+              onChange={setOutputMode}
+              size="sm"
+              className="col-span-3 sm:w-auto"
+              options={[
+                { value: "print", label: "完整畫質", icon: Printer },
+                { value: "screen", label: "螢幕顯示", icon: Monitor },
+              ]}
+            />
           )}
-          <button
+          <Button
             type="button"
             onClick={startGuide}
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors shadow-sm sm:flex-shrink-0`}
+            variant="secondary"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             <CircleHelp className="w-4 h-4" />
             <span className="truncate">製作教學</span>
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleDownloadAll}
             disabled={isBatchRendering || project.students.length === 0}
             data-guide="review-download-all"
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-emerald-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-40 transition-colors shadow-sm sm:flex-shrink-0`}
+            variant="success"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             {renderingAll
               ? <>
@@ -434,11 +436,13 @@ export default function ProjectReview() {
                 </>
               : <><Package className="w-4 h-4" /><span>PDF ZIP</span></>
             }
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleDownloadAllImages}
             disabled={isBatchRendering || project.students.length === 0}
-            className={`${responsiveActionItemClass} flex items-center gap-1.5 bg-sky-600 text-white px-2 sm:px-3 py-2 rounded-xl text-sm font-medium hover:bg-sky-700 disabled:opacity-40 transition-colors shadow-sm sm:flex-shrink-0`}
+            variant="info"
+            size="touch"
+            className={responsiveActionItemClass}
           >
             {renderingAllImages
               ? <>
@@ -450,13 +454,14 @@ export default function ProjectReview() {
                 </>
               : <><ImageDown className="w-4 h-4" /><span>{isAllImagesShareReady ? "開始分享" : "全部圖片"}</span></>
             }
-          </button>
+          </Button>
         </ResponsiveActionGroup>
-      </div>
+        )}
+      />
 
       {/* Progress bar */}
       {project.students.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-6 shadow-sm" data-guide="review-progress">
+        <Surface className="mb-6" data-guide="review-progress">
           <div className="flex justify-between text-sm mb-2">
             <span className="text-gray-600">已產生</span>
             <span className="font-medium text-gray-900">{doneCount} / {project.students.length}</span>
@@ -467,7 +472,7 @@ export default function ProjectReview() {
               style={{ width: `${project.students.length ? (doneCount / project.students.length) * 100 : 0}%` }}
             />
           </div>
-        </div>
+        </Surface>
       )}
 
       {/* Preview modal */}
@@ -476,8 +481,10 @@ export default function ProjectReview() {
           className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6 backdrop-blur-sm"
           onClick={() => setPreview(null)}
         >
-          <div
-            className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden"
+          <Surface
+            padding="none"
+            variant="dialog"
+            className="max-w-md w-full overflow-hidden"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100">
@@ -487,12 +494,13 @@ export default function ProjectReview() {
                 </div>
                 <div className="text-xs text-gray-400">第 {preview.pageIndex + 1} 頁預覽</div>
               </div>
-              <button
+              <IconButton
+                label="關閉預覽"
                 onClick={() => setPreview(null)}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                size="md"
               >
                 ✕
-              </button>
+              </IconButton>
             </div>
             <img
               src={`${previewUrl(id, preview.studentId, preview.pageIndex)}?t=${ts}`}
@@ -508,7 +516,7 @@ export default function ProjectReview() {
                     <button
                       key={i}
                       onClick={() => setPreview(p => ({ ...p, pageIndex: i }))}
-                      className={`w-7 h-7 rounded-lg text-xs font-medium transition-colors ${
+                      className={`h-8 w-8 rounded-lg text-xs font-medium transition-colors ${
                         preview.pageIndex === i
                           ? "bg-indigo-600 text-white"
                           : "bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -520,7 +528,7 @@ export default function ProjectReview() {
                 </div>
               ) : null;
             })()}
-          </div>
+          </Surface>
         </div>
       )}
 
@@ -541,11 +549,12 @@ export default function ProjectReview() {
               (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
             );
             return (
-              <div
+              <Surface
                 key={student.id}
                 data-guide="review-student-card"
                 style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
-                className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all hover:shadow-md ${
+                padding="none"
+                className={`overflow-hidden transition-all hover:shadow-md ${
                   isDone ? "border-emerald-100" : "border-gray-200"
                 }`}
               >
@@ -589,48 +598,57 @@ export default function ProjectReview() {
 
                   {/* Actions */}
                   <ResponsiveActionGroup mobileColumns={4} desktop="grid">
-                    <Link
+                    <Button
+                      as={Link}
                       to={`/projects/${id}/students/${student.id}/edit`}
                       data-guide="review-edit-student"
-                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors`}
+                      variant="neutral"
+                      size="xs"
+                      className={responsiveActionItemClass}
                     >
                       <Pencil className="w-3 h-3" />
                       編輯
-                    </Link>
-                    <button
+                    </Button>
+                    <Button
                       onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
                       data-guide="review-preview-student"
-                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors`}
+                      variant="neutral"
+                      size="xs"
+                      className={responsiveActionItemClass}
                     >
                       <Eye className="w-3 h-3" />
                       預覽
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       onClick={() => handleDownloadOne(student.id)}
                       disabled={isStudentBusy}
                       data-guide="review-download-student"
-                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors`}
+                      variant="successSoft"
+                      size="xs"
+                      className={responsiveActionItemClass}
                     >
                       {isStudentRendering
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Download className="w-3 h-3" />
                       }
                       {isStudentRendering ? "..." : "PDF"}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       onClick={() => handleDownloadOneImages(student.id)}
                       disabled={isStudentBusy}
-                      className={`${responsiveActionItemClass} flex items-center gap-1 px-2 py-1.5 text-xs bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 disabled:opacity-40 transition-colors`}
+                      variant="infoSoft"
+                      size="xs"
+                      className={responsiveActionItemClass}
                     >
                       {isStudentImageRendering
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <ImageDown className="w-3 h-3" />
                       }
                       {isStudentImageRendering ? "..." : isStudentImageShareReady ? "分享" : "圖片"}
-                    </button>
+                    </Button>
                   </ResponsiveActionGroup>
                 </div>
-              </div>
+              </Surface>
             );
           })}
         </div>
@@ -638,7 +656,7 @@ export default function ProjectReview() {
 
       {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
       {(canComment || currentUser?.role === "teacher") && (
-        <div className="mt-8 bg-white border border-gray-200 rounded-2xl shadow-sm p-5" data-guide="review-comments">
+        <Surface className="mt-8" data-guide="review-comments">
           <div className="flex items-center gap-2 mb-4">
             <MessageCircle className="w-4 h-4 text-violet-500" />
             <h3 className="font-semibold text-gray-800 text-sm">審閱意見</h3>
@@ -668,12 +686,14 @@ export default function ProjectReview() {
                           })}
                         </span>
                         {isAdmin && (
-                          <button
+                          <IconButton
+                            label="刪除留言"
                             onClick={() => handleDeleteComment(comment.id)}
-                            className="p-0.5 text-gray-200 hover:text-red-400 transition-colors"
+                            variant="danger"
+                            size="xs"
                           >
                             <Trash2 className="w-3 h-3" />
-                          </button>
+                          </IconButton>
                         )}
                       </div>
                     </div>
@@ -693,24 +713,25 @@ export default function ProjectReview() {
                   value={newCommentText}
                   onChange={(e) => setNewCommentText(e.target.value)}
                   placeholder="輸入審閱意見..."
-                  className="min-w-0 flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-gray-50 resize-none"
+                  className={`${fieldControlClass} flex-1 resize-none`}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
                   }}
                 />
-                <button
+                <Button
                   onClick={handleSubmitComment}
                   disabled={isSubmittingComment || !newCommentText.trim()}
-                  className="self-end flex flex-shrink-0 items-center justify-center gap-1 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                  variant="primary"
+                  className="self-end"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">送出</span>
-                </button>
+                </Button>
               </div>
               <p className="text-xs text-gray-300 mt-1.5">Ctrl+Enter 快速送出</p>
             </>
           )}
-        </div>
+        </Surface>
       )}
     </div>
   );

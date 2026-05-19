@@ -11,6 +11,10 @@ import { apiClient, renderClient } from "./authApi";
 export const fetchAllProjects = () =>
   apiClient.get("/projects/");
 
+/** 取得 30 天內可復原的封存專案 */
+export const fetchArchivedProjects = () =>
+  apiClient.get("/projects/archive");
+
 /** 建立新專案 */
 export const createProject = (projectName, templateId) =>
   apiClient.post("/projects/", new URLSearchParams({ name: projectName, template_id: templateId }));
@@ -26,6 +30,10 @@ export const renameProject = (projectId, newName) =>
 /** 刪除指定專案 */
 export const deleteProject = (projectId) =>
   apiClient.delete(`/projects/${projectId}`);
+
+/** 復原封存專案 */
+export const restoreProject = (projectId) =>
+  apiClient.post(`/projects/${projectId}/restore`);
 
 // ── 學生管理 ──────────────────────────────────────────────────────────────────
 

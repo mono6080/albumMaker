@@ -5,6 +5,7 @@ import { LogOut, Settings as SettingsIcon } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import PrivateRoute from "./components/PrivateRoute";
 import PwaUpdateBanner from "./components/PwaUpdateBanner";
+import { Button } from "./components/ui";
 import Login from "./pages/Login";
 import TemplateList from "./pages/TemplateList";
 import TemplateEditor from "./pages/TemplateEditor";
@@ -52,7 +53,7 @@ function Nav() {
   return (
     <nav className="bg-white border-b border-gray-200 shadow-sm">
       <div className="flex min-w-0 items-center gap-1 px-3 sm:px-6">
-        <Link to="/" className="flex flex-shrink-0 items-center gap-2 py-3.5 mr-1 sm:mr-3">
+        <Link to="/" className="flex min-h-12 min-w-10 flex-shrink-0 items-center justify-center gap-2 mr-1 sm:mr-3">
           <span className="text-xl leading-none">🎨</span>
           <span className="hidden lg:inline max-w-[11rem] truncate font-bold text-gray-900 text-sm tracking-tight">
             幼兒園相本系統
@@ -86,26 +87,27 @@ function Nav() {
                 {ROLE_LABELS[currentUser.role] ?? currentUser.role}
               </span>
             </span>
-            <Link
+            <Button
+              as={Link}
               to="/settings"
-              className={`flex flex-shrink-0 items-center justify-center gap-1 text-xs py-1.5 px-2 rounded-lg transition-colors ${
-                isActive("/settings")
-                  ? "bg-indigo-50 text-indigo-700"
-                  : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-              }`}
+              variant={isActive("/settings") ? "secondary" : "ghost"}
+              size="xs"
+              className="flex-shrink-0"
               title="設定"
             >
               <SettingsIcon className="w-3.5 h-3.5 flex-shrink-0" />
               <span className="hidden lg:inline whitespace-nowrap">設定</span>
-            </Link>
-            <button
+            </Button>
+            <Button
               onClick={handleLogout}
-              className="flex flex-shrink-0 items-center justify-center gap-1 text-xs text-gray-400 hover:text-gray-600 py-1.5 px-2 rounded-lg hover:bg-gray-100 transition-colors"
+              variant="ghost"
+              size="xs"
+              className="flex-shrink-0"
               title="登出"
             >
               <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
               <span className="hidden lg:inline whitespace-nowrap">登出</span>
-            </button>
+            </Button>
           </div>
         )}
       </div>

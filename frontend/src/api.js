@@ -19,10 +19,12 @@ export {
 export {
   // 專案 API
   fetchAllProjects as getProjects,
+  fetchArchivedProjects,
   createProject,
   fetchProject as getProject,
   renameProject,
   deleteProject,
+  restoreProject,
 
   // 學生 API
   batchAddStudents,
