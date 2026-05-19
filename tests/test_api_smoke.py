@@ -76,6 +76,15 @@ def png_bytes(size: tuple[int, int], color: tuple[int, int, int, int] = (240, 72
     return buffer.getvalue()
 
 
+def count_non_whiteish_pixels(image: Image.Image, box: tuple[int, int, int, int], threshold: int = 245) -> int:
+    sample = image.crop(box).convert("RGB")
+    return sum(
+        1
+        for pixel in sample.getdata()
+        if any(channel < threshold for channel in pixel)
+    )
+
+
 def workbook_bytes(rows: list[list[object]]) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
@@ -718,6 +727,28 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert_status(student_preview, 200)
         assert student_preview.headers["content-type"].startswith("image/jpeg")
 
+        stale_student_default = client.put(
+            f"/api/projects/{project_id}/batch/texts",
+            json={"students": {str(student_id): {"0": {"1": "{name} smoke label"}}}},
+        )
+        assert_status(stale_student_default, 200)
+
+        blank_texts = client.put(
+            f"/api/projects/{project_id}/label_texts",
+            json={"0": {"1": ""}},
+        )
+        assert_status(blank_texts, 200)
+
+        project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
+        assert_status(project_blank_preview, 200)
+        with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
+            assert count_non_whiteish_pixels(preview_image, (96, 340, 456, 436)) < 5
+
+        student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
+        assert_status(student_blank_preview, 200)
+        with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
+            assert count_non_whiteish_pixels(preview_image, (96, 340, 456, 436)) < 5
+
         render_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
         assert_status(render_response, 200)
         render_payload = render_response.json()
@@ -765,6 +796,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert_status(download_screen_image, 200)
         with Image.open(BytesIO(download_screen_image.content)) as exported_image:
             assert exported_image.size == (794, 1123)
+            assert count_non_whiteish_pixels(exported_image, (96, 340, 456, 436)) < 5
 
         missing_page_image = client.get(f"/api/projects/{project_id}/students/{student_id}/images/2")
         assert_status(missing_page_image, 404)

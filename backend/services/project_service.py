@@ -56,9 +56,43 @@ def _inherited_label_texts(label_texts: dict) -> dict:
     }
 
 
+def _template_label_texts_for_page(page_layouts: list[dict] | None, page_index_key: str) -> dict:
+    if page_layouts is None:
+        return {}
+    try:
+        page_layout = page_layouts[int(page_index_key)]
+    except (IndexError, TypeError, ValueError):
+        return {}
+    return {
+        str(label.get("id")): label.get("text", "")
+        for label in page_layout.get("text_labels", [])
+        if label.get("id") is not None
+    }
+
+
+def _drop_legacy_template_default_overrides(
+    student_label_texts: dict,
+    project_label_texts: dict,
+    template_label_texts: dict,
+) -> dict:
+    """舊版前端可能把模板預設文字存成學生覆寫；有專案覆寫時讓它回到繼承。"""
+    if not project_label_texts or not template_label_texts:
+        return student_label_texts
+    return {
+        label_id: text
+        for label_id, text in student_label_texts.items()
+        if not (
+            label_id in project_label_texts
+            and label_id in template_label_texts
+            and text == template_label_texts[label_id]
+        )
+    }
+
+
 def merge_project_label_texts_into_pages(
     student_pages_data: list,
-    project_label_texts: dict
+    project_label_texts: dict,
+    page_layouts: list[dict] | None = None,
 ) -> list:
     """
     將專案層級對應文字合併入學生頁面資料，作為學生未自訂時的預設值。
@@ -78,6 +112,11 @@ def merge_project_label_texts_into_pages(
         page_index_key = str(page_data.get("page_index", 0))
         project_page_label_texts = _inherited_label_texts(project_label_texts.get(page_index_key, {}))
         student_page_label_texts = _inherited_label_texts(page_data.get("label_texts", {}))
+        student_page_label_texts = _drop_legacy_template_default_overrides(
+            student_page_label_texts,
+            project_page_label_texts,
+            _template_label_texts_for_page(page_layouts, page_index_key),
+        )
         if project_page_label_texts or student_page_label_texts:
             # 學生的設定優先；專案設定補足尚未覆寫的對應文字
             merged_label_texts = {**project_page_label_texts, **student_page_label_texts}
@@ -142,7 +181,8 @@ def render_and_save_student_album(
     project_label_texts = json.loads(project.label_texts_json or "{}")
     student_pages_data = merge_project_label_texts_into_pages(
         json.loads(student.pages_data_json),
-        project_label_texts
+        project_label_texts,
+        page_layouts,
     )
 
     rendered_images = render_album(page_layouts, student.name, student_pages_data)

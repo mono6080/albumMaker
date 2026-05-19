@@ -88,6 +88,7 @@ def preview_student_page(
     student_pages_data = merge_project_label_texts_into_pages(
         _parse_json_field(student.pages_data_json, "pages_data_json"),
         project_label_texts,
+        page_layouts,
     )
 
     page_data_by_index = {
