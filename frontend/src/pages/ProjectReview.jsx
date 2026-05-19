@@ -95,6 +95,8 @@ export default function ProjectReview() {
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [imageShareDrafts, setImageShareDrafts] = useState({});
+  const [allImagesShareDraft, setAllImagesShareDraft] = useState(null);
   const [ts, setTs] = useState(0);
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
@@ -110,6 +112,8 @@ export default function ProjectReview() {
       setProject(projectResponse.data);
       const templateResponse = await getTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
+      setImageShareDrafts({});
+      setAllImagesShareDraft(null);
     } catch {
       setLoadError("找不到專案，請確認連結是否正確");
     }
@@ -202,18 +206,33 @@ export default function ProjectReview() {
       if (!studentRecord) return;
 
       if (isMobileDevice()) {
+        const preparedShare = imageShareDrafts[studentId];
+        if (preparedShare?.files?.length) {
+          const shareResult = await shareFiles(preparedShare.files, preparedShare.title);
+          if (shareResult === "shared") {
+            setImageShareDrafts(prev => {
+              const next = { ...prev };
+              delete next[studentId];
+              return next;
+            });
+            toast.success("已開啟分享");
+          } else if (shareResult !== "cancelled") {
+            toast.error(getShareFailureMessage(shareResult));
+          }
+          return;
+        }
+
         const files = await buildShareImageFiles([studentRecord], Date.now());
         if (!files.length) {
           toast.error("沒有可分享的頁面");
           return;
         }
 
-        const shareResult = await shareFiles(files, `${studentRecord.name} 相冊圖片`);
-        if (shareResult === "shared") {
-          toast.success("已開啟分享");
-        } else if (shareResult !== "cancelled") {
-          toast.error(getShareFailureMessage(shareResult));
-        }
+        setImageShareDrafts(prev => ({
+          ...prev,
+          [studentId]: { files, title: `${studentRecord.name} 相冊圖片` },
+        }));
+        toast.success("圖片已準備好，請再按一次開始分享");
         return;
       }
 
@@ -262,6 +281,17 @@ export default function ProjectReview() {
     setRenderAllImagesProgress({ current: 0, total: students.length });
     try {
       if (isMobileDevice()) {
+        if (allImagesShareDraft?.files?.length) {
+          const shareResult = await shareFiles(allImagesShareDraft.files, allImagesShareDraft.title);
+          if (shareResult === "shared") {
+            setAllImagesShareDraft(null);
+            toast.success("已開啟分享");
+          } else if (shareResult !== "cancelled") {
+            toast.error(getShareFailureMessage(shareResult));
+          }
+          return;
+        }
+
         const files = await buildShareImageFiles(
           students,
           Date.now(),
@@ -272,12 +302,8 @@ export default function ProjectReview() {
           return;
         }
 
-        const shareResult = await shareFiles(files, `${project.name} 全部圖片`);
-        if (shareResult === "shared") {
-          toast.success("已開啟分享");
-        } else if (shareResult !== "cancelled") {
-          toast.error(getShareFailureMessage(shareResult));
-        }
+        setAllImagesShareDraft({ files, title: `${project.name} 全部圖片` });
+        toast.success("圖片已準備好，請再按一次開始分享");
         return;
       }
 
@@ -344,6 +370,7 @@ export default function ProjectReview() {
   const pageCount = template.pages.length;
   const doneCount = project.students.filter(s => s.output_filename).length;
   const isBatchRendering = renderingAll || renderingAllImages;
+  const isAllImagesShareReady = isMobileDevice() && allImagesShareDraft?.files?.length > 0;
 
   return (
     <div className="w-full">
@@ -420,7 +447,7 @@ export default function ProjectReview() {
                     : <span className="hidden sm:inline">產生中...</span>
                   }
                 </>
-              : <><ImageDown className="w-4 h-4" /><span>全部圖片</span></>
+              : <><ImageDown className="w-4 h-4" /><span>{isAllImagesShareReady ? "開始分享" : "全部圖片"}</span></>
             }
           </button>
         </div>
@@ -507,6 +534,7 @@ export default function ProjectReview() {
             const isDone = !!student.output_filename;
             const isStudentRendering = rendering[student.id];
             const isStudentImageRendering = renderingImages[student.id];
+            const isStudentImageShareReady = isMobileDevice() && imageShareDrafts[student.id]?.files?.length > 0;
             const isStudentBusy = isStudentRendering || isStudentImageRendering;
             const studentSkippedPages = new Set(
               (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
@@ -597,7 +625,7 @@ export default function ProjectReview() {
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <ImageDown className="w-3 h-3" />
                       }
-                      {isStudentImageRendering ? "產生中..." : "圖片"}
+                      {isStudentImageRendering ? "準備中..." : isStudentImageShareReady ? "分享" : "圖片"}
                     </button>
                   </div>
                 </div>

@@ -85,6 +85,7 @@ export default function StudentEdit() {
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
   const [isImageRendering, setIsImageRendering] = useState(false);
+  const [imageShareDraft, setImageShareDraft] = useState(null);
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
@@ -157,6 +158,7 @@ export default function StudentEdit() {
     labelTexts[pageIndex]?.[String(labelId)] ?? "";
 
   const setLabelText = (pageIndex, labelId, textValue) => {
+    setImageShareDraft(null);
     setLabelTexts(prevTexts => ({
       ...prevTexts,
       [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
@@ -180,6 +182,7 @@ export default function StudentEdit() {
   const handlePageSkip = async (pageIndex, skip) => {
     try {
       await setStudentPageSkip(projectId, studentId, pageIndex, skip);
+      setImageShareDraft(null);
       setSkippedPages(prev => {
         const next = new Set(prev);
         if (skip) next.add(pageIndex); else next.delete(pageIndex);
@@ -208,6 +211,7 @@ export default function StudentEdit() {
 
     setIsRendering(true);
     try {
+      setImageShareDraft(null);
       await renderStudent(projectId, studentId);
       await loadStudentData();
       refreshAllPreviews();
@@ -221,6 +225,24 @@ export default function StudentEdit() {
   };
 
   const handleRenderImages = async () => {
+    if (isMobileDevice() && imageShareDraft?.files?.length) {
+      setIsImageRendering(true);
+      try {
+        const shareResult = await shareFiles(imageShareDraft.files, imageShareDraft.title);
+        if (shareResult === "shared") {
+          setImageShareDraft(null);
+          toast.success("已開啟分享");
+        } else if (shareResult !== "cancelled") {
+          toast.error(getShareFailureMessage(shareResult));
+        }
+      } catch {
+        toast.error("分享圖片失敗");
+      } finally {
+        setIsImageRendering(false);
+      }
+      return;
+    }
+
     await flushSave();
 
     setIsImageRendering(true);
@@ -247,12 +269,8 @@ export default function StudentEdit() {
           if (file) files.push(file);
         }
 
-        const shareResult = await shareFiles(files, `${student.name} 相冊圖片`);
-        if (shareResult === "shared") {
-          toast.success("已開啟分享");
-        } else if (shareResult !== "cancelled") {
-          toast.error(getShareFailureMessage(shareResult));
-        }
+        setImageShareDraft({ files, title: `${student.name} 相冊圖片` });
+        toast.success("圖片已準備好，請再按一次開始分享");
         return;
       }
 
@@ -303,6 +321,7 @@ export default function StudentEdit() {
 
   const isCurrentPageSkipped = skippedPages.has(activePage);
   const isOutputBusy = isRendering || isImageRendering;
+  const isImageShareReady = isMobileDevice() && imageShareDraft?.files?.length > 0;
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
@@ -358,8 +377,8 @@ export default function StudentEdit() {
             {isImageRendering
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <ImageDown className="w-4 h-4" />}
-            <span className="hidden sm:inline">{isImageRendering ? "產生中..." : "下載圖片"}</span>
-            <span className="sm:hidden">{isImageRendering ? "..." : "圖片"}</span>
+            <span className="hidden sm:inline">{isImageRendering ? "準備中..." : isImageShareReady ? "開始分享" : "下載圖片"}</span>
+            <span className="sm:hidden">{isImageRendering ? "..." : isImageShareReady ? "分享" : "圖片"}</span>
           </button>
         </div>
       </div>
@@ -400,8 +419,8 @@ export default function StudentEdit() {
             pages={templatePages}
             student={student}
             skippedPages={skippedPages}
-            onPhotoSaved={() => refreshAllPreviews()}
-            onSaved={() => { loadStudentData(); refreshAllPreviews(); }}
+            onPhotoSaved={() => { setImageShareDraft(null); refreshAllPreviews(); }}
+            onSaved={() => { setImageShareDraft(null); loadStudentData(); refreshAllPreviews(); }}
           />
           <div className="hidden lg:block" data-guide="student-text-panel">
             <StudentTextPanel
