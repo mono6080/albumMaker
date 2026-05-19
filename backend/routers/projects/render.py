@@ -5,7 +5,7 @@ import io
 import logging
 import time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
@@ -234,6 +234,41 @@ def download_student_images_as_zip(
     return StreamingResponse(
         io.BytesIO(build_zip_of_student_images(project, student, effective_mode, image_entries)),
         media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
+@router.get("/{project_id}/students/{student_id}/images/{page_number}")
+def download_student_image(
+    project_id: int,
+    student_id: int,
+    page_number: int = Path(..., ge=1),
+    mode: str = Query("print", pattern="^(print|screen)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """下載學生個人相冊的單頁 JPG。非 admin 使用者強制使用螢幕畫質。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+    student = get_student_or_404(student_id, project_id, db)
+
+    effective_mode = mode if current_user.role == "admin" else "screen"
+
+    if not student.output_filename:
+        raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
+
+    image_entries = get_student_image_entries(project, student, effective_mode)
+    if not image_entries:
+        raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
+    if page_number > len(image_entries):
+        raise HTTPException(status_code=404, detail="圖片頁碼超出範圍")
+
+    filename, image_bytes = image_entries[page_number - 1]
+    content_disposition = build_content_disposition_header(filename)
+
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
         headers={"Content-Disposition": content_disposition},
     )
 

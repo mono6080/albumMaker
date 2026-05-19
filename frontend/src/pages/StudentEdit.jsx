@@ -8,15 +8,22 @@ import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
-import { buildDownloadImagesZipUrl, buildDownloadPdfUrl } from "../api/urls";
+import { buildDownloadImagesZipUrl, buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
-import { ChevronRight, ChevronLeft, CircleHelp, Download, ImageDown, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, CircleHelp, Download, ImageDown, Loader2, Share2 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
 import { startProductGuide } from "../utils/productGuide";
+import {
+  createFileFromBlob,
+  downloadApiBlob,
+  fetchApiBlob,
+  getShareFailureMessage,
+  shareFiles,
+} from "../utils/browserFiles";
 
 const STUDENT_EDIT_GUIDE_STEPS = [
   {
@@ -57,7 +64,7 @@ const STUDENT_EDIT_GUIDE_STEPS = [
   {
     element: '[data-guide="student-download-button"]',
     title: "產出並下載",
-    description: "照片和文字確認後，按這裡產生此學生的 PDF；旁邊可下載單頁圖片 ZIP。",
+    description: "照片和文字確認後，按這裡產生此學生的 PDF；旁邊可下載圖片 ZIP 或用手機分享圖片。",
     side: "bottom",
     align: "end",
   },
@@ -77,6 +84,7 @@ export default function StudentEdit() {
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
   const [isImageRendering, setIsImageRendering] = useState(false);
+  const [isImageSharing, setIsImageSharing] = useState(false);
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
@@ -194,25 +202,6 @@ export default function StudentEdit() {
 
   // ── 渲染（含前置強制儲存） ────────────────────────────────────────────────
 
-  const triggerBlobDownload = async (downloadPath, fallbackFilename) => {
-    const apiPath = downloadPath.replace(/^\/api/, "");
-    const response = await apiClient.get(apiPath, { responseType: "blob" });
-    const disposition = response.headers["content-disposition"] ?? "";
-    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    const asciiMatch = disposition.match(/filename="([^"]+)"/i);
-    const filename = utf8Match
-      ? decodeURIComponent(utf8Match[1])
-      : asciiMatch
-        ? asciiMatch[1]
-        : fallbackFilename;
-    const blobUrl = URL.createObjectURL(response.data);
-    const anchor = document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(blobUrl);
-  };
-
   const handleRenderPdf = async () => {
     // 先強制同步儲存，確保渲染使用最新文字
     await flushSave();
@@ -223,7 +212,7 @@ export default function StudentEdit() {
       await loadStudentData();
       refreshAllPreviews();
       // 渲染完成後自動下載
-      await triggerBlobDownload(buildDownloadPdfUrl(projectId, studentId), `${student.name}.pdf`);
+      await downloadApiBlob(apiClient, buildDownloadPdfUrl(projectId, studentId), `${student.name}.pdf`);
       toast.success("PDF 已下載");
     } catch {
       toast.error("產生失敗");
@@ -239,12 +228,51 @@ export default function StudentEdit() {
       await renderStudent(projectId, studentId);
       await loadStudentData();
       refreshAllPreviews();
-      await triggerBlobDownload(buildDownloadImagesZipUrl(projectId, studentId), `${student.name}_images.zip`);
+      await downloadApiBlob(apiClient, buildDownloadImagesZipUrl(projectId, studentId), `${student.name}_images.zip`);
       toast.success("圖片 ZIP 已下載");
     } catch {
       toast.error("產生圖片失敗");
     }
     setIsImageRendering(false);
+  };
+
+  const handleShareImages = async () => {
+    await flushSave();
+
+    setIsImageSharing(true);
+    try {
+      const visiblePageIndexes = Array.from(
+        { length: template?.pages.length ?? 0 },
+        (_, pageIndex) => pageIndex,
+      ).filter(pageIndex => !skippedPages.has(pageIndex));
+
+      if (!visiblePageIndexes.length) {
+        toast.error("沒有可分享的頁面");
+        return;
+      }
+
+      const requestTs = Date.now();
+      const files = [];
+      for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
+        const { blob } = await fetchApiBlob(
+          apiClient,
+          `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${requestTs}`,
+        );
+        const file = createFileFromBlob(blob, `${student.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
+        if (file) files.push(file);
+      }
+
+      const shareResult = await shareFiles(files, `${student.name} 相冊圖片`);
+      if (shareResult === "shared") {
+        toast.success("已開啟分享");
+      } else if (shareResult !== "cancelled") {
+        toast.error(getShareFailureMessage(shareResult));
+      }
+    } catch {
+      toast.error("分享圖片失敗");
+    } finally {
+      setIsImageSharing(false);
+    }
   };
 
   const startGuide = () => {
@@ -277,7 +305,7 @@ export default function StudentEdit() {
   // ── 共用面板內容 ──────────────────────────────────────────────────────────
 
   const isCurrentPageSkipped = skippedPages.has(activePage);
-  const isOutputBusy = isRendering || isImageRendering;
+  const isOutputBusy = isRendering || isImageRendering || isImageSharing;
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
@@ -335,6 +363,17 @@ export default function StudentEdit() {
               : <ImageDown className="w-4 h-4" />}
             <span className="hidden sm:inline">{isImageRendering ? "產生中..." : "下載圖片"}</span>
             <span className="sm:hidden">{isImageRendering ? "..." : "圖片"}</span>
+          </button>
+          <button
+            onClick={handleShareImages}
+            disabled={isOutputBusy}
+            className="flex items-center gap-1.5 bg-violet-600 text-white px-3 py-2 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition-colors shadow-sm"
+          >
+            {isImageSharing
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Share2 className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isImageSharing ? "準備中..." : "分享圖片"}</span>
+            <span className="sm:hidden">{isImageSharing ? "..." : "分享"}</span>
           </button>
         </div>
       </div>

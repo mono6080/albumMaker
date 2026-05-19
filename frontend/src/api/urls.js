@@ -40,6 +40,10 @@ export const buildDownloadPdfUrl = (projectId, studentId, outputMode = "print") 
 export const buildDownloadImagesZipUrl = (projectId, studentId, outputMode = "print") =>
   `${API_BASE}/projects/${projectId}/students/${studentId}/images?mode=${outputMode}`;
 
+/** 學生個人指定頁面的 JPG 下載 URL */
+export const buildDownloadImageUrl = (projectId, studentId, pageNumber, outputMode = "print") =>
+  `${API_BASE}/projects/${projectId}/students/${studentId}/images/${pageNumber}?mode=${outputMode}`;
+
 /** 整個專案所有 PDF 打包下載 URL（含輸出模式）*/
 export const buildDownloadAllZipUrl = (projectId, outputMode = "print") =>
   `${API_BASE}/projects/${projectId}/download/all?mode=${outputMode}`;

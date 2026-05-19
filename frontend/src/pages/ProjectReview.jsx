@@ -15,9 +15,16 @@ import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
-  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2,
+  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2, Share2,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
+import {
+  createFileFromBlob,
+  downloadApiBlob,
+  fetchApiBlob,
+  getShareFailureMessage,
+  shareFiles,
+} from "../utils/browserFiles";
 
 const PROJECT_REVIEW_GUIDE_STEPS = [
   {
@@ -44,7 +51,7 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-preview-student"]',
     title: "快速預覽",
-    description: "不進入編輯頁也能快速打開此學生的頁面預覽。",
+    description: "不進入編輯頁也能快速打開此學生的頁面預覽，手機可在預覽視窗分享圖片。",
     side: "bottom",
     align: "center",
   },
@@ -87,6 +94,7 @@ export default function ProjectReview() {
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [sharingPreview, setSharingPreview] = useState(false);
   const [ts, setTs] = useState(0);
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
@@ -119,27 +127,14 @@ export default function ProjectReview() {
     loadComments();
   }, [loadProject, loadComments]);
 
-  /** 透過 apiClient 下載 blob 並觸發瀏覽器儲存，確保 HttpOnly Cookie 隨請求傳送 */
-  const triggerBlobDownload = async (url, fallbackFilename) => {
-    // urls.js 回傳的路徑已含 /api 前綴；apiClient.baseURL 也是 /api，需去掉重複的前綴
-    const apiPath = url.startsWith("/api") ? url.slice(4) : url;
-    const response = await apiClient.get(apiPath, { responseType: "blob" });
-    const disposition = response.headers["content-disposition"] ?? "";
-    // 嘗試從 filename*=UTF-8'' 或 filename= 讀取檔名
-    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    const asciiMatch = disposition.match(/filename="([^"]+)"/i);
-    const filename = utf8Match
-      ? decodeURIComponent(utf8Match[1])
-      : asciiMatch
-        ? asciiMatch[1]
-        : fallbackFilename;
-    const blobUrl = URL.createObjectURL(response.data);
-    const anchor = document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(blobUrl);
-  };
+  const getVisiblePageIndexes = useCallback((studentRecord) => {
+    if (!studentRecord) return [];
+    const skippedPages = new Set(
+      (studentRecord.pages_data || []).filter(pageData => pageData.skip).map(pageData => pageData.page_index)
+    );
+    return Array.from({ length: template?.pages.length ?? 0 }, (_, pageIndex) => pageIndex)
+      .filter(pageIndex => !skippedPages.has(pageIndex));
+  }, [template]);
 
   const showRetryToast = (message, onRetry) => {
     toast.custom(t => (
@@ -168,7 +163,8 @@ export default function ProjectReview() {
       await loadProject();
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await triggerBlobDownload(
+      await downloadApiBlob(
+        apiClient,
         downloadPdf(id, studentId, effectiveMode),
         "album.pdf",
       );
@@ -183,7 +179,8 @@ export default function ProjectReview() {
       await loadProject();
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await triggerBlobDownload(
+      await downloadApiBlob(
+        apiClient,
         downloadImagesZip(id, studentId, effectiveMode),
         "album-images.zip",
       );
@@ -204,7 +201,8 @@ export default function ProjectReview() {
       await loadProject();
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await triggerBlobDownload(
+      await downloadApiBlob(
+        apiClient,
         downloadAllZip(id, effectiveMode),
         "albums.zip",
       );
@@ -226,13 +224,52 @@ export default function ProjectReview() {
       await loadProject();
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await triggerBlobDownload(
+      await downloadApiBlob(
+        apiClient,
         downloadAllImagesZip(id, effectiveMode),
         "album-images.zip",
       );
     } catch { showRetryToast("批次產生圖片失敗", handleDownloadAllImages); }
     setRenderingAllImages(false);
     setRenderAllImagesProgress(null);
+  };
+
+  const handleSharePreviewImages = async () => {
+    if (!preview) return;
+
+    const previewStudent = project.students.find(student => student.id === preview.studentId);
+    if (!previewStudent) return;
+
+    setSharingPreview(true);
+    try {
+      const visiblePageIndexes = getVisiblePageIndexes(previewStudent);
+      if (!visiblePageIndexes.length) {
+        toast.error("沒有可分享的頁面");
+        return;
+      }
+
+      const requestTs = Date.now();
+      const files = [];
+      for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
+        const { blob } = await fetchApiBlob(
+          apiClient,
+          `${previewUrl(id, previewStudent.id, pageIndex)}?t=${requestTs}`,
+        );
+        const file = createFileFromBlob(blob, `${previewStudent.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
+        if (file) files.push(file);
+      }
+
+      const shareResult = await shareFiles(files, `${previewStudent.name} 相冊圖片`);
+      if (shareResult === "shared") {
+        toast.success("已開啟分享");
+      } else if (shareResult !== "cancelled") {
+        toast.error(getShareFailureMessage(shareResult));
+      }
+    } catch {
+      toast.error("分享圖片失敗");
+    } finally {
+      setSharingPreview(false);
+    }
   };
 
   const handleSubmitComment = async () => {
@@ -394,12 +431,25 @@ export default function ProjectReview() {
                 </div>
                 <div className="text-xs text-gray-400">第 {preview.pageIndex + 1} 頁預覽</div>
               </div>
-              <button
-                onClick={() => setPreview(null)}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSharePreviewImages}
+                  disabled={sharingPreview}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs bg-violet-50 text-violet-700 rounded-xl hover:bg-violet-100 disabled:opacity-40 transition-colors"
+                >
+                  {sharingPreview
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Share2 className="w-3.5 h-3.5" />}
+                  {sharingPreview ? "準備中..." : "分享圖片"}
+                </button>
+                <button
+                  onClick={() => setPreview(null)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             <img
               src={`${previewUrl(id, preview.studentId, preview.pageIndex)}?t=${ts}`}
@@ -408,10 +458,7 @@ export default function ProjectReview() {
             />
             {pageCount > 1 && (() => {
               const previewStudent = project.students.find(s => s.id === preview.studentId);
-              const previewSkipped = new Set(
-                (previewStudent?.pages_data || []).filter(p => p.skip).map(p => p.page_index)
-              );
-              const visiblePages = Array.from({ length: pageCount }, (_, i) => i).filter(i => !previewSkipped.has(i));
+              const visiblePages = getVisiblePageIndexes(previewStudent);
               return visiblePages.length > 1 ? (
                 <div className="flex justify-center gap-2 p-3 border-t border-gray-100">
                   {visiblePages.map(i => (

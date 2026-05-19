@@ -744,6 +744,14 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             with Image.open(BytesIO(image_bytes)) as exported_image:
                 assert exported_image.size == (1240, 1754)
 
+        download_image = client.get(f"/api/projects/{project_id}/students/{student_id}/images/1")
+        assert_status(download_image, 200)
+        assert download_image.headers["content-type"].startswith("image/jpeg")
+        assert download_image.headers["content-disposition"].startswith("attachment;")
+        assert download_image.content.startswith(b"\xff\xd8")
+        with Image.open(BytesIO(download_image.content)) as exported_image:
+            assert exported_image.size == (1240, 1754)
+
         download_screen_images = client.get(f"/api/projects/{project_id}/students/{student_id}/images?mode=screen")
         assert_status(download_screen_images, 200)
         with ZipFile(BytesIO(download_screen_images.content)) as image_zip:
@@ -752,6 +760,14 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             assert image_names[0].endswith("_screen_page1.jpg")
             with Image.open(BytesIO(image_zip.read(image_names[0]))) as exported_image:
                 assert exported_image.size == (794, 1123)
+
+        download_screen_image = client.get(f"/api/projects/{project_id}/students/{student_id}/images/1?mode=screen")
+        assert_status(download_screen_image, 200)
+        with Image.open(BytesIO(download_screen_image.content)) as exported_image:
+            assert exported_image.size == (794, 1123)
+
+        missing_page_image = client.get(f"/api/projects/{project_id}/students/{student_id}/images/2")
+        assert_status(missing_page_image, 404)
 
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)

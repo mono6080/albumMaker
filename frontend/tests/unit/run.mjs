@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildDownloadAllImagesZipUrl,
   buildDownloadAllZipUrl,
+  buildDownloadImageUrl,
   buildDownloadImagesZipUrl,
   buildDownloadPdfUrl,
   buildPhotoUrl,
@@ -12,6 +13,7 @@ import {
   buildTemplatePagePreviewUrl,
   buildTemplateSpreadPreviewUrl,
 } from "../../src/api/urls.js";
+import { getApiPath, getFilenameFromDisposition } from "../../src/utils/browserFiles.js";
 import { buildItems, clampPan, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
 import {
   CANVAS_DISPLAY_WIDTH,
@@ -46,9 +48,26 @@ test("API URL builders keep route contracts stable", () => {
   assert.equal(buildDownloadPdfUrl(3, 4, "screen"), "/api/projects/3/students/4/pdf?mode=screen");
   assert.equal(buildDownloadImagesZipUrl(3, 4), "/api/projects/3/students/4/images?mode=print");
   assert.equal(buildDownloadImagesZipUrl(3, 4, "screen"), "/api/projects/3/students/4/images?mode=screen");
+  assert.equal(buildDownloadImageUrl(3, 4, 2), "/api/projects/3/students/4/images/2?mode=print");
+  assert.equal(buildDownloadImageUrl(3, 4, 2, "screen"), "/api/projects/3/students/4/images/2?mode=screen");
   assert.equal(buildDownloadAllZipUrl(3, "screen"), "/api/projects/3/download/all?mode=screen");
   assert.equal(buildDownloadAllImagesZipUrl(3), "/api/projects/3/download/all/images?mode=print");
   assert.equal(buildDownloadAllImagesZipUrl(3, "screen"), "/api/projects/3/download/all/images?mode=screen");
+});
+
+
+test("browser file helpers normalize API paths and download filenames", () => {
+  assert.equal(getApiPath("/api/projects/1/download"), "/projects/1/download");
+  assert.equal(getApiPath("/projects/1/download"), "/projects/1/download");
+  assert.equal(
+    getFilenameFromDisposition("attachment; filename*=UTF-8''%E7%9B%B8%E5%86%8A.jpg", "fallback.jpg"),
+    "相冊.jpg",
+  );
+  assert.equal(
+    getFilenameFromDisposition('attachment; filename="album.jpg"', "fallback.jpg"),
+    "album.jpg",
+  );
+  assert.equal(getFilenameFromDisposition("", "fallback.jpg"), "fallback.jpg");
 });
 
 
