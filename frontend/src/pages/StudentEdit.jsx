@@ -51,7 +51,7 @@ const STUDENT_EDIT_GUIDE_STEPS = [
   {
     element: '[data-guide="student-text-panel"]',
     title: "個別文字",
-    description: "需要為單一學生覆寫文字時，在這裡輸入。清空會恢復專案共用文字或模板文字。",
+    description: "需要為單一學生覆寫文字時，在這裡輸入。清空會輸出空白；按恢復預設可回到共用文字或模板文字。",
     side: "left",
     align: "start",
   },
@@ -157,12 +157,24 @@ export default function StudentEdit() {
   const getLabelText = (pageIndex, labelId) =>
     labelTexts[pageIndex]?.[String(labelId)] ?? "";
 
+  const hasLabelTextOverride = (pageIndex, labelId) =>
+    Object.prototype.hasOwnProperty.call(labelTexts[pageIndex] || {}, String(labelId));
+
   const setLabelText = (pageIndex, labelId, textValue) => {
     setImageShareDraft(null);
     setLabelTexts(prevTexts => ({
       ...prevTexts,
       [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
     }));
+  };
+
+  const restoreDefaultLabelText = (pageIndex, labelId) => {
+    setImageShareDraft(null);
+    setLabelTexts(prevTexts => {
+      const nextPageTexts = { ...(prevTexts[pageIndex] || {}) };
+      delete nextPageTexts[String(labelId)];
+      return { ...prevTexts, [pageIndex]: nextPageTexts };
+    });
   };
 
   const refreshPreview = (pageIdx = activePage) =>
@@ -431,7 +443,9 @@ export default function StudentEdit() {
               projectLabelTexts={projectLabelTexts}
               student={student}
               getLabelText={getLabelText}
+              hasLabelTextOverride={hasLabelTextOverride}
               onLabelChange={setLabelText}
+              onRestoreDefault={restoreDefaultLabelText}
               onScheduleSave={() => { if (student) scheduleSave(); }}
             />
           </div>
@@ -447,7 +461,9 @@ export default function StudentEdit() {
             projectLabelTexts={projectLabelTexts}
             student={student}
             getLabelText={getLabelText}
+            hasLabelTextOverride={hasLabelTextOverride}
             onLabelChange={setLabelText}
+            onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
           />
         </div>

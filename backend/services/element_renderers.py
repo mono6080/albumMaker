@@ -210,7 +210,7 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
     """渲染對應文字方塊（無背景）。label_texts 提供專案 / 學生層級的文字覆蓋。"""
     label_id = str(label.get("id", ""))
     raw_text = label_texts.get(label_id)
-    if raw_text in (None, ""):
+    if raw_text is None:
         raw_text = label.get("text", "")
     label_text = raw_text.replace("{name}", student_name)
     if not label_text:

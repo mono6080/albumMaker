@@ -12,7 +12,3 @@ export function insertTextToken(value = "", selectionStart, selectionEnd, token 
   const text = `${sourceText.slice(0, start)}${token}${sourceText.slice(end)}`;
   return { text, caret: start + token.length };
 }
-
-export function restoreFallbackWhenEmpty(value = "", fallbackValue = "") {
-  return value === "" ? String(fallbackValue ?? "") : value;
-}

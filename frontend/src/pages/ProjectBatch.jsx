@@ -73,7 +73,7 @@ const BATCH_TEXT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-text-fields"]',
     title: "整班共用文字",
-    description: "這裡填入全班共用文案，清空時會恢復模板文字，{name} 會在輸出時自動替換姓名。",
+    description: "這裡填入全班共用文案，清空會輸出空白；按恢復預設可回到模板文字，{name} 會在輸出時自動替換姓名。",
     side: "left",
     align: "start",
   },
@@ -164,15 +164,11 @@ export default function ProjectBatch() {
       const templateResponse = await fetchTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
 
-      // 初始化對應文字狀態（專案設定優先，若無則使用模板預設）
+      // 初始化對應文字狀態：只保存專案覆寫；未覆寫時由預覽/渲染使用模板預設。
       const savedProjectLabelTexts = projectResponse.data.label_texts || {};
       const initialLabelTexts = {};
-      templateResponse.data.pages.forEach((templatePage, pageIndex) => {
-        initialLabelTexts[pageIndex] = {};
-        (templatePage.layout?.text_labels || []).forEach(label => {
-          initialLabelTexts[pageIndex][String(label.id)] =
-            savedProjectLabelTexts[String(pageIndex)]?.[String(label.id)] ?? label.text ?? "";
-        });
+      templateResponse.data.pages.forEach((_templatePage, pageIndex) => {
+        initialLabelTexts[pageIndex] = { ...(savedProjectLabelTexts[String(pageIndex)] || {}) };
       });
       setLabelTexts(initialLabelTexts);
     } catch {
@@ -230,11 +226,22 @@ export default function ProjectBatch() {
   const getLabelText = (pageIndex, labelId) =>
     labelTexts[pageIndex]?.[String(labelId)] ?? "";
 
+  const hasLabelTextOverride = (pageIndex, labelId) =>
+    Object.prototype.hasOwnProperty.call(labelTexts[pageIndex] || {}, String(labelId));
+
   const setLabelText = (pageIndex, labelId, textValue) => {
     setLabelTexts(prevTexts => ({
       ...prevTexts,
       [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
     }));
+  };
+
+  const restoreDefaultLabelText = (pageIndex, labelId) => {
+    setLabelTexts(prevTexts => {
+      const nextPageTexts = { ...(prevTexts[pageIndex] || {}) };
+      delete nextPageTexts[String(labelId)];
+      return { ...prevTexts, [pageIndex]: nextPageTexts };
+    });
   };
 
   // ── 載入中 ────────────────────────────────────────────────────────────────
@@ -271,13 +278,14 @@ export default function ProjectBatch() {
               文字 — 第 {activePage + 1} 頁
             </h3>
             <span className="text-xs text-gray-400 hidden sm:inline">
-              （{"{name}"} 會自動代入各學生姓名，清空會恢復模板文字）
+              （{"{name}"} 會自動代入各學生姓名，清空會輸出空白）
             </span>
           </div>
           <div className="space-y-3">
             {activePageLayout.text_labels.map(label => {
               const templateDefaultText = label.text ?? "";
               const currentValue = getLabelText(activePage, label.id);
+              const hasOverride = hasLabelTextOverride(activePage, label.id);
               const len = currentValue.length;
               return (
                 <div key={label.id} className="flex gap-3">
@@ -288,10 +296,12 @@ export default function ProjectBatch() {
                     <TextVariableTextarea
                       rows={2}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
+                      placeholder={templateDefaultText}
                       value={currentValue}
-                      fallbackValue={templateDefaultText}
                       defaultText={templateDefaultText}
+                      hasOverride={hasOverride}
                       onChange={value => setLabelText(activePage, label.id, value)}
+                      onRestoreDefault={() => restoreDefaultLabelText(activePage, label.id)}
                       onScheduleSave={scheduleSave}
                       buttonGuideId="batch-text-insert-name"
                       maxLength={200}

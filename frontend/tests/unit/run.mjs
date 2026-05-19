@@ -27,7 +27,7 @@ import {
   toDisplayCoord,
   toRealCoord,
 } from "../../src/utils/renderLayoutModel.js";
-import { insertTextToken, restoreFallbackWhenEmpty } from "../../src/utils/textVariables.js";
+import { insertTextToken } from "../../src/utils/textVariables.js";
 
 
 const tests = [];
@@ -180,13 +180,6 @@ test("text variable insertion respects caret and selected ranges", () => {
   assert.deepEqual(insertTextToken("今天很棒", 2, 2), { text: "今天{name}很棒", caret: 8 });
   assert.deepEqual(insertTextToken("姓名：___", 3, 6), { text: "姓名：{name}", caret: 9 });
   assert.deepEqual(insertTextToken("開頭", undefined, undefined), { text: "開頭{name}", caret: 8 });
-});
-
-
-test("empty text inputs restore their inherited fallback text", () => {
-  assert.equal(restoreFallbackWhenEmpty("", "Default {name}"), "Default {name}");
-  assert.equal(restoreFallbackWhenEmpty("自訂文字", "Default {name}"), "自訂文字");
-  assert.equal(restoreFallbackWhenEmpty("", null), "");
 });
 
 

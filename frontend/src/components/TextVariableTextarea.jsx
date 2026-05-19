@@ -1,20 +1,34 @@
 import { useRef } from "react";
 import CompositionTextarea from "./CompositionTextarea";
-import { NAME_VARIABLE, insertTextToken, restoreFallbackWhenEmpty } from "../utils/textVariables";
+import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 
 export default function TextVariableTextarea({
   value,
-  fallbackValue = "",
   defaultText,
+  hasOverride = false,
   onChange,
+  onRestoreDefault,
   onScheduleSave,
   buttonGuideId,
   ...textareaProps
 }) {
   const textareaRef = useRef(null);
+  const statusText = hasOverride
+    ? value === "" ? "空白輸出" : "自訂文字"
+    : "使用預設文字";
 
   const updateText = (nextValue) => {
-    onChange(restoreFallbackWhenEmpty(nextValue, fallbackValue));
+    onChange(nextValue);
+  };
+
+  const handleRestoreDefault = () => {
+    onRestoreDefault?.();
+    onScheduleSave?.();
+  };
+
+  const handleSetBlank = () => {
+    onChange("");
+    onScheduleSave?.();
   };
 
   const handleInsertName = () => {
@@ -38,17 +52,38 @@ export default function TextVariableTextarea({
       <div className="flex items-center justify-between gap-2">
         {defaultText ? (
           <div className="text-xs text-gray-400 truncate">
-            預設：{defaultText.substring(0, 25)}
+            {statusText} · 預設：{defaultText.substring(0, 25)}
           </div>
-        ) : <span />}
-        <button
-          type="button"
-          onClick={handleInsertName}
-          data-guide={buttonGuideId}
-          className="flex-shrink-0 px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
-        >
-          插入 {NAME_VARIABLE}
-        </button>
+        ) : (
+          <div className="text-xs text-gray-400">{statusText}</div>
+        )}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {hasOverride ? (
+            <button
+              type="button"
+              onClick={handleRestoreDefault}
+              className="px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors"
+            >
+              恢復預設
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSetBlank}
+              className="px-2 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 bg-white hover:bg-gray-50 transition-colors"
+            >
+              設為空白
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleInsertName}
+            data-guide={buttonGuideId}
+            className="px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+          >
+            插入 {NAME_VARIABLE}
+          </button>
+        </div>
       </div>
       <CompositionTextarea
         {...textareaProps}

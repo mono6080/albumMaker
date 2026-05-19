@@ -48,11 +48,11 @@ def build_content_disposition_header(filename: str) -> str:
 # ── 對應文字合併 ───────────────────────────────────────────────────────────────
 
 def _inherited_label_texts(label_texts: dict) -> dict:
-    """空字串代表使用上一級文字，因此合併時不視為覆寫。"""
+    """保留文字覆寫設定；空字串代表刻意輸出空白。"""
     return {
         str(label_id): text
         for label_id, text in (label_texts or {}).items()
-        if text not in (None, "")
+        if text is not None
     }
 
 

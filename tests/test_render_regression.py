@@ -108,7 +108,7 @@ def test_render_page_label_text_is_visually_centered_in_box():
     assert abs(text_center_y - box_center_y) <= 6
 
 
-def test_render_page_empty_label_text_falls_back_to_template_text():
+def test_render_page_empty_label_text_outputs_blank_text():
     layout = load_layout()
     label_box = (58, 250, 358, 332)
 
@@ -125,7 +125,7 @@ def test_render_page_empty_label_text_falls_back_to_template_text():
         page_index=0,
     ).crop(label_box)
 
-    assert ImageChops.difference(inherited_text, empty_override_text).getbbox() is None
+    assert ImageChops.difference(inherited_text, empty_override_text).getbbox() is not None
 
 
 def test_render_page_text_shadow_changes_label_and_bubble_regions():

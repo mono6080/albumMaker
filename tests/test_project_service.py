@@ -1,7 +1,7 @@
 from services.project_service import merge_project_label_texts_into_pages
 
 
-def test_empty_student_label_text_inherits_project_label_text():
+def test_empty_student_label_text_overrides_project_label_text():
     student_pages = [
         {
             "page_index": 0,
@@ -14,12 +14,12 @@ def test_empty_student_label_text_inherits_project_label_text():
     merged = merge_project_label_texts_into_pages(student_pages, project_label_texts)
 
     assert merged[0]["label_texts"] == {
-        "1": "Project default",
+        "1": "",
         "2": "Student detail",
     }
 
 
-def test_empty_project_label_text_does_not_create_override_page():
+def test_empty_project_label_text_creates_blank_override_page():
     merged = merge_project_label_texts_into_pages([], {"0": {"1": ""}})
 
-    assert merged == []
+    assert merged == [{"page_index": 0, "photos": {}, "label_texts": {"1": ""}}]

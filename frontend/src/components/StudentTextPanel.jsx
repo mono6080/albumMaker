@@ -13,7 +13,9 @@ export default function StudentTextPanel({
   projectLabelTexts,
   student,
   getLabelText,
+  hasLabelTextOverride = () => false,
   onLabelChange,
+  onRestoreDefault = () => {},
   onScheduleSave,
 }) {
   return (
@@ -29,7 +31,7 @@ export default function StudentTextPanel({
               第 {activePage + 1} 頁文字
             </h3>
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
-              ({"{name}"} 自動代入姓名，清空會恢復上一級文字)
+              ({"{name}"} 自動代入姓名，清空會輸出空白)
             </span>
           </div>
           <div className="space-y-3">
@@ -38,6 +40,7 @@ export default function StudentTextPanel({
                 projectLabelTexts[String(activePage)]?.[String(label.id)] ?? label.text ?? "";
               const displayDefaultText = rawDefaultText.replace("{name}", student.name);
               const currentValue = getLabelText(activePage, label.id);
+              const hasOverride = hasLabelTextOverride(activePage, label.id);
               const len = currentValue.length;
               return (
                 <div key={label.id} className="flex gap-3">
@@ -50,9 +53,10 @@ export default function StudentTextPanel({
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50 resize-none"
                       placeholder={displayDefaultText}
                       value={currentValue}
-                      fallbackValue={rawDefaultText}
                       defaultText={displayDefaultText}
+                      hasOverride={hasOverride}
                       onChange={value => onLabelChange(activePage, label.id, value)}
+                      onRestoreDefault={() => onRestoreDefault(activePage, label.id)}
                       onScheduleSave={onScheduleSave}
                       buttonGuideId="student-text-insert-name"
                       maxLength={200}
