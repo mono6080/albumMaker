@@ -5,6 +5,7 @@ import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 export default function TextVariableTextarea({
   value,
   defaultText,
+  inheritedValue,
   hasOverride = false,
   onChange,
   onRestoreDefault,
@@ -13,6 +14,8 @@ export default function TextVariableTextarea({
   ...textareaProps
 }) {
   const textareaRef = useRef(null);
+  const { placeholder, ...textareaRestProps } = textareaProps;
+  const visibleValue = hasOverride ? value : inheritedValue ?? defaultText ?? "";
   const statusText = hasOverride
     ? value === "" ? "空白輸出" : "自訂文字"
     : "使用預設文字";
@@ -34,7 +37,7 @@ export default function TextVariableTextarea({
   const handleInsertName = () => {
     const textarea = textareaRef.current;
     const next = insertTextToken(
-      textarea?.value ?? value ?? "",
+      textarea?.value ?? visibleValue ?? "",
       textarea?.selectionStart,
       textarea?.selectionEnd,
       NAME_VARIABLE,
@@ -86,9 +89,10 @@ export default function TextVariableTextarea({
         </div>
       </div>
       <CompositionTextarea
-        {...textareaProps}
+        {...textareaRestProps}
         ref={textareaRef}
-        value={value}
+        placeholder={hasOverride ? "" : placeholder}
+        value={visibleValue}
         onChange={updateText}
         onScheduleSave={onScheduleSave}
       />

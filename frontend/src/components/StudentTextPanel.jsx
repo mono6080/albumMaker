@@ -57,6 +57,7 @@ export default function StudentTextPanel({
                       placeholder={displayDefaultText}
                       value={currentValue}
                       defaultText={displayDefaultText}
+                      inheritedValue={rawDefaultText}
                       hasOverride={hasOverride}
                       onChange={value => onLabelChange(activePage, label.id, value)}
                       onRestoreDefault={() => onRestoreDefault(activePage, label.id)}

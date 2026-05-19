@@ -304,6 +304,7 @@ export default function ProjectBatch() {
                       placeholder={templateDefaultText}
                       value={currentValue}
                       defaultText={templateDefaultText}
+                      inheritedValue={templateDefaultText}
                       hasOverride={hasOverride}
                       onChange={value => setLabelText(activePage, label.id, value)}
                       onRestoreDefault={() => restoreDefaultLabelText(activePage, label.id)}
