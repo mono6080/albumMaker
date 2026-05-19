@@ -1,36 +1,154 @@
 // PWA 更新提示橫幅
-// autoUpdate 模式：Service Worker 在背景自動安裝並接管後，
-// 顯示橫幅讓使用者選擇立即 reload 或稍後（下次開啟時自然生效）
+// 主動檢查 Service Worker 更新，避免手機 PWA 只靠瀏覽器背景檢查而漏掉新版。
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { RefreshCw, X } from "lucide-react";
+
+const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_CHECK_DEBOUNCE_MS = 5000;
 
 export default function PwaUpdateBanner() {
   const [showBanner, setShowBanner] = useState(false);
+  const dismissedRef = useRef(false);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    // controllerchange 代表新版 SW 已取得控制權（autoUpdate 自動 skipWaiting 後觸發）
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (import.meta.env.DEV || !("serviceWorker" in navigator)) return undefined;
+
+    let disposed = false;
+    let activeRegistration = null;
+    let isChecking = false;
+    let lastCheckAt = 0;
+    let hadController = Boolean(navigator.serviceWorker.controller);
+    const cleanupCallbacks = [];
+
+    const showUpdate = () => {
+      if (disposed || !hadController || dismissedRef.current) return;
       setShowBanner(true);
-    });
+    };
+
+    const trackWorker = (worker) => {
+      if (!worker) return;
+
+      const handleStateChange = () => {
+        if (worker.state === "installed" || worker.state === "activated") {
+          showUpdate();
+        }
+      };
+
+      worker.addEventListener("statechange", handleStateChange);
+      cleanupCallbacks.push(() => worker.removeEventListener("statechange", handleStateChange));
+      handleStateChange();
+    };
+
+    const attachRegistration = (registration) => {
+      if (!registration || activeRegistration === registration) return;
+      activeRegistration = registration;
+
+      trackWorker(registration.installing);
+      trackWorker(registration.waiting);
+
+      const handleUpdateFound = () => {
+        trackWorker(registration.installing);
+      };
+      registration.addEventListener("updatefound", handleUpdateFound);
+      cleanupCallbacks.push(() => registration.removeEventListener("updatefound", handleUpdateFound));
+
+      if (registration.waiting) {
+        showUpdate();
+      }
+    };
+
+    const getRegistration = async () => {
+      const existingRegistration = await navigator.serviceWorker.getRegistration("/");
+      if (existingRegistration) return existingRegistration;
+      return navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    };
+
+    const checkForUpdate = async (force = false) => {
+      if (disposed || isChecking || !navigator.onLine) return;
+      const now = Date.now();
+      if (!force && now - lastCheckAt < UPDATE_CHECK_DEBOUNCE_MS) return;
+
+      isChecking = true;
+      lastCheckAt = now;
+      try {
+        const registration = activeRegistration ?? await getRegistration();
+        attachRegistration(registration);
+        await registration.update();
+        if (registration.waiting) {
+          showUpdate();
+        }
+      } catch {
+        // 更新檢查失敗時維持目前版本，下次切回前景或 interval 會再試。
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    const handleControllerChange = () => {
+      if (hadController) {
+        showUpdate();
+      }
+      hadController = true;
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        checkForUpdate(true);
+      }
+    };
+
+    const handleFocus = () => checkForUpdate(true);
+    const handleOnline = () => checkForUpdate(true);
+
+    navigator.serviceWorker.addEventListener("controllerchange", handleControllerChange);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
+
+    cleanupCallbacks.push(
+      () => navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange),
+      () => document.removeEventListener("visibilitychange", handleVisibilityChange),
+      () => window.removeEventListener("focus", handleFocus),
+      () => window.removeEventListener("online", handleOnline),
+    );
+
+    getRegistration()
+      .then((registration) => {
+        attachRegistration(registration);
+        checkForUpdate(true);
+      })
+      .catch(() => {});
+
+    const intervalId = window.setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL_MS);
+    const firstCheckId = window.setTimeout(() => checkForUpdate(true), 3000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      window.clearTimeout(firstCheckId);
+      cleanupCallbacks.forEach((cleanup) => cleanup());
+    };
   }, []);
 
   if (!showBanner) return null;
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-gray-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg">
+    <div className="fixed bottom-4 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 flex-wrap items-center gap-2 sm:gap-3 bg-gray-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg">
       <RefreshCw className="w-4 h-4 flex-shrink-0 text-indigo-400" />
-      <span>已更新到新版本</span>
+      <span className="min-w-0 flex-1">已更新到新版本</span>
       <button
         onClick={() => window.location.reload()}
-        className="ml-1 bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        className="flex-shrink-0 bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
       >
         立即重新載入
       </button>
       <button
-        onClick={() => setShowBanner(false)}
-        className="text-gray-400 hover:text-white transition-colors"
+        onClick={() => {
+          dismissedRef.current = true;
+          setShowBanner(false);
+        }}
+        className="flex-shrink-0 text-gray-400 hover:text-white transition-colors"
         title="稍後再說"
       >
         <X className="w-4 h-4" />
