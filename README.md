@@ -36,7 +36,7 @@ album_maker/
 │   │   ├── element_renderers.py # 各元素渲染：照片格 / 氣泡框 / 文字標籤 / 貼圖
 │   │   ├── project_service.py   # PDF 輸出、ZIP 打包、對應文字合併
 │   │   ├── file_service.py      # Storage key 計算與上傳工具
-│   │   └── storage.py           # StorageAdapter 抽象層（本機 / 未來可換 S3）
+│   │   └── storage.py           # StorageAdapter 抽象層（本機 / Cloudflare R2）
 │   └── uploads/           # 背景圖、貼圖、學生照片（執行期產生）
 │
 ├── frontend/              # React + Vite + Tailwind CSS
@@ -179,7 +179,14 @@ docker compose up -d --build
 | `SECRET_KEY` | 隨機佔位符（**必須修改**） | JWT 簽名密鑰，正式環境用 `python -c "import secrets; print(secrets.token_hex(32))"` 產生 |
 | `PRODUCTION` | 未設定 | 設為 `1` 時啟用 Cookie Secure flag（需 HTTPS）並拒絕啟動無 SECRET_KEY |
 | `DATABASE_URL` | `sqlite:///./album_maker.db` | 資料庫連線字串 |
-| `STORAGE_BACKEND` | `local` | 儲存後端（目前僅支援 `local`） |
+| `STORAGE_BACKEND` | `local` | 儲存後端，支援 `local` / `r2` |
+| `R2_ACCOUNT_ID` | 未設定 | Cloudflare account ID；`STORAGE_BACKEND=r2` 且未設定 `R2_ENDPOINT_URL` 時必填 |
+| `R2_ACCESS_KEY_ID` | 未設定 | R2 API access key ID；`STORAGE_BACKEND=r2` 時必填 |
+| `R2_SECRET_ACCESS_KEY` | 未設定 | R2 API secret access key；`STORAGE_BACKEND=r2` 時必填 |
+| `R2_BUCKET` | 未設定 | R2 bucket 名稱；`STORAGE_BACKEND=r2` 時必填 |
+| `R2_ENDPOINT_URL` | 未設定 | 自訂 S3-compatible endpoint；未設定時使用 `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `R2_SERVE_MODE` | `proxy` | R2 檔案 serving 模式：`proxy` 由後端代理回傳；`redirect` 轉址到 `R2_PUBLIC_BASE_URL` |
+| `R2_PUBLIC_BASE_URL` | 未設定 | R2 public/custom domain base URL；`R2_SERVE_MODE=redirect` 時必填 |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,...` | CORS 允許來源，逗號分隔；正式部署填入實際網域 |
 
 ---
