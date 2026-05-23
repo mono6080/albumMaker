@@ -12,10 +12,17 @@ from zipfile import ZipFile
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from PIL import Image
+from starlette.responses import Response
 
 from auth import hash_password
 from database import Project, SessionLocal, User
-from main import app, limiter as app_limiter
+from main import (
+    FRONTEND_APP_CACHE_CONTROL,
+    FRONTEND_ASSET_CACHE_CONTROL,
+    app,
+    apply_frontend_cache_headers,
+    limiter as app_limiter,
+)
 from routers.auth import limiter as auth_limiter
 
 
@@ -239,6 +246,28 @@ def test_health_and_auth_cookie_roundtrip():
         client.cookies.clear()
         after_logout = client.get("/api/auth/me")
         assert_status(after_logout, 401)
+
+
+def test_frontend_static_cache_headers_policy():
+    asset_response = Response()
+    apply_frontend_cache_headers(asset_response, "/assets/index-a1b2c3.js")
+    assert asset_response.headers["cache-control"] == FRONTEND_ASSET_CACHE_CONTROL
+
+    shell_response = Response()
+    apply_frontend_cache_headers(shell_response, "/projects/28/review")
+    assert shell_response.headers["cache-control"] == FRONTEND_APP_CACHE_CONTROL
+    assert shell_response.headers["pragma"] == "no-cache"
+    assert shell_response.headers["expires"] == "0"
+
+    sw_response = Response()
+    apply_frontend_cache_headers(sw_response, "/sw.js")
+    assert sw_response.headers["cache-control"] == FRONTEND_APP_CACHE_CONTROL
+    assert sw_response.headers["service-worker-allowed"] == "/"
+
+    api_response = Response()
+    api_response.headers["Cache-Control"] = "no-store"
+    apply_frontend_cache_headers(api_response, "/api/projects/1/preview/0")
+    assert api_response.headers["cache-control"] == "no-store"
 
 
 def test_template_project_student_and_text_contracts():

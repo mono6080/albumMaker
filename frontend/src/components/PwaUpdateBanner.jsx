@@ -10,6 +10,26 @@ const UPDATE_CHECK_DEBOUNCE_MS = 5000;
 export default function PwaUpdateBanner() {
   const [showBanner, setShowBanner] = useState(false);
   const dismissedRef = useRef(false);
+  const registrationRef = useRef(null);
+
+  const reloadForUpdate = () => {
+    const waitingWorker = registrationRef.current?.waiting;
+    if (!waitingWorker) {
+      window.location.reload();
+      return;
+    }
+
+    let didReload = false;
+    const reloadOnce = () => {
+      if (didReload) return;
+      didReload = true;
+      window.location.reload();
+    };
+
+    navigator.serviceWorker.addEventListener("controllerchange", reloadOnce, { once: true });
+    waitingWorker.postMessage({ type: "SKIP_WAITING" });
+    window.setTimeout(reloadOnce, 1500);
+  };
 
   useEffect(() => {
     if (import.meta.env.DEV || !("serviceWorker" in navigator)) return undefined;
@@ -43,6 +63,7 @@ export default function PwaUpdateBanner() {
     const attachRegistration = (registration) => {
       if (!registration || activeRegistration === registration) return;
       activeRegistration = registration;
+      registrationRef.current = registration;
 
       trackWorker(registration.installing);
       trackWorker(registration.waiting);
@@ -59,9 +80,12 @@ export default function PwaUpdateBanner() {
     };
 
     const getRegistration = async () => {
-      const existingRegistration = await navigator.serviceWorker.getRegistration("/");
-      if (existingRegistration) return existingRegistration;
-      return navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const registration = await navigator.serviceWorker.register("/sw.js", {
+        scope: "/",
+        updateViaCache: "none",
+      });
+      registrationRef.current = registration;
+      return registration;
     };
 
     const checkForUpdate = async (force = false) => {
@@ -138,7 +162,7 @@ export default function PwaUpdateBanner() {
       <RefreshCw className="w-4 h-4 flex-shrink-0 text-indigo-400" />
       <span className="min-w-0 flex-1">已更新到新版本</span>
       <button
-        onClick={() => window.location.reload()}
+        onClick={reloadForUpdate}
         className="flex-shrink-0 bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
       >
         立即重新載入

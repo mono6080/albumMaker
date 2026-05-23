@@ -23,6 +23,27 @@ limiter = Limiter(key_func=get_remote_address)
 
 # 前端編譯輸出目錄
 FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+FRONTEND_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
+FRONTEND_APP_CACHE_CONTROL = "no-cache, no-store, max-age=0, must-revalidate"
+
+
+def apply_frontend_cache_headers(response, path: str) -> None:
+    """Set cache policy for frontend files without touching API responses."""
+    if path.startswith("/api/"):
+        return
+
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = FRONTEND_ASSET_CACHE_CONTROL
+        return
+
+    # SPA routes, index.html, service workers, Workbox chunks, manifest, and
+    # other root-level PWA files must be revalidated after every deploy.
+    response.headers["Cache-Control"] = FRONTEND_APP_CACHE_CONTROL
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    if path == "/sw.js":
+        response.headers["Service-Worker-Allowed"] = "/"
+
 
 app = FastAPI(title="幼兒園相本製作系統")
 app.state.limiter = limiter
@@ -37,6 +58,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        apply_frontend_cache_headers(response, request.url.path)
         return response
 
 
