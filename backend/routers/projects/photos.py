@@ -3,6 +3,7 @@
 
 import io
 import json
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
-from services.file_service import get_photo_key, read_and_validate_image, rename_photo_to_slot
+from services.file_service import get_photo_key, read_and_validate_image
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
@@ -136,7 +137,10 @@ async def upload_photo(
         "offset_x": 0.0,
         "offset_y": 0.0,
     }
+    now = datetime.utcnow()
     student.pages_data_json = json.dumps(pages_data)
+    student.updated_at = now
+    project.updated_at = now
     db.commit()
 
     return {"filename": key.split("/")[-1], "path": key}
@@ -206,8 +210,8 @@ def update_photo_mapping(
     更新照片欄位對應關係，支援跨頁移動、位移縮放與清除。
 
     兩步驟協議（前後端共同約定）：
-    1. 重命名（第一步）：所有非 null 項目先重命名檔案，使路徑前綴與新格位對齊。
-       後端回傳 renames 供前端同步 serverPath，避免下次儲存送出舊路徑。
+    1. 寫入（第一步）：所有非 null 項目先寫入目標格位資料，但不重命名檔案。
+       storage key 只代表檔案位置，不需要跟目前格位同步；避免 R2 互動操作變成 copy/delete。
     2. 清除（第二步）：所有 null 項目統一刪除，但只刪除未被移走的檔案。
        跨頁互換時先收集 incoming_paths，確保「A 移到 B、B 移到 A」不誤刪。
 
@@ -221,7 +225,6 @@ def update_photo_mapping(
     student = get_student_or_404(student_id, project_id, db)
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
 
-    renames = {}  # 記錄所有重命名結果，供前端同步 serverPath
     all_pages = payload.pages
 
     # 跨頁統一收集所有「即將被寫入」的路徑，防止跨頁互換時先刪後找不到
@@ -234,7 +237,8 @@ def update_photo_mapping(
                 if path_str:
                     incoming_paths.add(path_str)
 
-    # 第一步：所有頁面的非 null 項目先重命名並寫入
+    # 第一步：所有頁面的非 null 項目先寫入。不要為了格位異動重命名檔案；
+    # R2 copy/delete 對拖曳交換太慢，且 render 只需要 DB mapping 中的 path。
     for page_index_str, slot_updates in all_pages.items():
         page_index = int(page_index_str)
         while len(pages_data) <= page_index:
@@ -246,19 +250,6 @@ def update_photo_mapping(
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
                 continue
-            if isinstance(photo_path, dict) and photo_path.get("path"):
-                original_path = photo_path["path"]
-                new_path_str = rename_photo_to_slot(
-                    original_path, page_index, int(slot_id_str)
-                )
-                # 同步更新 incoming_paths，讓後續 null 清除知道新路徑
-                if new_path_str != original_path:
-                    _delete_photo_thumbnails(storage, original_path)
-                    _delete_photo_thumbnails(storage, new_path_str)
-                    incoming_paths.discard(original_path)
-                    incoming_paths.add(new_path_str)
-                    renames.setdefault(page_index_str, {})[slot_id_str] = new_path_str
-                photo_path = {**photo_path, "path": new_path_str}
             pages_data[page_index]["photos"][slot_id_str] = photo_path
 
     # 第二步：所有頁面的 null 項目統一清除，只刪除未被移走的檔案
@@ -275,6 +266,9 @@ def update_photo_mapping(
                     storage.delete(old_key)
             pages_data[page_index]["photos"].pop(slot_id_str, None)
 
+    now = datetime.utcnow()
     student.pages_data_json = json.dumps(pages_data)
+    student.updated_at = now
+    project.updated_at = now
     db.commit()
-    return {"ok": True, "renames": renames}
+    return {"ok": True, "renames": {}}

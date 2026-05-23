@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,14 @@ import { fileURLToPath } from "node:url";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
+const redPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMCAYAAABr5z2BAAAAIklEQVR4nGP84OHxn4ECwESJ5lEDIICJgULANGoAA8VhAAC8pQKXSjbPdAAAAABJRU5ErkJggg==",
+  "base64",
+);
+const bluePng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMCAYAAABr5z2BAAAAIklEQVR4nGP0qPjwn4ECwESJ5lEDIICJgULANGoAA8VhAABNRALHqomXiwAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 
 async function loginViaUi(page) {
@@ -45,8 +54,80 @@ async function createTemplateWithLayout(page, templateName, layout) {
 }
 
 
+async function createProject(page, projectName, templateId) {
+  const projectResponse = await page.request.post("/api/projects/", {
+    form: { name: projectName, template_id: String(templateId) },
+  });
+  expect(projectResponse.ok()).toBeTruthy();
+  return await projectResponse.json();
+}
+
+
+async function addStudents(page, projectId, names) {
+  const batchResponse = await page.request.post(`/api/projects/${projectId}/students/batch`, {
+    data: names,
+  });
+  expect(batchResponse.ok()).toBeTruthy();
+  return await batchResponse.json();
+}
+
+
+async function fetchProjectDetail(page, projectId) {
+  const detailResponse = await page.request.get(`/api/projects/${projectId}`);
+  expect(detailResponse.ok()).toBeTruthy();
+  return await detailResponse.json();
+}
+
+
+async function uploadStudentPhoto(page, projectId, studentId, slotId, name, buffer) {
+  const uploadResponse = await page.request.post(
+    `/api/projects/${projectId}/students/${studentId}/pages/0/photos/${slotId}`,
+    {
+      multipart: {
+        file: {
+          name,
+          mimeType: "image/png",
+          buffer,
+        },
+      },
+    },
+  );
+  expect(uploadResponse.ok()).toBeTruthy();
+  return await uploadResponse.json();
+}
+
+
+async function fetchStudentPreview(page, projectId, studentId, cacheBuster = Date.now()) {
+  const previewResponse = await page.request.get(
+    `/api/projects/${projectId}/students/${studentId}/preview/0?t=${cacheBuster}`,
+  );
+  expect(previewResponse.ok()).toBeTruthy();
+  expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
+  const body = await previewResponse.body();
+  expect(body[0]).toBe(0xff);
+  expect(body[1]).toBe(0xd8);
+  return previewResponse;
+}
+
+
 async function loadFixtureLayout() {
   return JSON.parse(await readFile(fixturePath, "utf8"));
+}
+
+
+function layoutWithTwoPhotoSlots(layout) {
+  const nextLayout = JSON.parse(JSON.stringify(layout));
+  const firstSlot = nextLayout.photo_slots[0];
+  nextLayout.photo_slots = [
+    firstSlot,
+    {
+      ...firstSlot,
+      id: 2,
+      x: firstSlot.x + firstSlot.width + 40,
+      y: firstSlot.y,
+    },
+  ];
+  return nextLayout;
 }
 
 
@@ -87,7 +168,7 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await loginViaUi(page);
   await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
 
-  await page.getByPlaceholder(/模板名稱/).fill(templateName);
+  await page.getByPlaceholder("2026-05 12階 感官世界").fill(templateName);
   await page.getByRole("button", { name: "建立" }).click();
   await expect(page.getByText(templateName)).toBeVisible();
 
@@ -199,7 +280,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.locator('[data-guide="batch-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
   await expect(projectTextArea).toHaveValue("班級：{name}");
   await projectTextArea.fill("");
-  await expect(projectTextArea).toHaveValue("Default label");
+  await expect(projectTextArea).toHaveValue("");
   await waitForResponseAfter(
     page,
     response => response.url().includes("/label_texts") && response.request().method() === "PUT" && response.ok(),
@@ -237,12 +318,68 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
   await expect(studentTextArea).toHaveValue("學生：{name}");
   await studentTextArea.fill("");
-  await expect(studentTextArea).toHaveValue("共用 {name}");
+  await expect(studentTextArea).toHaveValue("");
   await waitForResponseAfter(
     page,
     response => response.url().includes("/batch/texts") && response.request().method() === "PUT" && response.ok(),
     () => studentTextArea.fill("個人 {name}"),
   );
+});
+
+
+test("student photo uploads, preview cache, and mapping swaps work through storage", async ({ page }) => {
+  const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
+  const templateName = `E2E 照片模板 ${Date.now()}`;
+  const projectName = `E2E 照片專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Photo Alice"]);
+
+  let detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "Photo Alice");
+  expect(student).toBeTruthy();
+
+  const firstPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "first.png", redPng);
+  const secondPhoto = await uploadStudentPhoto(page, project.id, student.id, 2, "second.png", bluePng);
+
+  const firstPreview = await fetchStudentPreview(page, project.id, student.id);
+  expect(firstPreview.headers()["x-preview-cache"]).toBe("MISS");
+  const cachedPreview = await fetchStudentPreview(page, project.id, student.id);
+  expect(cachedPreview.headers()["x-preview-cache"]).toBe("HIT");
+
+  const swapResponse = await page.request.put(`/api/projects/${project.id}/students/${student.id}/photos/mapping`, {
+    data: {
+      pages: {
+        "0": {
+          "1": { path: secondPhoto.path, scale: 1.15, offset_x: 0.05, offset_y: 0 },
+          "2": { path: firstPhoto.path, scale: 1.25, offset_x: -0.05, offset_y: 0 },
+        },
+      },
+    },
+  });
+  expect(swapResponse.ok()).toBeTruthy();
+  const swapPayload = await swapResponse.json();
+  expect(swapPayload.renames).toEqual({});
+
+  detail = await fetchProjectDetail(page, project.id);
+  const photos = detail.students.find(item => item.id === student.id).pages_data[0].photos;
+  expect(photos["1"].path).toBe(secondPhoto.path);
+  expect(photos["2"].path).toBe(firstPhoto.path);
+  expect(photos["1"].scale).toBe(1.15);
+  expect(photos["2"].scale).toBe(1.25);
+
+  const swappedPreview = await fetchStudentPreview(page, project.id, student.id);
+  expect(swappedPreview.headers()["x-preview-cache"]).toBe("MISS");
+  const swappedCachedPreview = await fetchStudentPreview(page, project.id, student.id);
+  expect(swappedCachedPreview.headers()["x-preview-cache"]).toBe("HIT");
+
+  const swappedFirstPhoto = await page.request.get(
+    `/api/projects/${project.id}/students/${student.id}/pages/0/photos/1`,
+  );
+  expect(swappedFirstPhoto.ok()).toBeTruthy();
+  expect(swappedFirstPhoto.headers()["content-type"]).toContain("image/png");
 });
 
 

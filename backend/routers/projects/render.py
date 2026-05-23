@@ -76,21 +76,28 @@ def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes):
     storage = get_storage()
     cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
     headers = {**PREVIEW_CACHE_HEADERS, "X-Preview-Cache-Key": cache_key}
+    cached_reader = getattr(storage, "get_cached_bytes", None)
 
     try:
-        if storage.exists(cache_key):
+        cached_bytes = cached_reader(cache_key) if cached_reader else storage.get_bytes(cache_key)
+        if cached_bytes is not None:
             return Response(
-                content=storage.get_bytes(cache_key),
+                content=cached_bytes,
                 media_type="image/jpeg",
                 headers={**headers, "X-Preview-Cache": "HIT"},
             )
+    except FileNotFoundError:
+        pass
     except Exception as cache_error:
         logger.warning("讀取預覽快取失敗 key=%s error=%s", cache_key, cache_error)
 
     image_bytes = render_bytes()
     try:
-        storage.delete_prefix(cache_prefix)
-        storage.put(cache_key, image_bytes)
+        cache_writer = getattr(storage, "put_cache_only", None)
+        if cache_writer:
+            cache_writer(cache_key, image_bytes)
+        else:
+            storage.put(cache_key, image_bytes)
     except Exception as cache_error:
         logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
 
@@ -131,7 +138,6 @@ def preview_project_page(
             "project_updated_at": project.updated_at,
             "page_index": page_index,
             "scale": scale,
-            "t": t,
             "layout": page_layout,
             "page_data": page_data,
         },
@@ -182,7 +188,6 @@ def preview_student_page(
             "student_name": student.name,
             "page_index": page_index,
             "scale": scale,
-            "t": t,
             "layout": page_layout,
             "page_data": current_page_data,
         },

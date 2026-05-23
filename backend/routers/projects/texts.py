@@ -2,6 +2,7 @@
 # 處理專案層級與學生個人的對應文字讀取、更新與批次更新
 
 import json
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -45,6 +46,7 @@ def update_project_label_texts(
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     project.label_texts_json = json.dumps(payload)
+    project.updated_at = datetime.utcnow()
     db.commit()
     return {"ok": True}
 
@@ -72,7 +74,10 @@ def update_student_label_texts(
         })
 
     pages_data[page_index]["label_texts"] = texts
+    now = datetime.utcnow()
     student.pages_data_json = json.dumps(pages_data)
+    student.updated_at = now
+    project.updated_at = now
     db.commit()
     return {"ok": True}
 
@@ -88,6 +93,7 @@ def batch_update_texts(
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     students_payload = payload.students
+    now = datetime.utcnow()
 
     for student in project.students:
         student_id_str = str(student.id)
@@ -106,6 +112,8 @@ def batch_update_texts(
             pages_data[page_index]["label_texts"] = label_texts
 
         student.pages_data_json = json.dumps(pages_data)
+        student.updated_at = now
 
+    project.updated_at = now
     db.commit()
     return {"ok": True}

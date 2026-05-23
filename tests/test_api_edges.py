@@ -221,12 +221,10 @@ def test_photo_mapping_swap_keeps_both_files(monkeypatch, tmp_path):
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
         photos = detail.json()["students"][0]["pages_data"][0]["photos"]
-        assert photos["1"]["path"].endswith("/p0_slot1_second.jpg")
-        assert photos["2"]["path"].endswith("/p0_slot2_first.jpg")
+        assert photos["1"]["path"] == second_path
+        assert photos["2"]["path"] == first_path
         assert photos["1"]["scale"] == 1.1
         assert photos["2"]["scale"] == 1.2
-        assert photos["1"]["path"] != second_path
-        assert photos["2"]["path"] != first_path
 
         swapped_first_slot = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1")
         assert_status(swapped_first_slot, 200)

@@ -84,10 +84,10 @@ class PhotoMappingPayload(BaseModel):
       }
     }
 
-    重命名規則：
-    - 照片移到新欄位時，後端自動重命名檔案使前綴與欄位對齊。
+    mapping 規則：
+    - 照片移到新欄位時只更新 DB mapping，不重命名 storage key。
     - 跨頁互換時先收集所有 incoming_paths，避免先刪後找不到。
-    - 回傳 renames 讓前端同步更新 serverPath。
+    - renames 保留為向後相容欄位，目前固定回傳空物件。
     """
     pages: dict[str, dict[str, Any]] = {}
 

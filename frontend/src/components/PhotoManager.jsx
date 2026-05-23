@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
+import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
@@ -7,6 +8,15 @@ import { buildItems, photoDims, clampPan } from "../utils/photoUtils";
 
 
 // ── 照片編輯 Modal ────────────────────────────────────────────────────────────
+
+function getUploadFailureMessage(error, count = 1) {
+  const detail = error?.response?.data?.detail;
+  if (error?.response?.status === 413) {
+    return count > 1 ? `${count} 張照片超過大小上限，請壓縮後再上傳` : (detail || "照片超過大小上限，請壓縮後再上傳");
+  }
+  if (detail) return count > 1 ? `${count} 張照片上傳失敗：${detail}` : detail;
+  return count > 1 ? `${count} 張照片上傳失敗` : "照片上傳失敗";
+}
 
 function PhotoEditModal({
   editModal, items, displayUrl,
@@ -230,15 +240,20 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       try {
         // Upload pending files, track returned server paths
         const uploadedPaths = {};
+        const uploadFailures = {};
         const pendingIndices = cur.map((it, i) => it.pendingFile ? i : -1).filter(i => i >= 0);
         if (pendingIndices.length) setUploadProgress(0);
         for (let fileNo = 0; fileNo < pendingIndices.length; fileNo++) {
           const i = pendingIndices[fileNo];
-          const res = await uploadPhoto(
-            projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
-            pct => setUploadProgress(Math.round((fileNo * 100 + pct) / pendingIndices.length))
-          );
-          uploadedPaths[i] = res.data.path;
+          try {
+            const res = await uploadPhoto(
+              projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
+              pct => setUploadProgress(Math.round((fileNo * 100 + pct) / pendingIndices.length))
+            );
+            uploadedPaths[i] = res.data.path;
+          } catch (error) {
+            uploadFailures[i] = error;
+          }
         }
         // Save mapping for moved / transform-changed items (skip pending — just uploaded)
         const pagesMap = {};
@@ -256,7 +271,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
           };
         }
-        // 儲存 mapping；若有重命名，後端回傳 renames 讓前端同步 serverPath
+        // 儲存 mapping；renames 保留相容舊後端，新後端交換照片不再重命名 R2 物件
         let renames = {};
         if (Object.keys(pagesMap).length) {
           const res = await updatePhotoMapping(projectId, studentId, pagesMap);
@@ -272,9 +287,11 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           if (snap.pendingFile !== null && uploadedPaths[i] !== undefined) {
             // Guard: ignore if the user already replaced the file mid-upload
             if (it.pendingFile !== snap.pendingFile) return it;
+            if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
             return {
               ...it,
               pendingFile: null,
+              previewUrl: null,
               serverPath: uploadedPaths[i],
               origServerPath: uploadedPaths[i],
               origPi: snap.pi,
@@ -282,15 +299,36 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
               origTransform: { ...snap.transform },
             };
           }
+          if (snap.pendingFile !== null && uploadFailures[i]) {
+            if (it.pendingFile !== snap.pendingFile) return it;
+            if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
+            return {
+              ...it,
+              pendingFile: null,
+              previewUrl: null,
+              serverPath: snap.origServerPath,
+              origPi: snap.origPi,
+              origSlotId: snap.origSlotId,
+              transform: { ...snap.origTransform },
+            };
+          }
           if (snap.pendingFile !== null) return it; // upload was attempted but failed
-          // 若後端重命名了此 slot 的照片，同步更新 serverPath 避免下次存檔送出舊路徑
+          // 舊後端可能回傳重命名後路徑；新後端維持原路徑以避免 R2 copy/delete。
           const renamedPath = renames[String(snap.pi)]?.[String(snap.slotId)];
           const syncedPath = renamedPath ?? snap.serverPath;
           return { ...it, serverPath: syncedPath, origServerPath: syncedPath, origTransform: { ...snap.transform } };
         }));
 
-        onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
-      } catch { /* silent — manual save remains available */ } finally {
+        if (Object.keys(uploadedPaths).length || Object.keys(pagesMap).length) {
+          onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
+        }
+        const failureList = Object.values(uploadFailures);
+        if (failureList.length) {
+          toast.error(getUploadFailureMessage(failureList[0], failureList.length));
+        }
+      } catch (error) {
+        toast.error(getUploadFailureMessage(error));
+      } finally {
         setUploadProgress(null);
       }
     }, 300);

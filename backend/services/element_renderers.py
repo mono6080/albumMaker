@@ -194,8 +194,6 @@ def render_sticker(canvas: Image.Image, sticker: dict) -> None:
     try:
         from services.storage import get_storage
         storage = get_storage()
-        if not storage.exists(stkr_path_str):
-            return
         stkr_img = storage.open_image(stkr_path_str).convert("RGBA")
         sw, sh = int(sticker["width"]), int(sticker["height"])
         stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)

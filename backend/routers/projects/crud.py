@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Student, Template, User, get_db
+from services.storage import get_storage
 
 from ._helpers import (
     _parse_json_field,

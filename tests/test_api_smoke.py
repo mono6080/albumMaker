@@ -935,14 +935,13 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             },
         )
         assert_status(mapping_response, 200)
-        renamed_path = mapping_response.json()["renames"]["0"]["2"]
-        assert renamed_path.endswith("/p0_slot2_smoke.jpg")
+        assert mapping_response.json()["renames"] == {}
 
         final_detail = client.get(f"/api/projects/{project_id}")
         assert_status(final_detail, 200)
         photos = final_detail.json()["students"][0]["pages_data"][0]["photos"]
         assert "1" not in photos
-        assert photos["2"]["path"] == renamed_path
+        assert photos["2"]["path"] == uploaded_path
         assert photos["2"]["scale"] == 1.25
 
         missing_old_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1")

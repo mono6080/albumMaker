@@ -97,6 +97,7 @@ const ProjectCard = memo(function ProjectCard({
   onDelete,
 }) {
   const isEditing = editingId === project.id;
+  const canEdit = canEditProject(project.owner_id);
 
   return (
     <Surface
@@ -129,7 +130,7 @@ const ProjectCard = memo(function ProjectCard({
             ) : (
               <div className="flex items-center gap-1 group/name min-w-0">
                 <div className="font-semibold text-gray-900 text-lg truncate">{project.name}</div>
-                {canEditProject(project.owner_id) && (
+                {canEdit && (
                   <IconButton
                     label="編輯專案名稱"
                     onClick={() => onEditStart(project.id, project.name)}
@@ -153,7 +154,7 @@ const ProjectCard = memo(function ProjectCard({
               )}
             </div>
           </div>
-          {canEditProject(project.owner_id) && (
+          {canEdit && (
             <IconButton
               label="封存專案"
               onClick={() => onDelete(project.id)}
@@ -165,8 +166,8 @@ const ProjectCard = memo(function ProjectCard({
           )}
         </div>
       </div>
-      <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEditProject(project.owner_id) ? "grid-cols-2" : "grid-cols-1"}`}>
-        {canEditProject(project.owner_id) && (
+      <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEdit ? "grid-cols-2" : "grid-cols-1"}`}>
+        {canEdit && (
           <Link
             to={`/projects/${project.id}/batch`}
             data-guide="project-settings-link"
@@ -182,7 +183,7 @@ const ProjectCard = memo(function ProjectCard({
           className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
-          個人編輯
+          {canEdit ? "個人編輯" : "審閱"}
         </Link>
       </div>
     </Surface>
@@ -193,12 +194,13 @@ const ArchivedProjectRow = memo(function ArchivedProjectRow({
   project,
   showOwner,
   canEditProject,
+  nowMs,
   onRestore,
   isRestoring,
 }) {
   const expiresAt = project.archive_expires_at ? new Date(project.archive_expires_at) : null;
   const daysLeft = expiresAt
-    ? Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+    ? Math.max(0, Math.ceil((expiresAt.getTime() - nowMs) / (24 * 60 * 60 * 1000)))
     : 0;
 
   return (
@@ -251,6 +253,7 @@ export default function ProjectList() {
   const [creating, setCreating] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
+  const [nowMs] = useState(() => Date.now());
 
   const startGuide = useCallback(() => {
     if (canCreateProject && !showForm) {
@@ -439,6 +442,7 @@ export default function ProjectList() {
                   project={project}
                   showOwner={showOwner}
                   canEditProject={canEditProject}
+                  nowMs={nowMs}
                   onRestore={handleRestore}
                   isRestoring={restoringId === project.id}
                 />

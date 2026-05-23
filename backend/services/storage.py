@@ -7,6 +7,7 @@ import mimetypes
 import os
 import posixpath
 import shutil
+from collections import OrderedDict
 from abc import ABC, abstractmethod
 from pathlib import Path
 from urllib.parse import quote
@@ -117,6 +118,9 @@ class R2StorageAdapter(StorageAdapter):
         endpoint_url: str | None = None,
         public_base_url: str | None = None,
         serve_mode: str = "proxy",
+        key_prefix: str | None = None,
+        local_cache_dir: str | None = None,
+        local_mirror_dir: str | None = None,
         s3_client=None,
     ):
         if not bucket:
@@ -124,6 +128,13 @@ class R2StorageAdapter(StorageAdapter):
         self._bucket = bucket
         self._public_base_url = public_base_url.rstrip("/") if public_base_url else None
         self._serve_mode = serve_mode
+        self._key_prefix = self._normalize_key_prefix(key_prefix)
+        self._cache: OrderedDict[str, bytes] = OrderedDict()
+        self._cache_bytes = 0
+        self._cache_max_bytes = int(os.getenv("R2_READ_CACHE_MAX_BYTES", str(150 * 1024 * 1024)))
+        self._local_cache_max_bytes = int(os.getenv("R2_LOCAL_CACHE_MAX_BYTES", str(1024 * 1024 * 1024)))
+        self._local_cache_dir = Path(local_cache_dir).resolve() if local_cache_dir else None
+        self._local_mirror_dir = Path(local_mirror_dir).resolve() if local_mirror_dir else None
         if self._serve_mode not in {"proxy", "redirect"}:
             raise ValueError("R2 serve_mode must be 'proxy' or 'redirect'")
         if self._serve_mode == "redirect" and not self._public_base_url:
@@ -153,6 +164,138 @@ class R2StorageAdapter(StorageAdapter):
             region_name="auto",
         )
 
+    def _normalize_key_prefix(self, key_prefix: str | None) -> str:
+        if not key_prefix:
+            return ""
+        if "\\" in key_prefix or key_prefix.startswith("/"):
+            raise ValueError(f"invalid R2 key prefix: {key_prefix!r}")
+        normalized = posixpath.normpath(key_prefix.strip("/"))
+        if normalized == ".":
+            return ""
+        if normalized.startswith("../") or normalized == "..":
+            raise ValueError(f"path traversal detected in R2 key prefix: {key_prefix!r}")
+        return normalized
+
+    def _cache_get(self, key: str) -> bytes | None:
+        data = self._cache.get(key)
+        if data is None:
+            return None
+        self._cache.move_to_end(key)
+        return data
+
+    def _cache_put(self, key: str, data: bytes) -> None:
+        if self._cache_max_bytes <= 0 or len(data) > self._cache_max_bytes:
+            self._cache_delete(key)
+            return
+        old = self._cache.pop(key, None)
+        if old is not None:
+            self._cache_bytes -= len(old)
+        self._cache[key] = data
+        self._cache_bytes += len(data)
+        while self._cache_bytes > self._cache_max_bytes and self._cache:
+            _, removed = self._cache.popitem(last=False)
+            self._cache_bytes -= len(removed)
+
+    def _cache_delete(self, key: str) -> None:
+        old = self._cache.pop(key, None)
+        if old is not None:
+            self._cache_bytes -= len(old)
+
+    def _cache_delete_prefix(self, prefix: str) -> None:
+        for key in list(self._cache.keys()):
+            if self._prefix_matches(prefix, key):
+                self._cache_delete(key)
+
+    def _local_path(self, base_dir: Path | None, key: str) -> Path | None:
+        if base_dir is None:
+            return None
+        resolved = (base_dir / key).resolve()
+        try:
+            resolved.relative_to(base_dir)
+        except ValueError:
+            raise ValueError(f"path traversal detected: {key!r}")
+        return resolved
+
+    def _read_local_cache(self, key: str) -> bytes | None:
+        for base_dir in (self._local_cache_dir, self._local_mirror_dir):
+            path = self._local_path(base_dir, key)
+            if path and path.is_file():
+                return path.read_bytes()
+        return None
+
+    def get_cached_bytes(self, key: str) -> bytes | None:
+        clean_key = self._key(key)
+        return self._get_cached_clean_bytes(clean_key)
+
+    def _get_cached_clean_bytes(self, clean_key: str) -> bytes | None:
+        cached = self._cache_get(clean_key)
+        if cached is not None:
+            return cached
+        local_data = self._read_local_cache(clean_key)
+        if local_data is not None:
+            self._cache_put(clean_key, local_data)
+            return local_data
+        return None
+
+    def put_cache_only(self, key: str, data: bytes) -> None:
+        clean_key = self._key(key)
+        self._cache_put(clean_key, data)
+        self._write_local_cache(clean_key, data)
+
+    def _write_local_cache(self, key: str, data: bytes) -> None:
+        path = self._local_path(self._local_cache_dir, key)
+        if not path or self._local_cache_max_bytes <= 0:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._prune_local_cache()
+
+    def _delete_local_cache(self, key: str) -> None:
+        path = self._local_path(self._local_cache_dir, key)
+        if path:
+            path.unlink(missing_ok=True)
+
+    def _delete_local_cache_prefix(self, prefix: str) -> None:
+        base_dir = self._local_cache_dir
+        if not base_dir:
+            return
+        prefix_path = self._local_path(base_dir, prefix)
+        if prefix_path and prefix_path.exists():
+            if prefix_path.is_dir():
+                shutil.rmtree(prefix_path)
+            else:
+                prefix_path.unlink(missing_ok=True)
+
+    def _prune_local_cache(self) -> None:
+        base_dir = self._local_cache_dir
+        max_bytes = self._local_cache_max_bytes
+        if not base_dir or max_bytes <= 0 or not base_dir.exists():
+            return
+
+        files = []
+        total_bytes = 0
+        for path in base_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            total_bytes += stat.st_size
+            files.append((stat.st_mtime, stat.st_size, path))
+
+        if total_bytes <= max_bytes:
+            return
+
+        for _, size, path in sorted(files):
+            try:
+                path.unlink()
+                total_bytes -= size
+            except OSError:
+                continue
+            if total_bytes <= max_bytes:
+                break
+
     def _key(self, key: str) -> str:
         if not isinstance(key, str) or not key:
             raise ValueError("storage key must be a non-empty string")
@@ -161,6 +304,8 @@ class R2StorageAdapter(StorageAdapter):
         normalized = posixpath.normpath(key)
         if normalized == "." or normalized.startswith("../") or normalized == "..":
             raise ValueError(f"path traversal detected: {key!r}")
+        if self._key_prefix:
+            return f"{self._key_prefix}/{normalized}"
         return normalized
 
     def _is_not_found(self, error: Exception) -> bool:
@@ -189,6 +334,8 @@ class R2StorageAdapter(StorageAdapter):
             Body=data,
             ContentType=mimetypes.guess_type(clean_key)[0] or "application/octet-stream",
         )
+        self._cache_put(clean_key, data)
+        self._write_local_cache(clean_key, data)
 
     def open_image(self, key: str) -> Image.Image:
         img = Image.open(io.BytesIO(self.get_bytes(key)))
@@ -203,10 +350,15 @@ class R2StorageAdapter(StorageAdapter):
         return Response(content=data, media_type=media_type)
 
     def delete(self, key: str) -> None:
-        self._s3.delete_object(Bucket=self._bucket, Key=self._key(key))
+        clean_key = self._key(key)
+        self._s3.delete_object(Bucket=self._bucket, Key=clean_key)
+        self._cache_delete(clean_key)
+        self._delete_local_cache(clean_key)
 
     def delete_prefix(self, key_prefix: str) -> None:
         prefix = self._key(key_prefix)
+        self._cache_delete_prefix(prefix)
+        self._delete_local_cache_prefix(prefix)
         paginator = self._s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
             objects = [
@@ -222,14 +374,24 @@ class R2StorageAdapter(StorageAdapter):
     def move(self, src_key: str, dst_key: str) -> None:
         src = self._key(src_key)
         dst = self._key(dst_key)
-        if not self.exists(src):
-            return
+        try:
+            self._s3.head_object(Bucket=self._bucket, Key=src)
+        except Exception as exc:
+            if self._is_not_found(exc):
+                return
+            raise
         self._s3.copy_object(
             Bucket=self._bucket,
             CopySource={"Bucket": self._bucket, "Key": src},
             Key=dst,
         )
-        self.delete(src)
+        cached = self._cache_get(src)
+        if cached is not None:
+            self._cache_put(dst, cached)
+            self._write_local_cache(dst, cached)
+        self._s3.delete_object(Bucket=self._bucket, Key=src)
+        self._cache_delete(src)
+        self._delete_local_cache(src)
 
     def exists(self, key: str) -> bool:
         try:
@@ -241,8 +403,12 @@ class R2StorageAdapter(StorageAdapter):
             raise
 
     def get_bytes(self, key: str) -> bytes:
+        clean_key = self._key(key)
+        cached = self._get_cached_clean_bytes(clean_key)
+        if cached is not None:
+            return cached
         try:
-            response = self._s3.get_object(Bucket=self._bucket, Key=self._key(key))
+            response = self._s3.get_object(Bucket=self._bucket, Key=clean_key)
         except Exception as exc:
             if self._is_not_found(exc):
                 raise FileNotFoundError(key) from exc
@@ -250,7 +416,10 @@ class R2StorageAdapter(StorageAdapter):
 
         body = response["Body"]
         try:
-            return body.read()
+            data = body.read()
+            self._cache_put(clean_key, data)
+            self._write_local_cache(clean_key, data)
+            return data
         finally:
             close = getattr(body, "close", None)
             if close:
@@ -258,6 +427,37 @@ class R2StorageAdapter(StorageAdapter):
 
 
 # ── 全域單例，透過環境變數切換 ──────────────────────────────────────────────────
+
+_STORAGE_CACHE_KEY = None
+_STORAGE_INSTANCE: StorageAdapter | None = None
+
+
+def _storage_config_key(uploads_dir: Path):
+    return (
+        os.getenv("STORAGE_BACKEND", "local"),
+        str(uploads_dir),
+        os.getenv("R2_BUCKET"),
+        os.getenv("R2_ACCOUNT_ID"),
+        os.getenv("R2_ACCESS_KEY_ID"),
+        os.getenv("R2_SECRET_ACCESS_KEY"),
+        os.getenv("R2_ENDPOINT_URL"),
+        os.getenv("R2_PUBLIC_BASE_URL"),
+        os.getenv("R2_SERVE_MODE", "proxy"),
+        os.getenv("R2_KEY_PREFIX"),
+        os.getenv("R2_READ_CACHE_MAX_BYTES"),
+        os.getenv("R2_LOCAL_CACHE_DIR"),
+        os.getenv("R2_LOCAL_MIRROR_DIR"),
+    )
+
+
+def _resolve_storage_path(value: str | None, uploads_dir: Path) -> str | None:
+    if not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    project_root = uploads_dir.parent.parent
+    return str((project_root / path).resolve())
 
 def get_storage() -> StorageAdapter:
     """
@@ -269,11 +469,19 @@ def get_storage() -> StorageAdapter:
     """
     from services.render_service import UPLOADS_DIR  # 避免循環 import
 
+    global _STORAGE_CACHE_KEY, _STORAGE_INSTANCE
+
+    cache_key = _storage_config_key(UPLOADS_DIR)
+    if _STORAGE_INSTANCE is not None and _STORAGE_CACHE_KEY == cache_key:
+        return _STORAGE_INSTANCE
+
     backend = os.getenv("STORAGE_BACKEND", "local")
     if backend == "local":
-        return LocalStorageAdapter(UPLOADS_DIR)
+        _STORAGE_INSTANCE = LocalStorageAdapter(UPLOADS_DIR)
+        _STORAGE_CACHE_KEY = cache_key
+        return _STORAGE_INSTANCE
     if backend == "r2":
-        return R2StorageAdapter(
+        _STORAGE_INSTANCE = R2StorageAdapter(
             bucket=os.getenv("R2_BUCKET"),
             account_id=os.getenv("R2_ACCOUNT_ID"),
             access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
@@ -281,6 +489,11 @@ def get_storage() -> StorageAdapter:
             endpoint_url=os.getenv("R2_ENDPOINT_URL"),
             public_base_url=os.getenv("R2_PUBLIC_BASE_URL"),
             serve_mode=os.getenv("R2_SERVE_MODE", "proxy"),
+            key_prefix=os.getenv("R2_KEY_PREFIX"),
+            local_cache_dir=_resolve_storage_path(os.getenv("R2_LOCAL_CACHE_DIR"), UPLOADS_DIR),
+            local_mirror_dir=_resolve_storage_path(os.getenv("R2_LOCAL_MIRROR_DIR"), UPLOADS_DIR),
         )
+        _STORAGE_CACHE_KEY = cache_key
+        return _STORAGE_INSTANCE
     # 日後在此擴充其他後端
     raise ValueError(f"未知的 STORAGE_BACKEND: {backend!r}")

@@ -1,6 +1,6 @@
-import { forwardRef } from "react";
+import { createElement, forwardRef } from "react";
 
-export function cn(...classes) {
+function cn(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
@@ -29,7 +29,7 @@ const buttonSizeClass = {
   touch: "min-h-12 px-3 py-2.5 text-sm sm:px-4",
 };
 
-export function getButtonClassName({
+function getButtonClassName({
   variant = "neutral",
   size = "md",
   fullWidth = false,
@@ -46,7 +46,7 @@ export function getButtonClassName({
 
 export const Button = forwardRef(function Button(
   {
-    as: Component = "button",
+    as = "button",
     type,
     variant = "neutral",
     size = "md",
@@ -56,14 +56,16 @@ export const Button = forwardRef(function Button(
   },
   ref,
 ) {
-  const buttonType = Component === "button" ? (type ?? "button") : type;
-  return (
-    <Component
-      ref={ref}
-      type={buttonType}
-      className={getButtonClassName({ variant, size, fullWidth, className })}
-      {...props}
-    />
+  const ButtonComponent = as;
+  const buttonType = ButtonComponent === "button" ? (type ?? "button") : type;
+  return createElement(
+    ButtonComponent,
+    {
+      ref,
+      type: buttonType,
+      className: getButtonClassName({ variant, size, fullWidth, className }),
+      ...props,
+    },
   );
 });
 
@@ -125,21 +127,23 @@ const surfacePaddingClass = {
 };
 
 export function Surface({
-  as: Component = "div",
+  as = "div",
   variant = "card",
   padding = "md",
   className = "",
   ...props
 }) {
-  return (
-    <Component
-      className={cn(
+  const SurfaceComponent = as;
+  return createElement(
+    SurfaceComponent,
+    {
+      className: cn(
         surfaceVariantClass[variant] ?? surfaceVariantClass.card,
         surfacePaddingClass[padding] ?? surfacePaddingClass.md,
         className,
-      )}
-      {...props}
-    />
+      ),
+      ...props,
+    },
   );
 }
 

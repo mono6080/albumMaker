@@ -111,6 +111,40 @@ npm run dev
 
 Windows 可直接雙擊 `start.bat` 啟動後端。
 
+### 本機使用 R2 staging
+
+一般本機開發仍可使用 `start.bat` 與本機 `backend/uploads`。若要讓 `localhost:8765`
+直接使用 Cloudflare R2 staging，請在 `.env` 放入 R2 設定後改用 `start_r2_local.bat`。
+
+`.env` 已被 `.gitignore` 排除，請勿把 access key 或 secret commit 進 repo：
+
+```env
+STORAGE_BACKEND=r2
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_ACCESS_KEY_ID=<r2-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+R2_BUCKET=album-maker-staging
+R2_SERVE_MODE=proxy
+R2_LOCAL_CACHE_DIR=backend/.r2-cache
+R2_LOCAL_CACHE_MAX_BYTES=1073741824
+R2_LOCAL_MIRROR_DIR=backend/uploads
+```
+
+啟動：
+
+```powershell
+.\start_r2_local.bat
+```
+
+`start_r2_local.bat` 只會從 `.env` 載入 storage / R2 相關設定，避免把 Docker 用的
+`DATABASE_URL=sqlite:////app/db/...` 帶進 Windows 本機後端。使用 R2 啟動後，
+本機 `localhost:8765` 的上傳、預覽快取與輸出檔案都會寫入 R2 bucket；若改用
+`start.bat`，則仍依一般本機環境執行。
+
+`R2_LOCAL_CACHE_DIR` 與 `R2_LOCAL_MIRROR_DIR` 只建議本機測試使用：寫入仍會先寫 R2，
+但預覽讀取可從本機快取或已搬移過的 `backend/uploads` 加速，避免每次互動預覽都
+從 R2 重新下載背景圖與照片。正式部署若要加速，優先使用 CDN / custom domain。
+
 ### 測試與品質檢查
 
 ```bash
@@ -187,7 +221,55 @@ docker compose up -d --build
 | `R2_ENDPOINT_URL` | 未設定 | 自訂 S3-compatible endpoint；未設定時使用 `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com` |
 | `R2_SERVE_MODE` | `proxy` | R2 檔案 serving 模式：`proxy` 由後端代理回傳；`redirect` 轉址到 `R2_PUBLIC_BASE_URL` |
 | `R2_PUBLIC_BASE_URL` | 未設定 | R2 public/custom domain base URL；`R2_SERVE_MODE=redirect` 時必填 |
+| `R2_KEY_PREFIX` | 未設定 | R2 object key 前綴；e2e / staging 隔離可設 `__e2e/<run-id>`，一般環境留空 |
+| `R2_READ_CACHE_MAX_BYTES` | `157286400` | R2 adapter 的記憶體讀取快取上限；設 `0` 可停用 |
+| `R2_LOCAL_CACHE_DIR` | 未設定 | R2 本機寫入快取目錄；本機測試可設 `backend/.r2-cache` |
+| `R2_LOCAL_CACHE_MAX_BYTES` | `1073741824` | R2 本機寫入快取容量上限；超過時刪除最舊 cache 檔，設 `0` 可停用本機寫入 cache |
+| `R2_LOCAL_MIRROR_DIR` | 未設定 | R2 本機唯讀鏡像目錄；本機測試可設 `backend/uploads` 加速歷史檔案讀取 |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,...` | CORS 允許來源，逗號分隔；正式部署填入實際網域 |
+
+---
+
+## Storage / R2 維護
+
+### 將本機 uploads 複製到 R2
+
+本機歷史檔案位於 `backend/uploads`。若要讓 R2-backed server 能讀到既有照片、
+模板素材、預覽與輸出檔，先確認 `.env` 已設定 R2 staging，接著執行：
+
+```powershell
+python scripts\migrate_uploads_to_r2.py
+```
+
+這個 script 是「複製」不是「搬走」：本機檔案會保留作為 rollback 來源。R2 key
+會保持和本機 storage key 一致，例如：
+
+```text
+backend/uploads/projects/proj10/photos/student1/a.jpg
+→ projects/proj10/photos/student1/a.jpg
+```
+
+script 會先用 `head_object` 比對遠端物件大小；如果 R2 已有相同大小的物件就跳過，
+因此可以重複執行。若只想檢查會上傳哪些 key：
+
+```powershell
+python scripts\migrate_uploads_to_r2.py --dry-run
+```
+
+完整比對時，第二次執行若顯示 `uploaded=0`、`failed=0`，代表本機 uploads
+和 R2 bucket 的檔案大小已一致。
+
+### R2 integration test
+
+一般測試不會連 R2。若要用目前 `.env` 對真實 staging bucket 做 put / get / delete
+smoke test，設定 `RUN_R2_INTEGRATION=1` 後執行 storage 測試：
+
+```powershell
+$env:RUN_R2_INTEGRATION='1'
+python -m pytest tests/test_storage.py -q
+```
+
+測試會在 `__integration_tests/storage_smoke/` 建立臨時物件，結束後刪除。
 
 ---
 

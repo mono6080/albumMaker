@@ -17,6 +17,7 @@ frontend/dist/
 
 # Uploads & generated output
 backend/uploads/
+backend/.r2-cache/
 
 # DB
 *.db
@@ -50,6 +51,8 @@ backend/rendered_*.png
 
 # Env
 .env
+*.env
+!.env.example
 
 # OS
 .DS_Store
@@ -60,5 +63,7 @@ Thumbs.db
 .idea/
 
 .pytest_cache/
+.pytest-tmp/
 .ruff_cache/
 .mypy_cache/
+tmp-pytest-codex/

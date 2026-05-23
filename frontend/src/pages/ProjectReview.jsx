@@ -91,7 +91,7 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
 
 export default function ProjectReview() {
   const { id } = useParams();
-  const { canDownloadPrint, canComment, isAdmin } = usePermissions();
+  const { canDownloadPrint, canComment, canEditProject, isAdmin } = usePermissions();
   const { currentUser } = useAuth();
 
   const [project, setProject] = useState(null);
@@ -363,7 +363,10 @@ export default function ProjectReview() {
   };
 
   const startGuide = () => {
-    startProductGuide(PROJECT_REVIEW_GUIDE_STEPS);
+    const guideSteps = canEditCurrentProject
+      ? PROJECT_REVIEW_GUIDE_STEPS
+      : PROJECT_REVIEW_GUIDE_STEPS.filter(step => step.element !== '[data-guide="review-edit-student"]');
+    startProductGuide(guideSteps);
   };
 
   if (loadError) return (
@@ -381,6 +384,7 @@ export default function ProjectReview() {
   const doneCount = project.students.filter(s => s.output_filename).length;
   const isBatchRendering = renderingAll || renderingAllImages;
   const isAllImagesShareReady = isMobileDevice() && allImagesShareDraft?.files?.length > 0;
+  const canEditCurrentProject = canEditProject(project.owner_id);
 
   return (
     <div className="w-full">
@@ -597,18 +601,20 @@ export default function ProjectReview() {
                   </div>
 
                   {/* Actions */}
-                  <ResponsiveActionGroup mobileColumns={4} desktop="grid">
-                    <Button
-                      as={Link}
-                      to={`/projects/${id}/students/${student.id}/edit`}
-                      data-guide="review-edit-student"
-                      variant="neutral"
-                      size="xs"
-                      className={responsiveActionItemClass}
-                    >
-                      <Pencil className="w-3 h-3" />
-                      編輯
-                    </Button>
+                  <ResponsiveActionGroup mobileColumns={canEditCurrentProject ? 4 : 3} desktop="grid">
+                    {canEditCurrentProject && (
+                      <Button
+                        as={Link}
+                        to={`/projects/${id}/students/${student.id}/edit`}
+                        data-guide="review-edit-student"
+                        variant="neutral"
+                        size="xs"
+                        className={responsiveActionItemClass}
+                      >
+                        <Pencil className="w-3 h-3" />
+                        編輯
+                      </Button>
+                    )}
                     <Button
                       onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
                       data-guide="review-preview-student"

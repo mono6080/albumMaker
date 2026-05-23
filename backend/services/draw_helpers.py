@@ -61,9 +61,10 @@ def load_key(key: str) -> Optional[Image.Image]:
     """從 storage 讀取圖片並轉為 sRGB，key 不存在時回傳 None。"""
     from services.storage import get_storage
     storage = get_storage()
-    if not storage.exists(key):
+    try:
+        return to_srgb(storage.open_image(key))
+    except FileNotFoundError:
         return None
-    return to_srgb(storage.open_image(key))
 
 
 @lru_cache(maxsize=128)

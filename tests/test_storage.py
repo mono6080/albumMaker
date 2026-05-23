@@ -2,6 +2,8 @@
 # 涵蓋 LocalStorageAdapter 的 put/get/exists/delete 完整生命週期，以及 path traversal 防護
 
 import io
+import os
+import uuid
 
 import pytest
 
@@ -35,6 +37,7 @@ class FakeS3Client:
     def __init__(self):
         self.objects = {}
         self.content_types = {}
+        self.get_object_calls = []
 
     def put_object(self, Bucket, Key, Body, ContentType=None):
         del Bucket
@@ -49,6 +52,7 @@ class FakeS3Client:
 
     def get_object(self, Bucket, Key):
         del Bucket
+        self.get_object_calls.append(Key)
         if Key not in self.objects:
             raise FakeClientError("NoSuchKey")
         return {"Body": io.BytesIO(self.objects[Key])}
@@ -190,3 +194,66 @@ def test_r2_serve_redirect_uses_public_base_url_and_encoded_key():
         "https://assets.example.com/base/templates/tmpl1/backgrounds/"
         "page1_%E6%84%9F%E5%AE%98%E4%B8%96%E7%95%8C.jpg"
     )
+
+
+def test_r2_key_prefix_is_applied_to_remote_objects_but_not_public_keys():
+    """R2_KEY_PREFIX 可隔離測試物件，不改變應用程式內部使用的 storage key。"""
+    client = FakeS3Client()
+    adapter = R2StorageAdapter(bucket="bucket", s3_client=client, key_prefix="__e2e/run1")
+
+    adapter.put("projects/proj1/photos/a.jpg", b"photo")
+
+    assert "__e2e/run1/projects/proj1/photos/a.jpg" in client.objects
+    assert adapter.exists("projects/proj1/photos/a.jpg") is True
+    assert adapter.get_bytes("projects/proj1/photos/a.jpg") == b"photo"
+    assert client.get_object_calls == []
+
+
+def test_r2_key_prefix_move_uses_single_prefix():
+    """R2_KEY_PREFIX 下 move 仍只應套用一次 prefix。"""
+    client = FakeS3Client()
+    adapter = R2StorageAdapter(bucket="bucket", s3_client=client, key_prefix="__e2e/run1")
+
+    adapter.put("foo/bar.txt", b"hi")
+    adapter.move("foo/bar.txt", "foo/baz.txt")
+
+    assert "__e2e/run1/foo/bar.txt" not in client.objects
+    assert client.objects["__e2e/run1/foo/baz.txt"] == b"hi"
+    assert adapter.exists("foo/baz.txt") is True
+
+
+def test_r2_real_bucket_smoke_when_enabled():
+    """本機手動驗證用：RUN_R2_INTEGRATION=1 時才打到真實 R2 bucket。"""
+    if os.getenv("RUN_R2_INTEGRATION") != "1":
+        pytest.skip("set RUN_R2_INTEGRATION=1 to run real R2 smoke test")
+
+    required_env = [
+        "R2_ACCOUNT_ID",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET",
+    ]
+    missing = [name for name in required_env if not os.getenv(name)]
+    if missing:
+        pytest.skip(f"missing R2 env vars: {', '.join(missing)}")
+
+    adapter = R2StorageAdapter(
+        bucket=os.environ["R2_BUCKET"],
+        account_id=os.environ["R2_ACCOUNT_ID"],
+        access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        endpoint_url=os.getenv("R2_ENDPOINT_URL"),
+        serve_mode="proxy",
+    )
+    key = f"__integration_tests/storage_smoke/{uuid.uuid4().hex}.txt"
+    payload = b"album-maker-r2-smoke"
+
+    try:
+        adapter.put(key, payload)
+        assert adapter.exists(key) is True
+        assert adapter.get_bytes(key) == payload
+        assert adapter.serve(key).body == payload
+    finally:
+        adapter.delete(key)
+
+    assert adapter.exists(key) is False
