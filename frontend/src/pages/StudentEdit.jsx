@@ -8,9 +8,15 @@ import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
-import { buildDownloadImagesZipUrl, buildDownloadPdfUrl, buildStudentPagePreviewUrl } from "../api/urls";
+import {
+  buildDownloadImageUrl,
+  buildDownloadImagesZipUrl,
+  buildDownloadPdfUrl,
+  buildStudentPagePreviewUrl,
+} from "../api/urls";
 import { apiClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
+import { usePermissions } from "../hooks/usePermissions";
 import {
   Camera,
   ChevronLeft,
@@ -20,6 +26,8 @@ import {
   Eye,
   ImageDown,
   Loader2,
+  Monitor,
+  Printer,
   Type,
 } from "lucide-react";
 import PhotoManager from "../components/PhotoManager";
@@ -27,13 +35,14 @@ import PanelSwitcher from "../components/PanelSwitcher";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
-import { Badge, Button, PageHeader, fieldControlClass } from "../components/ui";
+import { Badge, Button, PageHeader, SegmentedControl, fieldControlClass } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import {
   createFileFromBlob,
   downloadApiBlob,
   fetchApiBlob,
+  getFilenameFromDisposition,
   getShareFailureMessage,
   isMobileDevice,
   shareFiles,
@@ -83,6 +92,13 @@ const STUDENT_EDIT_GUIDE_STEPS = [
     align: "end",
   },
   {
+    element: '[data-guide="student-output-mode"]',
+    title: "輸出畫質",
+    description: "管理員可選完整畫質或壓縮版；下載 PDF、圖片 ZIP 和手機分享圖片都會套用這個設定。",
+    side: "bottom",
+    align: "end",
+  },
+  {
     element: '[data-guide="student-download-button"]',
     title: "產出並下載",
     description: "照片和文字確認後，按這裡產生 PDF；圖片按鈕在電腦下載 ZIP，手機會先準備圖片再開啟分享。",
@@ -96,6 +112,7 @@ const STUDENT_EDIT_GUIDE_STEPS = [
 export default function StudentEdit() {
   const { projectId, studentId } = useParams();
   const navigate = useNavigate();
+  const { canDownloadPrint } = usePermissions();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -108,6 +125,7 @@ export default function StudentEdit() {
   const [isImageRendering, setIsImageRendering] = useState(false);
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
   const [imageShareDraft, setImageShareDraft] = useState(null);
+  const [outputMode, setOutputMode] = useState("print");
   const [previewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
@@ -255,12 +273,51 @@ export default function StudentEdit() {
       await loadStudentData();
       refreshAllPreviews();
       // 渲染完成後自動下載
-      await downloadApiBlob(apiClient, buildDownloadPdfUrl(projectId, studentId), `${student.name}.pdf`);
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
+      await downloadApiBlob(apiClient, buildDownloadPdfUrl(projectId, studentId, effectiveMode), `${student.name}.pdf`);
       toast.success("PDF 已下載");
     } catch {
       toast.error("產生失敗");
     }
     setIsRendering(false);
+  };
+
+  const getVisiblePageIndexes = useCallback(() => (
+    Array.from(
+      { length: template?.pages.length ?? 0 },
+      (_, pageIndex) => pageIndex,
+    ).filter(pageIndex => !skippedPages.has(pageIndex))
+  ), [skippedPages, template]);
+
+  const buildShareImageFilesFromPreview = async (visiblePageIndexes, requestTs) => {
+    const files = [];
+    for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
+      const { blob } = await fetchApiBlob(
+        apiClient,
+        `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${requestTs}`,
+      );
+      const file = createFileFromBlob(blob, `${student.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
+      if (file) files.push(file);
+    }
+    return files;
+  };
+
+  const buildShareImageFilesFromRenderedOutput = async (visiblePageIndexes, effectiveMode) => {
+    const files = [];
+    for (const visibleIndex of visiblePageIndexes.keys()) {
+      const { blob, disposition } = await fetchApiBlob(
+        apiClient,
+        buildDownloadImageUrl(projectId, studentId, visibleIndex + 1, effectiveMode),
+      );
+      const filename = getFilenameFromDisposition(disposition, `${student.name}_page${visibleIndex + 1}.jpg`);
+      const file = createFileFromBlob(
+        blob,
+        filename,
+        "image/jpeg",
+      );
+      if (file) files.push(file);
+    }
+    return files;
   };
 
   const handleRenderImages = async () => {
@@ -286,27 +343,23 @@ export default function StudentEdit() {
 
     setIsImageRendering(true);
     try {
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       if (isMobileDevice()) {
-        const visiblePageIndexes = Array.from(
-          { length: template?.pages.length ?? 0 },
-          (_, pageIndex) => pageIndex,
-        ).filter(pageIndex => !skippedPages.has(pageIndex));
+        const visiblePageIndexes = getVisiblePageIndexes();
 
         if (!visiblePageIndexes.length) {
           toast.error("沒有可分享的頁面");
           return;
         }
 
-        const requestTs = Date.now();
-        const files = [];
-        for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
-          const { blob } = await fetchApiBlob(
-            apiClient,
-            `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${requestTs}`,
-          );
-          const file = createFileFromBlob(blob, `${student.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
-          if (file) files.push(file);
-        }
+        const files = canDownloadPrint
+          ? await (async () => {
+              await renderStudent(projectId, studentId);
+              await loadStudentData();
+              refreshAllPreviews();
+              return buildShareImageFilesFromRenderedOutput(visiblePageIndexes, effectiveMode);
+            })()
+          : await buildShareImageFilesFromPreview(visiblePageIndexes, Date.now());
 
         setImageShareDraft({ files, title: `${student.name} 相冊圖片` });
         toast.success("圖片已準備好，請再按一次開始分享");
@@ -316,11 +369,7 @@ export default function StudentEdit() {
       await renderStudent(projectId, studentId);
       await loadStudentData();
       refreshAllPreviews();
-      await downloadApiBlob(
-        apiClient,
-        buildDownloadImagesZipUrl(projectId, studentId),
-        `${student.name}_images.zip`,
-      );
+      await downloadApiBlob(apiClient, buildDownloadImagesZipUrl(projectId, studentId, effectiveMode), `${student.name}_images.zip`);
       toast.success("圖片 ZIP 已下載");
     } catch {
       toast.error(isMobileDevice() ? "分享圖片失敗" : "產生圖片失敗");
@@ -411,6 +460,23 @@ export default function StudentEdit() {
         )}
         actions={(
         <ResponsiveActionGroup mobileColumns={3}>
+          {canDownloadPrint && (
+            <div data-guide="student-output-mode" className="col-span-3 sm:w-auto">
+              <SegmentedControl
+                value={outputMode}
+                onChange={(value) => {
+                  setOutputMode(value);
+                  setImageShareDraft(null);
+                }}
+                size="sm"
+                className="w-full"
+                options={[
+                  { value: "print", label: "完整畫質", icon: Printer },
+                  { value: "screen", label: "壓縮版", icon: Monitor },
+                ]}
+              />
+            </div>
+          )}
           <Button
             type="button"
             onClick={startGuide}
