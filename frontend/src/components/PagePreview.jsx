@@ -1,12 +1,16 @@
 // 單頁渲染預覽圖子元件
 // 依 timestamp 更新觸發重新載入，避免切頁時觸發不必要的渲染
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { buildStudentPagePreviewUrl } from "../api/urls";
 
 export default function PagePreview({ projectId, studentId, pageIndex, timestamp }) {
   const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    setIsLoaded(false);
+  }, [projectId, studentId, pageIndex, timestamp]);
 
   return (
     <div

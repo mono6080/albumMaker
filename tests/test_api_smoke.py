@@ -633,11 +633,13 @@ def test_public_preview_endpoints_do_not_require_auth():
         template_preview = client.get(f"/api/templates/{template_id}/pages/{page_id}/preview")
         assert_status(template_preview, 200)
         assert template_preview.headers["content-type"].startswith("image/jpeg")
+        assert "no-store" in template_preview.headers["cache-control"]
         assert template_preview.content.startswith(b"\xff\xd8")
 
         spread_preview = client.get(f"/api/templates/{template_id}/spread-preview/0")
         assert_status(spread_preview, 200)
         assert spread_preview.headers["content-type"].startswith("image/jpeg")
+        assert "no-store" in spread_preview.headers["cache-control"]
         assert spread_preview.content.startswith(b"\xff\xd8")
         with Image.open(BytesIO(spread_preview.content)) as spread_image:
             assert spread_image.size == (1588, 1123)
@@ -645,6 +647,7 @@ def test_public_preview_endpoints_do_not_require_auth():
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)
         assert project_preview.headers["content-type"].startswith("image/jpeg")
+        assert "no-store" in project_preview.headers["cache-control"]
         assert project_preview.content.startswith(b"\xff\xd8")
 
 
@@ -802,6 +805,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_preview, 200)
         assert student_preview.headers["content-type"].startswith("image/jpeg")
+        assert "no-store" in student_preview.headers["cache-control"]
 
         stale_student_default = client.put(
             f"/api/projects/{project_id}/batch/texts",
@@ -817,6 +821,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
+        assert "no-store" in project_blank_preview.headers["cache-control"]
         assert project_blank_preview.headers["x-preview-cache"] == "MISS"
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / project_preview_key).exists()
@@ -829,11 +834,13 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview_cached = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview_cached, 200)
+        assert "no-store" in project_blank_preview_cached.headers["cache-control"]
         assert project_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert project_blank_preview_cached.content == project_blank_preview.content
 
         student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview, 200)
+        assert "no-store" in student_blank_preview.headers["cache-control"]
         assert student_blank_preview.headers["x-preview-cache"] == "MISS"
         student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / student_preview_key).exists()
@@ -846,6 +853,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         student_blank_preview_cached = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview_cached, 200)
+        assert "no-store" in student_blank_preview_cached.headers["cache-control"]
         assert student_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert student_blank_preview_cached.content == student_blank_preview.content
 

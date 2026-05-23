@@ -99,6 +99,7 @@ export default function StudentEdit() {
   const [isRendering, setIsRendering] = useState(false);
   const [isImageRendering, setIsImageRendering] = useState(false);
   const [imageShareDraft, setImageShareDraft] = useState(null);
+  const [previewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
@@ -443,6 +444,7 @@ export default function StudentEdit() {
             projectId={projectId}
             studentId={studentId}
             pageTimestamps={pageTimestamps}
+            timestampSeed={previewTimestampSeed}
             isCurrentPageSkipped={isCurrentPageSkipped}
             onPageSkip={handlePageSkip}
             onRefresh={refreshPreview}

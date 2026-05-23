@@ -149,7 +149,7 @@ export default function ProjectBatch() {
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewTimestamp, setPreviewTimestamp] = useState(0);
+  const [previewTimestamp, setPreviewTimestamp] = useState(() => Date.now());
 
   // ── 自動儲存對應文字（防抖 600ms） ────────────────────────────────────────
 

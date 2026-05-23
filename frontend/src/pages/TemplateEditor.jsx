@@ -150,7 +150,7 @@ export default function TemplateEditor() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
   const [spreadStartIndex, setSpreadStartIndex] = useState(0);
-  const [spreadPreviewTimestamp, setSpreadPreviewTimestamp] = useState(0);
+  const [spreadPreviewTimestamp, setSpreadPreviewTimestamp] = useState(() => Date.now());
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
 
   const stageRef = useRef(null);

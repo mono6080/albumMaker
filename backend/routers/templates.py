@@ -20,13 +20,17 @@ from services.storage import get_storage
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
 PREVIEW_JPEG_QUALITY = 72
+PREVIEW_RESPONSE_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+}
 
 
 def _jpeg_response(image: Image.Image, quality: int = PREVIEW_JPEG_QUALITY) -> StreamingResponse:
     image_buffer = io.BytesIO()
     image.convert("RGB").save(image_buffer, format="JPEG", quality=quality)
     image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/jpeg")
+    return StreamingResponse(image_buffer, media_type="image/jpeg", headers=PREVIEW_RESPONSE_HEADERS)
 
 
 def _count_template_photo_slots(template: Template) -> int:

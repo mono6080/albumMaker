@@ -16,6 +16,7 @@ export default function StudentPreviewPanel({
   isCurrentPageSkipped,
   onPageSkip,
   onRefresh,
+  timestampSeed = 0,
 }) {
   return (
     <div className="space-y-3">
@@ -52,7 +53,7 @@ export default function StudentPreviewPanel({
           projectId={projectId}
           studentId={studentId}
           pageIndex={activePage}
-          timestamp={pageTimestamps[activePage] ?? 0}
+          timestamp={pageTimestamps[activePage] ?? timestampSeed}
         />
         {isCurrentPageSkipped && (
           <div className="absolute inset-0 flex items-center justify-center">

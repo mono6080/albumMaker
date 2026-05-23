@@ -107,7 +107,7 @@ export default function ProjectReview() {
   const [preview, setPreview] = useState(null);
   const [imageShareDrafts, setImageShareDrafts] = useState({});
   const [allImagesShareDraft, setAllImagesShareDraft] = useState(null);
-  const [ts, setTs] = useState(0);
+  const [ts, setTs] = useState(() => Date.now());
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
 

@@ -104,6 +104,7 @@ async function fetchStudentPreview(page, projectId, studentId, cacheBuster = Dat
   );
   expect(previewResponse.ok()).toBeTruthy();
   expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
+  expect(previewResponse.headers()["cache-control"]).toContain("no-store");
   const body = await previewResponse.body();
   expect(body[0]).toBe(0xff);
   expect(body[1]).toBe(0xd8);

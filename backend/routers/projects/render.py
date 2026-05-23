@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 PREVIEW_JPEG_QUALITY = 80
-PREVIEW_CACHE_HEADERS = {"Cache-Control": "private, max-age=300"}
+PREVIEW_CACHE_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+}
 PREVIEW_CACHE_VERSION = "project-preview-v2"
 
 
