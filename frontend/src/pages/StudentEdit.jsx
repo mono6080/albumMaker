@@ -3,7 +3,7 @@
 // 文字變更後自動防抖儲存（500ms）
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
@@ -27,7 +27,7 @@ import PanelSwitcher from "../components/PanelSwitcher";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
-import { Badge, Button, PageHeader } from "../components/ui";
+import { Badge, Button, PageHeader, fieldControlClass } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import {
@@ -88,6 +88,7 @@ const STUDENT_EDIT_GUIDE_STEPS = [
 
 export default function StudentEdit() {
   const { projectId, studentId } = useParams();
+  const navigate = useNavigate();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -98,6 +99,7 @@ export default function StudentEdit() {
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
   const [isRendering, setIsRendering] = useState(false);
   const [isImageRendering, setIsImageRendering] = useState(false);
+  const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
   const [imageShareDraft, setImageShareDraft] = useState(null);
   const [previewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
@@ -324,6 +326,21 @@ export default function StudentEdit() {
     startProductGuide(STUDENT_EDIT_GUIDE_STEPS);
   };
 
+  const handleStudentSwitch = async (nextStudentId) => {
+    if (!nextStudentId || String(nextStudentId) === String(studentId) || isSwitchingStudent) return;
+
+    setIsSwitchingStudent(true);
+    try {
+      await flushSave();
+      setImageShareDraft(null);
+      navigate(`/projects/${projectId}/students/${nextStudentId}/edit`);
+    } catch {
+      toast.error("切換學生前儲存失敗");
+    } finally {
+      setIsSwitchingStudent(false);
+    }
+  };
+
   // ── 載入中 / 錯誤狀態 ─────────────────────────────────────────────────────
 
   if (loadError) {
@@ -352,6 +369,13 @@ export default function StudentEdit() {
   const isCurrentPageSkipped = skippedPages.has(activePage);
   const isOutputBusy = isRendering || isImageRendering;
   const isImageShareReady = isMobileDevice() && imageShareDraft?.files?.length > 0;
+  const students = project.students || [];
+  const currentStudentIndex = students.findIndex(item => item.id === Number(studentId));
+  const previousStudent = currentStudentIndex > 0 ? students[currentStudentIndex - 1] : null;
+  const nextStudent = currentStudentIndex >= 0 && currentStudentIndex < students.length - 1
+    ? students[currentStudentIndex + 1]
+    : null;
+  const canSwitchStudent = !isOutputBusy && !isSwitchingStudent && students.length > 1;
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
@@ -421,6 +445,55 @@ export default function StudentEdit() {
         </ResponsiveActionGroup>
         )}
       />
+
+      <div
+        data-guide="student-switcher"
+        className="mb-4 rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
+      >
+        <div className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-500">
+          <span className="font-medium">切換學生</span>
+          <span>
+            {currentStudentIndex >= 0 ? currentStudentIndex + 1 : "-"} / {students.length}
+          </span>
+        </div>
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+          <Button
+            type="button"
+            onClick={() => handleStudentSwitch(previousStudent?.id)}
+            disabled={!canSwitchStudent || !previousStudent}
+            variant="neutral"
+            size="touch"
+            className="px-3"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            <span className="hidden sm:inline">上一位</span>
+          </Button>
+          <select
+            aria-label="切換學生"
+            value={studentId}
+            onChange={event => handleStudentSwitch(event.target.value)}
+            disabled={!canSwitchStudent}
+            className={`${fieldControlClass} min-h-12 bg-white`}
+          >
+            {students.map((studentRecord, index) => (
+              <option key={studentRecord.id} value={studentRecord.id}>
+                {index + 1}. {studentRecord.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            onClick={() => handleStudentSwitch(nextStudent?.id)}
+            disabled={!canSwitchStudent || !nextStudent}
+            variant="neutral"
+            size="touch"
+            className="px-3"
+          >
+            <span className="hidden sm:inline">下一位</span>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
 
       {/* 行動裝置分頁切換 */}
       <PanelSwitcher

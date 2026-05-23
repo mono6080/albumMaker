@@ -339,6 +339,11 @@ test("admin can create a project and batch students from the browser", async ({ 
   const projects = await projectsResponse.json();
   const project = projects.find(item => item.name === projectName);
   expect(project.student_count).toBe(2);
+  const projectDetail = await fetchProjectDetail(page, project.id);
+  const alice = projectDetail.students.find(item => item.name === "Alice");
+  const bob = projectDetail.students.find(item => item.name === "Bob");
+  expect(alice).toBeTruthy();
+  expect(bob).toBeTruthy();
 
   await page.getByRole("link", { name: /個人編輯/ }).click();
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
@@ -365,6 +370,15 @@ test("admin can create a project and batch students from the browser", async ({ 
     response => response.url().includes("/batch/texts") && response.request().method() === "PUT" && response.ok(),
     () => studentTextArea.fill("個人 {name}"),
   );
+
+  await expect(page.getByLabel("切換學生")).toHaveValue(String(alice.id));
+  await page.getByRole("button", { name: "下一位" }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${bob.id}/edit`));
+  await expect(page.getByRole("heading", { name: "Bob", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("切換學生")).toHaveValue(String(bob.id));
+  await page.getByLabel("切換學生").selectOption(String(alice.id));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${alice.id}/edit`));
+  await expect(page.getByRole("heading", { name: "Alice", level: 1 })).toBeVisible();
 });
 
 
