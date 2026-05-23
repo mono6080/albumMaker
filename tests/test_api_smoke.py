@@ -760,6 +760,52 @@ def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
             assert sticker_image.size == (320, 120)
 
 
+def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("shared_photo_project"))
+
+        batch_response = client.post(f"/api/projects/{project_id}/students/batch", json=["Ava", "Ben"])
+        assert_status(batch_response, 200)
+        detail = client.get(f"/api/projects/{project_id}")
+        assert_status(detail, 200)
+        student_ids = [student["id"] for student in detail.json()["students"]]
+
+        shared_upload = client.post(
+            f"/api/projects/{project_id}/photos/shared/pages/0/slots/1",
+            files={"file": ("group.jpg", jpeg_bytes((60, 130, 220)), "image/jpeg")},
+        )
+        assert_status(shared_upload, 200)
+        assert shared_upload.json()["updated"] == 2
+
+        updated_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(updated_detail, 200)
+        paths = [
+            student["pages_data"][0]["photos"]["1"]["path"]
+            for student in updated_detail.json()["students"]
+        ]
+        assert len(set(paths)) == 2
+        assert all((tmp_path / "uploads" / path).exists() for path in paths)
+
+        first_photo = client.get(f"/api/projects/{project_id}/students/{student_ids[0]}/pages/0/photos/1")
+        assert_status(first_photo, 200)
+        second_photo = client.get(f"/api/projects/{project_id}/students/{student_ids[1]}/pages/0/photos/1")
+        assert_status(second_photo, 200)
+
+        clear_first = client.put(
+            f"/api/projects/{project_id}/students/{student_ids[0]}/photos/mapping",
+            json={"pages": {"0": {"1": None}}},
+        )
+        assert_status(clear_first, 200)
+        first_missing = client.get(f"/api/projects/{project_id}/students/{student_ids[0]}/pages/0/photos/1")
+        assert_status(first_missing, 404)
+        second_still_exists = client.get(f"/api/projects/{project_id}/students/{student_ids[1]}/pages/0/photos/1")
+        assert_status(second_still_exists, 200)
+
+
 def test_project_comments_contracts():
     with started_client() as client:
         login(client)

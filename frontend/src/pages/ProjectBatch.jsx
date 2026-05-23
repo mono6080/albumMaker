@@ -2,20 +2,20 @@
 // 提供學生名單管理（批次新增、刪除、改名）與專案層級對應文字的統一填入，
 // 文字變更後自動防抖儲存（600ms），並在右側顯示即時預覽
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import {
   fetchProject, batchAddStudents, deleteStudent,
-  updateProjectLabelTexts, renameStudent,
+  updateProjectLabelTexts, renameStudent, uploadSharedProjectPhoto,
 } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
 import { buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import {
   Users, Plus, ChevronRight, X, Type, CircleHelp,
-  Eye, Loader2, RefreshCw, Pencil, Check,
+  Eye, Loader2, RefreshCw, Pencil, Check, ImagePlus, Upload,
 } from "lucide-react";
 import PanelSwitcher from "../components/PanelSwitcher";
 import { useInlineEdit } from "../hooks/useInlineEdit";
@@ -37,6 +37,7 @@ import {
 } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
+import { handleApiError } from "../utils/apiError";
 
 const BATCH_STUDENT_GUIDE_STEPS = [
   {
@@ -121,29 +122,66 @@ const BATCH_TEXT_GUIDE_STEPS = [
   },
 ];
 
+const BATCH_PHOTO_GUIDE_STEPS = [
+  {
+    element: '[data-guide="batch-shared-photo-page"]',
+    title: "選擇頁面",
+    description: "先切到團體照所在的相本頁面。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="batch-shared-photo-slots"]',
+    title: "選擇照片格",
+    description: "選一個照片格，系統會把同一張照片套用到所有學生的同一格。",
+    side: "bottom",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-shared-photo-upload"]',
+    title: "套用到全班",
+    description: "選擇照片後按套用，會覆蓋所有學生此格原本的照片。",
+    side: "left",
+    align: "center",
+  },
+];
+
 export default function ProjectBatch() {
   const { id: projectId } = useParams();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [desktopTab, setDesktopTab] = useState("students"); // "students" | "texts"
-  const [mobileTab, setMobileTab] = useState("students");   // "students" | "edit" | "preview"
+  const [desktopTab, setDesktopTab] = useState("students"); // "students" | "photos" | "texts"
+  const [mobileTab, setMobileTab] = useState("students");   // "students" | "photos" | "edit" | "preview"
 
   // 行動版分頁切換時同步桌面 tab
   const handleMobileTabChange = (selectedTab) => {
     setMobileTab(selectedTab);
-    setDesktopTab(selectedTab === "students" ? "students" : "texts");
+    setDesktopTab(selectedTab === "students" ? "students" : selectedTab === "photos" ? "photos" : "texts");
   };
 
   const startGuide = () => {
-    startProductGuide(desktopTab === "students" ? BATCH_STUDENT_GUIDE_STEPS : BATCH_TEXT_GUIDE_STEPS);
+    startProductGuide(
+      desktopTab === "students"
+        ? BATCH_STUDENT_GUIDE_STEPS
+        : desktopTab === "photos"
+          ? BATCH_PHOTO_GUIDE_STEPS
+          : BATCH_TEXT_GUIDE_STEPS
+    );
   };
 
   // 學生名單 tab 狀態
   const [studentNamesInput, setStudentNamesInput] = useState("");
   const [isAddingStudents, setIsAddingStudents] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
+
+  // 共用照片 tab 狀態
+  const sharedPhotoInputRef = useRef(null);
+  const [selectedSharedPhotoSlotId, setSelectedSharedPhotoSlotId] = useState(null);
+  const [sharedPhotoFile, setSharedPhotoFile] = useState(null);
+  const [isSharedPhotoUploading, setIsSharedPhotoUploading] = useState(false);
+  const [sharedPhotoUploadProgress, setSharedPhotoUploadProgress] = useState(null);
 
   // 對應文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
@@ -195,6 +233,16 @@ export default function ProjectBatch() {
 
   useEffect(() => { loadProjectData(); }, [loadProjectData]);
 
+  useEffect(() => {
+    if (!template) return;
+    const pagePhotoSlots = template.pages[activePage]?.layout?.photo_slots || [];
+    setSelectedSharedPhotoSlotId(previousSlotId =>
+      pagePhotoSlots.some(slot => String(slot.id) === String(previousSlotId))
+        ? previousSlotId
+        : pagePhotoSlots[0]?.id ?? null
+    );
+  }, [template, activePage]);
+
   // ── 學生名單管理 ──────────────────────────────────────────────────────────
 
   const handleAddStudents = async () => {
@@ -238,6 +286,37 @@ export default function ProjectBatch() {
     });
   };
 
+  const clearSharedPhotoFile = () => {
+    setSharedPhotoFile(null);
+    if (sharedPhotoInputRef.current) sharedPhotoInputRef.current.value = "";
+  };
+
+  const handleUploadSharedPhoto = async () => {
+    if (!sharedPhotoFile || selectedSharedPhotoSlotId == null || isSharedPhotoUploading) return;
+
+    setIsSharedPhotoUploading(true);
+    setSharedPhotoUploadProgress(0);
+    try {
+      const response = await uploadSharedProjectPhoto(
+        projectId,
+        activePage,
+        selectedSharedPhotoSlotId,
+        sharedPhotoFile,
+        setSharedPhotoUploadProgress,
+      );
+      const updated = response.data?.updated ?? 0;
+      toast.success(`已套用到 ${updated} 位學生`);
+      clearSharedPhotoFile();
+      setPreviewTimestamp(Date.now());
+      await loadProjectData();
+    } catch (error) {
+      handleApiError(error, "共用照片上傳失敗");
+    } finally {
+      setIsSharedPhotoUploading(false);
+      setSharedPhotoUploadProgress(null);
+    }
+  };
+
   // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
   const getLabelText = (pageIndex, labelId) =>
@@ -279,6 +358,10 @@ export default function ProjectBatch() {
   const templatePages = template.pages;
   const activePageLayout = templatePages[activePage]?.layout;
   const activePageTextLabels = getFillableTextLabels(activePageLayout);
+  const activePagePhotoSlots = activePageLayout?.photo_slots || [];
+  const selectedSharedPhotoSlot = activePagePhotoSlots.find(
+    slot => String(slot.id) === String(selectedSharedPhotoSlotId)
+  );
 
   // ── 對應文字編輯面板 ──────────────────────────────────────────────────────
 
@@ -387,6 +470,132 @@ export default function ProjectBatch() {
     </div>
   );
 
+  const sharedPhotoPanel = (
+    <div className="max-w-3xl space-y-5">
+      <Surface data-guide="batch-shared-photo-page">
+        <div className="mb-4 flex min-w-0 items-center gap-2">
+          <ImagePlus className="h-4 w-4 flex-shrink-0 text-sky-600" />
+          <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-800">全班共用照片</h2>
+          <Badge tone="info">{project.students.length} 位</Badge>
+        </div>
+        <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
+      </Surface>
+
+      <Surface data-guide="batch-shared-photo-slots">
+        <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            照片格
+          </div>
+          <span className="text-xs text-gray-400">第 {activePage + 1} 頁</span>
+        </div>
+
+        {activePagePhotoSlots.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {activePagePhotoSlots.map((slot, slotIndex) => {
+              const isSelected = String(slot.id) === String(selectedSharedPhotoSlotId);
+              const slotW = slot.width || 400;
+              const slotH = slot.height || 400;
+              const previewHeight = 72;
+              const previewWidth = Math.max(48, Math.min(128, Math.round(previewHeight * slotW / slotH)));
+              const shadowOn = slot.shadow_enabled ?? slot.border;
+              return (
+                <button
+                  key={slot.id}
+                  type="button"
+                  onClick={() => setSelectedSharedPhotoSlotId(slot.id)}
+                  aria-pressed={isSelected}
+                  className={`flex min-h-32 min-w-0 flex-col items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm transition-colors ${
+                    isSelected
+                      ? "border-sky-300 bg-sky-50 text-sky-800 ring-2 ring-sky-200"
+                      : "border-gray-200 bg-white text-gray-500 hover:border-sky-200 hover:bg-sky-50"
+                  }`}
+                >
+                  <div
+                    className="flex flex-shrink-0 items-center justify-center bg-gray-100"
+                    style={{
+                      width: previewWidth,
+                      height: previewHeight,
+                      border: slot.border ? `${Math.max(2, Math.round((slot.border_width || 8) / 4))}px solid white` : "1px solid #d1d5db",
+                      borderRadius: Math.min(14, Math.round((slot.border_radius || 0) / 6)),
+                      boxShadow: shadowOn ? "0 8px 16px rgba(15, 23, 42, 0.12)" : "none",
+                    }}
+                  >
+                    <Upload className="h-4 w-4 text-gray-400" />
+                  </div>
+                  <span className="truncate font-medium">P{activePage + 1}·{slotIndex + 1}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex items-center justify-center py-10 text-sm text-gray-400">
+            此頁沒有照片格
+          </div>
+        )}
+      </Surface>
+
+      <Surface data-guide="batch-shared-photo-upload">
+        <input
+          ref={sharedPhotoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={event => setSharedPhotoFile(event.target.files?.[0] || null)}
+        />
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Button
+            type="button"
+            onClick={() => sharedPhotoInputRef.current?.click()}
+            variant="neutral"
+            className="w-full sm:w-auto"
+          >
+            <Upload className="h-4 w-4" />
+            選擇照片
+          </Button>
+
+          <div className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+            {sharedPhotoFile ? (
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate">{sharedPhotoFile.name}</span>
+                <IconButton label="清除照片檔案" onClick={clearSharedPhotoFile} size="xs">
+                  <X className="h-3.5 w-3.5" />
+                </IconButton>
+              </div>
+            ) : (
+              <span className="text-gray-400">未選擇照片</span>
+            )}
+          </div>
+
+          <Button
+            type="button"
+            onClick={handleUploadSharedPhoto}
+            disabled={
+              !sharedPhotoFile ||
+              !selectedSharedPhotoSlot ||
+              project.students.length === 0 ||
+              isSharedPhotoUploading
+            }
+            variant="primary"
+            className="w-full sm:w-auto"
+          >
+            {isSharedPhotoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+            套用到全班
+          </Button>
+        </div>
+
+        {sharedPhotoUploadProgress !== null && (
+          <div className="mt-3 h-1 overflow-hidden rounded-full bg-gray-100">
+            <div
+              className="h-full rounded-full bg-sky-500 transition-all duration-200"
+              style={{ width: `${sharedPhotoUploadProgress}%` }}
+            />
+          </div>
+        )}
+      </Surface>
+    </div>
+  );
+
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
   return (
@@ -443,6 +652,7 @@ export default function ProjectBatch() {
         onChange={handleMobileTabChange}
         tabs={[
           { value: "students", label: "登記", icon: Users },
+          { value: "photos",   label: "照片", icon: ImagePlus },
           { value: "edit",     label: "文字", icon: Type },
           { value: "preview",  label: "預覽", icon: Eye },
         ]}
@@ -454,6 +664,7 @@ export default function ProjectBatch() {
         onChange={setDesktopTab}
         options={[
           { value: "students", label: "登記學生", icon: Users, guideId: "batch-students-tab" },
+          { value: "photos", label: "共用照片", icon: ImagePlus, guideId: "batch-photos-tab" },
           { value: "texts", label: "文字", icon: Type, guideId: "batch-text-tab" },
         ]}
         className="mb-5 hidden w-fit lg:grid"
@@ -577,7 +788,10 @@ export default function ProjectBatch() {
         </div>
       )}
 
-      {/* Tab 2：對應文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
+      {/* Tab 2：全班共用照片 */}
+      {desktopTab === "photos" && sharedPhotoPanel}
+
+      {/* Tab 3：對應文字（桌面版：左預覽 | 右編輯；行動版：分頁切換） */}
       {desktopTab === "texts" && (
         <div
           className="lg:grid lg:gap-6 lg:items-start"

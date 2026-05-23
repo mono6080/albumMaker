@@ -69,6 +69,17 @@ export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, 
   );
 };
 
+/** 上傳專案共用照片，套用到所有學生同一頁同一照片格 */
+export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile, onProgress) => {
+  const formData = new FormData();
+  formData.append("file", photoFile);
+  return apiClient.post(
+    `/projects/${projectId}/photos/shared/pages/${pageIndex}/slots/${slotId}`,
+    formData,
+    onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}
+  );
+};
+
 /**
  * 更新照片欄位對應關係（支援重新排列與清除）。
  * pagesMapping 格式：{"0": {"1": "/path", "2": null}, ...}

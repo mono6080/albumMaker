@@ -331,6 +331,62 @@ test("admin can create a project and batch students from the browser", async ({ 
 });
 
 
+test("project shared photo upload applies one slot to every student", async ({ page }) => {
+  const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
+  const templateName = `E2E 共用照片模板 ${Date.now()}`;
+  const projectName = `E2E 共用照片專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Group Alice", "Group Bob"]);
+
+  await page.goto(`/projects/${project.id}/batch`);
+  await expect(page.getByText(projectName)).toBeVisible();
+  await page.getByRole("button", { name: "共用照片" }).click();
+  await expect(page.getByText("全班共用照片")).toBeVisible();
+
+  await page
+    .locator('[data-guide="batch-shared-photo-slots"]')
+    .getByRole("button", { name: /P1·2/ })
+    .click();
+
+  await page
+    .locator('[data-guide="batch-shared-photo-upload"] input[type="file"]')
+    .setInputFiles({ name: "group.png", mimeType: "image/png", buffer: bluePng });
+
+  const uploadResponse = page.waitForResponse(
+    response => response.url().includes("/photos/shared/pages/0/slots/2") && response.ok(),
+  );
+  await page.getByRole("button", { name: "套用到全班" }).click();
+  await uploadResponse;
+  await expect(page.getByText("已套用到 2 位學生")).toBeVisible();
+
+  let sharedPaths = [];
+  await expect.poll(async () => {
+    const detail = await fetchProjectDetail(page, project.id);
+    sharedPaths = detail.students.map(student => student.pages_data?.[0]?.photos?.["2"]?.path ?? null);
+    return sharedPaths.filter(Boolean).length;
+  }, { timeout: 20_000 }).toBe(2);
+
+  expect(sharedPaths[0]).toContain("student");
+  expect(sharedPaths[0]).toContain("p0_slot2_group.png");
+  expect(sharedPaths[1]).toContain("p0_slot2_group.png");
+  expect(sharedPaths[0]).not.toBe(sharedPaths[1]);
+
+  const detail = await fetchProjectDetail(page, project.id);
+  for (const student of detail.students) {
+    await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+    await expect(page.getByText("照片管理")).toBeVisible();
+    const slot = page.locator('[data-guide="student-photo-cell"][data-slot-id="2"]');
+    await expect(slot.locator('[data-guide="photo-slot-image"]')).toHaveAttribute(
+      "src",
+      /\/photos\/2\/thumbnail\?v=.*group\.png/,
+    );
+  }
+});
+
+
 test("student photo uploads, preview cache, and mapping swaps work through storage", async ({ page }) => {
   const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
   const templateName = `E2E 照片模板 ${Date.now()}`;

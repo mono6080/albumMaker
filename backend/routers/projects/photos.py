@@ -19,7 +19,7 @@ from services.file_service import get_photo_key, read_and_process_photo_upload
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
-from .schemas import PhotoMappingPayload, PhotoMappingResult, PhotoUploadResult
+from .schemas import PhotoMappingPayload, PhotoMappingResult, PhotoUploadResult, SharedPhotoUploadResult
 
 router = APIRouter()
 
@@ -94,6 +94,17 @@ def _get_photo_key_or_404(
     return photo_key
 
 
+def _assert_project_photo_slot_exists(project, page_index: int, slot_id: int) -> None:
+    if page_index < 0 or page_index >= len(project.template.pages):
+        raise HTTPException(status_code=404, detail="找不到頁面")
+
+    template_page = project.template.pages[page_index]
+    layout = _parse_json_field(template_page.layout_json, "layout_json")
+    photo_slots = layout.get("photo_slots") or []
+    if not any(str(slot.get("id")) == str(slot_id) for slot in photo_slots):
+        raise HTTPException(status_code=404, detail="找不到照片格")
+
+
 @router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
 async def upload_photo(
     project_id: int,
@@ -144,6 +155,71 @@ async def upload_photo(
     db.commit()
 
     return {"filename": key.split("/")[-1], "path": key}
+
+
+@router.post(
+    "/{project_id}/photos/shared/pages/{page_index}/slots/{slot_id}",
+    response_model=SharedPhotoUploadResult,
+)
+async def upload_shared_project_photo(
+    project_id: int,
+    page_index: int,
+    slot_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """上傳專案共用照片，並套用到所有學生的同一頁同一照片格。"""
+    processed_upload = await read_and_process_photo_upload(file)
+
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
+    _assert_project_photo_slot_exists(project, page_index, slot_id)
+
+    storage = get_storage()
+    now = datetime.utcnow()
+    updated = 0
+    slot_id_str = str(slot_id)
+
+    for student in project.students:
+        pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
+        while len(pages_data) <= page_index:
+            pages_data.append({
+                "page_index": len(pages_data),
+                "photos": {},
+                "label_texts": {},
+            })
+
+        old_record = pages_data[page_index].get("photos", {}).get(slot_id_str)
+        if old_record:
+            old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
+            if old_key:
+                _delete_photo_thumbnails(storage, old_key)
+                storage.delete(old_key)
+
+        key = get_photo_key(project_id, student.id, page_index, slot_id, processed_upload.filename)
+        storage.put(key, processed_upload.data)
+        pages_data[page_index].setdefault("photos", {})[slot_id_str] = {
+            "path": key,
+            "scale": 1.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0,
+        }
+        student.pages_data_json = json.dumps(pages_data)
+        student.updated_at = now
+        updated += 1
+
+    project.updated_at = now
+    db.commit()
+
+    return {
+        "ok": True,
+        "updated": updated,
+        "filename": processed_upload.filename,
+        "page_index": page_index,
+        "slot_id": slot_id,
+        "compressed": processed_upload.compressed,
+    }
 
 
 @router.get("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}")

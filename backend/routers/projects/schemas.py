@@ -134,6 +134,16 @@ class PhotoUploadResult(BaseModel):
     path: str
 
 
+class SharedPhotoUploadResult(BaseModel):
+    """專案層級共用照片上傳回應"""
+    ok: bool = True
+    updated: int
+    filename: str
+    page_index: int
+    slot_id: int
+    compressed: bool = False
+
+
 class PageSkipPayload(BaseModel):
     """設定頁面跳過旗標的 payload"""
     skip: bool
