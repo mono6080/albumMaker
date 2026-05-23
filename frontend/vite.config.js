@@ -2,8 +2,18 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import process from 'node:process'
+
+const appBuildId =
+  process.env.APP_BUILD_ID ||
+  process.env.SOURCE_VERSION ||
+  process.env.GITHUB_SHA ||
+  Date.now().toString(36)
 
 export default defineConfig({
+  define: {
+    'import.meta.env.VITE_APP_BUILD_ID': JSON.stringify(appBuildId),
+  },
   plugins: [
     react(),
     tailwindcss(),

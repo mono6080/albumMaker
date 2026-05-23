@@ -6,6 +6,7 @@ import { RefreshCw, X } from "lucide-react";
 
 const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_CHECK_DEBOUNCE_MS = 5000;
+const SERVICE_WORKER_URL = `/sw.js?v=${encodeURIComponent(import.meta.env.VITE_APP_BUILD_ID || "dev")}`;
 
 export default function PwaUpdateBanner() {
   const [showBanner, setShowBanner] = useState(false);
@@ -80,7 +81,7 @@ export default function PwaUpdateBanner() {
     };
 
     const getRegistration = async () => {
-      const registration = await navigator.serviceWorker.register("/sw.js", {
+      const registration = await navigator.serviceWorker.register(SERVICE_WORKER_URL, {
         scope: "/",
         updateViaCache: "none",
       });
