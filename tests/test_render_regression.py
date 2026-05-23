@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from services.render_service import render_page
+from services.render_service import PRINT_OUTPUT_SIZE, render_album, render_page
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "render_smoke_layout.json"
@@ -54,6 +54,33 @@ def test_render_page_smoke_fixture_draws_expected_regions():
     # Text label and footer regions should contain rendered glyph pixels.
     assert count_non_white_pixels(image, (58, 250, 358, 332)) > 20
     assert count_non_white_pixels(image, (36, 1058, 250, 1102)) > 20
+
+
+def test_render_album_print_output_renders_on_native_canvas():
+    layout = load_layout()
+
+    image = render_album(
+        [layout],
+        student_name="Ada",
+        pages_data=[{"page_index": 0, "label_texts": {"1": "Native print label"}}],
+        output_size=PRINT_OUTPUT_SIZE,
+    )[0]
+
+    assert image.size == PRINT_OUTPUT_SIZE
+    scale_x = PRINT_OUTPUT_SIZE[0] / layout["canvas_width"]
+    scale_y = PRINT_OUTPUT_SIZE[1] / layout["canvas_height"]
+
+    assert_pixel_close(image, (round(55 * scale_x), round(67 * scale_y)), (238, 238, 238))
+    assert_pixel_close(image, (round(308 * scale_x), round(70 * scale_y)), (253, 230, 138))
+    assert count_non_white_pixels(
+        image,
+        (
+            round(58 * scale_x),
+            round(250 * scale_y),
+            round(358 * scale_x),
+            round(332 * scale_y),
+        ),
+    ) > 200
 
 
 def test_render_page_label_text_override_changes_text_region():

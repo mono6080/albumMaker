@@ -24,6 +24,7 @@ from main import (
     limiter as app_limiter,
 )
 from routers.auth import limiter as auth_limiter
+from services.render_service import PRINT_OUTPUT_SIZE
 
 
 ADMIN_PASSWORD = "admin-password-123"
@@ -956,7 +957,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             image_bytes = image_zip.read(image_names[0])
             assert image_bytes.startswith(b"\xff\xd8")
             with Image.open(BytesIO(image_bytes)) as exported_image:
-                assert exported_image.size == (1240, 1754)
+                assert exported_image.size == PRINT_OUTPUT_SIZE
 
         download_image = client.get(f"/api/projects/{project_id}/students/{student_id}/images/1")
         assert_status(download_image, 200)
@@ -964,7 +965,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert download_image.headers["content-disposition"].startswith("attachment;")
         assert download_image.content.startswith(b"\xff\xd8")
         with Image.open(BytesIO(download_image.content)) as exported_image:
-            assert exported_image.size == (1240, 1754)
+            assert exported_image.size == PRINT_OUTPUT_SIZE
 
         download_screen_images = client.get(f"/api/projects/{project_id}/students/{student_id}/images?mode=screen")
         assert_status(download_screen_images, 200)

@@ -9,7 +9,7 @@ import zipfile
 from urllib.parse import quote
 
 from database import Project, Student
-from services.render_service import render_album, save_album_pdf, save_album_images
+from services.render_service import PRINT_OUTPUT_SIZE, render_album, save_album_pdf, save_album_images
 from services.storage import get_storage
 
 
@@ -185,7 +185,13 @@ def render_and_save_student_album(
         page_layouts,
     )
 
-    rendered_images = render_album(page_layouts, student.name, student_pages_data)
+    rendered_screen_images = render_album(page_layouts, student.name, student_pages_data)
+    rendered_print_images = render_album(
+        page_layouts,
+        student.name,
+        student_pages_data,
+        output_size=PRINT_OUTPUT_SIZE,
+    )
 
     combined_stem = build_combined_stem(project.name, student.name)
     output_prefix = get_project_output_prefix(project_id)
@@ -195,16 +201,17 @@ def render_and_save_student_album(
     storage = get_storage()
     # 清除該學生舊的輸出（PDF + 頁面圖），避免無限累積
     storage.delete_prefix(f"{output_prefix}/{combined_stem}")
-    storage.put(print_key, save_album_pdf(rendered_images, mode="print"))
-    storage.put(screen_key, save_album_pdf(rendered_images, mode="screen"))
-    for output_mode in ("print", "screen"):
-        for filename, img_bytes in save_album_images(rendered_images, combined_stem, mode=output_mode).items():
-            storage.put(f"{output_prefix}/{combined_stem}/images/{output_mode}/{filename}", img_bytes)
+    storage.put(print_key, save_album_pdf(rendered_print_images, mode="print"))
+    storage.put(screen_key, save_album_pdf(rendered_screen_images, mode="screen"))
+    for filename, img_bytes in save_album_images(rendered_print_images, combined_stem, mode="print").items():
+        storage.put(f"{output_prefix}/{combined_stem}/images/print/{filename}", img_bytes)
+    for filename, img_bytes in save_album_images(rendered_screen_images, combined_stem, mode="screen").items():
+        storage.put(f"{output_prefix}/{combined_stem}/images/screen/{filename}", img_bytes)
 
     student.output_filename = print_key
     db.commit()
 
-    return {"pdf": print_key, "pages": len(rendered_images)}
+    return {"pdf": print_key, "pages": len(rendered_screen_images)}
 
 
 # ── ZIP 封裝 ───────────────────────────────────────────────────────────────────
