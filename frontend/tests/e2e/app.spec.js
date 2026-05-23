@@ -387,7 +387,7 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
 });
 
 
-test("student multi-select upload fills slots without overwriting first files", async ({ page }) => {
+test("student multi-select upload only fills remaining empty slots", async ({ page }) => {
   const layout = layoutWithPhotoSlots(await loadFixtureLayout(), 4);
   const templateName = `E2E 多選模板 ${Date.now()}`;
   const projectName = `E2E 多選專案 ${Date.now()}`;
@@ -400,6 +400,7 @@ test("student multi-select upload fills slots without overwriting first files", 
   const initialDetail = await fetchProjectDetail(page, project.id);
   const student = initialDetail.students.find(item => item.name === "Multi Alice");
   expect(student).toBeTruthy();
+  const existingPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "existing.png", redPng);
 
   await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
   await expect(page.getByText("照片管理")).toBeVisible();
@@ -412,6 +413,7 @@ test("student multi-select upload fills slots without overwriting first files", 
       buffer,
     })),
   );
+  await expect(page.getByText("只上傳前 3 張，已略過 2 張")).toBeVisible();
 
   await expect.poll(async () => {
     const detail = await fetchProjectDetail(page, project.id);
@@ -423,10 +425,10 @@ test("student multi-select upload fills slots without overwriting first files", 
       ]),
     );
   }, { timeout: 20_000 }).toEqual({
-    "1": expect.stringContaining("p0_slot1_multi-1.png"),
-    "2": expect.stringContaining("p0_slot2_multi-2.png"),
-    "3": expect.stringContaining("p0_slot3_multi-3.png"),
-    "4": expect.stringContaining("p0_slot4_multi-4.png"),
+    "1": existingPhoto.path,
+    "2": expect.stringContaining("p0_slot2_multi-1.png"),
+    "3": expect.stringContaining("p0_slot3_multi-2.png"),
+    "4": expect.stringContaining("p0_slot4_multi-3.png"),
   });
 
   await expect(page.locator('[data-guide="student-photo-grid"] img')).toHaveCount(4);

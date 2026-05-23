@@ -413,6 +413,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const isDirty = (it) =>
     it.pendingFile !== null || it.serverPath !== it.origServerPath || transformDirty(it);
   const hasDirty = items.some(isDirty);
+  const availableEmptyCount = items.filter(it =>
+    !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
+  ).length;
 
   const photoUrlVersion = (it) => [
     student?.updated_at ?? "",
@@ -443,22 +446,25 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
   const handleMultiUpload = (files) => {
     const arr = Array.from(files);
+    const emptyCount = itemsRef.current.filter(it =>
+      !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
+    ).length;
+    if (emptyCount === 0) {
+      toast.error("沒有剩餘空格可上傳");
+      return;
+    }
+    const acceptedFiles = arr.slice(0, emptyCount);
+    const skippedCount = arr.length - acceptedFiles.length;
+    if (skippedCount > 0) {
+      toast(`只上傳前 ${acceptedFiles.length} 張，已略過 ${skippedCount} 張`);
+    }
     setItems(prev => {
       const next = prev.map(it => ({ ...it }));
-      const emptyIndexes = [];
-      const occupiedIndexes = [];
-      prev.forEach((it, idx) => {
-        if (!it.pendingFile && !it.serverPath) emptyIndexes.push(idx);
-        else occupiedIndexes.push(idx);
-      });
       let fi = 0;
-      for (const i of emptyIndexes) {
-        if (fi >= arr.length) break;
-        assignFile(next, i, arr[fi++]);
-      }
-      for (const i of occupiedIndexes) {
-        if (fi >= arr.length) break;
-        assignFile(next, i, arr[fi++]);
+      for (let i = 0; i < prev.length && fi < acceptedFiles.length; i++) {
+        const it = prev[i];
+        if (disabled || skippedPages.has(it.pi) || it.pendingFile || it.serverPath) continue;
+        assignFile(next, i, acceptedFiles[fi++]);
       }
       return next;
     });
@@ -642,13 +648,18 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         <div className="ml-auto flex flex-shrink-0 gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
           <button
             onClick={() => multiRef.current?.click()}
+            disabled={disabled || availableEmptyCount === 0}
             data-guide="student-multi-upload"
-            className="flex items-center justify-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium whitespace-nowrap"
+            data-empty-count={availableEmptyCount}
+            title={availableEmptyCount > 0 ? `剩餘 ${availableEmptyCount} 格可上傳` : "沒有剩餘空格"}
+            className="flex items-center justify-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:pointer-events-none transition-colors font-medium whitespace-nowrap"
           >
             <Upload className="w-3.5 h-3.5" />
-            多選上傳
+            <span>多選上傳</span>
+            <span className="text-xs text-indigo-400">剩 {availableEmptyCount}</span>
           </button>
           <input ref={multiRef} type="file" accept="image/*" multiple className="hidden"
+            disabled={disabled || availableEmptyCount === 0}
             onChange={e => { if (e.target.files?.length) { handleMultiUpload(e.target.files); e.target.value = ""; } }} />
         </div>
       </div>
