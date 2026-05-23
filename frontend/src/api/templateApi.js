@@ -6,21 +6,49 @@ import { apiClient } from "./authApi";
 
 // ── 模板 CRUD ─────────────────────────────────────────────────────────────────
 
+const compactParams = (params = {}) =>
+  Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== ""));
+
+const toFormParams = (payload) => new URLSearchParams(compactParams(payload));
+
+/** 取得固定部門清單 */
+export const fetchTemplateDepartments = () =>
+  apiClient.get("/templates/departments");
+
+/** 取得模板期別清單 */
+export const fetchTemplatePeriods = (params = {}) =>
+  apiClient.get("/templates/periods", { params: compactParams(params) });
+
+/** 建立模板期別 */
+export const createTemplatePeriod = ({ name, department, status = "draft" }) =>
+  apiClient.post("/templates/periods", toFormParams({ name, department, status }));
+
+/** 更新模板期別 */
+export const updateTemplatePeriod = (periodId, { name, status }) =>
+  apiClient.patch(`/templates/periods/${periodId}`, toFormParams({ name, status }));
+
 /** 取得所有模板清單 */
-export const fetchAllTemplates = () =>
-  apiClient.get("/templates/");
+export const fetchAllTemplates = (params = {}) =>
+  apiClient.get("/templates/", { params: compactParams(params) });
+
+/** 取得可建立專案的模板清單（只含使用中期別） */
+export const fetchAvailableTemplates = (params = {}) =>
+  fetchAllTemplates({ ...params, available: true });
 
 /** 建立新模板 */
-export const createTemplate = (templateName) =>
-  apiClient.post("/templates/", new URLSearchParams({ name: templateName }));
+export const createTemplate = (templateName, periodId, sourceTemplateId) =>
+  apiClient.post(
+    "/templates/",
+    toFormParams({ name: templateName, period_id: periodId, source_template_id: sourceTemplateId })
+  );
 
 /** 取得指定模板的完整資料（含所有頁面） */
 export const fetchTemplate = (templateId) =>
   apiClient.get(`/templates/${templateId}`);
 
 /** 修改模板名稱（行內編輯） */
-export const renameTemplate = (templateId, newName) =>
-  apiClient.patch(`/templates/${templateId}`, new URLSearchParams({ name: newName }));
+export const renameTemplate = (templateId, newName, periodId) =>
+  apiClient.patch(`/templates/${templateId}`, toFormParams({ name: newName, period_id: periodId }));
 
 /** 刪除指定模板 */
 export const deleteTemplate = (templateId) =>

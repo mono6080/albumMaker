@@ -5,6 +5,11 @@
 export {
   // 模板 API
   fetchAllTemplates as getTemplates,
+  fetchAvailableTemplates,
+  fetchTemplateDepartments,
+  fetchTemplatePeriods,
+  createTemplatePeriod,
+  updateTemplatePeriod,
   createTemplate,
   fetchTemplate as getTemplate,
   renameTemplate,

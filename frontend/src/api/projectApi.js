@@ -16,8 +16,16 @@ export const fetchArchivedProjects = () =>
   apiClient.get("/projects/archive");
 
 /** 建立新專案 */
-export const createProject = (projectName, templateId) =>
-  apiClient.post("/projects/", new URLSearchParams({ name: projectName, template_id: templateId }));
+export const createProject = (projectName, templateId, department, templatePeriodId) =>
+  apiClient.post(
+    "/projects/",
+    new URLSearchParams(Object.fromEntries(Object.entries({
+      name: projectName,
+      template_id: templateId,
+      department,
+      template_period_id: templatePeriodId,
+    }).filter(([, value]) => value !== undefined && value !== null && value !== "")))
+  );
 
 /** 取得指定專案的完整資料（含所有學生） */
 export const fetchProject = (projectId) =>

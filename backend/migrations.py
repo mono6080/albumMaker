@@ -4,6 +4,11 @@
 
 from sqlalchemy import text
 from database import engine
+from template_periods import (
+    DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
+    DEFAULT_TEMPLATE_PERIOD_NAME,
+    TEMPLATE_DEPARTMENTS,
+)
 
 
 def run_migrations():
@@ -23,6 +28,7 @@ def run_migrations():
         _add_timestamp_columns(connection)
         _add_project_archive_columns(connection)
         _drop_bubble_texts_json_column(connection)
+        _add_template_periods_and_scope_columns(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -283,6 +289,139 @@ def _drop_bubble_texts_json_column(connection):
         "CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id)"
     ))
     connection.execute(text("PRAGMA foreign_keys = ON"))
+    connection.commit()
+
+
+def _add_template_periods_and_scope_columns(connection):
+    """新增模板期別資料表，並將歷史模板/專案歸到 202605 預設期別。"""
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "template_periods" not in existing_tables:
+        connection.execute(text("""
+            CREATE TABLE template_periods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                department VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'draft',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        connection.commit()
+
+    for department in TEMPLATE_DEPARTMENTS:
+        existing_period = connection.execute(
+            text("""
+                SELECT id FROM template_periods
+                WHERE department = :department AND name = :name
+                LIMIT 1
+            """),
+            {"department": department["code"], "name": DEFAULT_TEMPLATE_PERIOD_NAME},
+        ).fetchone()
+        if not existing_period:
+            connection.execute(
+                text("""
+                    INSERT INTO template_periods (department, name, status)
+                    VALUES (:department, :name, 'active')
+                """),
+                {"department": department["code"], "name": DEFAULT_TEMPLATE_PERIOD_NAME},
+            )
+    connection.commit()
+
+    default_period_id = connection.execute(
+        text("""
+            SELECT id FROM template_periods
+            WHERE department = :department AND name = :name
+            ORDER BY id
+            LIMIT 1
+        """),
+        {
+            "department": DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
+            "name": DEFAULT_TEMPLATE_PERIOD_NAME,
+        },
+    ).scalar()
+
+    template_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(templates)"))
+    }
+    if "period_id" not in template_columns:
+        connection.execute(text(
+            "ALTER TABLE templates ADD COLUMN period_id INTEGER REFERENCES template_periods(id)"
+        ))
+        connection.commit()
+    if default_period_id is not None:
+        connection.execute(
+            text("UPDATE templates SET period_id = :period_id WHERE period_id IS NULL"),
+            {"period_id": default_period_id},
+        )
+        connection.commit()
+
+    project_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "department" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN department VARCHAR"))
+    if "template_period_id" not in project_columns:
+        connection.execute(text(
+            "ALTER TABLE projects ADD COLUMN template_period_id INTEGER REFERENCES template_periods(id)"
+        ))
+    connection.commit()
+
+    connection.execute(text("""
+        UPDATE projects
+        SET template_period_id = (
+            SELECT templates.period_id
+            FROM templates
+            WHERE templates.id = projects.template_id
+        )
+        WHERE template_period_id IS NULL
+    """))
+    connection.execute(text("""
+        UPDATE projects
+        SET department = (
+            SELECT template_periods.department
+            FROM template_periods
+            WHERE template_periods.id = projects.template_period_id
+        )
+        WHERE (department IS NULL OR department = '')
+          AND template_period_id IS NOT NULL
+    """))
+    if default_period_id is not None:
+        connection.execute(
+            text("UPDATE projects SET template_period_id = :period_id WHERE template_period_id IS NULL"),
+            {"period_id": default_period_id},
+        )
+    connection.execute(
+        text("""
+            UPDATE projects
+            SET department = :department
+            WHERE department IS NULL OR department = ''
+        """),
+        {"department": DEFAULT_TEMPLATE_PERIOD_DEPARTMENT},
+    )
+
+    indexes = [
+        (
+            "idx_template_periods_department_status",
+            "CREATE INDEX idx_template_periods_department_status ON template_periods(department, status)",
+        ),
+        ("idx_templates_period_id", "CREATE INDEX idx_templates_period_id ON templates(period_id)"),
+        ("idx_projects_department", "CREATE INDEX idx_projects_department ON projects(department)"),
+        (
+            "idx_projects_template_period_id",
+            "CREATE INDEX idx_projects_template_period_id ON projects(template_period_id)",
+        ),
+    ]
+    existing_indexes = {
+        row[1]
+        for row in connection.execute(text("SELECT type, name FROM sqlite_master WHERE type='index'"))
+    }
+    for index_name, create_sql in indexes:
+        if index_name not in existing_indexes:
+            connection.execute(text(create_sql))
     connection.commit()
 
 

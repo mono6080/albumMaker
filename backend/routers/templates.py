@@ -4,18 +4,28 @@
 
 import io
 import json
+import posixpath
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
-from database import Template, TemplatePage, User, get_db
+from database import Template, TemplatePage, TemplatePeriod, User, get_db
 from crud.template_crud import get_template_or_404, get_template_page_or_404
 from services.file_service import get_background_key, get_sticker_key, read_and_validate_image
 from services.render_service import render_page
 from services.storage import get_storage
+from template_periods import (
+    DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
+    DEFAULT_TEMPLATE_PERIOD_NAME,
+    TEMPLATE_DEPARTMENTS,
+    VALID_PERIOD_STATUSES,
+    VALID_TEMPLATE_DEPARTMENTS,
+    department_label,
+    period_status_label,
+)
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -41,6 +51,36 @@ def _count_template_photo_slots(template: Template) -> int:
     return total
 
 
+def _serialize_period(period: TemplatePeriod) -> dict:
+    return {
+        "id": period.id,
+        "department": period.department,
+        "department_label": department_label(period.department),
+        "name": period.name,
+        "status": period.status,
+        "status_label": period_status_label(period.status),
+        "created_at": period.created_at,
+        "template_count": len(period.templates),
+    }
+
+
+def _serialize_template_summary(template: Template) -> dict:
+    period = template.period
+    return {
+        "id": template.id,
+        "name": template.name,
+        "created_at": template.created_at,
+        "page_count": len(template.pages),
+        "photo_count": _count_template_photo_slots(template),
+        "period_id": period.id if period else None,
+        "period_name": period.name if period else None,
+        "period_status": period.status if period else None,
+        "period_status_label": period_status_label(period.status) if period else None,
+        "department": period.department if period else None,
+        "department_label": department_label(period.department) if period else None,
+    }
+
+
 def _template_page_layout_with_background(template_page: TemplatePage) -> dict:
     """回傳渲染用 layout；背景圖以資料庫欄位為準，避免版面儲存覆蓋掉底圖。"""
     page_layout = json.loads(template_page.layout_json)
@@ -49,51 +89,275 @@ def _template_page_layout_with_background(template_page: TemplatePage) -> dict:
     return page_layout
 
 
+def _validate_department(department: str) -> str:
+    normalized = department.strip()
+    if normalized not in VALID_TEMPLATE_DEPARTMENTS:
+        raise HTTPException(status_code=400, detail="不支援的部門")
+    return normalized
+
+
+def _validate_period_status(status: str) -> str:
+    normalized = status.strip()
+    if normalized not in VALID_PERIOD_STATUSES:
+        raise HTTPException(status_code=400, detail="不支援的期別狀態")
+    return normalized
+
+
+def _get_period_or_404(period_id: int, db: Session) -> TemplatePeriod:
+    period = db.query(TemplatePeriod).filter(TemplatePeriod.id == period_id).first()
+    if not period:
+        raise HTTPException(status_code=404, detail="找不到期別")
+    return period
+
+
+def _resolve_template_period(period_id: int | None, db: Session) -> TemplatePeriod:
+    if period_id is not None:
+        return _get_period_or_404(period_id, db)
+
+    default_period = (
+        db.query(TemplatePeriod)
+        .filter(
+            TemplatePeriod.department == DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
+            TemplatePeriod.name == DEFAULT_TEMPLATE_PERIOD_NAME,
+        )
+        .order_by(TemplatePeriod.id.asc())
+        .first()
+    )
+    if default_period:
+        return default_period
+
+    active_period = (
+        db.query(TemplatePeriod)
+        .filter(TemplatePeriod.status == "active")
+        .order_by(TemplatePeriod.id.asc())
+        .first()
+    )
+    if active_period:
+        return active_period
+    raise HTTPException(status_code=400, detail="尚未建立可用期別")
+
+
+def _copy_storage_key(storage, source_key: str, target_key: str) -> bool:
+    try:
+        data = storage.get_bytes(source_key)
+    except FileNotFoundError:
+        return False
+    storage.put(target_key, data)
+    return True
+
+
+def _copy_layout_sticker_assets(
+    layout: dict,
+    source_template_id: int,
+    target_template_id: int,
+    storage,
+) -> dict:
+    copied_layout = json.loads(json.dumps(layout))
+    source_prefix = f"templates/tmpl{source_template_id}/stickers/"
+    copied_paths: set[str] = set()
+
+    for sticker in copied_layout.get("stickers") or []:
+        if not isinstance(sticker, dict):
+            continue
+        source_path = sticker.get("path")
+        if not isinstance(source_path, str) or not source_path.startswith(source_prefix):
+            continue
+
+        target_path = f"templates/tmpl{target_template_id}/stickers/{posixpath.basename(source_path)}"
+        if target_path not in copied_paths:
+            _copy_storage_key(storage, source_path, target_path)
+            copied_paths.add(target_path)
+        sticker["path"] = target_path
+
+    return copied_layout
+
+
+def _copy_template_pages(source_template: Template, target_template: Template, db: Session) -> None:
+    storage = get_storage()
+    for source_page in source_template.pages:
+        layout = _copy_layout_sticker_assets(
+            json.loads(source_page.layout_json),
+            source_template.id,
+            target_template.id,
+            storage,
+        )
+        layout.pop("background_filename", None)
+        target_page = TemplatePage(
+            template_id=target_template.id,
+            page_number=source_page.page_number,
+            layout_json=json.dumps(layout),
+        )
+        db.add(target_page)
+        db.flush()
+
+        if source_page.background_filename:
+            target_key = (
+                f"templates/tmpl{target_template.id}/backgrounds/"
+                f"page{target_page.id}_{posixpath.basename(source_page.background_filename)}"
+            )
+            if _copy_storage_key(storage, source_page.background_filename, target_key):
+                target_page.background_filename = target_key
+                layout["background_filename"] = target_key
+                target_page.layout_json = json.dumps(layout)
+
+
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
+
+@router.get("/departments")
+def list_template_departments(
+    _: User = Depends(get_current_user),
+):
+    """回傳固定部門清單，供期別與專案建立流程使用。"""
+    return list(TEMPLATE_DEPARTMENTS)
+
+
+@router.get("/periods")
+def list_template_periods(
+    department: str | None = Query(None),
+    status: str | None = Query(None),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """回傳模板期別清單。"""
+    query = db.query(TemplatePeriod)
+    if department:
+        query = query.filter(TemplatePeriod.department == _validate_department(department))
+    if status:
+        query = query.filter(TemplatePeriod.status == _validate_period_status(status))
+    periods = (
+        query
+        .order_by(TemplatePeriod.department.asc(), TemplatePeriod.created_at.desc(), TemplatePeriod.id.desc())
+        .all()
+    )
+    return [_serialize_period(period) for period in periods]
+
+
+@router.post("/periods")
+def create_template_period(
+    name: str = Form(...),
+    department: str = Form(...),
+    status: str = Form("draft"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
+    """建立新模板期別。"""
+    period_name = name.strip()
+    if not period_name:
+        raise HTTPException(status_code=400, detail="期別名稱不可空白")
+    period_department = _validate_department(department)
+    period_status = _validate_period_status(status)
+
+    existing = (
+        db.query(TemplatePeriod)
+        .filter(
+            TemplatePeriod.department == period_department,
+            TemplatePeriod.name == period_name,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="此部門已存在同名期別")
+
+    period = TemplatePeriod(
+        department=period_department,
+        name=period_name,
+        status=period_status,
+    )
+    db.add(period)
+    db.commit()
+    db.refresh(period)
+    return _serialize_period(period)
+
+
+@router.patch("/periods/{period_id}")
+def update_template_period(
+    period_id: int,
+    name: str | None = Form(None),
+    status: str | None = Form(None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
+    """更新期別名稱或狀態；狀態屬於期別，不屬於單一模板。"""
+    period = _get_period_or_404(period_id, db)
+    if name is not None:
+        period_name = name.strip()
+        if not period_name:
+            raise HTTPException(status_code=400, detail="期別名稱不可空白")
+        period.name = period_name
+    if status is not None:
+        period.status = _validate_period_status(status)
+    db.commit()
+    db.refresh(period)
+    return _serialize_period(period)
+
 
 @router.get("/")
 def list_templates(
+    department: str | None = Query(None),
+    period_id: int | None = Query(None),
+    available: bool = Query(False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
     """回傳所有模板的摘要清單（依建立時間降序）。"""
-    all_templates = db.query(Template).order_by(Template.created_at.desc()).all()
-    return [
-        {
-            "id": template.id,
-            "name": template.name,
-            "created_at": template.created_at,
-            "page_count": len(template.pages),
-            "photo_count": _count_template_photo_slots(template),
-        }
-        for template in all_templates
-    ]
+    query = db.query(Template)
+    if department or available:
+        query = query.join(TemplatePeriod, Template.period_id == TemplatePeriod.id)
+    if department:
+        query = query.filter(TemplatePeriod.department == _validate_department(department))
+    if period_id is not None:
+        query = query.filter(Template.period_id == period_id)
+    if available:
+        query = query.filter(TemplatePeriod.status == "active")
+    all_templates = query.order_by(Template.created_at.desc()).all()
+    return [_serialize_template_summary(template) for template in all_templates]
 
 
 @router.post("/")
 def create_template(
     name: str = Form(...),
+    period_id: int | None = Form(None),
+    source_template_id: int | None = Form(None),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    """建立新模板。"""
-    new_template = Template(name=name)
+    """建立新模板，可選擇空白建立或複製既有模板。"""
+    template_name = name.strip()
+    if not template_name:
+        raise HTTPException(status_code=400, detail="模板名稱不可空白")
+    period = _resolve_template_period(period_id, db)
+    source_template = None
+    if source_template_id is not None:
+        source_template = get_template_or_404(source_template_id, db)
+
+    new_template = Template(name=template_name, period_id=period.id)
     db.add(new_template)
+    db.flush()
+    if source_template:
+        _copy_template_pages(source_template, new_template, db)
     db.commit()
     db.refresh(new_template)
-    return {"id": new_template.id, "name": new_template.name}
+    return _serialize_template_summary(new_template)
 
 
 @router.patch("/{template_id}")
 def rename_template(
     template_id: int,
-    name: str = Form(...),
+    name: str | None = Form(None),
+    period_id: int | None = Form(None),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    """修改模板名稱（行內編輯）。"""
+    """修改模板名稱或移動到其他期別。"""
     template = get_template_or_404(template_id, db)
-    template.name = name.strip()
+    if name is not None:
+        template_name = name.strip()
+        if not template_name:
+            raise HTTPException(status_code=400, detail="模板名稱不可空白")
+        template.name = template_name
+    if period_id is not None:
+        period = _get_period_or_404(period_id, db)
+        template.period_id = period.id
     db.commit()
     return {"ok": True}
 
@@ -111,6 +375,12 @@ def get_template(
         "name": template.name,
         "created_at": template.created_at,
         "photo_count": _count_template_photo_slots(template),
+        "period_id": template.period_id,
+        "period_name": template.period.name if template.period else None,
+        "period_status": template.period.status if template.period else None,
+        "period_status_label": period_status_label(template.period.status) if template.period else None,
+        "department": template.period.department if template.period else None,
+        "department_label": department_label(template.period.department) if template.period else None,
         "pages": [
             {
                 "id": page.id,

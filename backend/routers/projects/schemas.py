@@ -12,6 +12,10 @@ class ProjectSummary(BaseModel):
     id: int
     name: str
     template_id: int
+    department: Optional[str] = None
+    department_label: Optional[str] = None
+    template_period_id: Optional[int] = None
+    template_period_name: Optional[str] = None
     created_at: Optional[datetime] = None
     student_count: int
     owner_id: Optional[int] = None
@@ -34,6 +38,10 @@ class ProjectDetail(BaseModel):
     id: int
     name: str
     template_id: int
+    department: Optional[str] = None
+    department_label: Optional[str] = None
+    template_period_id: Optional[int] = None
+    template_period_name: Optional[str] = None
     created_at: Optional[datetime] = None
     owner_id: Optional[int] = None
     deleted_at: Optional[datetime] = None
@@ -102,6 +110,8 @@ class ProjectCreated(BaseModel):
     """建立專案回應"""
     id: int
     name: str
+    department: Optional[str] = None
+    template_period_id: Optional[int] = None
 
 
 class BatchAddResult(BaseModel):

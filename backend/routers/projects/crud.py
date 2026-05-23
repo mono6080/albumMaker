@@ -13,6 +13,7 @@ from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Student, Template, User, get_db
 from services.storage import get_storage
+from template_periods import department_label
 
 from ._helpers import (
     _parse_json_field,
@@ -56,6 +57,8 @@ def list_archived_projects(
 def create_project(
     name: str = Form(..., max_length=100),
     template_id: int = Form(...),
+    department: Optional[str] = Form(None),
+    template_period_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin", "teacher", "supervisor")),
 ):
@@ -64,11 +67,34 @@ def create_project(
     if not template:
         raise HTTPException(status_code=404, detail="找不到模板")
 
-    new_project = Project(name=name, template_id=template_id, owner_id=current_user.id)
+    project_department = department
+    project_period_id = template_period_id
+    if template.period:
+        if department and department != template.period.department:
+            raise HTTPException(status_code=400, detail="模板不屬於所選部門")
+        if template_period_id and template_period_id != template.period.id:
+            raise HTTPException(status_code=400, detail="模板不屬於所選期別")
+        if template.period.status != "active":
+            raise HTTPException(status_code=400, detail="只能使用「使用中」期別的模板建立專案")
+        project_department = template.period.department
+        project_period_id = template.period.id
+
+    new_project = Project(
+        name=name,
+        template_id=template_id,
+        owner_id=current_user.id,
+        department=project_department,
+        template_period_id=project_period_id,
+    )
     db.add(new_project)
     db.commit()
     db.refresh(new_project)
-    return {"id": new_project.id, "name": new_project.name}
+    return {
+        "id": new_project.id,
+        "name": new_project.name,
+        "department": new_project.department,
+        "template_period_id": new_project.template_period_id,
+    }
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
@@ -84,6 +110,10 @@ def get_project(
         "id": project.id,
         "name": project.name,
         "template_id": project.template_id,
+        "department": project.department,
+        "department_label": department_label(project.department),
+        "template_period_id": project.template_period_id,
+        "template_period_name": project.template_period.name if project.template_period else None,
         "created_at": project.created_at,
         "owner_id": project.owner_id,
         "deleted_at": project.deleted_at,
@@ -183,6 +213,10 @@ def _serialize_project_summary(project: Project) -> dict:
         "id": project.id,
         "name": project.name,
         "template_id": project.template_id,
+        "department": project.department,
+        "department_label": department_label(project.department),
+        "template_period_id": project.template_period_id,
+        "template_period_name": project.template_period.name if project.template_period else None,
         "created_at": project.created_at,
         "student_count": len(project.students),
         "owner_id": project.owner_id,

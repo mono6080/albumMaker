@@ -198,8 +198,8 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await loginViaUi(page);
   await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
 
-  await page.getByPlaceholder("2026-05 12階 感官世界").fill(templateName);
-  await page.getByRole("button", { name: "建立" }).click();
+  await page.locator('[data-guide="template-name-input"]').fill(templateName);
+  await page.locator('[data-guide="template-create-button"]').click();
   await expect(page.getByText(templateName)).toBeVisible();
 
   const templatesResponse = await page.request.get("/api/templates/");
@@ -281,7 +281,7 @@ test("admin can create a project and batch students from the browser", async ({ 
 
   await page.goto("/projects");
   await page.getByRole("button", { name: "新建專案" }).click();
-  await page.locator("select").selectOption(String(templateId));
+  await page.getByLabel("選擇模板").selectOption(String(templateId));
   await page.getByPlaceholder("例：東區校 10階A").fill(projectSuffix);
   await page.getByRole("button", { name: "建立" }).click();
 

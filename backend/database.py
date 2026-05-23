@@ -60,11 +60,25 @@ class User(Base):
     comments = relationship("ProjectComment", back_populates="author")
 
 
+class TemplatePeriod(Base):
+    __tablename__ = "template_periods"
+    id = Column(Integer, primary_key=True, index=True)
+    department = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="draft")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    templates = relationship("Template", back_populates="period", order_by="Template.created_at.desc()")
+    projects = relationship("Project", back_populates="template_period")
+
+
 class Template(Base):
     __tablename__ = "templates"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    period = relationship("TemplatePeriod", back_populates="templates")
     pages = relationship("TemplatePage", back_populates="template", cascade="all, delete-orphan", order_by="TemplatePage.page_number")
     projects = relationship("Project", back_populates="template")
 
@@ -84,6 +98,8 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     template_id = Column(Integer, ForeignKey("templates.id"), nullable=False)
+    department = Column(String, nullable=True)
+    template_period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
     # 專案所有者（帶班老師或 admin），nullable 以相容歷史資料
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -92,6 +108,7 @@ class Project(Base):
     archive_expires_at = Column(DateTime, nullable=True)
     label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
+    template_period = relationship("TemplatePeriod", back_populates="projects")
     students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")
     owner = relationship("User", back_populates="owned_projects", foreign_keys=[owner_id])
     comments = relationship("ProjectComment", back_populates="project", cascade="all, delete-orphan", order_by="ProjectComment.created_at")

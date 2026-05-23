@@ -1,0 +1,33 @@
+TEMPLATE_DEPARTMENTS = (
+    {"code": "infant", "name": "嬰幼部"},
+    {"code": "academy", "name": "學院部"},
+)
+
+TEMPLATE_DEPARTMENT_LABELS = {
+    department["code"]: department["name"]
+    for department in TEMPLATE_DEPARTMENTS
+}
+
+PERIOD_STATUS_LABELS = {
+    "draft": "草稿",
+    "active": "使用中",
+    "archived": "已封存",
+}
+
+VALID_PERIOD_STATUSES = tuple(PERIOD_STATUS_LABELS.keys())
+VALID_TEMPLATE_DEPARTMENTS = tuple(TEMPLATE_DEPARTMENT_LABELS.keys())
+
+DEFAULT_TEMPLATE_PERIOD_NAME = "202605"
+DEFAULT_TEMPLATE_PERIOD_DEPARTMENT = "infant"
+
+
+def department_label(department: str | None) -> str | None:
+    if department is None:
+        return None
+    return TEMPLATE_DEPARTMENT_LABELS.get(department, department)
+
+
+def period_status_label(status: str | None) -> str | None:
+    if status is None:
+        return None
+    return PERIOD_STATUS_LABELS.get(status, status)

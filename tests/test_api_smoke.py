@@ -761,6 +761,106 @@ def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
             assert sticker_image.size == (320, 120)
 
 
+def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+
+        departments = client.get("/api/templates/departments")
+        assert_status(departments, 200)
+        assert {department["code"] for department in departments.json()} == {"infant", "academy"}
+
+        periods = client.get("/api/templates/periods")
+        assert_status(periods, 200)
+        default_periods = [
+            period for period in periods.json()
+            if period["name"] == "202605" and period["status"] == "active"
+        ]
+        assert {period["department"] for period in default_periods} == {"infant", "academy"}
+        infant_period = next(period for period in default_periods if period["department"] == "infant")
+
+        draft_period_response = client.post(
+            "/api/templates/periods",
+            data={"name": unique_name("period"), "department": "academy", "status": "draft"},
+        )
+        assert_status(draft_period_response, 200)
+        draft_period = draft_period_response.json()
+
+        draft_template = client.post(
+            "/api/templates/",
+            data={"name": unique_name("draft_template"), "period_id": str(draft_period["id"])},
+        )
+        assert_status(draft_template, 200)
+        draft_template_id = draft_template.json()["id"]
+
+        unavailable = client.get("/api/templates/", params={"available": "true"})
+        assert_status(unavailable, 200)
+        assert draft_template_id not in {template["id"] for template in unavailable.json()}
+
+        draft_project = client.post(
+            "/api/projects/",
+            data={"name": unique_name("draft_project"), "template_id": str(draft_template_id)},
+        )
+        assert_status(draft_project, 400)
+
+        source_template_id, source_page_id = create_template_with_page(client, name=unique_name("copy_source"))
+        background_upload = client.post(
+            f"/api/templates/{source_template_id}/pages/{source_page_id}/background",
+            files={"file": ("copy-bg.png", png_bytes((24, 24), (20, 160, 80, 255)), "image/png")},
+        )
+        assert_status(background_upload, 200)
+        sticker_upload = client.post(
+            f"/api/templates/{source_template_id}/stickers",
+            files={"file": ("copy-sticker.png", png_bytes((80, 40)), "image/png")},
+        )
+        assert_status(sticker_upload, 200)
+
+        copied_layout = smoke_layout()
+        copied_layout["stickers"] = [{
+            "id": 77,
+            "path": sticker_upload.json()["path"],
+            "filename": "copy-sticker.png",
+            "x": 12,
+            "y": 18,
+            "width": 80,
+            "height": 40,
+        }]
+        update_source_layout = client.put(
+            f"/api/templates/{source_template_id}/pages/{source_page_id}/layout",
+            json=copied_layout,
+        )
+        assert_status(update_source_layout, 200)
+
+        copied_template = client.post(
+            "/api/templates/",
+            data={
+                "name": unique_name("copy_target"),
+                "period_id": str(infant_period["id"]),
+                "source_template_id": str(source_template_id),
+            },
+        )
+        assert_status(copied_template, 200)
+        copied_template_id = copied_template.json()["id"]
+
+        copied_detail = client.get(f"/api/templates/{copied_template_id}")
+        assert_status(copied_detail, 200)
+        copied_page = copied_detail.json()["pages"][0]
+        assert copied_page["background_filename"].startswith(f"templates/tmpl{copied_template_id}/backgrounds/")
+        assert copied_page["layout"]["background_filename"] == copied_page["background_filename"]
+        copied_sticker_path = copied_page["layout"]["stickers"][0]["path"]
+        assert copied_sticker_path.startswith(f"templates/tmpl{copied_template_id}/stickers/")
+
+        copied_background = client.get(
+            f"/api/templates/{copied_template_id}/pages/{copied_page['id']}/background"
+        )
+        assert_status(copied_background, 200)
+        copied_sticker = client.get(
+            f"/api/templates/{copied_template_id}/stickers/{copied_sticker_path.split('/')[-1]}"
+        )
+        assert_status(copied_sticker, 200)
+
+
 def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_path):
     use_tmp_uploads(monkeypatch, tmp_path)
 

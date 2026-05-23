@@ -9,7 +9,7 @@ import {
   renameProject,
   restoreProject,
 } from "../api/projectApi";
-import { fetchAllTemplates } from "../api/templateApi";
+import { fetchAvailableTemplates, fetchTemplateDepartments } from "../api/templateApi";
 import {
   ArchiveRestore,
   CalendarClock,
@@ -58,7 +58,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-create-form"]',
     title: "選模板與命名",
-    description: "選擇設計組提供的模板，輸入補充名稱後，系統會組成專案全名。",
+    description: "先選部門與目前使用中的期別，再選設計組提供的模板並補上專案名稱。",
     side: "bottom",
     align: "start",
   },
@@ -99,6 +99,11 @@ const PROJECT_LIST_GUIDE_STEPS = [
   },
 ];
 
+const FALLBACK_DEPARTMENTS = [
+  { code: "infant", name: "嬰幼部" },
+  { code: "academy", name: "學院部" },
+];
+
 function normalizeSearchText(value) {
   return String(value ?? "").trim().toLocaleLowerCase("zh-TW");
 }
@@ -111,6 +116,8 @@ function projectMatchesTerms(project, terms) {
   const haystack = normalizeSearchText([
     project.name,
     project.owner_name,
+    project.department_label,
+    project.template_period_name,
     project.student_count,
     createdDate,
   ].join(" "));
@@ -183,6 +190,15 @@ const ProjectCard = memo(function ProjectCard({
                 <>
                   <span className="text-gray-300">·</span>
                   <span>{project.owner_name}</span>
+                </>
+              )}
+              {project.template_period_name && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <Badge tone="primary">
+                    {project.department_label ? `${project.department_label} / ` : ""}
+                    {project.template_period_name}
+                  </Badge>
                 </>
               )}
             </div>
@@ -280,7 +296,13 @@ export default function ProjectList() {
   const [projects, setProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [form, setForm] = useState({ customName: "", template_id: "" });
+  const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
+  const [form, setForm] = useState({
+    customName: "",
+    department: "infant",
+    period_id: "",
+    template_id: "",
+  });
   const [showForm, setShowForm] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -315,8 +337,45 @@ export default function ProjectList() {
   useEffect(() => {
     fetchAllProjects().then(r => setProjects(r.data));
     fetchArchivedProjects().then(r => setArchivedProjects(r.data));
-    fetchAllTemplates().then(r => setTemplates(r.data));
+    fetchAvailableTemplates().then(r => setTemplates(r.data));
+    fetchTemplateDepartments().then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS));
   }, []);
+
+  const departmentTemplates = useMemo(
+    () => templates.filter(template => template.department === form.department),
+    [templates, form.department]
+  );
+  const activePeriods = useMemo(() => {
+    const periodMap = new Map();
+    for (const template of departmentTemplates) {
+      if (!template.period_id || periodMap.has(template.period_id)) continue;
+      periodMap.set(template.period_id, {
+        id: template.period_id,
+        name: template.period_name,
+        department: template.department,
+        department_label: template.department_label,
+      });
+    }
+    return Array.from(periodMap.values());
+  }, [departmentTemplates]);
+  const periodTemplates = useMemo(
+    () => departmentTemplates.filter(template => String(template.period_id) === String(form.period_id)),
+    [departmentTemplates, form.period_id]
+  );
+
+  useEffect(() => {
+    const periodExists = activePeriods.some(period => String(period.id) === String(form.period_id));
+    const nextPeriodId = periodExists ? form.period_id : (activePeriods[0]?.id ? String(activePeriods[0].id) : "");
+    const templatesForNextPeriod = departmentTemplates.filter(template => String(template.period_id) === String(nextPeriodId));
+    const templateExists = templatesForNextPeriod.some(template => String(template.id) === String(form.template_id));
+    const nextTemplateId = templateExists ? form.template_id : (templatesForNextPeriod[0]?.id ? String(templatesForNextPeriod[0].id) : "");
+    if (nextPeriodId === form.period_id && nextTemplateId === form.template_id) return;
+    setForm(current => ({
+      ...current,
+      period_id: nextPeriodId,
+      template_id: nextTemplateId,
+    }));
+  }, [activePeriods, departmentTemplates, form.period_id, form.template_id]);
 
   const selectedTemplate = templates.find(t => String(t.id) === String(form.template_id));
   const composedName = selectedTemplate
@@ -329,9 +388,9 @@ export default function ProjectList() {
     if (!composedName.trim()) return toast.error("請填寫名稱");
     setCreating(true);
     try {
-      await createProject(composedName, form.template_id);
+      await createProject(composedName, form.template_id, form.department, form.period_id);
       toast.success("專案已建立");
-      setForm({ customName: "", template_id: "" });
+      setForm(current => ({ ...current, customName: "", template_id: "" }));
       setShowForm(false);
       // 建立後 fetch 完整清單以取得 id / student_count / owner_name
       const r = await fetchAllProjects();
@@ -509,15 +568,49 @@ export default function ProjectList() {
       {showForm && (
         <Surface className="mb-8 border-indigo-100" padding="lg" data-guide="project-create-form">
           <h2 className="font-semibold text-gray-800 mb-4">新建相本專案</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 gap-4 mb-4 md:grid-cols-2 xl:grid-cols-4">
+            <FormField label="部門">
+              <select
+                className={fieldControlClass}
+                value={form.department}
+                onChange={e => setForm(f => ({
+                  ...f,
+                  department: e.target.value,
+                  period_id: "",
+                  template_id: "",
+                }))}
+              >
+                {departments.map(department => (
+                  <option key={department.code} value={department.code}>{department.name}</option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="期別">
+              <select
+                className={fieldControlClass}
+                value={form.period_id}
+                onChange={e => setForm(f => ({ ...f, period_id: e.target.value, template_id: "" }))}
+                disabled={activePeriods.length <= 1}
+              >
+                {activePeriods.length === 0 ? (
+                  <option value="">尚無使用中期別</option>
+                ) : activePeriods.map(period => (
+                  <option key={period.id} value={period.id}>{period.name}</option>
+                ))}
+              </select>
+            </FormField>
             <FormField label="選擇模板">
               <select
                 className={fieldControlClass}
                 value={form.template_id}
                 onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
               >
-                <option value="">請選擇...</option>
-                {templates.map(t => (
+                {periodTemplates.length === 0 ? (
+                  <option value="">此期別尚無模板</option>
+                ) : (
+                  <option value="">請選擇...</option>
+                )}
+                {periodTemplates.map(t => (
                   <option key={t.id} value={t.id}>
                     {t.name}（{t.page_count} 頁 / {t.photo_count ?? 0} 張照片）
                   </option>
