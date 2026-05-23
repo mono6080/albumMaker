@@ -98,6 +98,9 @@ _PREVIEW_NUMERIC_KEYS = {
     "letter_spacing",
 }
 PREVIEW_RENDER_SCALE = 0.7
+PRINT_OUTPUT_SIZE = (2480, 3508)
+PRINT_OUTPUT_DPI = (300, 300)
+PRINT_IMAGE_QUALITY = 95
 
 
 def _scale_number(value, scale: float):
@@ -228,7 +231,7 @@ def render_album(template_pages: list[dict], student_name: str,
 def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
     """將相冊頁面轉成 PDF bytes 並回傳。
 
-    mode='print'  — 放大至 A4@150dpi（1240×1754），lossless PNG
+    mode='print'  — 放大至 A4@300dpi（2480×3508），lossless PNG
     mode='screen' — 維持原始尺寸，JPEG quality=72，以 96dpi 儲存（A4 大小，省資源）
     """
     import img2pdf
@@ -239,9 +242,9 @@ def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
             # 低畫質：原始 794×1123，JPEG 壓縮，96 DPI → PDF 頁面為 A4 大小
             img.convert("RGB").save(buf, format="JPEG", quality=72, dpi=(96, 96))
         else:
-            # 列印畫質：放大至 A4@150dpi（1240×1754），PNG lossless
-            a4_img = img.convert("RGB").resize((1240, 1754), Image.LANCZOS)
-            a4_img.save(buf, format="PNG", dpi=(150, 150))
+            # 列印畫質：放大至 A4@300dpi（2480×3508），PNG lossless
+            a4_img = img.convert("RGB").resize(PRINT_OUTPUT_SIZE, Image.LANCZOS)
+            a4_img.save(buf, format="PNG", dpi=PRINT_OUTPUT_DPI)
         pages_bytes.append(buf.getvalue())
     return img2pdf.convert(pages_bytes)
 
@@ -249,7 +252,7 @@ def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
 def save_album_images(images: list[Image.Image], student_name: str, mode: str = "print") -> dict[str, bytes]:
     """將每頁轉為 JPEG bytes，回傳 {檔名: bytes} 字典。
 
-    mode='print'  — 放大至 A4@150dpi（1240×1754），JPEG quality=95
+    mode='print'  — 放大至 A4@300dpi（2480×3508），JPEG quality=95
     mode='screen' — 維持原始尺寸（794×1123），JPEG quality=72
     """
     result = {}
@@ -260,8 +263,8 @@ def save_album_images(images: list[Image.Image], student_name: str, mode: str = 
             output_image.save(buf, format="JPEG", quality=72, dpi=(96, 96))
             suffix = "_screen"
         else:
-            output_image = img.convert("RGB").resize((1240, 1754), Image.LANCZOS)
-            output_image.save(buf, format="JPEG", quality=95, dpi=(150, 150))
+            output_image = img.convert("RGB").resize(PRINT_OUTPUT_SIZE, Image.LANCZOS)
+            output_image.save(buf, format="JPEG", quality=PRINT_IMAGE_QUALITY, dpi=PRINT_OUTPUT_DPI)
             suffix = ""
         result[f"{student_name}{suffix}_page{i + 1}.jpg"] = buf.getvalue()
     return result
