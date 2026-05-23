@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
-from services.file_service import get_photo_key, read_and_validate_image
+from services.file_service import get_photo_key, read_and_process_photo_upload
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
@@ -105,7 +105,7 @@ async def upload_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
-    file_bytes = await read_and_validate_image(file, max_mb=10)
+    processed_upload = await read_and_process_photo_upload(file)
 
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
@@ -128,8 +128,8 @@ async def upload_photo(
             _delete_photo_thumbnails(storage, old_key)
             storage.delete(old_key)
 
-    key = get_photo_key(project_id, student_id, page_index, slot_id, file.filename)
-    storage.put(key, file_bytes)  # 直接使用已讀取的 bytes，避免二次讀取
+    key = get_photo_key(project_id, student_id, page_index, slot_id, processed_upload.filename)
+    storage.put(key, processed_upload.data)  # 直接使用已讀取的 bytes，避免二次讀取
 
     pages_data[page_index]["photos"][str(slot_id)] = {
         "path": key,

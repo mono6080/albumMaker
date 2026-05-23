@@ -2,12 +2,26 @@
 # 封裝所有與上傳檔案 key 計算及實際寫入相關的邏輯，
 # 所有 I/O 操作委派給 StorageAdapter，確保路徑格式一致
 
+import io
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_BYTES_PER_MB = 1024 * 1024
+PHOTO_UPLOAD_COMPRESS_OVER_MB = 10
+PHOTO_UPLOAD_COMPRESS_TARGET_MB = 5
+PHOTO_UPLOAD_HARD_LIMIT_MB = 50
+
+
+@dataclass(frozen=True)
+class ProcessedImageUpload:
+    data: bytes
+    filename: str
+    compressed: bool = False
 
 
 def get_photo_key(
@@ -52,6 +66,102 @@ async def read_and_validate_image(file: UploadFile, max_mb: int = 10) -> bytes:
     if len(file_bytes) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {max_mb} MB")
     return file_bytes
+
+
+def _jpeg_upload_filename(original_filename: str | None) -> str:
+    original_name = Path(original_filename or "photo").name
+    original_path = Path(original_name)
+    if original_path.suffix.lower() in {".jpg", ".jpeg"}:
+        return original_name
+    stem = original_path.stem or "photo"
+    return f"{stem}.jpg"
+
+
+def _flatten_to_rgb(image: Image.Image) -> Image.Image:
+    if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    return image.convert("RGB")
+
+
+def _save_jpeg(image: Image.Image, quality: int) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+    return buffer.getvalue()
+
+
+def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int) -> bytes:
+    target_bytes = target_mb * _BYTES_PER_MB
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as raw_image:
+            image = _flatten_to_rgb(ImageOps.exif_transpose(raw_image))
+            image.load()
+    except (OSError, UnidentifiedImageError) as exc:
+        raise HTTPException(status_code=415, detail="無法讀取圖片，請確認檔案格式") from exc
+
+    current = image
+    try:
+        for _ in range(10):
+            best = None
+            low, high = 40, 92
+            while low <= high:
+                quality = (low + high) // 2
+                candidate = _save_jpeg(current, quality)
+                if len(candidate) <= target_bytes:
+                    best = candidate
+                    low = quality + 1
+                else:
+                    high = quality - 1
+
+            if best is not None:
+                return best
+
+            next_width = max(1, int(current.width * 0.85))
+            next_height = max(1, int(current.height * 0.85))
+            if next_width == current.width and next_height == current.height:
+                break
+            resized = current.resize((next_width, next_height), Image.Resampling.LANCZOS)
+            if current is not image:
+                current.close()
+            current = resized
+    finally:
+        image.close()
+        if current is not image:
+            current.close()
+
+    raise HTTPException(status_code=413, detail=f"圖片壓縮後仍超過 {target_mb} MB，請先降低解析度")
+
+
+async def read_and_process_photo_upload(
+    file: UploadFile,
+    *,
+    compress_over_mb: int = PHOTO_UPLOAD_COMPRESS_OVER_MB,
+    target_mb: int = PHOTO_UPLOAD_COMPRESS_TARGET_MB,
+    hard_limit_mb: int = PHOTO_UPLOAD_HARD_LIMIT_MB,
+) -> ProcessedImageUpload:
+    """Read a student photo upload, compressing oversized images instead of rejecting them."""
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+
+    file_bytes = await file.read()
+    if len(file_bytes) > hard_limit_mb * _BYTES_PER_MB:
+        raise HTTPException(status_code=413, detail=f"檔案過大，上限 {hard_limit_mb} MB")
+
+    if len(file_bytes) <= compress_over_mb * _BYTES_PER_MB:
+        return ProcessedImageUpload(
+            data=file_bytes,
+            filename=file.filename or "photo",
+            compressed=False,
+        )
+
+    compressed_bytes = _compress_image_to_jpeg(file_bytes, target_mb)
+    return ProcessedImageUpload(
+        data=compressed_bytes,
+        filename=_jpeg_upload_filename(file.filename),
+        compressed=True,
+    )
 
 
 async def save_uploaded_file(key: str, uploaded_file: UploadFile) -> None:

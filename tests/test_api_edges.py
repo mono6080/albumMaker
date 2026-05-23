@@ -1,7 +1,10 @@
 # API 負向與邊界契約測試
 # 補足 smoke tests 沒涵蓋的 401 / 404 / 413 / 415 / 422 與渲染失敗路徑。
 
+from io import BytesIO
+
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from tests.test_api_smoke import (
     assert_status,
@@ -25,6 +28,15 @@ def create_student(client: TestClient, project_id: int, name: str = "Edge Studen
     detail = client.get(f"/api/projects/{project_id}")
     assert_status(detail, 200)
     return detail.json()["students"][0]["id"]
+
+
+def large_jpeg_bytes() -> bytes:
+    image = Image.effect_noise((3000, 3000), 100).convert("RGB")
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=100)
+    data = buffer.getvalue()
+    assert len(data) > 10 * 1024 * 1024
+    return data
 
 
 def test_auth_missing_resource_and_validation_edges():
@@ -91,11 +103,17 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
         )
         assert_status(unsupported_type, 415)
 
-        too_large = client.post(
+        oversized_photo = client.post(
             photo_url,
-            files={"file": ("too-large.jpg", b"x" * (10 * 1024 * 1024 + 1), "image/jpeg")},
+            files={"file": ("too-large.jpg", large_jpeg_bytes(), "image/jpeg")},
         )
-        assert_status(too_large, 413)
+        assert_status(oversized_photo, 200)
+        oversized_payload = oversized_photo.json()
+        assert oversized_payload["filename"].endswith(".jpg")
+        oversized_path = tmp_path / "uploads" / oversized_payload["path"]
+        assert oversized_path.stat().st_size <= 5 * 1024 * 1024
+        with Image.open(oversized_path) as compressed_image:
+            assert compressed_image.format == "JPEG"
 
         valid_upload = client.post(
             photo_url,
