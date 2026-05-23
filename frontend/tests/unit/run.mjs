@@ -15,7 +15,7 @@ import {
   buildTemplateSpreadPreviewUrl,
 } from "../../src/api/urls.js";
 import { getApiPath, getFilenameFromDisposition, isMobileDevice } from "../../src/utils/browserFiles.js";
-import { buildItems, clampPan, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
+import { buildItems, clampPan, getPhotoCropBox, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
 import {
   CANVAS_DISPLAY_WIDTH,
   CANVAS_REAL_WIDTH,
@@ -58,7 +58,9 @@ test("API URL builders keep route contracts stable", () => {
   assert.equal(buildProjectPagePreviewUrl(3, 0), "/api/projects/3/preview/0");
   assert.equal(buildStudentPagePreviewUrl(3, 4, 1), "/api/projects/3/students/4/preview/1");
   assert.equal(buildPhotoUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9");
+  assert.equal(buildPhotoUrl(3, 4, 1, 9, "path/with space.png"), "/api/projects/3/students/4/pages/1/photos/9?v=path%2Fwith%20space.png");
   assert.equal(buildPhotoThumbnailUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9/thumbnail");
+  assert.equal(buildPhotoThumbnailUrl(3, 4, 1, 9, "rev-2"), "/api/projects/3/students/4/pages/1/photos/9/thumbnail?v=rev-2");
   assert.equal(buildDownloadPdfUrl(3, 4), "/api/projects/3/students/4/pdf?mode=print");
   assert.equal(buildDownloadPdfUrl(3, 4, "screen"), "/api/projects/3/students/4/pdf?mode=screen");
   assert.equal(buildDownloadImagesZipUrl(3, 4), "/api/projects/3/students/4/images?mode=print");
@@ -133,6 +135,26 @@ test("photo sizing cover-fills crop boxes and clamps visible overflow", () => {
   assert.deepEqual(photoDims(100, 100, 0.5, 1), { w: 100, h: 200 });
   assert.deepEqual(clampPan(200, -200, 100, 100, 2, 1), { panX: 50, panY: -0 });
   assert.deepEqual(clampPan(-200, 200, 100, 100, 0.5, 1), { panX: -0, panY: 50 });
+});
+
+
+test("photo crop boxes match backend bordered slot geometry", () => {
+  assert.deepEqual(getPhotoCropBox({ slotW: 150, slotH: 120, border: true, borderW: 8 }), {
+    x: 8,
+    y: 8,
+    right: 8,
+    bottom: 24,
+    width: 134,
+    height: 88,
+  });
+  assert.deepEqual(getPhotoCropBox({ slotW: 150, slotH: 120, border: false, borderW: 8 }), {
+    x: 0,
+    y: 0,
+    right: 0,
+    bottom: 0,
+    width: 150,
+    height: 120,
+  });
 });
 
 

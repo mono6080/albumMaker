@@ -432,6 +432,161 @@ test("student multi-select upload fills slots without overwriting first files", 
 });
 
 
+test("student photo manager keeps thumbnails fresh after same-name replacement", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  const templateName = `E2E 縮圖更新模板 ${Date.now()}`;
+  const projectName = `E2E 縮圖更新專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Thumb Alice"]);
+
+  const detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "Thumb Alice");
+  expect(student).toBeTruthy();
+  await uploadStudentPhoto(page, project.id, student.id, 1, "same-name.png", redPng);
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+  const image = page.locator('[data-guide="photo-slot-image"]').first();
+  await expect(image).toHaveAttribute("src", /\/thumbnail\?v=/);
+  const initialSrc = await image.getAttribute("src");
+
+  await page
+    .locator('[data-guide="student-photo-cell"][data-slot-id="1"] input[type="file"]:not([multiple])')
+    .setInputFiles({ name: "same-name.png", mimeType: "image/png", buffer: bluePng });
+
+  await expect.poll(async () => {
+    const src = await image.getAttribute("src");
+    return src?.includes("/thumbnail") ? src : initialSrc;
+  }, { timeout: 20_000 }).not.toBe(initialSrc);
+
+  const updatedSrc = await image.getAttribute("src");
+  expect(updatedSrc).toContain("/thumbnail?v=");
+  expect(updatedSrc).toContain("same-name.png");
+});
+
+
+test("student photo manager resyncs slot URLs after drag swap", async ({ page }) => {
+  const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
+  const templateName = `E2E 交換縮圖模板 ${Date.now()}`;
+  const projectName = `E2E 交換縮圖專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Swap Alice"]);
+
+  const detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "Swap Alice");
+  expect(student).toBeTruthy();
+  const firstPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "first.png", redPng);
+  const secondPhoto = await uploadStudentPhoto(page, project.id, student.id, 2, "second.png", bluePng);
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+  const firstCell = page.locator('[data-guide="student-photo-cell"][data-slot-id="1"]');
+  const secondCell = page.locator('[data-guide="student-photo-cell"][data-slot-id="2"]');
+  await expect(firstCell.locator('[data-guide="photo-slot-image"]')).toHaveAttribute("src", /\/photos\/1\/thumbnail\?v=/);
+  await expect(secondCell.locator('[data-guide="photo-slot-image"]')).toHaveAttribute("src", /\/photos\/2\/thumbnail\?v=/);
+
+  const mappingResponse = page.waitForResponse(
+    response => response.url().includes("/photos/mapping") && response.request().method() === "PUT" && response.ok(),
+  );
+  await firstCell.dragTo(secondCell);
+  await mappingResponse;
+
+  await expect.poll(async () => {
+    const src = await firstCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
+    return src ?? "";
+  }, { timeout: 20_000 }).toContain("/photos/1/thumbnail");
+  await expect.poll(async () => {
+    const src = await secondCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
+    return src ?? "";
+  }, { timeout: 20_000 }).toContain("/photos/2/thumbnail");
+
+  const firstSrc = await firstCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
+  const secondSrc = await secondCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
+  expect(firstSrc).toContain("p0_slot2_second.png");
+  expect(secondSrc).toContain("p0_slot1_first.png");
+
+  const swappedDetail = await fetchProjectDetail(page, project.id);
+  const photos = swappedDetail.students.find(item => item.id === student.id).pages_data[0].photos;
+  expect(photos["1"].path).toBe(secondPhoto.path);
+  expect(photos["2"].path).toBe(firstPhoto.path);
+});
+
+
+test("student photo manager bordered thumbnail geometry matches preview renderer", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  const templateName = `E2E 縮圖裁切模板 ${Date.now()}`;
+  const projectName = `E2E 縮圖裁切專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Crop Alice"]);
+
+  const detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "Crop Alice");
+  expect(student).toBeTruthy();
+  const photo = await uploadStudentPhoto(page, project.id, student.id, 1, "crop.png", redPng);
+  const mappingResponse = await page.request.put(`/api/projects/${project.id}/students/${student.id}/photos/mapping`, {
+    data: {
+      pages: {
+        "0": {
+          "1": { path: photo.path, scale: 1.6, offset_x: 0.6, offset_y: -0.5 },
+        },
+      },
+    },
+  });
+  expect(mappingResponse.ok()).toBeTruthy();
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+  const image = page.locator('[data-guide="photo-slot-image"]').first();
+  await expect(image).toHaveAttribute("src", /\/thumbnail\?v=/);
+  await expect.poll(async () => {
+    return await image.evaluate(img => img.style.position);
+  }, { timeout: 10_000 }).toBe("absolute");
+
+  const metrics = await page.locator('[data-guide="photo-slot-crop"]').first().evaluate((cropElement) => {
+    const cardElement = cropElement.closest('[data-guide="photo-slot-card"]');
+    const imageElement = cropElement.querySelector('[data-guide="photo-slot-image"]');
+    const crop = cropElement.getBoundingClientRect();
+    const card = cardElement.getBoundingClientRect();
+    const imageRect = imageElement.getBoundingClientRect();
+    return {
+      cardW: card.width,
+      cardH: card.height,
+      cropW: crop.width,
+      cropH: crop.height,
+      cropTop: crop.top - card.top,
+      cropLeft: crop.left - card.left,
+      cropBottom: card.bottom - crop.bottom,
+      cropRight: card.right - crop.right,
+      imageW: imageRect.width,
+      imageH: imageRect.height,
+      imageLeft: imageRect.left - crop.left,
+      imageTop: imageRect.top - crop.top,
+    };
+  });
+
+  const scale = metrics.cardH / 120;
+  expect(Math.abs(metrics.cropTop - 8 * scale)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.cropBottom - 24 * scale)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.cropLeft - 8 * scale)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.cropRight - 8 * scale)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.cropW - 134 * scale)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(metrics.cropH - 88 * scale)).toBeLessThanOrEqual(1.5);
+  expect(metrics.imageW).toBeGreaterThan(metrics.cropW);
+  expect(metrics.imageH).toBeGreaterThan(metrics.cropH);
+  expect(metrics.imageLeft).toBeLessThan(0);
+  expect(metrics.imageTop).toBeLessThan(0);
+});
+
+
 test("TemplateEditor browser canvas matches PIL preview in stable regions", async ({ page }) => {
   const layout = await loadFixtureLayout();
   const templateName = `E2E 視覺 ${Date.now()}`;

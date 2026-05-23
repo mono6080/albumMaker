@@ -4,6 +4,11 @@
 
 const API_BASE = "/api";
 
+const appendCacheVersion = (url, version) =>
+  version === undefined || version === null || version === ""
+    ? url
+    : `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
+
 // ── 模板相關 URL ──────────────────────────────────────────────────────────────
 
 /** 模板頁面背景圖的預覽端點 URL */
@@ -29,12 +34,18 @@ export const buildStudentPagePreviewUrl = (projectId, studentId, pageIndex) =>
   `${API_BASE}/projects/${projectId}/students/${studentId}/preview/${pageIndex}`;
 
 /** 學生個人照片的存取 URL */
-export const buildPhotoUrl = (projectId, studentId, pageIndex, slotId) =>
-  `${API_BASE}/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}`;
+export const buildPhotoUrl = (projectId, studentId, pageIndex, slotId, version) =>
+  appendCacheVersion(
+    `${API_BASE}/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}`,
+    version,
+  );
 
 /** 學生個人照片縮圖的存取 URL */
-export const buildPhotoThumbnailUrl = (projectId, studentId, pageIndex, slotId) =>
-  `${buildPhotoUrl(projectId, studentId, pageIndex, slotId)}/thumbnail`;
+export const buildPhotoThumbnailUrl = (projectId, studentId, pageIndex, slotId, version) =>
+  appendCacheVersion(
+    `${API_BASE}/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}/thumbnail`,
+    version,
+  );
 
 /** 學生個人 PDF 下載 URL（含輸出模式）*/
 export const buildDownloadPdfUrl = (projectId, studentId, outputMode = "print") =>

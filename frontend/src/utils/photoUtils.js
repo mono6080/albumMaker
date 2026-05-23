@@ -31,6 +31,20 @@ export function buildItems(allSlots, student) {
   });
 }
 
+export function getPhotoCropBox(slot) {
+  const slotW = slot.slotW ?? slot.width ?? 400;
+  const slotH = slot.slotH ?? slot.height ?? 400;
+  const borderW = slot.border ? (slot.borderW ?? slot.border_width ?? 8) : 0;
+  return {
+    x: borderW,
+    y: borderW,
+    right: borderW,
+    bottom: borderW * 3,
+    width: slot.border ? slotW - borderW * 2 : slotW,
+    height: slot.border ? slotH - borderW * 4 : slotH,
+  };
+}
+
 // 計算照片顯示尺寸（cover fill + 使用者縮放）
 export function photoDims(cropW, cropH, imgAspect, scale) {
   const cropAspect = cropW / cropH;

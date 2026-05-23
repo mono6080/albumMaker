@@ -1,5 +1,7 @@
 // 照片格縮圖卡片（純顯示，含 PIL 精確位移縮放計算）
 
+import { getPhotoCropBox } from "../utils/photoUtils";
+
 export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRefCallback }) {
   const SHADOW_SCALE = 110 / it.slotH;
   const shEnabled = it.shadowEnabled ?? it.border;
@@ -14,15 +16,18 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
     ? `${(Math.max(0, (it.borderRadius || 0) - it.borderW) / it.slotH * 100).toFixed(1)}%`
     : undefined;
 
-  const bPctX = it.border ? (it.borderW / it.slotW) * 100 : 0;
-  const bPctY = it.border ? (it.borderW / it.slotH) * 100 : 0;
+  const cropBox = getPhotoCropBox(it);
+  const cropTopPct = (cropBox.y / it.slotH) * 100;
+  const cropLeftPct = (cropBox.x / it.slotW) * 100;
+  const cropRightPct = (cropBox.right / it.slotW) * 100;
+  const cropBottomPct = (cropBox.bottom / it.slotH) * 100;
 
   // PIL-accurate positioning: pixel-based (card fixed at 110px tall)
   const physScale = 110 / it.slotH;
   let imgStyle = null;
   if (nat && url) {
-    const cropTW = it.border ? it.slotW - 2 * it.borderW : it.slotW;
-    const cropTH = it.border ? it.slotH - 3 * it.borderW : it.slotH;
+    const cropTW = cropBox.width;
+    const cropTH = cropBox.height;
     const cropAspect = cropTW / cropTH;
     let baseW, baseH;
     if (nat > cropAspect) { baseH = cropTH; baseW = cropTH * nat; }
@@ -45,7 +50,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
   }
 
   return (
-    <div style={{
+    <div data-guide="photo-slot-card" style={{
       position: "relative",
       flexShrink: 0,
       height: 110,
@@ -57,11 +62,11 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
       boxShadow: slotShadow ?? "none",
     }}>
       {/* Photo / empty area */}
-      <div style={{
+      <div data-guide="photo-slot-crop" style={{
         position: "absolute",
-        top: `${bPctY}%`, left: `${bPctX}%`,
-        right: `${bPctX}%`,
-        bottom: it.border ? `${bPctY * 2}%` : "0%",
+        top: `${cropTopPct}%`, left: `${cropLeftPct}%`,
+        right: `${cropRightPct}%`,
+        bottom: `${cropBottomPct}%`,
         overflow: "hidden",
         borderRadius: innerRPct,
         background: url ? "transparent" : (disabled ? "#f1f5f9" : "#EEEEEE"),
@@ -69,6 +74,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
       }}>
         {url ? (
           <img
+            data-guide="photo-slot-image"
             ref={imgRefCallback}
             src={url} alt="" draggable={false}
             style={imgStyle ?? {

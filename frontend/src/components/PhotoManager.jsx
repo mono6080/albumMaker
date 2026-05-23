@@ -4,7 +4,7 @@ import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
-import { buildItems, photoDims, clampPan } from "../utils/photoUtils";
+import { buildItems, photoDims, clampPan, getPhotoCropBox } from "../utils/photoUtils";
 
 
 // ── 照片編輯 Modal ────────────────────────────────────────────────────────────
@@ -203,6 +203,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
   // uploadProgress: null = 閒置，0-100 = 上傳中
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
   const [isTouchDevice] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(hover: none)").matches
   );
@@ -316,10 +317,18 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           // 舊後端可能回傳重命名後路徑；新後端維持原路徑以避免 R2 copy/delete。
           const renamedPath = renames[String(snap.pi)]?.[String(snap.slotId)];
           const syncedPath = renamedPath ?? snap.serverPath;
-          return { ...it, serverPath: syncedPath, origServerPath: syncedPath, origTransform: { ...snap.transform } };
+          return {
+            ...it,
+            serverPath: syncedPath,
+            origServerPath: syncedPath,
+            origPi: syncedPath ? snap.pi : null,
+            origSlotId: syncedPath ? snap.slotId : null,
+            origTransform: { ...snap.transform },
+          };
         }));
 
         if (Object.keys(uploadedPaths).length || Object.keys(pagesMap).length) {
+          setPhotoRefreshKey(Date.now());
           onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
         }
         const failureList = Object.values(uploadFailures);
@@ -405,17 +414,23 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     it.pendingFile !== null || it.serverPath !== it.origServerPath || transformDirty(it);
   const hasDirty = items.some(isDirty);
 
+  const photoUrlVersion = (it) => [
+    student?.updated_at ?? "",
+    it.serverPath ?? "",
+    photoRefreshKey,
+  ].join("|");
+
   const displayUrl = (it) => {
     if (it.previewUrl) return it.previewUrl;
     if (it.serverPath !== null && it.origPi !== null)
-      return buildPhotoUrl(projectId, studentId, it.origPi, it.origSlotId);
+      return buildPhotoUrl(projectId, studentId, it.origPi, it.origSlotId, photoUrlVersion(it));
     return null;
   };
 
   const thumbnailUrl = (it) => {
     if (it.previewUrl) return it.previewUrl;
     if (it.serverPath !== null && it.origPi !== null)
-      return buildPhotoThumbnailUrl(projectId, studentId, it.origPi, it.origSlotId);
+      return buildPhotoThumbnailUrl(projectId, studentId, it.origPi, it.origSlotId, photoUrlVersion(it));
     return null;
   };
 
@@ -522,9 +537,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     // Responsive crop area: cap to viewport
     const vw = Math.min(window.innerWidth - 32, 460);
     const CROP_MAX_W = vw, CROP_MAX_H = Math.round(window.innerHeight * 0.55);
-    const bw = it.border ? it.borderW : 0;
-    const effectiveW = it.slotW - bw * 2;
-    const effectiveH = it.slotH - bw * 4;
+    const cropBox = getPhotoCropBox(it);
+    const effectiveW = cropBox.width;
+    const effectiveH = cropBox.height;
     const rawAspect = effectiveH / effectiveW;
     const cropW = rawAspect > CROP_MAX_H / CROP_MAX_W
       ? Math.round(CROP_MAX_H / rawAspect) : CROP_MAX_W;
@@ -679,6 +694,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
           return (
             <div
+              data-guide="student-photo-cell"
+              data-slot-id={it.slotId}
+              data-page-index={it.pi}
               key={rk}
               draggable={!!url && !isItemDisabled && !isTouchDevice}
               onDragStart={e => handleDragStart(e, idx)}
