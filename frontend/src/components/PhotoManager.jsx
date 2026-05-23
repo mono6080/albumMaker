@@ -65,6 +65,7 @@ function PhotoEditModal({
       onTouchEnd={() => { editDragRef.current.dragging = false; }}
     >
       <div
+        data-guide="photo-edit-modal"
         className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
         style={{ maxHeight: "95dvh" }}
         onClick={e => e.stopPropagation()}
@@ -85,12 +86,14 @@ function PhotoEditModal({
 
         {/* Crop area */}
         <div
+          data-guide="photo-edit-crop"
           ref={cropElRef}
           onMouseDown={onCropMouseDown}
           onTouchStart={onCropTouchStart}
           onTouchMove={onCropTouchMove}
           style={{
             width: cropW, height: cropH, flexShrink: 0,
+            alignSelf: "center",
             overflow: "hidden", position: "relative",
             background: "#1a1a1a",
             cursor: imgAspect ? "grab" : "default",

@@ -1,11 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { Buffer } from "node:buffer";
+import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
+const E2E_SECRET_KEY = "e2e-secret-do-not-use";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 const redPng = Buffer.from(
@@ -28,10 +30,34 @@ async function loginViaUi(page) {
 
 
 async function loginViaApi(page) {
-  const response = await page.request.post("/api/auth/login", {
-    form: { username: "admin", password: ADMIN_PASSWORD },
-  });
-  expect(response.ok()).toBeTruthy();
+  const token = createE2eAccessToken({ userId: 1, username: "admin", role: "admin" });
+  await page.context().addCookies([{
+    name: "access_token",
+    value: token,
+    url: "http://127.0.0.1:5173",
+    httpOnly: true,
+    sameSite: "Lax",
+    expires: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
+  }]);
+}
+
+
+function createE2eAccessToken({ userId, username, role }) {
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload = {
+    sub: String(userId),
+    username,
+    role,
+    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
+  };
+  const body = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+  const signature = createHmac("sha256", E2E_SECRET_KEY).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
 
@@ -643,6 +669,53 @@ test("student photo manager bordered thumbnail geometry matches preview renderer
   expect(metrics.imageH).toBeGreaterThan(metrics.cropH);
   expect(metrics.imageLeft).toBeLessThan(0);
   expect(metrics.imageTop).toBeLessThan(0);
+});
+
+
+test("student photo crop modal stays centered on mobile width", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  const templateName = `E2E 手機裁切模板 ${Date.now()}`;
+  const projectName = `E2E 手機裁切專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Mobile Crop Alice"]);
+
+  const detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "Mobile Crop Alice");
+  expect(student).toBeTruthy();
+  await uploadStudentPhoto(page, project.id, student.id, 1, "mobile-crop.png", redPng);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+
+  const firstCell = page.locator('[data-guide="student-photo-cell"][data-slot-id="1"]');
+  await firstCell.hover();
+  await firstCell.locator('button[title="位移/縮放"]').click({ force: true });
+
+  const crop = page.locator('[data-guide="photo-edit-crop"]');
+  await expect(crop).toBeVisible();
+  await expect(crop.locator("img")).toHaveCSS("opacity", "1");
+
+  const metrics = await crop.evaluate((cropElement) => {
+    const cropRect = cropElement.getBoundingClientRect();
+    const imageRect = cropElement.querySelector("img").getBoundingClientRect();
+    return {
+      viewportW: window.innerWidth,
+      cropCenterX: cropRect.left + cropRect.width / 2,
+      cropW: cropRect.width,
+      imageCenterX: imageRect.left + imageRect.width / 2,
+      imageCenterY: imageRect.top + imageRect.height / 2,
+      cropCenterY: cropRect.top + cropRect.height / 2,
+    };
+  });
+
+  expect(Math.abs(metrics.cropCenterX - metrics.viewportW / 2)).toBeLessThanOrEqual(1);
+  expect(metrics.cropW).toBeLessThanOrEqual(metrics.viewportW - 32);
+  expect(Math.abs(metrics.imageCenterX - metrics.cropCenterX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metrics.imageCenterY - metrics.cropCenterY)).toBeLessThanOrEqual(1);
 });
 
 
