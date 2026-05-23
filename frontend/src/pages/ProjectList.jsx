@@ -51,35 +51,49 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-create-button"]',
     title: "新建專案",
-    description: "每個班級每個月建立一個相本專案。先點這裡選模板並命名。",
+    description: "每個班級每個月建立一個相本專案。先點這裡選模板，再補分校、班級或月份名稱。",
     side: "left",
     align: "center",
   },
   {
     element: '[data-guide="project-create-form"]',
     title: "選模板與命名",
-    description: "選擇設計組提供的模板，輸入班級或月份補充名稱，系統會組成專案全名。",
+    description: "選擇設計組提供的模板，輸入補充名稱後，系統會組成專案全名。",
     side: "bottom",
     align: "start",
   },
   {
+    element: '[data-guide="project-search"]',
+    title: "搜尋專案",
+    description: "可用專案名稱、建立者、學生數或日期快速縮小列表；同一個搜尋也會套用到封存復原清單。",
+    side: "bottom",
+    align: "start",
+  },
+  {
+    element: '[data-guide="project-archive-button"]',
+    title: "封存復原",
+    description: "刪除專案會先移到封存，30 天內可從這裡復原，不會立刻永久刪除。",
+    side: "bottom",
+    align: "center",
+  },
+  {
     element: '[data-guide="project-card"]',
     title: "專案卡片",
-    description: "卡片會顯示學生數與建立日期。建立後從這裡進入設定或編輯。",
+    description: "卡片會顯示學生數、建立日期與建立者。可直接改名、封存或進入後續流程。",
     side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="project-settings-link"]',
     title: "專案設定",
-    description: "先進入專案設定登記學生名單，並填整班共用文字。",
+    description: "先進入專案設定登記學生名單、套用全班共用照片，並填整班共用文字。",
     side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="project-review-link"]',
     title: "個人編輯與輸出",
-    description: "學生登記完成後，進入個人編輯逐位補照片、調整文字並輸出 PDF。",
+    description: "學生登記完成後，進入個人編輯逐位補照片、調整文字、審閱並輸出 PDF 或圖片。",
     side: "bottom",
     align: "end",
   },
@@ -420,6 +434,7 @@ export default function ProjectList() {
           <Button
             type="button"
             onClick={() => setShowArchive(v => !v)}
+            data-guide="project-archive-button"
             variant="archive"
             size="touch"
             className={responsiveActionItemClass}
@@ -534,7 +549,10 @@ export default function ProjectList() {
         </Surface>
       )}
 
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div
+        className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+        data-guide="project-search"
+      >
         <div className="relative w-full sm:max-w-sm">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input

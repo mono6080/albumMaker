@@ -43,7 +43,7 @@ const BATCH_STUDENT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-student-input"]',
     title: "新增學生名單",
-    description: "把學生姓名貼在這裡，可以一行一位，也可以用逗號或頓號分隔。",
+    description: "把學生姓名貼在這裡，可以一行一位，也可以用逗號、頓號或空白分隔。",
     side: "right",
     align: "start",
   },
@@ -57,9 +57,16 @@ const BATCH_STUDENT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-student-list"]',
     title: "已登記學生",
-    description: "新增後在這裡檢查人數、修改姓名或刪除不需要的學生。",
+    description: "新增後在這裡檢查人數、修改姓名或刪除不需要的學生。刪除前會再確認。",
     side: "right",
     align: "start",
+  },
+  {
+    element: '[data-guide="batch-photos-tab"]',
+    title: "全班共用照片",
+    description: "如果某一格要放團體照或共用照片，切到這裡一次套用到所有學生。",
+    side: "bottom",
+    align: "center",
   },
   {
     element: '[data-guide="batch-text-tab"]',
@@ -71,7 +78,7 @@ const BATCH_STUDENT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-review-link"]',
     title: "進入個人編輯",
-    description: "學生名單與共用文字確認後，進入個人編輯逐位補照片與輸出。",
+    description: "學生名單、共用照片與共用文字確認後，進入個人編輯逐位微調與輸出。",
     side: "left",
     align: "center",
   },
@@ -88,7 +95,7 @@ const BATCH_TEXT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-text-fields"]',
     title: "整班共用文字",
-    description: "這裡填入全班共用文案，清空會輸出空白；按恢復預設可回到模板文字，{name} 會在輸出時自動替換姓名。",
+    description: "這裡填入全班共用文案。清空會輸出空白；按恢復預設可回到模板文字，{name} 會在輸出時自動替換姓名。",
     side: "left",
     align: "start",
   },
@@ -102,7 +109,7 @@ const BATCH_TEXT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-preview-panel"]',
     title: "樣版預覽",
-    description: "右側預覽會套用目前文字，確認文字位置與內容是否正確。",
+    description: "預覽會套用目前共用文字，確認文字位置與內容是否正確。",
     side: "right",
     align: "center",
   },
@@ -116,7 +123,7 @@ const BATCH_TEXT_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-review-link"]',
     title: "進入個人編輯",
-    description: "共用文字填完後，進入個人編輯逐位補照片、覆寫文字或輸出 PDF。",
+    description: "共用文字填完後，進入個人編輯逐位補照片、覆寫文字、切換學生或輸出檔案。",
     side: "left",
     align: "center",
   },
@@ -126,21 +133,28 @@ const BATCH_PHOTO_GUIDE_STEPS = [
   {
     element: '[data-guide="batch-shared-photo-page"]',
     title: "選擇頁面",
-    description: "先切到團體照所在的相本頁面。",
+    description: "先切到團體照或共用照片所在的相本頁面。",
     side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="batch-shared-photo-slots"]',
     title: "選擇照片格",
-    description: "選一個照片格，系統會把同一張照片套用到所有學生的同一格。",
+    description: "選一個照片格，系統會把同一張照片套用到所有學生的同一頁同一格。",
     side: "bottom",
     align: "center",
   },
   {
     element: '[data-guide="batch-shared-photo-upload"]',
     title: "套用到全班",
-    description: "選擇照片後按套用，會覆蓋所有學生此格原本的照片。",
+    description: "選擇照片後按套用，會覆蓋所有學生此格原本的照片；每位學生會各自保存一份，後續仍可個別調整。",
+    side: "left",
+    align: "center",
+  },
+  {
+    element: '[data-guide="batch-review-link"]',
+    title: "進入個人編輯",
+    description: "共用照片套用後，進入個人編輯逐位確認裁切、補其他照片並輸出。",
     side: "left",
     align: "center",
   },

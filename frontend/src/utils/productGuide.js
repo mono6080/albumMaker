@@ -1,14 +1,28 @@
 import { driver } from "driver.js";
 
+function resolveGuideElement(selector) {
+  const elements = Array.from(document.querySelectorAll(selector));
+  return elements.find(element => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }) ?? null;
+}
+
 export function startProductGuide(guideSteps) {
   const steps = guideSteps
-    .filter(step => document.querySelector(step.element))
-    .map(({ element, title, description, side, align, ...stepOptions }) => ({
-      ...stepOptions,
-      element,
-      popover: { title, description, side, align },
-      disableActiveInteraction: stepOptions.disableActiveInteraction ?? false,
-    }));
+    .map(step => ({ ...step, resolvedElement: resolveGuideElement(step.element) }))
+    .filter(step => step.resolvedElement)
+    .map(({ resolvedElement, title, description, side, align, ...stepOptions }) => {
+      const driverOptions = { ...stepOptions };
+      delete driverOptions.element;
+      return {
+        ...driverOptions,
+        element: resolvedElement,
+        popover: { title, description, side, align },
+        disableActiveInteraction: driverOptions.disableActiveInteraction ?? false,
+      };
+    });
 
   if (steps.length === 0) return;
 

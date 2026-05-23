@@ -47,7 +47,7 @@ const EDITOR_GUIDE_STEPS = [
   {
     element: '[data-guide="template-photo-count"]',
     title: "照片總計",
-    description: "這裡統計整份模板的照片格總數，交付前要和企劃需求一致。",
+    description: "這裡統計整份模板的照片格總數，交付前要和企劃需求或班級照片規劃一致。",
     side: "bottom",
     align: "start",
   },
@@ -61,7 +61,7 @@ const EDITOR_GUIDE_STEPS = [
   {
     element: '[data-guide="canvas-frame"]',
     title: "A4 畫布",
-    description: "背景、照片格、文字和貼圖都在這裡排版。新增元素後切回選取工具再調整。",
+    description: "背景、照片格、文字和貼圖都在這裡排版。新增元素後切回選取工具再調整位置與尺寸。",
     side: "right",
     align: "center",
   },
@@ -75,7 +75,7 @@ const EDITOR_GUIDE_STEPS = [
   {
     element: '[data-guide="page-list"]',
     title: "頁面管理",
-    description: "在這裡切換頁面或新增頁。切到不同頁面後再編輯該頁內容。",
+    description: "在這裡切換頁面、新增頁或刪除頁。切到不同頁面後再編輯該頁內容。",
     side: "right",
     align: "start",
   },
@@ -94,9 +94,16 @@ const EDITOR_GUIDE_STEPS = [
     align: "end",
   },
   {
+    element: '[data-guide="save-template"]',
+    title: "儲存模板",
+    description: "調整版面後記得儲存。未儲存時離開頁面，後端預覽與專案會看不到最新修改。",
+    side: "bottom",
+    align: "end",
+  },
+  {
     element: '[data-guide="property-region"]',
     title: "屬性面板",
-    description: "點選畫布元素後，這裡會出現位置、尺寸、文字、陰影等精準設定。",
+    description: "點選畫布元素後，這裡會出現位置、尺寸、照片框樣式、文字角色、陰影等精準設定。純排版文字可設為固定文字，避免老師端修改。",
     side: "left",
     align: "center",
   },
