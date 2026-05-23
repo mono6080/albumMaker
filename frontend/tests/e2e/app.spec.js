@@ -16,6 +16,7 @@ const bluePng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMCAYAAABr5z2BAAAAIklEQVR4nGP0qPjwn4ECwESJ5lEDIICJgULANGoAA8VhAABNRALHqomXiwAAAABJRU5ErkJggg==",
   "base64",
 );
+const uploadPngs = [redPng, bluePng, redPng, bluePng, redPng];
 
 
 async function loginViaUi(page) {
@@ -116,17 +117,19 @@ async function loadFixtureLayout() {
 
 
 function layoutWithTwoPhotoSlots(layout) {
+  return layoutWithPhotoSlots(layout, 2);
+}
+
+
+function layoutWithPhotoSlots(layout, count) {
   const nextLayout = JSON.parse(JSON.stringify(layout));
   const firstSlot = nextLayout.photo_slots[0];
-  nextLayout.photo_slots = [
-    firstSlot,
-    {
+  nextLayout.photo_slots = Array.from({ length: count }, (_, index) => ({
       ...firstSlot,
-      id: 2,
-      x: firstSlot.x + firstSlot.width + 40,
-      y: firstSlot.y,
-    },
-  ];
+      id: index + 1,
+      x: firstSlot.x + (index % 2) * (firstSlot.width + 40),
+      y: firstSlot.y + Math.floor(index / 2) * (firstSlot.height + 36),
+    }));
   return nextLayout;
 }
 
@@ -380,6 +383,52 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
   );
   expect(swappedFirstPhoto.ok()).toBeTruthy();
   expect(swappedFirstPhoto.headers()["content-type"]).toContain("image/png");
+});
+
+
+test("student multi-select upload fills slots without overwriting first files", async ({ page }) => {
+  const layout = layoutWithPhotoSlots(await loadFixtureLayout(), 4);
+  const templateName = `E2E 多選模板 ${Date.now()}`;
+  const projectName = `E2E 多選專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Multi Alice"]);
+
+  const initialDetail = await fetchProjectDetail(page, project.id);
+  const student = initialDetail.students.find(item => item.name === "Multi Alice");
+  expect(student).toBeTruthy();
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+
+  const uploadInput = page.locator('[data-guide="student-photo-manager"] input[type="file"][multiple]');
+  await uploadInput.setInputFiles(
+    uploadPngs.map((buffer, index) => ({
+      name: `multi-${index + 1}.png`,
+      mimeType: "image/png",
+      buffer,
+    })),
+  );
+
+  await expect.poll(async () => {
+    const detail = await fetchProjectDetail(page, project.id);
+    const photos = detail.students.find(item => item.id === student.id)?.pages_data?.[0]?.photos ?? {};
+    return Object.fromEntries(
+      Object.entries(photos).map(([slotId, value]) => [
+        slotId,
+        typeof value === "string" ? value : value.path,
+      ]),
+    );
+  }, { timeout: 20_000 }).toEqual({
+    "1": expect.stringContaining("p0_slot1_multi-1.png"),
+    "2": expect.stringContaining("p0_slot2_multi-2.png"),
+    "3": expect.stringContaining("p0_slot3_multi-3.png"),
+    "4": expect.stringContaining("p0_slot4_multi-4.png"),
+  });
+
+  await expect(page.locator('[data-guide="student-photo-grid"] img')).toHaveCount(4);
 });
 
 

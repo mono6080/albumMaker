@@ -430,11 +430,21 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     const arr = Array.from(files);
     setItems(prev => {
       const next = prev.map(it => ({ ...it }));
+      const emptyIndexes = [];
+      const occupiedIndexes = [];
+      prev.forEach((it, idx) => {
+        if (!it.pendingFile && !it.serverPath) emptyIndexes.push(idx);
+        else occupiedIndexes.push(idx);
+      });
       let fi = 0;
-      for (let i = 0; i < next.length && fi < arr.length; i++)
-        if (!next[i].pendingFile && !next[i].serverPath) assignFile(next, i, arr[fi++]);
-      for (let i = 0; i < next.length && fi < arr.length; i++)
-        if (next[i].pendingFile || next[i].serverPath) assignFile(next, i, arr[fi++]);
+      for (const i of emptyIndexes) {
+        if (fi >= arr.length) break;
+        assignFile(next, i, arr[fi++]);
+      }
+      for (const i of occupiedIndexes) {
+        if (fi >= arr.length) break;
+        assignFile(next, i, arr[fi++]);
+      }
       return next;
     });
   };
