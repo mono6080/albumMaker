@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -20,6 +20,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Trash2,
   Users,
   X,
@@ -83,6 +84,24 @@ const PROJECT_LIST_GUIDE_STEPS = [
     align: "end",
   },
 ];
+
+function normalizeSearchText(value) {
+  return String(value ?? "").trim().toLocaleLowerCase("zh-TW");
+}
+
+function projectMatchesTerms(project, terms) {
+  if (terms.length === 0) return true;
+  const createdDate = project.created_at
+    ? new Date(project.created_at).toLocaleDateString("zh-TW")
+    : "";
+  const haystack = normalizeSearchText([
+    project.name,
+    project.owner_name,
+    project.student_count,
+    createdDate,
+  ].join(" "));
+  return terms.every(term => haystack.includes(term));
+}
 
 const ProjectCard = memo(function ProjectCard({
   project,
@@ -254,6 +273,21 @@ export default function ProjectList() {
   const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [nowMs] = useState(() => Date.now());
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const searchTerms = useMemo(
+    () => normalizeSearchText(searchQuery).split(/\s+/).filter(Boolean),
+    [searchQuery]
+  );
+  const filteredProjects = useMemo(
+    () => projects.filter(project => projectMatchesTerms(project, searchTerms)),
+    [projects, searchTerms]
+  );
+  const filteredArchivedProjects = useMemo(
+    () => archivedProjects.filter(project => projectMatchesTerms(project, searchTerms)),
+    [archivedProjects, searchTerms]
+  );
+  const hasSearch = searchTerms.length > 0;
 
   const startGuide = useCallback(() => {
     if (canCreateProject && !showForm) {
@@ -434,9 +468,13 @@ export default function ProjectList() {
             <div className="px-4 py-8 text-center text-sm text-gray-400">
               目前沒有可復原的封存專案
             </div>
+          ) : filteredArchivedProjects.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-400">
+              沒有符合「{searchQuery.trim()}」的封存專案
+            </div>
           ) : (
             <div>
-              {archivedProjects.map(project => (
+              {filteredArchivedProjects.map(project => (
                 <ArchivedProjectRow
                   key={project.id}
                   project={project}
@@ -496,14 +534,46 @@ export default function ProjectList() {
         </Surface>
       )}
 
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={event => setSearchQuery(event.target.value)}
+            placeholder="搜尋專案名稱、建立者、日期"
+            aria-label="搜尋專案"
+            className={`${fieldControlClass} pl-9 pr-10`}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              aria-label="清除搜尋"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        <div className="text-xs text-gray-400">
+          {hasSearch ? `找到 ${filteredProjects.length} / ${projects.length} 個專案` : `共 ${projects.length} 個專案`}
+        </div>
+      </div>
+
       {projects.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="text-sm">尚無專案，請點右上角建立</p>
         </div>
+      ) : filteredProjects.length === 0 ? (
+        <div className="text-center py-20 text-gray-400">
+          <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">沒有符合「{searchQuery.trim()}」的專案</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {projects.map(p => (
+          {filteredProjects.map(p => (
             <ProjectCard
               key={p.id}
               project={p}
