@@ -19,6 +19,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false,
       // 離線 fallback 頁（由 workbox 在 navigate 失敗時回退）
       filename: 'sw.js',
       manifest: {
