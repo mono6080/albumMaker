@@ -5,6 +5,7 @@ import io
 import json
 from datetime import datetime
 from pathlib import PurePosixPath
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi import HTTPException
@@ -249,7 +250,8 @@ def get_photo_thumbnail(
     photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db)
     storage = get_storage()
     thumbnail_key = _thumbnail_key(photo_key, size)
-    headers = {**PHOTO_THUMBNAIL_HEADERS, "X-Photo-Thumbnail-Key": thumbnail_key}
+    # HTTP header 只能用 latin-1，含中文檔名時需 URL-encode
+    headers = {**PHOTO_THUMBNAIL_HEADERS, "X-Photo-Thumbnail-Key": quote(thumbnail_key, safe="/")}
 
     try:
         if storage.exists(thumbnail_key):
