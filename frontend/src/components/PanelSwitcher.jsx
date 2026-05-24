@@ -8,7 +8,7 @@ const DEFAULT_TABS = [
 
 export default function PanelSwitcher({ value, onChange, tabs = DEFAULT_TABS }) {
   return (
-    <div className="sticky top-0 z-10 flex bg-white border-b border-gray-100 lg:hidden mb-4 -mx-4 sm:-mx-8 px-4 sm:px-8 py-2 shadow-sm">
+    <div className="sticky top-0 z-10 -mx-4 mb-4 bg-white px-4 py-2 sm:-mx-8 sm:px-8 lg:hidden">
       <SegmentedControl
         value={value}
         onChange={onChange}

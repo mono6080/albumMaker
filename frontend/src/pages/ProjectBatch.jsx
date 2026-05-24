@@ -20,7 +20,9 @@ import {
 import PanelSwitcher from "../components/PanelSwitcher";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import AlbumPageNav from "../components/AlbumPageNav";
+import BatchPhotoWizard from "../components/BatchPhotoWizard";
 import ConfirmModal from "../components/ConfirmModal";
+import PhotoSlotCard from "../components/PhotoSlotCard";
 import ResponsiveActionGroup, {
   mobileVisibleHoverActionClass,
   responsiveActionItemClass,
@@ -196,6 +198,9 @@ export default function ProjectBatch() {
   const [sharedPhotoFile, setSharedPhotoFile] = useState(null);
   const [isSharedPhotoUploading, setIsSharedPhotoUploading] = useState(false);
   const [sharedPhotoUploadProgress, setSharedPhotoUploadProgress] = useState(null);
+
+  // 批次照片分配 Modal
+  const [isBatchWizardOpen, setIsBatchWizardOpen] = useState(false);
 
   // 對應文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
@@ -485,128 +490,219 @@ export default function ProjectBatch() {
   );
 
   const sharedPhotoPanel = (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-4xl space-y-5">
+      {/* Step 1：選擇頁面與照片格 */}
       <Surface data-guide="batch-shared-photo-page">
-        <div className="mb-4 flex min-w-0 items-center gap-2">
-          <ImagePlus className="h-4 w-4 flex-shrink-0 text-sky-600" />
-          <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-800">全班共用照片</h2>
+        <div className="mb-3 flex min-w-0 items-center gap-2">
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">1</span>
+          <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-800">選擇頁面與照片格</h2>
           <Badge tone="info">{project.students.length} 位</Badge>
         </div>
-        <AlbumPageNav page={activePage} total={templatePages.length} onChange={setActivePage} />
-      </Surface>
 
-      <Surface data-guide="batch-shared-photo-slots">
-        <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-            照片格
-          </div>
-          <span className="text-xs text-gray-400">第 {activePage + 1} 頁</span>
+        {/* 頁面縮圖選擇器 */}
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+          頁面
+        </div>
+        <div className="mb-4 grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8">
+          {templatePages.map((_, pi) => {
+            const isSelected = pi === activePage;
+            return (
+              <button
+                key={pi}
+                type="button"
+                onClick={() => { if (pi !== activePage) setActivePage(pi); }}
+                aria-pressed={isSelected}
+                className={`group relative overflow-hidden rounded-md border bg-white transition-all ${
+                  isSelected
+                    ? "border-indigo-400 ring-2 ring-indigo-300"
+                    : "border-gray-200 hover:border-indigo-200"
+                }`}
+                style={{ aspectRatio: "794/1123" }}
+              >
+                <img
+                  src={`${buildProjectPagePreviewUrl(projectId, pi)}?t=${previewTimestamp}`}
+                  alt={`第 ${pi + 1} 頁`}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  draggable={false}
+                  loading="lazy"
+                />
+                <span
+                  className={`absolute inset-x-0 bottom-0 px-1 py-0.5 text-center text-[10px] font-semibold ${
+                    isSelected ? "bg-indigo-600/85 text-white" : "bg-black/55 text-white"
+                  }`}
+                >
+                  P{pi + 1}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
+        {/* 當前頁面的照片格 */}
+        <div className="mb-1 flex items-center justify-between">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            照片格（第 {activePage + 1} 頁）
+          </div>
+        </div>
         {activePagePhotoSlots.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div
+            data-guide="batch-shared-photo-slots"
+            className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5"
+          >
             {activePagePhotoSlots.map((slot, slotIndex) => {
               const isSelected = String(slot.id) === String(selectedSharedPhotoSlotId);
-              const slotW = slot.width || 400;
-              const slotH = slot.height || 400;
-              const previewHeight = 72;
-              const previewWidth = Math.max(48, Math.min(128, Math.round(previewHeight * slotW / slotH)));
-              const shadowOn = slot.shadow_enabled ?? slot.border;
+              const slotItem = {
+                pi: activePage, slotId: slot.id, slotIndex,
+                slotW: slot.width || 400,
+                slotH: slot.height || 400,
+                border: slot.border ?? false,
+                borderW: slot.border_width ?? 8,
+                borderRadius: slot.border_radius ?? 0,
+                shadowEnabled: slot.shadow_enabled,
+                shadowOffsetX: slot.shadow_offset_x,
+                shadowOffsetY: slot.shadow_offset_y,
+                shadowBlur: slot.shadow_blur,
+                shadowOpacity: slot.shadow_opacity,
+                transform: { scale: 1, offsetX: 0, offsetY: 0 },
+              };
               return (
                 <button
                   key={slot.id}
                   type="button"
                   onClick={() => setSelectedSharedPhotoSlotId(slot.id)}
                   aria-pressed={isSelected}
-                  className={`flex min-h-32 min-w-0 flex-col items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm transition-colors ${
+                  className={`group flex aspect-square items-center justify-center rounded-lg border transition-all ${
                     isSelected
-                      ? "border-sky-300 bg-sky-50 text-sky-800 ring-2 ring-sky-200"
-                      : "border-gray-200 bg-white text-gray-500 hover:border-sky-200 hover:bg-sky-50"
+                      ? "border-indigo-400 bg-indigo-50/40 ring-2 ring-indigo-300"
+                      : "border-gray-200 bg-gray-50 hover:border-indigo-200 hover:bg-indigo-50/30"
                   }`}
                 >
-                  <div
-                    className="flex flex-shrink-0 items-center justify-center bg-gray-100"
-                    style={{
-                      width: previewWidth,
-                      height: previewHeight,
-                      border: slot.border ? `${Math.max(2, Math.round((slot.border_width || 8) / 4))}px solid white` : "1px solid #d1d5db",
-                      borderRadius: Math.min(14, Math.round((slot.border_radius || 0) / 6)),
-                      boxShadow: shadowOn ? "0 8px 16px rgba(15, 23, 42, 0.12)" : "none",
-                    }}
-                  >
-                    <Upload className="h-4 w-4 text-gray-400" />
-                  </div>
-                  <span className="truncate font-medium">P{activePage + 1}·{slotIndex + 1}</span>
+                  <PhotoSlotCard it={slotItem} url={null} nat={null} />
                 </button>
               );
             })}
           </div>
         ) : (
-          <div className="flex items-center justify-center py-10 text-sm text-gray-400">
+          <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 py-10 text-sm text-gray-400">
             此頁沒有照片格
           </div>
         )}
       </Surface>
 
-      <Surface data-guide="batch-shared-photo-upload">
-        <input
-          ref={sharedPhotoInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={event => setSharedPhotoFile(event.target.files?.[0] || null)}
-        />
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button
-            type="button"
-            onClick={() => sharedPhotoInputRef.current?.click()}
-            variant="neutral"
-            className="w-full sm:w-auto"
-          >
-            <Upload className="h-4 w-4" />
-            選擇照片
-          </Button>
-
-          <div className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
-            {sharedPhotoFile ? (
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate">{sharedPhotoFile.name}</span>
-                <IconButton label="清除照片檔案" onClick={clearSharedPhotoFile} size="xs">
-                  <X className="h-3.5 w-3.5" />
-                </IconButton>
-              </div>
-            ) : (
-              <span className="text-gray-400">未選擇照片</span>
-            )}
-          </div>
-
-          <Button
-            type="button"
-            onClick={handleUploadSharedPhoto}
-            disabled={
-              !sharedPhotoFile ||
-              !selectedSharedPhotoSlot ||
-              project.students.length === 0 ||
-              isSharedPhotoUploading
-            }
-            variant="primary"
-            className="w-full sm:w-auto"
-          >
-            {isSharedPhotoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-            套用到全班
-          </Button>
+      {/* Step 2：選擇上傳模式 */}
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">2</span>
+          <h2 className="text-sm font-semibold text-gray-800">選擇上傳模式</h2>
         </div>
 
-        {sharedPhotoUploadProgress !== null && (
-          <div className="mt-3 h-1 overflow-hidden rounded-full bg-gray-100">
-            <div
-              className="h-full rounded-full bg-sky-500 transition-all duration-200"
-              style={{ width: `${sharedPhotoUploadProgress}%` }}
+        <div className="grid gap-3 lg:grid-cols-2">
+          {/* 模式 A：所有人同一張（既有共用照片流程） */}
+          <Surface data-guide="batch-shared-photo-upload" padding="md" className="flex flex-col">
+            <div className="mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-gray-800">所有人同一張</h3>
+              <Badge tone="info">共用照片</Badge>
+            </div>
+            <p className="mb-3 text-xs text-gray-500">
+              適用團體照、班級 logo 等所有學生共用的照片格。一張照片套用到全班。
+            </p>
+
+            <input
+              ref={sharedPhotoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={event => setSharedPhotoFile(event.target.files?.[0] || null)}
             />
-          </div>
-        )}
-      </Surface>
+
+            <div className="mt-auto space-y-2">
+              <Button
+                type="button"
+                onClick={() => sharedPhotoInputRef.current?.click()}
+                variant="neutral"
+                fullWidth
+              >
+                <Upload className="h-4 w-4" />
+                選擇照片
+              </Button>
+
+              <div className="min-h-9 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                {sharedPhotoFile ? (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">{sharedPhotoFile.name}</span>
+                    <IconButton label="清除照片檔案" onClick={clearSharedPhotoFile} size="xs">
+                      <X className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                ) : (
+                  <span className="text-gray-400">未選擇照片</span>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                onClick={handleUploadSharedPhoto}
+                disabled={
+                  !sharedPhotoFile ||
+                  !selectedSharedPhotoSlot ||
+                  project.students.length === 0 ||
+                  isSharedPhotoUploading
+                }
+                variant="primary"
+                fullWidth
+              >
+                {isSharedPhotoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                套用到全班
+              </Button>
+
+              {sharedPhotoUploadProgress !== null && (
+                <div className="h-1 overflow-hidden rounded-full bg-gray-100">
+                  <div
+                    className="h-full rounded-full bg-sky-500 transition-all duration-200"
+                    style={{ width: `${sharedPhotoUploadProgress}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </Surface>
+
+          {/* 模式 B：每人不同張（批次分配） */}
+          <Surface
+            data-guide="batch-photo-wizard-open"
+            padding="md"
+            className="flex flex-col border-indigo-200 bg-indigo-50/30"
+          >
+            <div className="mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-gray-800">每人不同張</h3>
+              <Badge tone="primary">批次分配</Badge>
+            </div>
+            <p className="mb-3 text-xs text-gray-600">
+              一次上傳多張照片，系統可依檔名自動配對到對的學生（如 <code>小明.jpg</code>）；之後可拖曳調整。
+            </p>
+
+            <div className="mt-auto">
+              <Button
+                type="button"
+                variant="primary"
+                fullWidth
+                onClick={() => setIsBatchWizardOpen(true)}
+                disabled={
+                  project.students.length === 0 ||
+                  !selectedSharedPhotoSlot
+                }
+              >
+                <ImagePlus className="h-4 w-4" />
+                開始批次分配
+              </Button>
+              {!selectedSharedPhotoSlot && (
+                <p className="mt-2 text-[11px] text-amber-700">
+                  ⚠ 請先在上方選擇一個照片格
+                </p>
+              )}
+            </div>
+          </Surface>
+        </div>
+      </div>
     </div>
   );
 
@@ -619,6 +715,19 @@ export default function ProjectBatch() {
         message={confirmModal?.message}
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
+      />
+      <BatchPhotoWizard
+        isOpen={isBatchWizardOpen}
+        projectId={projectId}
+        template={template}
+        students={project.students}
+        pageIndex={activePage}
+        slotId={selectedSharedPhotoSlotId}
+        onClose={() => setIsBatchWizardOpen(false)}
+        onUploaded={() => {
+          setPreviewTimestamp(Date.now());
+          loadProjectData();
+        }}
       />
       <PageHeader
         title={project.name}
@@ -672,13 +781,13 @@ export default function ProjectBatch() {
         ]}
       />
 
-      {/* 桌面版 Pill 分頁 */}
+      {/* 桌面版 Pill 分頁（不含預覽，預覽在側欄常駐） */}
       <SegmentedControl
         value={desktopTab}
         onChange={setDesktopTab}
         options={[
-          { value: "students", label: "登記學生", icon: Users, guideId: "batch-students-tab" },
-          { value: "photos", label: "共用照片", icon: ImagePlus, guideId: "batch-photos-tab" },
+          { value: "students", label: "登記", icon: Users, guideId: "batch-students-tab" },
+          { value: "photos", label: "照片", icon: ImagePlus, guideId: "batch-photos-tab" },
           { value: "texts", label: "文字", icon: Type, guideId: "batch-text-tab" },
         ]}
         className="mb-5 hidden w-fit lg:grid"
