@@ -154,6 +154,30 @@ class SharedPhotoUploadResult(BaseModel):
     compressed: bool = False
 
 
+class BatchPhotoUploadItem(BaseModel):
+    """批次上傳中單一學生的處理結果"""
+    student_id: int
+    filename: str
+    path: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class BatchPhotoUploadResult(BaseModel):
+    """
+    批次照片上傳回應。
+
+    succeeded：成功寫入的學生與檔案
+    failed：解碼、儲存失敗的紀錄（含原因代碼）
+    skipped：依 overwrite_existing=false 跳過的學生
+    """
+    ok: bool = True
+    page_index: int
+    slot_id: int
+    succeeded: list[BatchPhotoUploadItem] = []
+    failed: list[BatchPhotoUploadItem] = []
+    skipped: list[BatchPhotoUploadItem] = []
+
+
 class PageSkipPayload(BaseModel):
     """設定頁面跳過旗標的 payload"""
     skip: bool

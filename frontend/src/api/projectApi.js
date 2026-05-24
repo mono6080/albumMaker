@@ -89,6 +89,36 @@ export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile
 };
 
 /**
+ * 批次照片分配上傳。
+ *   assignments: [{ studentId, file }]
+ *   options: { overwriteExisting?: boolean }
+ *   onProgress(percent): 整體上傳進度 0~100
+ * 回傳格式：{ ok, page_index, slot_id, succeeded[], failed[], skipped[] }
+ */
+export const batchUploadPhotos = (
+  projectId, pageIndex, slotId,
+  assignments,
+  options = {},
+  onProgress,
+) => {
+  const formData = new FormData();
+  const mapping = {};
+  assignments.forEach(({ studentId, file }) => {
+    formData.append("files", file);
+    mapping[String(studentId)] = file.name;
+  });
+  formData.append("mapping", JSON.stringify(mapping));
+  formData.append("overwrite_existing", String(options.overwriteExisting ?? true));
+  return apiClient.post(
+    `/projects/${projectId}/photos/batch/pages/${pageIndex}/slots/${slotId}`,
+    formData,
+    onProgress
+      ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) }
+      : {},
+  );
+};
+
+/**
  * 更新照片欄位對應關係（支援重新排列與清除）。
  * pagesMapping 格式：{"0": {"1": "/path", "2": null}, ...}
  */

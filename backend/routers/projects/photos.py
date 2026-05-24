@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi import HTTPException
 from fastapi.responses import Response
 from PIL import Image
@@ -15,12 +15,22 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import User, get_db
-from services.file_service import get_photo_key, read_and_process_photo_upload
+from database import Student, User, get_db
+from services.file_service import (
+    ProcessedImageUpload,
+    get_photo_key,
+    read_and_process_photo_upload,
+)
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
-from .schemas import PhotoMappingPayload, PhotoMappingResult, PhotoUploadResult, SharedPhotoUploadResult
+from .schemas import (
+    BatchPhotoUploadResult,
+    PhotoMappingPayload,
+    PhotoMappingResult,
+    PhotoUploadResult,
+    SharedPhotoUploadResult,
+)
 
 router = APIRouter()
 
@@ -106,6 +116,61 @@ def _assert_project_photo_slot_exists(project, page_index: int, slot_id: int) ->
         raise HTTPException(status_code=404, detail="找不到照片格")
 
 
+def _apply_photo_to_student(
+    student: Student,
+    project_id: int,
+    page_index: int,
+    slot_id: int,
+    processed_upload: ProcessedImageUpload,
+    storage,
+    now: datetime,
+) -> str:
+    """寫入單一學生指定照片格：刪舊縮圖→put 新檔→更新 pages_data_json。回傳新 key。
+
+    供 upload_photo / upload_shared_project_photo / batch_upload_photos 共用。
+    呼叫端負責呼叫 db.commit()。
+    """
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
+    while len(pages_data) <= page_index:
+        pages_data.append({
+            "page_index": len(pages_data),
+            "photos": {},
+            "label_texts": {},
+        })
+
+    slot_id_str = str(slot_id)
+    old_record = pages_data[page_index].get("photos", {}).get(slot_id_str)
+    if old_record:
+        old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
+        if old_key:
+            _delete_photo_thumbnails(storage, old_key)
+            storage.delete(old_key)
+
+    key = get_photo_key(project_id, student.id, page_index, slot_id, processed_upload.filename)
+    storage.put(key, processed_upload.data)
+    pages_data[page_index].setdefault("photos", {})[slot_id_str] = {
+        "path": key,
+        "scale": 1.0,
+        "offset_x": 0.0,
+        "offset_y": 0.0,
+    }
+    student.pages_data_json = json.dumps(pages_data)
+    student.updated_at = now
+    return key
+
+
+def _student_has_photo(student: Student, page_index: int, slot_id: int) -> bool:
+    """判斷學生在指定頁面/照片格是否已有照片紀錄。"""
+    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
+    if page_index >= len(pages_data):
+        return False
+    record = pages_data[page_index].get("photos", {}).get(str(slot_id))
+    if not record:
+        return False
+    key = record if isinstance(record, str) else record.get("path", "")
+    return bool(key)
+
+
 @router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
 async def upload_photo(
     project_id: int,
@@ -123,35 +188,11 @@ async def upload_photo(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-    while len(pages_data) <= page_index:
-        pages_data.append({
-            "page_index": len(pages_data),
-            "photos": {},
-            "label_texts": {},
-        })
-
     storage = get_storage()
-    # 若該 slot 已有舊照片，先刪除避免殘留（delete 已處理不存在的情況）
-    old_record = pages_data[page_index]["photos"].get(str(slot_id))
-    if old_record:
-        old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
-        if old_key:
-            _delete_photo_thumbnails(storage, old_key)
-            storage.delete(old_key)
-
-    key = get_photo_key(project_id, student_id, page_index, slot_id, processed_upload.filename)
-    storage.put(key, processed_upload.data)  # 直接使用已讀取的 bytes，避免二次讀取
-
-    pages_data[page_index]["photos"][str(slot_id)] = {
-        "path": key,
-        "scale": 1.0,
-        "offset_x": 0.0,
-        "offset_y": 0.0,
-    }
     now = datetime.utcnow()
-    student.pages_data_json = json.dumps(pages_data)
-    student.updated_at = now
+    key = _apply_photo_to_student(
+        student, project_id, page_index, slot_id, processed_upload, storage, now,
+    )
     project.updated_at = now
     db.commit()
 
@@ -180,34 +221,11 @@ async def upload_shared_project_photo(
     storage = get_storage()
     now = datetime.utcnow()
     updated = 0
-    slot_id_str = str(slot_id)
 
     for student in project.students:
-        pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-        while len(pages_data) <= page_index:
-            pages_data.append({
-                "page_index": len(pages_data),
-                "photos": {},
-                "label_texts": {},
-            })
-
-        old_record = pages_data[page_index].get("photos", {}).get(slot_id_str)
-        if old_record:
-            old_key = old_record if isinstance(old_record, str) else old_record.get("path", "")
-            if old_key:
-                _delete_photo_thumbnails(storage, old_key)
-                storage.delete(old_key)
-
-        key = get_photo_key(project_id, student.id, page_index, slot_id, processed_upload.filename)
-        storage.put(key, processed_upload.data)
-        pages_data[page_index].setdefault("photos", {})[slot_id_str] = {
-            "path": key,
-            "scale": 1.0,
-            "offset_x": 0.0,
-            "offset_y": 0.0,
-        }
-        student.pages_data_json = json.dumps(pages_data)
-        student.updated_at = now
+        _apply_photo_to_student(
+            student, project_id, page_index, slot_id, processed_upload, storage, now,
+        )
         updated += 1
 
     project.updated_at = now
@@ -220,6 +238,115 @@ async def upload_shared_project_photo(
         "page_index": page_index,
         "slot_id": slot_id,
         "compressed": processed_upload.compressed,
+    }
+
+
+@router.post(
+    "/{project_id}/photos/batch/pages/{page_index}/slots/{slot_id}",
+    response_model=BatchPhotoUploadResult,
+)
+async def batch_upload_photos(
+    project_id: int,
+    page_index: int,
+    slot_id: int,
+    files: list[UploadFile] = File(...),
+    mapping: str = Form(...),
+    overwrite_existing: bool = Form(True),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """批次上傳照片並依 mapping 分配給對應學生的同一照片格。
+
+    - mapping：JSON 字串，格式 {"<student_id>": "<filename>"}
+    - overwrite_existing=false 時跳過已有照片的學生（記入 skipped）
+    - 單筆失敗不中斷整批，最後一起 commit
+    """
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
+    _assert_project_photo_slot_exists(project, page_index, slot_id)
+
+    try:
+        mapping_data: dict[str, str] = json.loads(mapping)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="mapping 必須是合法 JSON")
+    if not isinstance(mapping_data, dict):
+        raise HTTPException(status_code=400, detail="mapping 必須是 student_id→filename 字典")
+
+    files_by_name = {f.filename: f for f in files}
+    students_by_id = {str(s.id): s for s in project.students}
+
+    storage = get_storage()
+    now = datetime.utcnow()
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    skipped: list[dict] = []
+    any_change = False
+
+    for student_id_str, filename in mapping_data.items():
+        if student_id_str not in students_by_id:
+            failed.append({
+                "student_id": int(student_id_str) if student_id_str.isdigit() else -1,
+                "filename": filename or "",
+                "reason": "student_not_in_project",
+            })
+            continue
+
+        student = students_by_id[student_id_str]
+        upload_file = files_by_name.get(filename)
+        if upload_file is None:
+            failed.append({
+                "student_id": student.id, "filename": filename or "",
+                "reason": "file_not_uploaded",
+            })
+            continue
+
+        if not overwrite_existing and _student_has_photo(student, page_index, slot_id):
+            skipped.append({
+                "student_id": student.id, "filename": filename,
+                "reason": "already_has_photo",
+            })
+            continue
+
+        try:
+            processed_upload = await read_and_process_photo_upload(upload_file)
+        except HTTPException as exc:
+            failed.append({
+                "student_id": student.id, "filename": filename,
+                "reason": f"upload_rejected:{exc.detail}",
+            })
+            continue
+        except Exception:
+            failed.append({
+                "student_id": student.id, "filename": filename,
+                "reason": "image_decode_failed",
+            })
+            continue
+
+        try:
+            key = _apply_photo_to_student(
+                student, project_id, page_index, slot_id, processed_upload, storage, now,
+            )
+        except Exception:
+            failed.append({
+                "student_id": student.id, "filename": filename,
+                "reason": "storage_write_failed",
+            })
+            continue
+
+        succeeded.append({"student_id": student.id, "filename": filename, "path": key})
+        any_change = True
+
+    if any_change:
+        project.updated_at = now
+        db.commit()
+
+    return {
+        "ok": True,
+        "page_index": page_index,
+        "slot_id": slot_id,
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped": skipped,
     }
 
 
