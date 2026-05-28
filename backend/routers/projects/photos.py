@@ -21,6 +21,7 @@ from services.file_service import (
     get_photo_key,
     read_and_process_photo_upload,
 )
+from services.request_limiter import require_photo_upload_slot
 from services.storage import get_storage
 
 from ._helpers import _parse_json_field, assert_project_writable
@@ -178,6 +179,7 @@ async def upload_photo(
     page_index: int,
     slot_id: int,
     file: UploadFile = File(...),
+    _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -208,6 +210,7 @@ async def upload_shared_project_photo(
     page_index: int,
     slot_id: int,
     file: UploadFile = File(...),
+    _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -252,6 +255,7 @@ async def batch_upload_photos(
     files: list[UploadFile] = File(...),
     mapping: str = Form(...),
     overwrite_existing: bool = Form(True),
+    _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

@@ -26,6 +26,7 @@ from services.project_service import (
     merge_project_label_texts_into_pages,
     render_and_save_student_album,
 )
+from services.request_limiter import album_render_limiter, preview_render_limiter, zip_build_limiter
 from services.render_service import PREVIEW_RENDER_SCALE, render_preview_page
 from services.storage import get_storage
 
@@ -75,34 +76,49 @@ def _render_preview_jpeg_bytes(layout: dict, student_name: str, page_data: dict,
     return image_buffer.getvalue()
 
 
+def _read_cached_preview_bytes(storage, cache_key: str, cached_reader):
+    try:
+        return cached_reader(cache_key) if cached_reader else storage.get_bytes(cache_key)
+    except FileNotFoundError:
+        return None
+    except Exception as cache_error:
+        logger.warning("讀取預覽快取失敗 key=%s error=%s", cache_key, cache_error)
+        return None
+
+
 def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes):
     storage = get_storage()
     cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
     headers = {**PREVIEW_CACHE_HEADERS, "X-Preview-Cache-Key": cache_key}
     cached_reader = getattr(storage, "get_cached_bytes", None)
 
-    try:
-        cached_bytes = cached_reader(cache_key) if cached_reader else storage.get_bytes(cache_key)
+    cached_bytes = _read_cached_preview_bytes(storage, cache_key, cached_reader)
+    if cached_bytes is not None:
+        return Response(
+            content=cached_bytes,
+            media_type="image/jpeg",
+            headers={**headers, "X-Preview-Cache": "HIT"},
+        )
+
+    with preview_render_limiter.acquire("預覽產生中，請稍後再試"):
+        # 等待 limiter 期間可能已有其他請求補好同一張預覽。
+        cached_bytes = _read_cached_preview_bytes(storage, cache_key, cached_reader)
         if cached_bytes is not None:
             return Response(
                 content=cached_bytes,
                 media_type="image/jpeg",
                 headers={**headers, "X-Preview-Cache": "HIT"},
             )
-    except FileNotFoundError:
-        pass
-    except Exception as cache_error:
-        logger.warning("讀取預覽快取失敗 key=%s error=%s", cache_key, cache_error)
 
-    image_bytes = render_bytes()
-    try:
-        cache_writer = getattr(storage, "put_cache_only", None)
-        if cache_writer:
-            cache_writer(cache_key, image_bytes)
-        else:
-            storage.put(cache_key, image_bytes)
-    except Exception as cache_error:
-        logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
+        image_bytes = render_bytes()
+        try:
+            cache_writer = getattr(storage, "put_cache_only", None)
+            if cache_writer:
+                cache_writer(cache_key, image_bytes)
+            else:
+                storage.put(cache_key, image_bytes)
+        except Exception as cache_error:
+            logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
 
     return Response(
         content=image_bytes,
@@ -211,7 +227,8 @@ def render_student(
     student = get_student_or_404(student_id, project_id, db)
     logger.info("開始渲染 project_id=%s student_id=%s student=%s", project_id, student_id, student.name)
     t0 = time.monotonic()
-    result = render_and_save_student_album(project, student, project_id, db)
+    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
+        result = render_and_save_student_album(project, student, project_id, db)
     logger.info("渲染完成 project_id=%s student_id=%s 耗時=%.2fs pages=%s",
                 project_id, student_id, time.monotonic() - t0, result.get("pages"))
     return result
@@ -235,16 +252,17 @@ def render_all_students(
     # 迴圈外預先讀取模板佈局，避免每個學生重複查詢 N×1
     shared_page_layouts = get_template_page_layouts(project)
 
-    for student in project.students:
-        t0 = time.monotonic()
-        try:
-            result = render_and_save_student_album(project, student, project_id, db, shared_page_layouts)
-            render_results.append({"student": student.name, "pdf": result["pdf"]})
-            logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
-        except Exception as render_error:
-            db.rollback()
-            render_errors.append({"student": student.name, "error": "渲染失敗"})
-            logger.error("  ✗ %s 失敗: %s", student.name, render_error)
+    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
+        for student in project.students:
+            t0 = time.monotonic()
+            try:
+                result = render_and_save_student_album(project, student, project_id, db, shared_page_layouts)
+                render_results.append({"student": student.name, "pdf": result["pdf"]})
+                logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
+            except Exception as render_error:
+                db.rollback()
+                render_errors.append({"student": student.name, "error": "渲染失敗"})
+                logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
     logger.info("批次渲染完成 project_id=%s 成功=%s 失敗=%s 總耗時=%.2fs",
                 project_id, len(render_results), len(render_errors), time.monotonic() - t_all)
@@ -312,16 +330,18 @@ def download_student_images_as_zip(
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
 
-    image_entries = get_student_image_entries(project, student, effective_mode)
-    if not image_entries:
-        raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
-
     combined_stem = build_combined_stem(project.name, student.name)
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     content_disposition = build_content_disposition_header(f"{combined_stem}{screen_suffix}_images.zip")
 
+    with zip_build_limiter.acquire("圖片 ZIP 正在產生中，請稍後再試"):
+        image_entries = get_student_image_entries(project, student, effective_mode)
+        if not image_entries:
+            raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
+        zip_bytes = build_zip_of_student_images(project, student, effective_mode, image_entries)
+
     return StreamingResponse(
-        io.BytesIO(build_zip_of_student_images(project, student, effective_mode, image_entries)),
+        io.BytesIO(zip_bytes),
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )
@@ -375,7 +395,8 @@ def download_all_pdfs_as_zip(
 
     effective_mode = mode if current_user.role == "admin" else "screen"
 
-    zip_bytes = build_zip_of_all_student_pdfs(project, effective_mode)
+    with zip_build_limiter.acquire("PDF ZIP 正在產生中，請稍後再試"):
+        zip_bytes = build_zip_of_all_student_pdfs(project, effective_mode)
 
     zip_filename = f"{project.name}.zip"
     content_disposition = build_content_disposition_header(zip_filename)
@@ -400,7 +421,8 @@ def download_all_images_as_zip(
 
     effective_mode = mode if current_user.role == "admin" else "screen"
 
-    zip_bytes = build_zip_of_all_student_images(project, effective_mode)
+    with zip_build_limiter.acquire("圖片 ZIP 正在產生中，請稍後再試"):
+        zip_bytes = build_zip_of_all_student_images(project, effective_mode)
 
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     zip_filename = f"{project.name}{screen_suffix}_images.zip"

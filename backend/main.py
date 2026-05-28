@@ -2,7 +2,9 @@
 # 負責建立 FastAPI 實例、掛載中介層、路由與靜態檔案服務，
 # 以及啟動時執行資料庫初始化與遷移
 
+import logging
 import os
+import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,20 @@ from database import init_db
 from migrations import run_migrations
 from routers import templates, projects, auth, users
 
+logger = logging.getLogger("album_maker.requests")
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        logger.warning("invalid_env_float name=%s value=%r default=%.3f", name, value, default)
+        return default
+
+
 # 速率限制器（依客戶端 IP 計算）
 limiter = Limiter(key_func=get_remote_address)
 
@@ -25,6 +41,7 @@ limiter = Limiter(key_func=get_remote_address)
 FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 FRONTEND_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 FRONTEND_APP_CACHE_CONTROL = "no-cache, no-store, max-age=0, must-revalidate"
+SLOW_REQUEST_LOG_SECONDS = _env_float("SLOW_REQUEST_LOG_SECONDS", 1.0)
 
 
 def apply_frontend_cache_headers(response, path: str) -> None:
@@ -53,12 +70,30 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """為所有回應加入基本安全 HTTP Headers，防止 Clickjacking、MIME sniffing 等攻擊。"""
     async def dispatch(self, request: Request, call_next):
+        started_at = time.monotonic()
         response = await call_next(request)
+        elapsed = time.monotonic() - started_at
+        response.headers["X-Response-Time"] = f"{elapsed:.3f}"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         apply_frontend_cache_headers(response, request.url.path)
+        if elapsed >= SLOW_REQUEST_LOG_SECONDS:
+            forwarded_for = request.headers.get("x-forwarded-for")
+            client_ip = (
+                forwarded_for.split(",", 1)[0].strip()
+                if forwarded_for
+                else request.client.host if request.client else "-"
+            )
+            logger.warning(
+                "slow_request method=%s path=%s status=%s duration=%.3fs client=%s",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed,
+                client_ip,
+            )
         return response
 
 
