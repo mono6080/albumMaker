@@ -37,6 +37,14 @@ import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
 import { Badge, Button, PageHeader, SegmentedControl, fieldControlClass } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
+import {
+  getLabelEntryAlign,
+  getLabelEntryTextOverride,
+  hasLabelEntryTextOverride,
+  withLabelEntryAlign,
+  withLabelEntryText,
+  withoutLabelEntryText,
+} from "../utils/labelTextEntries";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import {
   createFileFromBlob,
@@ -120,7 +128,7 @@ export default function StudentEdit() {
   const [projectLabelTexts, setProjectLabelTexts] = useState({});
   const [loadError, setLoadError] = useState(null);
   const [activePage, setActivePage] = useState(0);
-  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
+  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
   const [isRendering, setIsRendering] = useState(false);
   const [isImageRendering, setIsImageRendering] = useState(false);
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
@@ -199,27 +207,51 @@ export default function StudentEdit() {
 
   // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
+  const getLabelEntry = (pageIndex, labelId) =>
+    labelTexts[pageIndex]?.[String(labelId)];
+
   const getLabelText = (pageIndex, labelId) =>
-    labelTexts[pageIndex]?.[String(labelId)] ?? "";
+    getLabelEntryTextOverride(getLabelEntry(pageIndex, labelId)) ?? "";
+
+  const getLabelAlign = (pageIndex, labelId, fallbackAlign = "center") =>
+    getLabelEntryAlign(getLabelEntry(pageIndex, labelId), fallbackAlign);
 
   const hasLabelTextOverride = (pageIndex, labelId) =>
-    Object.prototype.hasOwnProperty.call(labelTexts[pageIndex] || {}, String(labelId));
+    hasLabelEntryTextOverride(getLabelEntry(pageIndex, labelId));
 
-  const setLabelText = (pageIndex, labelId, textValue) => {
-    setImageShareDraft(null);
-    setLabelTexts(prevTexts => ({
-      ...prevTexts,
-      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
-    }));
+  const updateLabelEntry = (pageIndex, labelId, getNextEntry) => {
+    const labelIdKey = String(labelId);
+    setLabelTexts(prevTexts => {
+      const currentPageTexts = { ...(prevTexts[pageIndex] || {}) };
+      const nextEntry = getNextEntry(currentPageTexts[labelIdKey]);
+      if (nextEntry === undefined) {
+        delete currentPageTexts[labelIdKey];
+      } else {
+        currentPageTexts[labelIdKey] = nextEntry;
+      }
+      return { ...prevTexts, [pageIndex]: currentPageTexts };
+    });
   };
 
-  const restoreDefaultLabelText = (pageIndex, labelId) => {
+  const setLabelText = (pageIndex, labelId, textValue, fallbackAlign = "center") => {
     setImageShareDraft(null);
-    setLabelTexts(prevTexts => {
-      const nextPageTexts = { ...(prevTexts[pageIndex] || {}) };
-      delete nextPageTexts[String(labelId)];
-      return { ...prevTexts, [pageIndex]: nextPageTexts };
-    });
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withLabelEntryText(currentEntry, textValue, fallbackAlign)
+    );
+  };
+
+  const setLabelAlign = (pageIndex, labelId, textAlign, fallbackAlign = "center") => {
+    setImageShareDraft(null);
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withLabelEntryAlign(currentEntry, textAlign, fallbackAlign)
+    );
+  };
+
+  const restoreDefaultLabelText = (pageIndex, labelId, fallbackAlign = "center") => {
+    setImageShareDraft(null);
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withoutLabelEntryText(currentEntry, fallbackAlign)
+    );
   };
 
   const refreshPreview = (pageIdx = activePage) =>
@@ -617,8 +649,10 @@ export default function StudentEdit() {
               projectLabelTexts={projectLabelTexts}
               student={student}
               getLabelText={getLabelText}
+              getLabelAlign={getLabelAlign}
               hasLabelTextOverride={hasLabelTextOverride}
               onLabelChange={setLabelText}
+              onLabelAlignChange={setLabelAlign}
               onRestoreDefault={restoreDefaultLabelText}
               onScheduleSave={() => { if (student) scheduleSave(); }}
             />
@@ -635,8 +669,10 @@ export default function StudentEdit() {
             projectLabelTexts={projectLabelTexts}
             student={student}
             getLabelText={getLabelText}
+            getLabelAlign={getLabelAlign}
             hasLabelTextOverride={hasLabelTextOverride}
             onLabelChange={setLabelText}
+            onLabelAlignChange={setLabelAlign}
             onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
           />

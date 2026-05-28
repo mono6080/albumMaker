@@ -199,4 +199,4 @@ class BatchTextsPayload(BaseModel):
         }
       }
     """
-    students: dict[str, dict[str, dict[str, str]]] = {}
+    students: dict[str, dict[str, dict[str, Any]]] = {}

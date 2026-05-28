@@ -28,6 +28,7 @@ import ResponsiveActionGroup, {
   responsiveActionItemClass,
 } from "../components/ResponsiveActionGroup";
 import TextVariableTextarea from "../components/TextVariableTextarea";
+import TextAlignControl from "../components/TextAlignControl";
 import {
   Badge,
   Button,
@@ -38,6 +39,14 @@ import {
   fieldControlClass,
 } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
+import {
+  getLabelEntryAlign,
+  getLabelEntryTextOverride,
+  hasLabelEntryTextOverride,
+  withLabelEntryAlign,
+  withLabelEntryText,
+  withoutLabelEntryText,
+} from "../utils/labelTextEntries";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 import { handleApiError } from "../utils/apiError";
 
@@ -204,7 +213,7 @@ export default function ProjectBatch() {
 
   // 對應文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
-  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text } }
+  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewTimestamp, setPreviewTimestamp] = useState(() => Date.now());
 
@@ -338,25 +347,48 @@ export default function ProjectBatch() {
 
   // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
+  const getLabelEntry = (pageIndex, labelId) =>
+    labelTexts[pageIndex]?.[String(labelId)];
+
   const getLabelText = (pageIndex, labelId) =>
-    labelTexts[pageIndex]?.[String(labelId)] ?? "";
+    getLabelEntryTextOverride(getLabelEntry(pageIndex, labelId)) ?? "";
+
+  const getLabelAlign = (pageIndex, labelId, fallbackAlign = "center") =>
+    getLabelEntryAlign(getLabelEntry(pageIndex, labelId), fallbackAlign);
 
   const hasLabelTextOverride = (pageIndex, labelId) =>
-    Object.prototype.hasOwnProperty.call(labelTexts[pageIndex] || {}, String(labelId));
+    hasLabelEntryTextOverride(getLabelEntry(pageIndex, labelId));
 
-  const setLabelText = (pageIndex, labelId, textValue) => {
-    setLabelTexts(prevTexts => ({
-      ...prevTexts,
-      [pageIndex]: { ...(prevTexts[pageIndex] || {}), [String(labelId)]: textValue },
-    }));
+  const updateLabelEntry = (pageIndex, labelId, getNextEntry) => {
+    const labelIdKey = String(labelId);
+    setLabelTexts(prevTexts => {
+      const currentPageTexts = { ...(prevTexts[pageIndex] || {}) };
+      const nextEntry = getNextEntry(currentPageTexts[labelIdKey]);
+      if (nextEntry === undefined) {
+        delete currentPageTexts[labelIdKey];
+      } else {
+        currentPageTexts[labelIdKey] = nextEntry;
+      }
+      return { ...prevTexts, [pageIndex]: currentPageTexts };
+    });
   };
 
-  const restoreDefaultLabelText = (pageIndex, labelId) => {
-    setLabelTexts(prevTexts => {
-      const nextPageTexts = { ...(prevTexts[pageIndex] || {}) };
-      delete nextPageTexts[String(labelId)];
-      return { ...prevTexts, [pageIndex]: nextPageTexts };
-    });
+  const setLabelText = (pageIndex, labelId, textValue, fallbackAlign = "center") => {
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withLabelEntryText(currentEntry, textValue, fallbackAlign)
+    );
+  };
+
+  const setLabelAlign = (pageIndex, labelId, textAlign, fallbackAlign = "center") => {
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withLabelEntryAlign(currentEntry, textAlign, fallbackAlign)
+    );
+  };
+
+  const restoreDefaultLabelText = (pageIndex, labelId, fallbackAlign = "center") => {
+    updateLabelEntry(pageIndex, labelId, currentEntry =>
+      withoutLabelEntryText(currentEntry, fallbackAlign)
+    );
   };
 
   // ── 載入中 ────────────────────────────────────────────────────────────────
@@ -404,7 +436,9 @@ export default function ProjectBatch() {
           <div className="space-y-3">
             {activePageTextLabels.map(label => {
               const templateDefaultText = label.text ?? "";
+              const defaultAlign = label.text_align ?? "center";
               const currentValue = getLabelText(activePage, label.id);
+              const currentAlign = getLabelAlign(activePage, label.id, defaultAlign);
               const hasOverride = hasLabelTextOverride(activePage, label.id);
               const len = currentValue.length;
               return (
@@ -421,11 +455,17 @@ export default function ProjectBatch() {
                       defaultText={templateDefaultText}
                       inheritedValue={templateDefaultText}
                       hasOverride={hasOverride}
-                      onChange={value => setLabelText(activePage, label.id, value)}
-                      onRestoreDefault={() => restoreDefaultLabelText(activePage, label.id)}
+                      onChange={value => setLabelText(activePage, label.id, value, defaultAlign)}
+                      onRestoreDefault={() => restoreDefaultLabelText(activePage, label.id, defaultAlign)}
                       onScheduleSave={scheduleSave}
                       buttonGuideId="batch-text-insert-name"
                       maxLength={200}
+                    />
+                    <TextAlignControl
+                      value={currentAlign}
+                      onChange={value => setLabelAlign(activePage, label.id, value, defaultAlign)}
+                      onScheduleSave={scheduleSave}
+                      className="mt-2"
                     />
                     {len > 0 && (
                       <div className={`text-right text-xs mt-0.5 ${len >= 180 ? "text-red-500" : "text-gray-300"}`}>

@@ -11,8 +11,9 @@ from auth import get_current_user  # noqa: F401 — re-export
 from crud.user_crud import get_subordinate_user_ids
 from database import Project, User
 
-# label_texts 格式：{label_id_str: text_str}，值必須為字串
-LabelTextsPayload = dict[str, str]
+# label_texts 格式支援舊版 {label_id_str: text_str}，
+# 以及新版 {label_id_str: {"text": text_str, "text_align": "left|center|right"}}
+LabelTextsPayload = dict[str, Any]
 
 
 def _parse_json_field(raw: str, field_name: str = "欄位") -> Any:

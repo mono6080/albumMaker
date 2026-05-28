@@ -3,7 +3,9 @@
 
 import { Type } from "lucide-react";
 import AlbumPageNav from "./AlbumPageNav";
+import TextAlignControl from "./TextAlignControl";
 import TextVariableTextarea from "./TextVariableTextarea";
+import { getLabelEntryAlign, getLabelEntryText } from "../utils/labelTextEntries";
 import { getFillableTextLabels } from "../utils/textLabelRoles";
 
 export default function StudentTextPanel({
@@ -14,8 +16,10 @@ export default function StudentTextPanel({
   projectLabelTexts,
   student,
   getLabelText,
+  getLabelAlign,
   hasLabelTextOverride = () => false,
   onLabelChange,
+  onLabelAlignChange,
   onRestoreDefault = () => {},
   onScheduleSave,
 }) {
@@ -39,10 +43,13 @@ export default function StudentTextPanel({
           </div>
           <div className="space-y-3">
             {fillableTextLabels.map(label => {
+              const projectEntry = projectLabelTexts[String(activePage)]?.[String(label.id)];
               const rawDefaultText =
-                projectLabelTexts[String(activePage)]?.[String(label.id)] ?? label.text ?? "";
+                getLabelEntryText(projectEntry, label.text ?? "");
               const displayDefaultText = rawDefaultText.replace("{name}", student.name);
+              const defaultAlign = getLabelEntryAlign(projectEntry, label.text_align ?? "center");
               const currentValue = getLabelText(activePage, label.id);
+              const currentAlign = getLabelAlign(activePage, label.id, defaultAlign);
               const hasOverride = hasLabelTextOverride(activePage, label.id);
               const len = currentValue.length;
               return (
@@ -59,11 +66,17 @@ export default function StudentTextPanel({
                       defaultText={displayDefaultText}
                       inheritedValue={rawDefaultText}
                       hasOverride={hasOverride}
-                      onChange={value => onLabelChange(activePage, label.id, value)}
-                      onRestoreDefault={() => onRestoreDefault(activePage, label.id)}
+                      onChange={value => onLabelChange(activePage, label.id, value, defaultAlign)}
+                      onRestoreDefault={() => onRestoreDefault(activePage, label.id, defaultAlign)}
                       onScheduleSave={onScheduleSave}
                       buttonGuideId="student-text-insert-name"
                       maxLength={200}
+                    />
+                    <TextAlignControl
+                      value={currentAlign}
+                      onChange={value => onLabelAlignChange(activePage, label.id, value, defaultAlign)}
+                      onScheduleSave={onScheduleSave}
+                      className="mt-2"
                     />
                     {len > 0 && (
                       <div className={`text-right text-xs mt-0.5 ${len >= 180 ? "text-red-500" : "text-gray-300"}`}>

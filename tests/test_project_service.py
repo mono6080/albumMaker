@@ -49,3 +49,20 @@ def test_legacy_student_template_default_does_not_block_project_blank_override()
         "1": "",
         "2": "Student custom",
     }
+
+
+def test_project_label_alignment_merges_with_student_text_override():
+    student_pages = [
+        {
+            "page_index": 0,
+            "photos": {},
+            "label_texts": {"1": "Student custom"},
+        }
+    ]
+    project_label_texts = {"0": {"1": {"text": "Project default", "text_align": "right"}}}
+
+    merged = merge_project_label_texts_into_pages(student_pages, project_label_texts)
+
+    assert merged[0]["label_texts"] == {
+        "1": {"text": "Student custom", "text_align": "right"},
+    }

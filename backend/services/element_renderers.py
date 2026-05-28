@@ -10,6 +10,7 @@ from services.draw_helpers import (
     draw_speech_bubble, wrap_text,
     _line_width_with_spacing, draw_line_with_spacing,
 )
+from services.label_texts import get_label_entry_align, get_label_entry_text
 
 
 def _clamp_int(value, default: int, min_value: int, max_value: int) -> int:
@@ -214,7 +215,8 @@ def _text_label_is_fillable(label: dict) -> bool:
 def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, student_name: str) -> None:
     """渲染文字方塊（無背景）；固定文字會忽略專案 / 學生覆寫。"""
     label_id = str(label.get("id", ""))
-    raw_text = label_texts.get(label_id) if _text_label_is_fillable(label) else None
+    label_entry = label_texts.get(label_id) if _text_label_is_fillable(label) else None
+    raw_text = get_label_entry_text(label_entry)
     if raw_text is None:
         raw_text = label.get("text", "")
     label_text = raw_text.replace("{name}", student_name)
@@ -227,7 +229,7 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
     letter_spacing = int(label.get("letter_spacing", 0))
     lw, lh = int(label["width"]), int(label["height"])
     rotation = label.get("rotation", 0)
-    text_align = label.get("text_align", "center")
+    text_align = get_label_entry_align(label_entry, label.get("text_align", "center"))
     shadow = _text_shadow_settings(label)
     draw = ImageDraw.Draw(canvas, "RGBA")
     lines = wrap_text(label_text, font, lw, draw, letter_spacing)

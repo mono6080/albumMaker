@@ -9,6 +9,12 @@ import zipfile
 from urllib.parse import quote
 
 from database import Project, Student
+from services.label_texts import (
+    get_label_entry_text,
+    label_entry_has_style_override,
+    merge_label_entries,
+    normalize_label_entry,
+)
 from services.render_service import PRINT_OUTPUT_SIZE, render_album, save_album_pdf, save_album_images
 from services.storage import get_storage
 
@@ -49,11 +55,12 @@ def build_content_disposition_header(filename: str) -> str:
 
 def _inherited_label_texts(label_texts: dict) -> dict:
     """保留文字覆寫設定；空字串代表刻意輸出空白。"""
-    return {
-        str(label_id): text
-        for label_id, text in (label_texts or {}).items()
-        if text is not None
-    }
+    inherited = {}
+    for label_id, text in (label_texts or {}).items():
+        normalized = normalize_label_entry(text)
+        if normalized is not None:
+            inherited[str(label_id)] = normalized
+    return inherited
 
 
 def _template_label_texts_for_page(page_layouts: list[dict] | None, page_index_key: str) -> dict:
@@ -84,9 +91,22 @@ def _drop_legacy_template_default_overrides(
         if not (
             label_id in project_label_texts
             and label_id in template_label_texts
-            and text == template_label_texts[label_id]
+            and get_label_entry_text(text) == template_label_texts[label_id]
+            and not label_entry_has_style_override(text)
         )
     }
+
+
+def _merge_page_label_texts(project_page_label_texts: dict, student_page_label_texts: dict) -> dict:
+    merged = {}
+    for label_id in set(project_page_label_texts) | set(student_page_label_texts):
+        merged_entry = merge_label_entries(
+            project_page_label_texts.get(label_id),
+            student_page_label_texts.get(label_id),
+        )
+        if merged_entry is not None:
+            merged[label_id] = merged_entry
+    return merged
 
 
 def merge_project_label_texts_into_pages(
@@ -119,7 +139,7 @@ def merge_project_label_texts_into_pages(
         )
         if project_page_label_texts or student_page_label_texts:
             # 學生的設定優先；專案設定補足尚未覆寫的對應文字
-            merged_label_texts = {**project_page_label_texts, **student_page_label_texts}
+            merged_label_texts = _merge_page_label_texts(project_page_label_texts, student_page_label_texts)
             page_data = {**page_data, "label_texts": merged_label_texts}
         merged_pages.append(page_data)
 
