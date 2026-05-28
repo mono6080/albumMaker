@@ -14,7 +14,7 @@ import {
   buildDownloadPdfUrl,
   buildStudentPagePreviewUrl,
 } from "../api/urls";
-import { apiClient } from "../api/authApi";
+import { apiClient, renderClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { usePermissions } from "../hooks/usePermissions";
 import {
@@ -306,7 +306,7 @@ export default function StudentEdit() {
       refreshAllPreviews();
       // 渲染完成後自動下載
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await downloadApiBlob(apiClient, buildDownloadPdfUrl(projectId, studentId, effectiveMode), `${student.name}.pdf`);
+      await downloadApiBlob(renderClient, buildDownloadPdfUrl(projectId, studentId, effectiveMode), `${student.name}.pdf`);
       toast.success("PDF 已下載");
     } catch {
       toast.error("產生失敗");
@@ -325,7 +325,7 @@ export default function StudentEdit() {
     const files = [];
     for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
       const { blob } = await fetchApiBlob(
-        apiClient,
+        renderClient,
         `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${requestTs}`,
       );
       const file = createFileFromBlob(blob, `${student.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
@@ -338,7 +338,7 @@ export default function StudentEdit() {
     const files = [];
     for (const visibleIndex of visiblePageIndexes.keys()) {
       const { blob, disposition } = await fetchApiBlob(
-        apiClient,
+        renderClient,
         buildDownloadImageUrl(projectId, studentId, visibleIndex + 1, effectiveMode),
       );
       const filename = getFilenameFromDisposition(disposition, `${student.name}_page${visibleIndex + 1}.jpg`);
@@ -401,7 +401,7 @@ export default function StudentEdit() {
       await renderStudent(projectId, studentId);
       await loadStudentData();
       refreshAllPreviews();
-      await downloadApiBlob(apiClient, buildDownloadImagesZipUrl(projectId, studentId, effectiveMode), `${student.name}_images.zip`);
+      await downloadApiBlob(renderClient, buildDownloadImagesZipUrl(projectId, studentId, effectiveMode), `${student.name}_images.zip`);
       toast.success("圖片 ZIP 已下載");
     } catch {
       toast.error(isMobileDevice() ? "分享圖片失敗" : "產生圖片失敗");

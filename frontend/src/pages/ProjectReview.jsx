@@ -10,7 +10,7 @@ import {
   buildDownloadAllZipUrl as downloadAllZip,
   buildDownloadAllImagesZipUrl as downloadAllImagesZip,
 } from "../api/urls";
-import { apiClient } from "../api/authApi";
+import { apiClient, renderClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
@@ -337,7 +337,7 @@ export default function ProjectReview() {
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
-        apiClient,
+        renderClient,
         downloadPdf(id, studentId, effectiveMode),
         "album.pdf",
       );
@@ -354,7 +354,7 @@ export default function ProjectReview() {
       const visiblePageIndexes = getVisiblePageIndexes(studentRecord);
       for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
         const { blob } = await fetchApiBlob(
-          apiClient,
+          renderClient,
           `${previewUrl(id, studentRecord.id, pageIndex)}?t=${requestTs}`,
         );
         const file = createFileFromBlob(
@@ -410,7 +410,7 @@ export default function ProjectReview() {
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
-        apiClient,
+        renderClient,
         downloadImagesZip(id, studentId, effectiveMode),
         "album-images.zip",
       );
@@ -434,7 +434,7 @@ export default function ProjectReview() {
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
-        apiClient,
+        renderClient,
         downloadAllZip(id, effectiveMode),
         "albums.zip",
       );
@@ -484,7 +484,7 @@ export default function ProjectReview() {
       setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
-        apiClient,
+        renderClient,
         downloadAllImagesZip(id, effectiveMode),
         "album-images.zip",
       );

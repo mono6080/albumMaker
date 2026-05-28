@@ -64,8 +64,8 @@ const PROJECT_LIST_GUIDE_STEPS = [
   },
   {
     element: '[data-guide="project-search"]',
-    title: "搜尋專案",
-    description: "可用專案名稱、建立者、學生數或日期快速縮小列表；同一個搜尋也會套用到封存復原清單。",
+    title: "搜尋與篩選",
+    description: "可用專案名稱、建立者、學生數或日期搜尋；管理員可再用部門、期別與建立者篩選，同樣會套用到封存復原清單。",
     side: "bottom",
     align: "start",
   },
@@ -104,6 +104,14 @@ const FALLBACK_DEPARTMENTS = [
   { code: "academy", name: "學院部" },
 ];
 
+const ALL_FILTER_VALUE = "all";
+
+const DEFAULT_PROJECT_FILTERS = {
+  department: ALL_FILTER_VALUE,
+  period: ALL_FILTER_VALUE,
+  ownerQuery: "",
+};
+
 function normalizeSearchText(value) {
   return String(value ?? "").trim().toLocaleLowerCase("zh-TW");
 }
@@ -122,6 +130,35 @@ function projectMatchesTerms(project, terms) {
     createdDate,
   ].join(" "));
   return terms.every(term => haystack.includes(term));
+}
+
+function projectMatchesFilters(project, filters, showOwner, canUseProjectFilters) {
+  if (!canUseProjectFilters) return true;
+  if (filters.department !== ALL_FILTER_VALUE && String(project.department ?? "") !== filters.department) {
+    return false;
+  }
+  if (filters.period !== ALL_FILTER_VALUE && String(project.template_period_id ?? "") !== filters.period) {
+    return false;
+  }
+  const ownerQuery = normalizeSearchText(filters.ownerQuery);
+  if (showOwner && ownerQuery) {
+    const ownerText = normalizeSearchText([project.owner_name, project.owner_id].join(" "));
+    if (!ownerText.includes(ownerQuery)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, targetLabel = "專案") {
+  const trimmedSearch = searchQuery.trim();
+  if (hasSearch && hasActiveFilters) {
+    return `沒有符合「${trimmedSearch}」與目前篩選條件的${targetLabel}`;
+  }
+  if (hasSearch) {
+    return `沒有符合「${trimmedSearch}」的${targetLabel}`;
+  }
+  return `沒有符合目前篩選條件的${targetLabel}`;
 }
 
 const ProjectCard = memo(function ProjectCard({
@@ -293,6 +330,7 @@ export default function ProjectList() {
   const { currentUser } = useAuth();
   // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
   const showOwner = currentUser?.role !== "teacher";
+  const canUseProjectFilters = currentUser?.role === "admin";
   const [projects, setProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -310,20 +348,90 @@ export default function ProjectList() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [nowMs] = useState(() => Date.now());
   const [searchQuery, setSearchQuery] = useState("");
+  const [filters, setFilters] = useState(DEFAULT_PROJECT_FILTERS);
 
   const searchTerms = useMemo(
     () => normalizeSearchText(searchQuery).split(/\s+/).filter(Boolean),
     [searchQuery]
   );
+  const filterSourceProjects = useMemo(
+    () => [...projects, ...archivedProjects],
+    [projects, archivedProjects]
+  );
+  const departmentFilterOptions = useMemo(() => {
+    const optionMap = new Map();
+    for (const department of departments) {
+      if (!department.code) continue;
+      optionMap.set(String(department.code), department.name || department.code);
+    }
+    for (const project of filterSourceProjects) {
+      if (!project.department) continue;
+      const value = String(project.department);
+      if (!optionMap.has(value)) {
+        optionMap.set(value, project.department_label || value);
+      }
+    }
+    return Array.from(optionMap, ([value, label]) => ({ value, label }));
+  }, [departments, filterSourceProjects]);
+  const periodFilterOptions = useMemo(() => {
+    const optionMap = new Map();
+    for (const project of filterSourceProjects) {
+      if (!project.template_period_id) continue;
+      const value = String(project.template_period_id);
+      if (optionMap.has(value)) continue;
+      const periodLabel = project.template_period_name || `期別 ${value}`;
+      optionMap.set(value, project.department_label ? `${project.department_label} / ${periodLabel}` : periodLabel);
+    }
+    return Array.from(optionMap, ([value, label]) => ({ value, label }));
+  }, [filterSourceProjects]);
+  const ownerFilterOptions = useMemo(() => {
+    if (!showOwner) return [];
+    const optionMap = new Map();
+    for (const project of filterSourceProjects) {
+      if (project.owner_id === null || project.owner_id === undefined) continue;
+      const value = String(project.owner_id);
+      if (!optionMap.has(value)) {
+        optionMap.set(value, project.owner_name || `使用者 ${value}`);
+      }
+    }
+    return Array.from(optionMap, ([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "zh-TW"));
+  }, [filterSourceProjects, showOwner]);
+  const hasActiveFilters = canUseProjectFilters && (
+    filters.department !== ALL_FILTER_VALUE ||
+    filters.period !== ALL_FILTER_VALUE ||
+    (showOwner && Boolean(filters.ownerQuery?.trim()))
+  );
+  const hasListFilters = searchTerms.length > 0 || hasActiveFilters;
   const filteredProjects = useMemo(
-    () => projects.filter(project => projectMatchesTerms(project, searchTerms)),
-    [projects, searchTerms]
+    () => projects.filter(project => (
+      projectMatchesTerms(project, searchTerms) &&
+      projectMatchesFilters(project, filters, showOwner, canUseProjectFilters)
+    )),
+    [projects, searchTerms, filters, showOwner, canUseProjectFilters]
   );
   const filteredArchivedProjects = useMemo(
-    () => archivedProjects.filter(project => projectMatchesTerms(project, searchTerms)),
-    [archivedProjects, searchTerms]
+    () => archivedProjects.filter(project => (
+      projectMatchesTerms(project, searchTerms) &&
+      projectMatchesFilters(project, filters, showOwner, canUseProjectFilters)
+    )),
+    [archivedProjects, searchTerms, filters, showOwner, canUseProjectFilters]
   );
   const hasSearch = searchTerms.length > 0;
+  const activeEmptyMessage = buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, "專案");
+  const archivedEmptyMessage = buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, "封存專案");
+  const listCountLabel = hasListFilters
+    ? `找到 ${filteredProjects.length} / ${projects.length} 個專案`
+    : `共 ${projects.length} 個專案`;
+
+  const updateFilter = useCallback((key, value) => {
+    setFilters(current => ({ ...current, [key]: value }));
+  }, []);
+
+  const clearListFilters = useCallback(() => {
+    setSearchQuery("");
+    setFilters({ ...DEFAULT_PROJECT_FILTERS });
+  }, []);
 
   const startGuide = useCallback(() => {
     if (canCreateProject && !showForm) {
@@ -544,7 +652,7 @@ export default function ProjectList() {
             </div>
           ) : filteredArchivedProjects.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-gray-400">
-              沒有符合「{searchQuery.trim()}」的封存專案
+              {archivedEmptyMessage}
             </div>
           ) : (
             <div>
@@ -642,35 +750,104 @@ export default function ProjectList() {
         </Surface>
       )}
 
-      <div
-        className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+      <Surface
+        variant="toolbar"
+        padding="sm"
+        className="mb-4"
         data-guide="project-search"
       >
-        <div className="relative w-full sm:max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={event => setSearchQuery(event.target.value)}
-            placeholder="搜尋專案名稱、建立者、日期"
-            aria-label="搜尋專案"
-            className={`${fieldControlClass} pl-9 pr-10`}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-              aria-label="清除搜尋"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+          <FormField label="搜尋" className="xl:w-80 xl:flex-shrink-0">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                placeholder="專案名稱、建立者、日期"
+                aria-label="搜尋專案"
+                className={`${fieldControlClass} pl-9 pr-10`}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                  aria-label="清除搜尋"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </FormField>
+          {canUseProjectFilters && (
+            <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <FormField label="部門">
+                <select
+                  className={fieldControlClass}
+                  value={filters.department}
+                  onChange={event => updateFilter("department", event.target.value)}
+                >
+                  <option value={ALL_FILTER_VALUE}>全部部門</option>
+                  {departmentFilterOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="期別">
+                <select
+                  className={fieldControlClass}
+                  value={filters.period}
+                  onChange={event => updateFilter("period", event.target.value)}
+                >
+                  <option value={ALL_FILTER_VALUE}>全部期別</option>
+                  {periodFilterOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              {showOwner && (
+                <FormField label="建立者">
+                  <div className="relative">
+                    <input
+                      list="project-owner-filter-options"
+                      className={`${fieldControlClass} pr-10`}
+                      value={filters.ownerQuery ?? ""}
+                      onChange={event => updateFilter("ownerQuery", event.target.value)}
+                      placeholder="輸入建立者"
+                      aria-label="篩選建立者"
+                    />
+                    {filters.ownerQuery && (
+                      <button
+                        type="button"
+                        onClick={() => updateFilter("ownerQuery", "")}
+                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                        aria-label="清除建立者篩選"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <datalist id="project-owner-filter-options">
+                      {ownerFilterOptions.map(option => (
+                        <option key={option.value} value={option.label} />
+                      ))}
+                    </datalist>
+                  </div>
+                </FormField>
+              )}
+            </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-2 xl:flex-shrink-0 xl:justify-end xl:pb-0.5">
+            <div className="text-xs text-gray-400">{listCountLabel}</div>
+            {hasListFilters && (
+              <Button type="button" onClick={clearListFilters} variant="ghost" size="sm">
+                <X className="h-3.5 w-3.5" />
+                清除
+              </Button>
+            )}
+          </div>
         </div>
-        <div className="text-xs text-gray-400">
-          {hasSearch ? `找到 ${filteredProjects.length} / ${projects.length} 個專案` : `共 ${projects.length} 個專案`}
-        </div>
-      </div>
+      </Surface>
 
       {projects.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
@@ -680,7 +857,7 @@ export default function ProjectList() {
       ) : filteredProjects.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
           <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">沒有符合「{searchQuery.trim()}」的專案</p>
+          <p className="text-sm">{activeEmptyMessage}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
