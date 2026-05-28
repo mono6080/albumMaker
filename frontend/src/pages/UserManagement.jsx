@@ -29,6 +29,13 @@ const ROLE_BADGE_STYLE = {
   none:       "bg-gray-100 text-gray-500",
 };
 
+const SUPERVISABLE_ROLES = new Set(["teacher", "supervisor"]);
+
+function canHaveSupervisor(userOrRole) {
+  const role = typeof userOrRole === "string" ? userOrRole : userOrRole?.role;
+  return SUPERVISABLE_ROLES.has(role);
+}
+
 function getSupervisorIds(user) {
   return user.supervisor_ids ?? (user.supervisor_id ? [user.supervisor_id] : []);
 }
@@ -78,6 +85,9 @@ export default function UserManagement() {
   const editInputRef = useRef(null);
   const importFileRef = useRef(null);
   const supervisorEditorUser = users.find((user) => user.id === supervisorEditorUserId);
+  const supervisorEditorOptions = supervisorEditorUser
+    ? supervisors.filter(supervisor => supervisor.id !== supervisorEditorUser.id)
+    : [];
 
   const loadUsers = async () => {
     try {
@@ -105,7 +115,7 @@ export default function UserManagement() {
         display_name: newDisplayName,
         password: newPassword,
         role: newRole,
-        ...(newRole === "teacher" ? { supervisor_ids: newSupervisorIds } : {}),
+        ...(canHaveSupervisor(newRole) ? { supervisor_ids: newSupervisorIds } : {}),
       };
       await createUser(params);
       toast.success("使用者已建立");
@@ -152,7 +162,7 @@ export default function UserManagement() {
 
   const handleSupervisorToggle = async (user, supervisorId, checked) => {
     const currentSupervisorIds = getSupervisorIds(user);
-    if (!checked && currentSupervisorIds.length <= 1) {
+    if (user.role === "teacher" && !checked && currentSupervisorIds.length <= 1) {
       toast.error("請至少保留一位主管");
       return;
     }
@@ -255,11 +265,11 @@ export default function UserManagement() {
               </button>
             </div>
             <div className="p-4 max-h-80 overflow-y-auto">
-              {supervisors.length === 0 ? (
-                <div className="text-sm text-gray-400 text-center py-8">尚無主管</div>
+              {supervisorEditorOptions.length === 0 ? (
+                <div className="text-sm text-gray-400 text-center py-8">尚無可指定的其他主管</div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {supervisors.map((supervisor) => {
+                  {supervisorEditorOptions.map((supervisor) => {
                     const supervisorIds = getSupervisorIds(supervisorEditorUser);
                     return (
                       <label key={supervisor.id} className="inline-flex items-center gap-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
@@ -366,7 +376,7 @@ export default function UserManagement() {
             onChange={(e) => {
               const role = e.target.value;
               setNewRole(role);
-              if (role !== "teacher") setNewSupervisorIds([]);
+              if (!canHaveSupervisor(role)) setNewSupervisorIds([]);
             }}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
           >
@@ -375,9 +385,11 @@ export default function UserManagement() {
             ))}
           </select>
         </div>
-        {newRole === "teacher" && (
+        {canHaveSupervisor(newRole) && (
           <div className="border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
-            <div className="text-xs font-medium text-gray-500 mb-2">主管（可多選）</div>
+            <div className="text-xs font-medium text-gray-500 mb-2">
+              主管（可多選{newRole === "supervisor" ? "，選填" : ""}）
+            </div>
             {supervisors.length === 0 ? (
               <div className="text-xs text-gray-400">尚無主管</div>
             ) : (
@@ -480,7 +492,7 @@ export default function UserManagement() {
                   </select>
                 </td>
                 <td className="px-4 py-3">
-                  {user.role === "teacher" ? (
+                  {canHaveSupervisor(user) ? (
                     <div className="flex items-center gap-2 max-w-56">
                       {supervisors.length === 0 ? (
                         <span className="text-xs text-gray-300">未指定</span>

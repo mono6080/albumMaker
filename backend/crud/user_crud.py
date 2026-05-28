@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from database import User, teacher_supervisors
 
+SUPERVISABLE_ROLES = {"teacher", "supervisor"}
+
 
 def get_user_or_404(user_id: int, db: Session) -> User:
     """依 ID 取得使用者，不存在則回傳 HTTP 404。"""
@@ -20,20 +22,20 @@ def get_user_by_username(username: str, db: Session) -> User | None:
 
 
 def get_subordinate_user_ids(supervisor_id: int, db: Session) -> list[int]:
-    """取得指定主管的所有下屬老師 ID 清單。"""
-    assigned_teacher_ids = {
+    """取得指定主管的所有受管理使用者 ID 清單。"""
+    assigned_user_ids = {
         row[0]
         for row in db.query(teacher_supervisors.c.teacher_id)
         .join(User, User.id == teacher_supervisors.c.teacher_id)
         .filter(teacher_supervisors.c.supervisor_id == supervisor_id)
-        .filter(User.role == "teacher")
+        .filter(User.role.in_(SUPERVISABLE_ROLES))
         .all()
     }
-    legacy_teacher_ids = {
+    legacy_user_ids = {
         row[0]
         for row in db.query(User.id)
         .filter(User.supervisor_id == supervisor_id)
-        .filter(User.role == "teacher")
+        .filter(User.role.in_(SUPERVISABLE_ROLES))
         .all()
     }
-    return sorted(assigned_teacher_ids | legacy_teacher_ids)
+    return sorted(assigned_user_ids | legacy_user_ids)

@@ -569,6 +569,17 @@ def test_role_access_and_none_login_contracts():
             "teacher",
             supervisor_ids=[supervisor["id"], second_supervisor["id"]],
         )
+        assign_supervisor_to_supervisor = client.patch(
+            f"/api/users/{supervisor['id']}",
+            json={"supervisor_ids": [second_supervisor["id"]]},
+        )
+        assert_status(assign_supervisor_to_supervisor, 200)
+        assert assign_supervisor_to_supervisor.json()["supervisor_ids"] == [second_supervisor["id"]]
+        self_supervision = client.patch(
+            f"/api/users/{supervisor['id']}",
+            json={"supervisor_ids": [supervisor["id"]]},
+        )
+        assert_status(self_supervision, 400)
         art_team, art_team_password = create_user(client, "art_team")
         none_user, none_password = create_user(client, "none")
 
@@ -625,9 +636,16 @@ def test_role_access_and_none_login_contracts():
         assert_status(second_supervisor_projects, 200)
         second_supervisor_project_ids = {project["id"] for project in second_supervisor_projects.json()}
         assert teacher_project_id in second_supervisor_project_ids
-        assert supervisor_own_project_id not in second_supervisor_project_ids
+        assert supervisor_own_project_id in second_supervisor_project_ids
         second_supervisor_reads_teacher = client.get(f"/api/projects/{teacher_project_id}")
         assert_status(second_supervisor_reads_teacher, 200)
+        second_supervisor_reads_supervisor_project = client.get(f"/api/projects/{supervisor_own_project_id}")
+        assert_status(second_supervisor_reads_supervisor_project, 200)
+        second_supervisor_writes_supervisor_project = client.patch(
+            f"/api/projects/{supervisor_own_project_id}",
+            data={"name": "blocked"},
+        )
+        assert_status(second_supervisor_writes_supervisor_project, 403)
 
         client.cookies.clear()
         login(client, teacher["username"], teacher_password)

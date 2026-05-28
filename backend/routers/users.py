@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, hash_password, require_role
-from crud.user_crud import get_user_or_404
+from crud.user_crud import SUPERVISABLE_ROLES, get_user_or_404
 from database import Project, User, get_db, teacher_supervisors
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -167,7 +167,7 @@ async def import_users_from_excel(
             supervisor_tokens = _split_supervisor_tokens(
                 _cell_to_text(_row_value(row, column_map.get("supervisor")))
             )
-            supervisor_ids = _resolve_supervisor_tokens(supervisor_tokens, db) if role == "teacher" else []
+            supervisor_ids = _resolve_supervisor_tokens(supervisor_tokens, db) if role in SUPERVISABLE_ROLES else []
 
             new_user = _create_user_record(
                 db,
@@ -235,7 +235,7 @@ def _create_user_record(
     if role == "teacher" and not supervisor_ids:
         raise HTTPException(status_code=400, detail="帶班老師必須指定主管")
 
-    supervisors = _validate_supervisors(supervisor_ids, db) if role == "teacher" else []
+    supervisors = _validate_supervisors(supervisor_ids, db) if role in SUPERVISABLE_ROLES else []
 
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=400, detail="帳號已存在")
@@ -245,9 +245,9 @@ def _create_user_record(
         display_name=display_name,
         hashed_password=hash_password(password),
         role=role,
-        supervisor_id=supervisor_ids[0] if role == "teacher" and supervisor_ids else None,
+        supervisor_id=supervisor_ids[0] if role in SUPERVISABLE_ROLES and supervisor_ids else None,
     )
-    if role == "teacher":
+    if role in SUPERVISABLE_ROLES:
         new_user.supervisors = supervisors
     db.add(new_user)
     return new_user
@@ -288,7 +288,9 @@ def update_user(
         normalized_supervisor_ids = _normalize_supervisor_ids(body.supervisor_ids, body.supervisor_id)
 
     if normalized_supervisor_ids is not None:
-        supervisors = _validate_supervisors(normalized_supervisor_ids, db)
+        if target_user.role not in SUPERVISABLE_ROLES and normalized_supervisor_ids:
+            raise HTTPException(status_code=400, detail="只有帶班老師或主管可以指定主管")
+        supervisors = _validate_supervisors(normalized_supervisor_ids, db, target_user_id=target_user.id)
         target_user.supervisors = supervisors
         target_user.supervisor_id = normalized_supervisor_ids[0] if normalized_supervisor_ids else None
 
@@ -296,7 +298,7 @@ def update_user(
         target_user.supervisors = []
         target_user.supervisor_id = None
 
-    if target_user.role != "teacher":
+    if target_user.role not in SUPERVISABLE_ROLES:
         target_user.supervisors = []
         target_user.supervisor_id = None
 
@@ -464,9 +466,11 @@ def _normalize_supervisor_ids(supervisor_ids: list[int] | None, supervisor_id: i
     return normalized
 
 
-def _validate_supervisors(supervisor_ids: list[int], db: Session) -> list[User]:
+def _validate_supervisors(supervisor_ids: list[int], db: Session, target_user_id: int | None = None) -> list[User]:
     supervisors = []
     for supervisor_id in supervisor_ids:
+        if target_user_id is not None and supervisor_id == target_user_id:
+            raise HTTPException(status_code=400, detail="不能指定自己為主管")
         supervisor = get_user_or_404(supervisor_id, db)
         if supervisor.role != "supervisor":
             raise HTTPException(status_code=400, detail="指定的主管必須是 supervisor 角色")
