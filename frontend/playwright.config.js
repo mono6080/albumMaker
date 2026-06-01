@@ -1,8 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === "1";
+const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 
-export default defineConfig({
+const config = {
   testDir: "./tests/e2e",
   timeout: 60_000,
   expect: {
@@ -21,7 +22,10 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: [
+};
+
+if (!skipWebServer) {
+  config.webServer = [
     {
       command: "python ../scripts/e2e_server.py",
       url: "http://127.0.0.1:8765/api/health",
@@ -34,5 +38,7 @@ export default defineConfig({
       reuseExistingServer,
       timeout: 30_000,
     },
-  ],
-});
+  ];
+}
+
+export default defineConfig(config);

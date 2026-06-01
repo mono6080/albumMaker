@@ -8,10 +8,22 @@ React 19 + Vite 8 + Tailwind CSS 4 SPA for the kindergarten album maker.
 npm run dev      # Vite dev server on 5173; /api proxies to localhost:8765
 npm run build    # production bundle consumed by backend/main.py from frontend/dist
 npm run lint     # ESLint
+npm run test:e2e # clean Playwright run; starts its own e2e backend and Vite
 ```
 
 For HMR development, run the FastAPI backend on `8765`; this matches
 `start.bat`, Docker, and the backend-served app path.
+
+For repeated local Playwright checks, keep the e2e backend and Vite running:
+
+```bash
+npm run dev:e2e
+npm run test:e2e:reuse -- -g multi-select
+```
+
+`dev:e2e` uses an isolated `.tmp/e2e` database and the fixed e2e admin
+password. `test:e2e:reuse` skips Playwright's `webServer` startup entirely, so
+do not use it unless `dev:e2e` is already running.
 
 ## Structure
 

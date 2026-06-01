@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:e2e": "node scripts/e2e-local-servers.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:unit": "node tests/unit/run.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:reuse": "node scripts/playwright-reuse.mjs",
     "test:render-parity": "node ../scripts/check_render_parity.mjs && node ../scripts/check_render_canvas_parity.mjs"
   },
   "dependencies": {

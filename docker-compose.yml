@@ -7,6 +7,8 @@ services:
       - production_album_maker_socket:/album_maker_socket
     env_file:
       - .env
+    environment:
+      PHOTO_UPLOAD_CONCURRENCY: ${PHOTO_UPLOAD_CONCURRENCY:-2}
     networks:
       - nginx_net
     restart: unless-stopped

@@ -18,10 +18,46 @@ import {
 } from "../utils/photoMatcher";
 import { handleApiError } from "../utils/apiError";
 
-const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const ACCEPTED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+];
+const ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".hif"];
 const MAX_FILES_PER_BATCH = 60;
+const UPLOAD_CHUNK_SIZE = 2;
 
 // ── 小工具 ────────────────────────────────────────────────────────────────
+
+function chunkAssignments(assignments, size) {
+  const chunks = [];
+  for (let i = 0; i < assignments.length; i += size) {
+    chunks.push(assignments.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function uploadStatusLabel(status) {
+  if (!status) return "";
+  if (status.phase === "processing") return "處理中";
+  if (status.phase === "saving") return "整理結果中";
+  return "上傳中";
+}
+
+function mergeBatchOutcome(target, source) {
+  target.succeeded.push(...(source.succeeded ?? []));
+  target.failed.push(...(source.failed ?? []));
+  target.skipped.push(...(source.skipped ?? []));
+}
+
+function isAcceptedImageFile(file) {
+  const lowerName = file.name.toLowerCase();
+  return ACCEPTED_TYPES.includes(file.type) || ACCEPTED_EXTENSIONS.some(ext => lowerName.endsWith(ext));
+}
 
 function useObjectUrls(files) {
   const [urls, setUrls] = useState({});
@@ -85,7 +121,7 @@ export default function BatchPhotoWizard({
   const [matchResult, setMatchResult] = useState(emptyMatch([], []));
   const [overwriteExisting, setOverwriteExisting] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadOutcome, setUploadOutcome] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -103,10 +139,9 @@ export default function BatchPhotoWizard({
     setStrategy("name");
     setMatchResult(emptyMatch([], []));
     setOverwriteExisting(true);
-    setUploadProgress(null);
+    setUploadStatus(null);
     setUploadOutcome(null);
     setIsUploading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // 策略或檔案變動時重算配對
@@ -129,9 +164,9 @@ export default function BatchPhotoWizard({
 
   const handleFilesSelected = (fileList) => {
     const incoming = Array.from(fileList);
-    const accepted = incoming.filter((f) => ACCEPTED_TYPES.includes(f.type));
+    const accepted = incoming.filter(isAcceptedImageFile);
     const rejected = incoming.length - accepted.length;
-    if (rejected > 0) toast.error(`已忽略 ${rejected} 個非 JPEG/PNG/WebP 檔案`);
+    if (rejected > 0) toast.error(`已忽略 ${rejected} 個非 JPEG/PNG/WebP/HEIC 檔案`);
 
     // 依檔名去重（同檔名後者覆蓋前者）
     const merged = new Map();
@@ -163,33 +198,71 @@ export default function BatchPhotoWizard({
       return;
     }
     setIsUploading(true);
-    setUploadProgress(0);
+    setUploadStatus({ phase: "uploading", percent: 0 });
     setUploadOutcome(null);
     try {
-      const response = await batchUploadPhotos(
-        projectId,
-        pageIndex,
-        slotId,
-        matchResult.assignments,
-        { overwriteExisting },
-        setUploadProgress,
-      );
-      const data = response.data ?? {};
-      setUploadOutcome(data);
-      const okCount = data.succeeded?.length ?? 0;
-      const failCount = data.failed?.length ?? 0;
-      const skipCount = data.skipped?.length ?? 0;
+      const assignments = matchResult.assignments;
+      const chunks = chunkAssignments(assignments, UPLOAD_CHUNK_SIZE);
+      const merged = {
+        ok: true,
+        page_index: pageIndex,
+        slot_id: slotId,
+        succeeded: [],
+        failed: [],
+        skipped: [],
+      };
+      let completedAssignments = 0;
+
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex];
+        const updateChunkStatus = (phase, chunkPercent) => {
+          const weightedProgress = completedAssignments + (chunkPercent / 100) * chunk.length;
+          setUploadStatus({
+            phase,
+            percent: Math.round((weightedProgress / assignments.length) * 100),
+            completed: completedAssignments,
+            total: assignments.length,
+            chunk: chunkIndex + 1,
+            chunks: chunks.length,
+          });
+        };
+
+        updateChunkStatus("uploading", 0);
+        const response = await batchUploadPhotos(
+          projectId,
+          pageIndex,
+          slotId,
+          chunk,
+          { overwriteExisting },
+          pct => updateChunkStatus(pct >= 100 ? "processing" : "uploading", pct),
+        );
+        mergeBatchOutcome(merged, response.data ?? {});
+        completedAssignments += chunk.length;
+        setUploadStatus({
+          phase: chunkIndex === chunks.length - 1 ? "saving" : "uploading",
+          percent: Math.round((completedAssignments / assignments.length) * 100),
+          completed: completedAssignments,
+          total: assignments.length,
+          chunk: chunkIndex + 1,
+          chunks: chunks.length,
+        });
+      }
+
+      setUploadOutcome(merged);
+      const okCount = merged.succeeded.length;
+      const failCount = merged.failed.length;
+      const skipCount = merged.skipped.length;
       if (failCount === 0) {
         toast.success(`已上傳 ${okCount} 張` + (skipCount > 0 ? `（跳過 ${skipCount}）` : ""));
       } else {
         toast.error(`完成 ${okCount} 張，失敗 ${failCount} 張`);
       }
-      onUploaded?.(data);
+      onUploaded?.(merged);
     } catch (error) {
       handleApiError(error, "批次上傳失敗");
     } finally {
       setIsUploading(false);
-      setUploadProgress(null);
+      setUploadStatus(null);
     }
   };
 
@@ -215,13 +288,13 @@ export default function BatchPhotoWizard({
               {" / "}班上 <strong className="text-gray-800">{students.length}</strong> 位學生
             </p>
             <p className="text-[11px] text-gray-400">
-              支援 JPEG、PNG、WebP；建議檔名包含學生姓名（如 <code>小明.jpg</code>）以自動配對
+              支援 JPEG、PNG、WebP、HEIC；建議檔名包含學生姓名（如 <code>小明.jpg</code>）以自動配對
             </p>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,.hif"
             multiple
             className="hidden"
             onChange={(e) => {
@@ -335,16 +408,19 @@ export default function BatchPhotoWizard({
               覆蓋學生原本已有的照片（不勾選則跳過已有照片的學生）
             </label>
 
-            {uploadProgress !== null && (
+            {uploadStatus !== null && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>上傳中</span>
-                  <span>{uploadProgress}%</span>
+                  <span>
+                    {uploadStatus.chunks > 1 && `第 ${uploadStatus.chunk}/${uploadStatus.chunks} 批 · `}
+                    {uploadStatusLabel(uploadStatus)}
+                  </span>
+                  <span>{uploadStatus.percent}%</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
                   <div
                     className="h-full rounded-full bg-indigo-500 transition-all"
-                    style={{ width: `${uploadProgress}%` }}
+                    style={{ width: `${uploadStatus.percent}%` }}
                   />
                 </div>
               </div>
@@ -427,7 +503,7 @@ export default function BatchPhotoWizard({
               disabled={isUploading || matchResult.assignments.length === 0}
             >
               {isUploading ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> 上傳中...</>
+                <><Loader2 className="h-4 w-4 animate-spin" /> {uploadStatusLabel(uploadStatus)}...</>
               ) : (
                 <>上傳 {matchResult.assignments.length} 張</>
               )}

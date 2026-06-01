@@ -47,6 +47,12 @@ import {
   withLabelEntryText,
   withoutLabelEntryText,
 } from "../utils/labelTextEntries";
+
+function uploadStatusLabel(status) {
+  if (!status) return "";
+  if (status.phase === "processing") return "處理中";
+  return "上傳中";
+}
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 import { handleApiError } from "../utils/apiError";
 
@@ -206,7 +212,7 @@ export default function ProjectBatch() {
   const [selectedSharedPhotoSlotId, setSelectedSharedPhotoSlotId] = useState(null);
   const [sharedPhotoFile, setSharedPhotoFile] = useState(null);
   const [isSharedPhotoUploading, setIsSharedPhotoUploading] = useState(false);
-  const [sharedPhotoUploadProgress, setSharedPhotoUploadProgress] = useState(null);
+  const [sharedPhotoUploadStatus, setSharedPhotoUploadStatus] = useState(null);
 
   // 批次照片分配 Modal
   const [isBatchWizardOpen, setIsBatchWizardOpen] = useState(false);
@@ -323,14 +329,17 @@ export default function ProjectBatch() {
     if (!sharedPhotoFile || selectedSharedPhotoSlotId == null || isSharedPhotoUploading) return;
 
     setIsSharedPhotoUploading(true);
-    setSharedPhotoUploadProgress(0);
+    setSharedPhotoUploadStatus({ phase: "uploading", percent: 0 });
     try {
       const response = await uploadSharedProjectPhoto(
         projectId,
         activePage,
         selectedSharedPhotoSlotId,
         sharedPhotoFile,
-        setSharedPhotoUploadProgress,
+        pct => setSharedPhotoUploadStatus({
+          phase: pct >= 100 ? "processing" : "uploading",
+          percent: pct,
+        }),
       );
       const updated = response.data?.updated ?? 0;
       toast.success(`已套用到 ${updated} 位學生`);
@@ -341,7 +350,7 @@ export default function ProjectBatch() {
       handleApiError(error, "共用照片上傳失敗");
     } finally {
       setIsSharedPhotoUploading(false);
-      setSharedPhotoUploadProgress(null);
+      setSharedPhotoUploadStatus(null);
     }
   };
 
@@ -650,7 +659,7 @@ export default function ProjectBatch() {
             <input
               ref={sharedPhotoInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.heic,.heif,.hif"
               className="hidden"
               onChange={event => setSharedPhotoFile(event.target.files?.[0] || null)}
             />
@@ -695,12 +704,18 @@ export default function ProjectBatch() {
                 套用到全班
               </Button>
 
-              {sharedPhotoUploadProgress !== null && (
-                <div className="h-1 overflow-hidden rounded-full bg-gray-100">
-                  <div
-                    className="h-full rounded-full bg-sky-500 transition-all duration-200"
-                    style={{ width: `${sharedPhotoUploadProgress}%` }}
-                  />
+              {sharedPhotoUploadStatus !== null && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>{uploadStatusLabel(sharedPhotoUploadStatus)}</span>
+                    <span>{sharedPhotoUploadStatus.percent}%</span>
+                  </div>
+                  <div className="h-1 overflow-hidden rounded-full bg-gray-100">
+                    <div
+                      className="h-full rounded-full bg-sky-500 transition-all duration-200"
+                      style={{ width: `${sharedPhotoUploadStatus.percent}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </div>

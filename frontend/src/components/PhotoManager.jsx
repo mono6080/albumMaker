@@ -6,6 +6,14 @@ import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan, getPhotoCropBox } from "../utils/photoUtils";
 
+const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
+
+function uploadStatusLabel(status) {
+  if (!status) return "";
+  if (status.phase === "processing") return "處理中";
+  if (status.phase === "saving") return "儲存中";
+  return "上傳中";
+}
 
 // ── 照片編輯 Modal ────────────────────────────────────────────────────────────
 
@@ -204,8 +212,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const [dragOverIdx, setDragOverIdx] = useState(null);
   const dragIdxRef = useRef(null);
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
-  // uploadProgress: null = 閒置，0-100 = 上傳中
-  const [uploadProgress, setUploadProgress] = useState(null);
+  // uploadStatus: null = 閒置；otherwise { phase, percent }
+  const [uploadStatus, setUploadStatus] = useState(null);
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
   const [isTouchDevice] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(hover: none)").matches
@@ -246,18 +254,52 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         const uploadedPaths = {};
         const uploadFailures = {};
         const pendingIndices = cur.map((it, i) => it.pendingFile ? i : -1).filter(i => i >= 0);
-        if (pendingIndices.length) setUploadProgress(0);
-        for (let fileNo = 0; fileNo < pendingIndices.length; fileNo++) {
-          const i = pendingIndices[fileNo];
-          try {
-            const res = await uploadPhoto(
-              projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
-              pct => setUploadProgress(Math.round((fileNo * 100 + pct) / pendingIndices.length))
+        if (pendingIndices.length) {
+          const progressByIndex = new Map(pendingIndices.map(i => [i, 0]));
+          let completedUploads = 0;
+          let nextPendingCursor = 0;
+
+          const updateAggregateStatus = (phaseOverride) => {
+            const totalProgress = [...progressByIndex.values()].reduce((sum, pct) => sum + pct, 0);
+            const percent = Math.round(totalProgress / pendingIndices.length);
+            const phase = phaseOverride ?? (
+              percent >= 100 && completedUploads < pendingIndices.length ? "processing" : "uploading"
             );
-            uploadedPaths[i] = res.data.path;
-          } catch (error) {
-            uploadFailures[i] = error;
-          }
+            setUploadStatus({
+              phase,
+              percent,
+              completed: completedUploads,
+              total: pendingIndices.length,
+            });
+          };
+
+          updateAggregateStatus("uploading");
+
+          const uploadNext = async () => {
+            while (nextPendingCursor < pendingIndices.length) {
+              const i = pendingIndices[nextPendingCursor++];
+              try {
+                const res = await uploadPhoto(
+                  projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
+                  pct => {
+                    progressByIndex.set(i, pct);
+                    updateAggregateStatus();
+                  }
+                );
+                progressByIndex.set(i, 100);
+                uploadedPaths[i] = res.data.path;
+              } catch (error) {
+                progressByIndex.set(i, 100);
+                uploadFailures[i] = error;
+              } finally {
+                completedUploads += 1;
+                updateAggregateStatus(completedUploads === pendingIndices.length ? "saving" : undefined);
+              }
+            }
+          };
+
+          const workerCount = Math.min(PHOTO_UPLOAD_PARALLEL_LIMIT, pendingIndices.length);
+          await Promise.all(Array.from({ length: workerCount }, uploadNext));
         }
         // Save mapping for moved / transform-changed items (skip pending — just uploaded)
         const pagesMap = {};
@@ -341,7 +383,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       } catch (error) {
         toast.error(getUploadFailureMessage(error));
       } finally {
-        setUploadProgress(null);
+        setUploadStatus(null);
       }
     }, 300);
   }, [items, studentId, projectId]);
@@ -614,6 +656,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
   // ── Render ────────────────────────────────────────────────────────────────
   const filledCount = items.filter(it => displayUrl(it)).length;
+  const uploadPercent = uploadStatus?.percent ?? 0;
+  const uploadLabel = uploadStatusLabel(uploadStatus);
 
 
   return (
@@ -643,8 +687,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         <h3 className="font-semibold text-gray-800 text-sm flex-shrink-0">照片管理</h3>
         <span className="text-xs text-gray-400 min-w-0">
           {filledCount} / {allSlots.length} 格
-          {uploadProgress !== null
-            ? <span className="text-indigo-600 ml-1">↑ 上傳中 {uploadProgress}%</span>
+          {uploadStatus !== null
+            ? <span className="text-indigo-600 ml-1">↑ {uploadLabel} {uploadPercent}%</span>
             : hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>
           }
         </span>
@@ -661,18 +705,18 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             <span>多選上傳</span>
             <span className="text-xs text-indigo-400">剩 {availableEmptyCount}</span>
           </button>
-          <input ref={multiRef} type="file" accept="image/*" multiple className="hidden"
+          <input ref={multiRef} type="file" accept="image/*,.heic,.heif,.hif" multiple className="hidden"
             disabled={disabled || availableEmptyCount === 0}
             onChange={e => { if (e.target.files?.length) { handleMultiUpload(e.target.files); e.target.value = ""; } }} />
         </div>
       </div>
 
       {/* Upload progress bar */}
-      {uploadProgress !== null && (
+      {uploadStatus !== null && (
         <div className="w-full h-1 bg-gray-100 rounded-full mb-3 overflow-hidden">
           <div
             className="h-full bg-indigo-500 rounded-full transition-all duration-200"
-            style={{ width: `${uploadProgress}%` }}
+            style={{ width: `${uploadPercent}%` }}
           />
         </div>
       )}
@@ -806,7 +850,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
               {/* File input lives in the cell, not the card */}
               <input ref={el => { replaceRefs.current[rk] = el; }}
-                type="file" accept="image/*" className="hidden"
+                type="file" accept="image/*,.heic,.heif,.hif" className="hidden"
                 onChange={e => { if (e.target.files?.[0]) { handleReplace(idx, e.target.files[0]); e.target.value = ""; } }} />
             </div>
           );

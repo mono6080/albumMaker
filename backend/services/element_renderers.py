@@ -151,16 +151,33 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         else:
             base_w = box_w
             base_h = int(box_w / ir)
-        nw = max(box_w, int(base_w * u_scale))
-        nh = max(box_h, int(base_h * u_scale))
+        nw = max(1, int(base_w * u_scale))
+        nh = max(1, int(base_h * u_scale))
         img = img.resize((nw, nh), Image.LANCZOS)
-        avail_x = nw - box_w
-        avail_y = nh - box_h
-        cx = int(avail_x * (0.5 + ox * 0.5))
-        cy = int(avail_y * (0.5 + oy * 0.5))
-        cx = max(0, min(cx, avail_x))
-        cy = max(0, min(cy, avail_y))
-        return img.crop((cx, cy, cx + box_w, cy + box_h))
+        overflow_x = nw - box_w
+        overflow_y = nh - box_h
+        if overflow_x >= 0:
+            src_x = int(overflow_x * (0.5 + ox * 0.5))
+            src_x = max(0, min(src_x, overflow_x))
+            dst_x = 0
+            copy_w = box_w
+        else:
+            src_x = 0
+            dst_x = int(-overflow_x / 2)
+            copy_w = nw
+        if overflow_y >= 0:
+            src_y = int(overflow_y * (0.5 + oy * 0.5))
+            src_y = max(0, min(src_y, overflow_y))
+            dst_y = 0
+            copy_h = box_h
+        else:
+            src_y = 0
+            dst_y = int(-overflow_y / 2)
+            copy_h = nh
+        crop = img.crop((src_x, src_y, src_x + copy_w, src_y + copy_h))
+        frame = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+        frame.paste(crop, (dst_x, dst_y), crop)
+        return frame
 
     if border:
         inner_w = sw - border_w * 2

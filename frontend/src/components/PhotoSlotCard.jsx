@@ -1,6 +1,6 @@
 // 照片格縮圖卡片（純顯示，含 PIL 精確位移縮放計算）
 
-import { getPhotoCropBox } from "../utils/photoUtils";
+import { getPhotoCropBox, photoDims } from "../utils/photoUtils";
 
 export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRefCallback }) {
   const SHADOW_SCALE = 110 / it.slotH;
@@ -28,22 +28,21 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
   if (nat && url) {
     const cropTW = cropBox.width;
     const cropTH = cropBox.height;
-    const cropAspect = cropTW / cropTH;
-    let baseW, baseH;
-    if (nat > cropAspect) { baseH = cropTH; baseW = cropTH * nat; }
-    else                  { baseW = cropTW; baseH = cropTW / nat; }
-    const dW = baseW * it.transform.scale;
-    const dH = baseH * it.transform.scale;
-    const availX = Math.max(0, dW - cropTW);
-    const availY = Math.max(0, dH - cropTH);
-    const startX = availX / 2 + it.transform.offsetX * availX / 2;
-    const startY = availY / 2 + it.transform.offsetY * availY / 2;
+    const { w: dW, h: dH } = photoDims(cropTW, cropTH, nat, it.transform.scale);
+    const overflowX = dW - cropTW;
+    const overflowY = dH - cropTH;
+    const left = overflowX >= 0
+      ? -(overflowX / 2 + it.transform.offsetX * overflowX / 2)
+      : -overflowX / 2;
+    const top = overflowY >= 0
+      ? -(overflowY / 2 + it.transform.offsetY * overflowY / 2)
+      : -overflowY / 2;
     imgStyle = {
       position: "absolute",
       width: Math.round(dW * physScale),
       height: Math.round(dH * physScale),
-      left: Math.round(-startX * physScale),
-      top: Math.round(-startY * physScale),
+      left: Math.round(left * physScale),
+      top: Math.round(top * physScale),
       userSelect: "none", pointerEvents: "none",
       maxWidth: "none", maxHeight: "none",
     };

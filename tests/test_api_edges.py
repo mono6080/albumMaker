@@ -39,6 +39,16 @@ def large_jpeg_bytes() -> bytes:
     return data
 
 
+def heif_bytes() -> bytes:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    image = Image.new("RGB", (96, 72), (80, 120, 220))
+    buffer = BytesIO()
+    image.save(buffer, format="HEIF")
+    return buffer.getvalue()
+
+
 def test_auth_missing_resource_and_validation_edges():
     with started_client() as client:
         templates_without_login = client.get("/api/templates/")
@@ -114,6 +124,17 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
         assert oversized_path.stat().st_size <= 5 * 1024 * 1024
         with Image.open(oversized_path) as compressed_image:
             assert compressed_image.format == "JPEG"
+
+        heic_upload = client.post(
+            photo_url,
+            files={"file": ("edge.heic", heif_bytes(), "image/heic")},
+        )
+        assert_status(heic_upload, 200)
+        heic_payload = heic_upload.json()
+        assert heic_payload["filename"].endswith(".jpg")
+        heic_path = tmp_path / "uploads" / heic_payload["path"]
+        with Image.open(heic_path) as converted_image:
+            assert converted_image.format == "JPEG"
 
         valid_upload = client.post(
             photo_url,

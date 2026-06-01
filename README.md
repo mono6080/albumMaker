@@ -162,6 +162,16 @@ npm run test:e2e
 npm run build
 ```
 
+本機反覆跑單一 Playwright 測試時，先常駐 e2e 專用後端與 Vite，再使用 reuse 模式，避免每次都讓 Playwright 管理 server：
+
+```bash
+cd frontend
+npm run dev:e2e
+npm run test:e2e:reuse -- -g multi-select
+```
+`test:e2e:reuse` 會略過 Playwright 的 `webServer` 啟動流程；請只在 `dev:e2e`
+已常駐時使用。
+
 GitHub Actions 會在 push / pull request 自動跑同一組 gate。
 
 ---

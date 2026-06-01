@@ -130,11 +130,14 @@ test("photo utilities normalize records and build slot items", () => {
 });
 
 
-test("photo sizing cover-fills crop boxes and clamps visible overflow", () => {
+test("photo sizing cover-fits the crop box and clamps visible overflow", () => {
   assert.deepEqual(photoDims(100, 100, 2, 1), { w: 200, h: 100 });
   assert.deepEqual(photoDims(100, 100, 0.5, 1), { w: 100, h: 200 });
+  assert.deepEqual(photoDims(200, 100, 1.5, 1), { w: 200, h: 133.33333333333334 });
+  assert.deepEqual(photoDims(100, 200, 0.75, 1), { w: 150, h: 200 });
   assert.deepEqual(clampPan(200, -200, 100, 100, 2, 1), { panX: 50, panY: -0 });
   assert.deepEqual(clampPan(-200, 200, 100, 100, 0.5, 1), { panX: -0, panY: 50 });
+  assert.deepEqual(clampPan(200, 200, 200, 100, 1.5, 1), { panX: 0, panY: 16.66666666666667 });
 });
 
 

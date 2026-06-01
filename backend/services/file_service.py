@@ -9,12 +9,18 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
-_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_BROWSER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_HEIF_IMAGE_TYPES = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
+_HEIF_EXTENSIONS = {".heic", ".heif", ".hif"}
+_ALLOWED_IMAGE_TYPES = _BROWSER_IMAGE_TYPES
+_ALLOWED_PHOTO_IMAGE_TYPES = _BROWSER_IMAGE_TYPES | _HEIF_IMAGE_TYPES
 _BYTES_PER_MB = 1024 * 1024
 PHOTO_UPLOAD_COMPRESS_OVER_MB = 10
 PHOTO_UPLOAD_COMPRESS_TARGET_MB = 5
 PHOTO_UPLOAD_HARD_LIMIT_MB = 50
+_heif_opener_registered = False
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,30 @@ class ProcessedImageUpload:
     data: bytes
     filename: str
     compressed: bool = False
+
+
+def _register_heif_opener() -> None:
+    global _heif_opener_registered
+    if _heif_opener_registered:
+        return
+    try:
+        from pillow_heif import register_heif_opener
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=415,
+            detail="伺服器尚未啟用 HEIC/HEIF 支援，請先轉成 JPEG 再上傳",
+        ) from exc
+    register_heif_opener()
+    _heif_opener_registered = True
+
+
+def _is_heif_upload(file: UploadFile) -> bool:
+    suffix = Path(file.filename or "").suffix.lower()
+    return file.content_type in _HEIF_IMAGE_TYPES or suffix in _HEIF_EXTENSIONS
+
+
+def _is_supported_photo_upload(file: UploadFile) -> bool:
+    return file.content_type in _ALLOWED_PHOTO_IMAGE_TYPES or _is_heif_upload(file)
 
 
 def get_photo_key(
@@ -92,9 +122,11 @@ def _save_jpeg(image: Image.Image, quality: int) -> bytes:
     return buffer.getvalue()
 
 
-def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int) -> bytes:
+def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int, is_heif: bool = False) -> bytes:
     target_bytes = target_mb * _BYTES_PER_MB
     try:
+        if is_heif:
+            _register_heif_opener()
         with Image.open(io.BytesIO(file_bytes)) as raw_image:
             image = _flatten_to_rgb(ImageOps.exif_transpose(raw_image))
             image.load()
@@ -142,21 +174,22 @@ async def read_and_process_photo_upload(
     hard_limit_mb: int = PHOTO_UPLOAD_HARD_LIMIT_MB,
 ) -> ProcessedImageUpload:
     """Read a student photo upload, compressing oversized images instead of rejecting them."""
-    if file.content_type not in _ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
+    is_heif = _is_heif_upload(file)
+    if not _is_supported_photo_upload(file):
+        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP、HEIC/HEIF 格式")
 
     file_bytes = await file.read()
     if len(file_bytes) > hard_limit_mb * _BYTES_PER_MB:
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {hard_limit_mb} MB")
 
-    if len(file_bytes) <= compress_over_mb * _BYTES_PER_MB:
+    if not is_heif and len(file_bytes) <= compress_over_mb * _BYTES_PER_MB:
         return ProcessedImageUpload(
             data=file_bytes,
             filename=file.filename or "photo",
             compressed=False,
         )
 
-    compressed_bytes = _compress_image_to_jpeg(file_bytes, target_mb)
+    compressed_bytes = await run_in_threadpool(_compress_image_to_jpeg, file_bytes, target_mb, is_heif)
     return ProcessedImageUpload(
         data=compressed_bytes,
         filename=_jpeg_upload_filename(file.filename),

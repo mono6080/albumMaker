@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-noto-cjk \
         fonts-wqy-zenhei \
         fonts-wqy-microhei \
+        libheif1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依賴

@@ -45,13 +45,18 @@ export function getPhotoCropBox(slot) {
   };
 }
 
-// 計算照片顯示尺寸（cover fill + 使用者縮放）
+// 計算照片顯示尺寸：比較照片與裁切框比例，取能剛好填滿裁切框的最小縮放。
 export function photoDims(cropW, cropH, imgAspect, scale) {
   const cropAspect = cropW / cropH;
   let baseW, baseH;
-  if (imgAspect > cropAspect) { baseH = cropH; baseW = cropH * imgAspect; }
-  else                         { baseW = cropW; baseH = cropW / imgAspect; }
-  return { w: Math.max(cropW, baseW * scale), h: Math.max(cropH, baseH * scale) };
+  if (imgAspect > cropAspect) {
+    baseH = cropH;
+    baseW = cropH * imgAspect;
+  } else {
+    baseW = cropW;
+    baseH = cropW / imgAspect;
+  }
+  return { w: baseW * scale, h: baseH * scale };
 }
 
 // 限制平移範圍不超出可見區域
