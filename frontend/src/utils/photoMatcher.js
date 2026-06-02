@@ -2,6 +2,116 @@
 // 統一回傳 { assignments: [{studentId, file}], unmatched: studentId[], unused: File[] }
 
 const stem = (file) => file.name.replace(/\.[^.]+$/, "");
+const normalizeSlotSuffix = (value) => value.trim().replace(/^[\s_-]+/, "");
+
+function normalizePositiveInteger(value) {
+  if (!/^\d+$/.test(value)) return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? String(number) : null;
+}
+
+function normalizePageSlotKey(value) {
+  const match = /^(\d+)-(\d+)$/.exec(value);
+  if (!match) return null;
+  const page = normalizePositiveInteger(match[1]);
+  const slot = normalizePositiveInteger(match[2]);
+  return page && slot ? `${page}-${slot}` : null;
+}
+
+function buildSlotLookups(pages) {
+  const byPageSlot = new Map();
+  const bySequence = new Map();
+  let sequence = 1;
+
+  pages.forEach((page, pageIndex) => {
+    const slots = page?.layout?.photo_slots || [];
+    slots.forEach((slot, slotIndex) => {
+      const target = { pageIndex, slotId: slot.id, slotIndex };
+      byPageSlot.set(`${pageIndex + 1}-${slotIndex + 1}`, target);
+      bySequence.set(String(sequence), target);
+      sequence += 1;
+    });
+  });
+
+  return { byPageSlot, bySequence };
+}
+
+function findNamedSuffix(fileStem, students) {
+  const sortedStudents = [...students].sort(
+    (a, b) => (b.name?.length || 0) - (a.name?.length || 0),
+  );
+  for (const student of sortedStudents) {
+    if (!student?.name) continue;
+    if (fileStem.startsWith(student.name)) {
+      return {
+        student,
+        suffix: normalizeSlotSuffix(fileStem.slice(student.name.length)),
+      };
+    }
+  }
+  return null;
+}
+
+function matchByNamedSlot(students, files, pages, mode) {
+  const { byPageSlot, bySequence } = buildSlotLookups(pages);
+  const assignments = [];
+  const invalid = [];
+  const usedTargets = new Set();
+  const usedFiles = new Set();
+
+  files.forEach((file) => {
+    const fileStem = stem(file);
+    const parsedName = findNamedSuffix(fileStem, students);
+    if (!parsedName) {
+      invalid.push({ file, reason: "找不到學生姓名" });
+      return;
+    }
+
+    const suffix = parsedName.suffix;
+    const isValidSuffix = mode === "page-slot"
+      ? /^\d+-\d+$/.test(suffix)
+      : /^\d+$/.test(suffix);
+    if (!isValidSuffix) {
+      invalid.push({ file, reason: "檔名尾碼格式不符合" });
+      return;
+    }
+
+    const lookupKey = mode === "page-slot"
+      ? normalizePageSlotKey(suffix)
+      : normalizePositiveInteger(suffix);
+    const target = mode === "page-slot"
+      ? byPageSlot.get(lookupKey)
+      : bySequence.get(lookupKey);
+    if (!target) {
+      invalid.push({ file, reason: "找不到對應照片格" });
+      return;
+    }
+
+    const targetKey = `${parsedName.student.id}:${target.pageIndex}:${target.slotId}`;
+    if (usedTargets.has(targetKey)) {
+      invalid.push({ file, reason: "同一學生同一格重複配對" });
+      return;
+    }
+
+    assignments.push({
+      studentId: parsedName.student.id,
+      pageIndex: target.pageIndex,
+      slotId: target.slotId,
+      slotIndex: target.slotIndex,
+      file,
+    });
+    usedTargets.add(targetKey);
+    usedFiles.add(file);
+  });
+
+  const matchedIds = new Set(assignments.map((a) => a.studentId));
+  return {
+    assignments,
+    unmatched: students.filter((s) => !matchedIds.has(s.id)).map((s) => s.id),
+    unused: files.filter((file) => !usedFiles.has(file)),
+    invalid,
+  };
+}
 
 /**
  * 依檔名是否包含學生姓名子字串配對。
@@ -32,6 +142,7 @@ export function matchByName(students, files) {
     assignments,
     unmatched: students.filter((s) => !matchedIds.has(s.id)).map((s) => s.id),
     unused: files.filter((file) => !usedFiles.has(file)),
+    invalid: [],
   };
 }
 
@@ -59,6 +170,79 @@ export function matchBySequence(students, files) {
     assignments,
     unmatched: sortedStudents.filter((s) => !matchedIds.has(s.id)).map((s) => s.id),
     unused: sortedFiles.filter((f) => !usedFiles.has(f)),
+    invalid: [],
+  };
+}
+
+/**
+ * 依「姓名 + 頁-格」解析檔名。
+ * 例：王小明1-2.jpg → 王小明，第 1 頁第 2 個照片格。
+ */
+export function matchByNamePageSlot(students, files, pages) {
+  return matchByNamedSlot(students, files, pages, "page-slot");
+}
+
+/**
+ * 依「姓名 + 全書照片格流水號」解析檔名。
+ * 例：王小明3.jpg → 王小明，整本相本第 3 個照片格。
+ */
+export function matchByNameSlotSequence(students, files, pages) {
+  return matchByNamedSlot(students, files, pages, "sequence");
+}
+
+/**
+ * 個人多選上傳用：只看檔名尾端數字。
+ * 支援尾端「頁-格」或「流水格」，例如 1-2.jpg、生活照3.jpg。
+ * 無法解析的檔案放進 unused 供順序補位。
+ */
+export function matchPersonalFilesToSlots(files, pages) {
+  const { byPageSlot, bySequence } = buildSlotLookups(pages);
+  const assignments = [];
+  const invalid = [];
+  const usedTargets = new Set();
+  const usedFiles = new Set();
+
+  files.forEach((file) => {
+    const fileStem = stem(file);
+    const suffix = fileStem.match(/(\d+-\d+|\d+)$/)?.[1] ?? "";
+
+    const pageSlotKey = normalizePageSlotKey(suffix);
+    const sequenceKey = pageSlotKey ? null : normalizePositiveInteger(suffix);
+    const target = pageSlotKey
+      ? byPageSlot.get(pageSlotKey)
+      : sequenceKey
+        ? bySequence.get(sequenceKey)
+        : null;
+
+    if (!pageSlotKey && !sequenceKey) return;
+
+    if (!target) {
+      invalid.push({ file, reason: "找不到對應照片格" });
+      return;
+    }
+
+    const targetKey = `${target.pageIndex}:${target.slotId}`;
+    if (usedTargets.has(targetKey)) {
+      invalid.push({ file, reason: "同一格重複配對" });
+      return;
+    }
+
+    assignments.push({
+      pageIndex: target.pageIndex,
+      slotId: target.slotId,
+      slotIndex: target.slotIndex,
+      file,
+    });
+    usedTargets.add(targetKey);
+    usedFiles.add(file);
+  });
+
+  const invalidFiles = new Set(invalid.map((item) => item.file));
+  return {
+    assignments,
+    unmatched: [],
+    unused: files.filter((file) => !usedFiles.has(file) && !invalidFiles.has(file)),
+    invalid,
   };
 }
 
@@ -68,6 +252,7 @@ export function emptyMatch(students, files) {
     assignments: [],
     unmatched: students.map((s) => s.id),
     unused: [...files],
+    invalid: [],
   };
 }
 

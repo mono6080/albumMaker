@@ -1,8 +1,7 @@
-// 批次照片分配精靈（4 步驟 Modal）
-//   Step 1 選頁面與照片格
-//   Step 2 拖入或選擇多張照片
-//   Step 3 選擇配對策略（依姓名 / 依順序 / 手動）
-//   Step 4 確認對應表 → 上傳
+// 批次照片分配精靈
+//   Step 1 拖入或選擇多張照片
+//   Step 2 選擇配對策略（單一格 / 檔名指定格位 / 手動）
+//   Step 3 確認對應表 → 上傳
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -14,7 +13,8 @@ import {
 import { Badge, Button, Surface } from "./ui";
 import { batchUploadPhotos } from "../api/projectApi";
 import {
-  assignFile, clearAssignment, emptyMatch, matchByName, matchBySequence, swapAssignments,
+  assignFile, clearAssignment, emptyMatch, matchByName, matchByNamePageSlot,
+  matchByNameSlotSequence, matchBySequence, swapAssignments,
 } from "../utils/photoMatcher";
 import { handleApiError } from "../utils/apiError";
 
@@ -30,6 +30,7 @@ const ACCEPTED_TYPES = [
 const ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".hif"];
 const MAX_FILES_PER_BATCH = 60;
 const UPLOAD_CHUNK_SIZE = 2;
+const NAMED_SLOT_STRATEGIES = new Set(["namePageSlot", "nameSlotSequence"]);
 
 // ── 小工具 ────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,38 @@ function mergeBatchOutcome(target, source) {
   target.skipped.push(...(source.skipped ?? []));
 }
 
+function isNamedSlotStrategy(strategy) {
+  return NAMED_SLOT_STRATEGIES.has(strategy);
+}
+
+function getTargetLabel(target) {
+  return `P${target.pageIndex + 1} 格${(target.slotIndex ?? 0) + 1}`;
+}
+
+function assignmentTarget(assignment, fallbackPageIndex, fallbackSlotId, fallbackSlotIndex) {
+  return {
+    pageIndex: assignment.pageIndex ?? fallbackPageIndex,
+    slotId: assignment.slotId ?? fallbackSlotId,
+    slotIndex: assignment.slotIndex ?? fallbackSlotIndex,
+  };
+}
+
+function groupAssignmentsByTarget(assignments, fallbackPageIndex, fallbackSlotId, fallbackSlotIndex) {
+  const groupsByKey = new Map();
+  assignments.forEach((assignment) => {
+    const target = assignmentTarget(assignment, fallbackPageIndex, fallbackSlotId, fallbackSlotIndex);
+    const key = `${target.pageIndex}:${target.slotId}`;
+    if (!groupsByKey.has(key)) {
+      groupsByKey.set(key, { ...target, assignments: [] });
+    }
+    groupsByKey.get(key).assignments.push({
+      studentId: assignment.studentId,
+      file: assignment.file,
+    });
+  });
+  return [...groupsByKey.values()];
+}
+
 function isAcceptedImageFile(file) {
   const lowerName = file.name.toLowerCase();
   return ACCEPTED_TYPES.includes(file.type) || ACCEPTED_EXTENSIONS.some(ext => lowerName.endsWith(ext));
@@ -73,8 +106,10 @@ function useObjectUrls(files) {
   return (file) => urls[`${file.name}__${file.size}__${file.lastModified}`];
 }
 
-function ProgressDots({ step }) {
-  const steps = ["選照片", "對應方式", "確認上傳"];
+function ProgressDots({ step, scope }) {
+  const steps = scope === "filename"
+    ? ["選照片", "檔名規則", "確認匯入"]
+    : ["選照片", "對應方式", "確認上傳"];
   return (
     <div className="flex items-center gap-2 text-xs">
       {steps.map((label, index) => {
@@ -110,6 +145,7 @@ export default function BatchPhotoWizard({
   projectId,
   template,
   students,
+  scope = "slot",
   pageIndex,   // 由主畫面決定，不可在 Modal 內變更
   slotId,      // 由主畫面決定，不可在 Modal 內變更
   onClose,
@@ -125,7 +161,8 @@ export default function BatchPhotoWizard({
   const [uploadOutcome, setUploadOutcome] = useState(null);
   const fileInputRef = useRef(null);
 
-  const pages = template?.pages || [];
+  const pages = useMemo(() => template?.pages || [], [template]);
+  const isFilenameScope = scope === "filename";
   const activePage = pages[pageIndex];
   const activePageSlots = activePage?.layout?.photo_slots || [];
   const targetSlot = activePageSlots.find((s) => String(s.id) === String(slotId));
@@ -136,13 +173,13 @@ export default function BatchPhotoWizard({
     if (!isOpen) return;
     setStep(1);
     setFiles([]);
-    setStrategy("name");
+    setStrategy(isFilenameScope ? "namePageSlot" : "name");
     setMatchResult(emptyMatch([], []));
     setOverwriteExisting(true);
     setUploadStatus(null);
     setUploadOutcome(null);
     setIsUploading(false);
-  }, [isOpen]);
+  }, [isOpen, isFilenameScope]);
 
   // 策略或檔案變動時重算配對
   useEffect(() => {
@@ -150,15 +187,18 @@ export default function BatchPhotoWizard({
       setMatchResult(matchByName(students, files));
     } else if (strategy === "sequence") {
       setMatchResult(matchBySequence(students, files));
+    } else if (strategy === "namePageSlot") {
+      setMatchResult(matchByNamePageSlot(students, files, pages));
+    } else if (strategy === "nameSlotSequence") {
+      setMatchResult(matchByNameSlotSequence(students, files, pages));
     } else {
       setMatchResult(emptyMatch(students, files));
     }
-  }, [strategy, files, students]);
+  }, [strategy, files, students, pages]);
 
   const getUrl = useObjectUrls(files);
 
   if (!isOpen) return null;
-  if (!targetSlot) return null; // 父層應確保有效；防呆而已
 
   // ── 檔案選擇 ───────────────────────────────────────────────────────────
 
@@ -202,49 +242,55 @@ export default function BatchPhotoWizard({
     setUploadOutcome(null);
     try {
       const assignments = matchResult.assignments;
-      const chunks = chunkAssignments(assignments, UPLOAD_CHUNK_SIZE);
+      const groups = groupAssignmentsByTarget(assignments, pageIndex, slotId, targetSlotIndex);
+      const uploadChunks = groups.flatMap((group) =>
+        chunkAssignments(group.assignments, UPLOAD_CHUNK_SIZE).map((chunk) => ({
+          ...group,
+          assignments: chunk,
+        }))
+      );
       const merged = {
         ok: true,
-        page_index: pageIndex,
-        slot_id: slotId,
         succeeded: [],
         failed: [],
         skipped: [],
       };
       let completedAssignments = 0;
 
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-        const chunk = chunks[chunkIndex];
+      for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex++) {
+        const chunk = uploadChunks[chunkIndex];
         const updateChunkStatus = (phase, chunkPercent) => {
-          const weightedProgress = completedAssignments + (chunkPercent / 100) * chunk.length;
+          const weightedProgress = completedAssignments + (chunkPercent / 100) * chunk.assignments.length;
           setUploadStatus({
             phase,
             percent: Math.round((weightedProgress / assignments.length) * 100),
             completed: completedAssignments,
             total: assignments.length,
             chunk: chunkIndex + 1,
-            chunks: chunks.length,
+            chunks: uploadChunks.length,
+            targetLabel: getTargetLabel(chunk),
           });
         };
 
         updateChunkStatus("uploading", 0);
         const response = await batchUploadPhotos(
           projectId,
-          pageIndex,
-          slotId,
-          chunk,
+          chunk.pageIndex,
+          chunk.slotId,
+          chunk.assignments,
           { overwriteExisting },
           pct => updateChunkStatus(pct >= 100 ? "processing" : "uploading", pct),
         );
         mergeBatchOutcome(merged, response.data ?? {});
-        completedAssignments += chunk.length;
+        completedAssignments += chunk.assignments.length;
         setUploadStatus({
-          phase: chunkIndex === chunks.length - 1 ? "saving" : "uploading",
+          phase: chunkIndex === uploadChunks.length - 1 ? "saving" : "uploading",
           percent: Math.round((completedAssignments / assignments.length) * 100),
           completed: completedAssignments,
           total: assignments.length,
           chunk: chunkIndex + 1,
-          chunks: chunks.length,
+          chunks: uploadChunks.length,
+          targetLabel: getTargetLabel(chunk),
         });
       }
 
@@ -269,10 +315,17 @@ export default function BatchPhotoWizard({
   // ── 共用元件 ───────────────────────────────────────────────────────────
 
   const canGoStep2 = files.length > 0;
-  const canGoStep3 = matchResult.assignments.length > 0;
+  const hasUsableTarget = isFilenameScope || !!targetSlot;
+  const canGoStep3 = matchResult.assignments.length > 0 && hasUsableTarget;
+  const canAdvanceFromStrategy = strategy === "manual"
+    ? hasUsableTarget
+    : canGoStep3;
 
   const renderStepBody = () => {
     if (step === 1) {
+      const filenameHint = isFilenameScope
+        ? <>支援 JPEG、PNG、WebP、HEIC；檔名需含學生姓名與格位，例如 <code>小明1-2.jpg</code> 或 <code>小明3.jpg</code></>
+        : <>支援 JPEG、PNG、WebP、HEIC；檔名可含學生姓名，例如 <code>小明.jpg</code></>;
       return (
         <div className="space-y-4">
           <div
@@ -288,7 +341,7 @@ export default function BatchPhotoWizard({
               {" / "}班上 <strong className="text-gray-800">{students.length}</strong> 位學生
             </p>
             <p className="text-[11px] text-gray-400">
-              支援 JPEG、PNG、WebP、HEIC；建議檔名包含學生姓名（如 <code>小明.jpg</code>）以自動配對
+              {filenameHint}
             </p>
           </div>
           <input
@@ -334,16 +387,22 @@ export default function BatchPhotoWizard({
     }
 
     if (step === 2) {
-      const strategies = [
-        { id: "name", label: "依檔名姓名配對", hint: "檔名包含學生姓名子字串時自動配對（長名優先）" },
-        { id: "sequence", label: "依檔名順序對名單順序", hint: "檔名字典序對學生 order_index 順序 1 對 1" },
-        { id: "manual", label: "手動分配", hint: "跳過自動配對，直接在下一步逐位指派" },
-      ];
+      const strategies = isFilenameScope
+        ? [
+            { id: "namePageSlot", label: "姓名 + 頁-格", hint: "如 小明1-2.jpg，代表小明第 1 頁第 2 格" },
+            { id: "nameSlotSequence", label: "姓名 + 流水格", hint: "如 小明3.jpg，代表整本相本第 3 個照片格" },
+          ]
+        : [
+            { id: "name", label: "依檔名姓名配對", hint: "檔名包含學生姓名子字串時自動配對（長名優先）" },
+            { id: "sequence", label: "依檔名順序對名單順序", hint: "檔名字典序對學生 order_index 順序 1 對 1" },
+            { id: "manual", label: "手動分配", hint: "跳過自動配對，直接在下一步逐位指派" },
+          ];
       const matched = matchResult.assignments.length;
-      const total = students.length;
+      const invalidCount = matchResult.invalid?.length ?? 0;
+      const total = isNamedSlotStrategy(strategy) ? files.length : students.length;
       return (
         <div className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className={`grid gap-2 ${isFilenameScope ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}>
             {strategies.map((s) => (
               <button
                 type="button"
@@ -366,6 +425,16 @@ export default function BatchPhotoWizard({
               <Badge tone={matched === total && total > 0 ? "success" : "primary"}>
                 {matched} / {total} 已配對
               </Badge>
+              {isNamedSlotStrategy(strategy) && invalidCount > 0 && (
+                <span className="text-red-600">
+                  {invalidCount} 張檔名無法解析
+                </span>
+              )}
+              {!isNamedSlotStrategy(strategy) && !targetSlot && (
+                <span className="text-amber-700">
+                  請先選擇上方照片格，或改用檔名指定格位模式
+                </span>
+              )}
               {matchResult.unmatched.length > 0 && (
                 <span className="text-amber-700">
                   ⚠ {matchResult.unmatched.length} 位學生未配對
@@ -378,6 +447,20 @@ export default function BatchPhotoWizard({
               )}
             </div>
           </Surface>
+
+          {isNamedSlotStrategy(strategy) && invalidCount > 0 && (
+            <Surface variant="panel" padding="md" className="border-red-100 bg-red-50/40">
+              <div className="mb-2 text-xs font-semibold text-red-700">無法解析的檔案</div>
+              <ul className="max-h-28 space-y-1 overflow-y-auto text-xs text-red-700">
+                {matchResult.invalid.map((item, index) => (
+                  <li key={`${item.file.name}-${index}`}>
+                    {item.file.name}
+                    <span className="ml-1 text-red-500">（{item.reason}）</span>
+                  </li>
+                ))}
+              </ul>
+            </Surface>
+          )}
         </div>
       );
     }
@@ -387,6 +470,27 @@ export default function BatchPhotoWizard({
       <div className="space-y-4">
         {uploadOutcome ? (
           <UploadOutcomePanel outcome={uploadOutcome} students={students} />
+        ) : isNamedSlotStrategy(strategy) ? (
+          <>
+            <NamedSlotAssignmentTable
+              assignments={matchResult.assignments}
+              invalid={matchResult.invalid}
+              students={students}
+            />
+
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={overwriteExisting}
+                onChange={(e) => setOverwriteExisting(e.target.checked)}
+              />
+              覆蓋學生原本已有的照片（不勾選則跳過已有照片的學生）
+            </label>
+
+            {uploadStatus !== null && (
+              <UploadProgress status={uploadStatus} />
+            )}
+          </>
         ) : (
           <>
             <AssignmentBoard
@@ -409,21 +513,7 @@ export default function BatchPhotoWizard({
             </label>
 
             {uploadStatus !== null && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>
-                    {uploadStatus.chunks > 1 && `第 ${uploadStatus.chunk}/${uploadStatus.chunks} 批 · `}
-                    {uploadStatusLabel(uploadStatus)}
-                  </span>
-                  <span>{uploadStatus.percent}%</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
-                  <div
-                    className="h-full rounded-full bg-indigo-500 transition-all"
-                    style={{ width: `${uploadStatus.percent}%` }}
-                  />
-                </div>
-              </div>
+              <UploadProgress status={uploadStatus} />
             )}
           </>
         )}
@@ -450,13 +540,27 @@ export default function BatchPhotoWizard({
         <div className="flex items-start justify-between">
           <div className="min-w-0">
             <h2 id="batch-photo-wizard-title" className="text-base font-semibold text-gray-900">
-              批次照片分配
+              {isFilenameScope ? "依檔名指定格位" : "批次照片分配"}
             </h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              目標位置：
-              <Badge tone="primary" className="mx-1">第 {pageIndex + 1} 頁</Badge>
-              <Badge tone="info" className="mr-1">格位 {targetSlotIndex + 1}</Badge>
-              <span className="text-gray-400">（{targetSlot.width}×{targetSlot.height}）</span>
+              {isFilenameScope ? (
+                <>
+                  檔名需包含學生姓名與格位，例如 <code>小明1-2.jpg</code> 或 <code>小明3.jpg</code>
+                </>
+              ) : (
+                <>
+                  目標位置：
+                  {targetSlot ? (
+                    <>
+                      <Badge tone="primary" className="mx-1">第 {pageIndex + 1} 頁</Badge>
+                      <Badge tone="info" className="mr-1">格位 {targetSlotIndex + 1}</Badge>
+                      <span className="text-gray-400">（{targetSlot.width}×{targetSlot.height}）</span>
+                    </>
+                  ) : (
+                    <span className="ml-1 text-amber-600">未選單一格</span>
+                  )}
+                </>
+              )}
             </p>
           </div>
           <button
@@ -470,7 +574,7 @@ export default function BatchPhotoWizard({
           </button>
         </div>
 
-        <ProgressDots step={step} />
+        <ProgressDots step={step} scope={scope} />
 
         <div className="min-h-[260px] flex-1 overflow-y-auto pr-1">{renderStepBody()}</div>
 
@@ -489,7 +593,7 @@ export default function BatchPhotoWizard({
               onClick={() => setStep((s) => s + 1)}
               disabled={
                 (step === 1 && !canGoStep2) ||
-                (step === 2 && !canGoStep3 && strategy !== "manual")
+                (step === 2 && !canAdvanceFromStrategy)
               }
             >
               下一步 <ChevronRight className="h-4 w-4" />
@@ -500,7 +604,7 @@ export default function BatchPhotoWizard({
             <Button
               variant="success"
               onClick={handleUpload}
-              disabled={isUploading || matchResult.assignments.length === 0}
+              disabled={isUploading || matchResult.assignments.length === 0 || !hasUsableTarget}
             >
               {isUploading ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> {uploadStatusLabel(uploadStatus)}...</>
@@ -520,6 +624,27 @@ export default function BatchPhotoWizard({
 }
 
 // ── 子元件 ────────────────────────────────────────────────────────────────
+
+function UploadProgress({ status }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-gray-500">
+        <span>
+          {status.chunks > 1 && `第 ${status.chunk}/${status.chunks} 批 · `}
+          {status.targetLabel && `${status.targetLabel} · `}
+          {uploadStatusLabel(status)}
+        </span>
+        <span>{status.percent}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-all"
+          style={{ width: `${status.percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function FileTile({ file, url, onRemove }) {
   return (
@@ -542,6 +667,64 @@ function FileTile({ file, url, onRemove }) {
       >
         <X className="h-3 w-3" />
       </button>
+    </div>
+  );
+}
+
+function NamedSlotAssignmentTable({ assignments, invalid = [], students }) {
+  const nameById = new Map(students.map((student) => [student.id, student.name]));
+  return (
+    <div className="space-y-3">
+      <Surface variant="panel" padding="md" className="bg-gray-50">
+        <div className="mb-2 flex items-center justify-between text-xs">
+          <span className="font-semibold text-gray-600">檔名指定格位</span>
+          <Badge tone="primary">{assignments.length} 張可上傳</Badge>
+        </div>
+        <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+          {assignments.length > 0 ? (
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">學生</th>
+                  <th className="px-3 py-2 font-semibold">照片格</th>
+                  <th className="px-3 py-2 font-semibold">檔案</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {assignments.map((assignment, index) => (
+                  <tr key={`${assignment.file.name}-${index}`}>
+                    <td className="px-3 py-2 font-medium text-gray-800">
+                      {nameById.get(assignment.studentId) ?? `學生 #${assignment.studentId}`}
+                    </td>
+                    <td className="px-3 py-2 text-indigo-700">
+                      P{assignment.pageIndex + 1} 格{(assignment.slotIndex ?? 0) + 1}
+                    </td>
+                    <td className="max-w-0 truncate px-3 py-2 text-gray-500">
+                      {assignment.file.name}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="py-6 text-center text-xs text-gray-400">沒有可上傳的配對</div>
+          )}
+        </div>
+      </Surface>
+
+      {invalid.length > 0 && (
+        <Surface variant="panel" padding="md" className="border-red-100 bg-red-50/40">
+          <div className="mb-2 text-xs font-semibold text-red-700">以下檔案不會上傳</div>
+          <ul className="max-h-28 space-y-1 overflow-y-auto text-xs text-red-700">
+            {invalid.map((item, index) => (
+              <li key={`${item.file.name}-${index}`}>
+                {item.file.name}
+                <span className="ml-1 text-red-500">（{item.reason}）</span>
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      )}
     </div>
   );
 }
