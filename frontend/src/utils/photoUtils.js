@@ -1,5 +1,7 @@
 // 照片資料處理工具函式
 
+import { getPhotoContentRect, getPhotoFrameRect } from "./photoFrameGeometry.js";
+
 export function normalizePhotoData(raw) {
   if (!raw) return null;
   if (typeof raw === "string") return { path: raw, scale: 1.0, offsetX: 0, offsetY: 0 };
@@ -10,14 +12,22 @@ export function buildItems(allSlots, student) {
   const pagesDataMap = Object.fromEntries(
     (student?.pages_data ?? []).map(p => [p.page_index, p])
   );
-  return allSlots.map(({ pi, slotId, slotIndex, slotW, slotH, border, borderW, borderRadius,
+  return allSlots.map(({ pi, slotId, slotIndex, slotW, slotH, border, borderW, borderRadius, dimensionMode,
     shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity }) => {
+    const frameRect = getPhotoFrameRect({
+      x: 0,
+      y: 0,
+      width: slotW ?? 400,
+      height: slotH ?? 400,
+      border,
+      border_width: borderW,
+    }, { dimensionMode });
     const raw = pagesDataMap[pi]?.photos?.[String(slotId)] ?? null;
     const photo = normalizePhotoData(raw);
     const transform = { scale: photo?.scale ?? 1.0, offsetX: photo?.offsetX ?? 0, offsetY: photo?.offsetY ?? 0 };
     return {
-      pi, slotId, slotIndex, slotW: slotW ?? 400, slotH: slotH ?? 400,
-      border: border ?? false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,
+      pi, slotId, slotIndex, slotW: frameRect.width, slotH: frameRect.height,
+      border: border !== false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,
       shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity,
       origPi: photo ? pi : null,
       origSlotId: photo ? slotId : null,
@@ -34,14 +44,24 @@ export function buildItems(allSlots, student) {
 export function getPhotoCropBox(slot) {
   const slotW = slot.slotW ?? slot.width ?? 400;
   const slotH = slot.slotH ?? slot.height ?? 400;
-  const borderW = slot.border ? (slot.borderW ?? slot.border_width ?? 8) : 0;
+  const sourceSlot = {
+    x: 0,
+    y: 0,
+    width: slotW,
+    height: slotH,
+    border: slot.border,
+    border_width: slot.borderW ?? slot.border_width,
+  };
+  const frameRect = getPhotoFrameRect(sourceSlot, { dimensionMode: slot.dimensionMode });
+  const contentRect = getPhotoContentRect(sourceSlot, { dimensionMode: slot.dimensionMode });
+
   return {
-    x: borderW,
-    y: borderW,
-    right: borderW,
-    bottom: borderW * 3,
-    width: slot.border ? slotW - borderW * 2 : slotW,
-    height: slot.border ? slotH - borderW * 4 : slotH,
+    x: contentRect.x - frameRect.x,
+    y: contentRect.y - frameRect.y,
+    right: frameRect.x + frameRect.width - contentRect.x - contentRect.width,
+    bottom: frameRect.y + frameRect.height - contentRect.y - contentRect.height,
+    width: Math.max(1, contentRect.width),
+    height: Math.max(1, contentRect.height),
   };
 }
 

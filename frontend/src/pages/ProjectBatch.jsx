@@ -29,6 +29,7 @@ import ResponsiveActionGroup, {
 } from "../components/ResponsiveActionGroup";
 import TextVariableTextarea from "../components/TextVariableTextarea";
 import TextAlignControl from "../components/TextAlignControl";
+import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import {
   Badge,
   Button,
@@ -216,6 +217,7 @@ export default function ProjectBatch() {
 
   // 批次照片分配 Modal
   const [isBatchWizardOpen, setIsBatchWizardOpen] = useState(false);
+  const [isFilenameBatchWizardOpen, setIsFilenameBatchWizardOpen] = useState(false);
 
   // 對應文字 tab 狀態
   const [activePage, setActivePage] = useState(0);
@@ -539,12 +541,55 @@ export default function ProjectBatch() {
   );
 
   const sharedPhotoPanel = (
-    <div className="max-w-4xl space-y-5">
-      {/* Step 1：選擇頁面與照片格 */}
+    <div className="max-w-5xl space-y-6">
+      {/* 檔名指定全書格位流程 */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold text-gray-800">依檔名匯入全書格位</h2>
+          <Badge tone="success">不使用下方格位</Badge>
+          <span className="text-xs text-gray-500">適合整批依學生與格位命名好的照片。</span>
+        </div>
+
+        <Surface
+          padding="md"
+          className="border-emerald-200 bg-emerald-50/30"
+        >
+          <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-gray-800">跨頁跨格自動匯入</h3>
+                <Badge tone="success">全書格位</Badge>
+              </div>
+              <p className="text-xs leading-relaxed text-gray-600">
+                檔名需包含學生姓名與格位，例如 <code>小明1-2.jpg</code> 代表第 1 頁第 2 格，<code>小明3.jpg</code> 代表整本相本第 3 個照片格。
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="success"
+              onClick={() => setIsFilenameBatchWizardOpen(true)}
+              disabled={project.students.length === 0}
+              className="w-full md:w-auto"
+            >
+              <ImagePlus className="h-4 w-4" />
+              依檔名匯入
+            </Button>
+          </div>
+        </Surface>
+      </div>
+
+      {/* 單一照片格流程 */}
+      <div className="space-y-4 border-t border-gray-100 pt-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold text-gray-800">針對單一照片格</h2>
+          <Badge tone="info">需先選格位</Badge>
+          <span className="text-xs text-gray-500">適合同一格放團體照，或每位學生同一格放不同照片。</span>
+        </div>
+
       <Surface data-guide="batch-shared-photo-page">
         <div className="mb-3 flex min-w-0 items-center gap-2">
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">1</span>
-          <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-800">選擇頁面與照片格</h2>
+          <h3 className="min-w-0 flex-1 text-sm font-semibold text-gray-800">選擇頁面與照片格</h3>
           <Badge tone="info">{project.students.length} 位</Badge>
         </div>
 
@@ -600,11 +645,12 @@ export default function ProjectBatch() {
           >
             {activePagePhotoSlots.map((slot, slotIndex) => {
               const isSelected = String(slot.id) === String(selectedSharedPhotoSlotId);
+              const frameRect = getPhotoFrameRect(slot, { dimensionMode: getPhotoSlotDimensionMode(activePageLayout) });
               const slotItem = {
                 pi: activePage, slotId: slot.id, slotIndex,
-                slotW: slot.width || 400,
-                slotH: slot.height || 400,
-                border: slot.border ?? false,
+                slotW: frameRect.width || 400,
+                slotH: frameRect.height || 400,
+                border: slot.border !== false,
                 borderW: slot.border_width ?? 8,
                 borderRadius: slot.border_radius ?? 0,
                 shadowEnabled: slot.shadow_enabled,
@@ -638,11 +684,10 @@ export default function ProjectBatch() {
         )}
       </Surface>
 
-      {/* Step 2：選擇上傳模式 */}
       <div>
         <div className="mb-3 flex items-center gap-2">
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">2</span>
-          <h2 className="text-sm font-semibold text-gray-800">選擇上傳模式</h2>
+          <h3 className="text-sm font-semibold text-gray-800">選擇此格的上傳方式</h3>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-2">
@@ -732,7 +777,7 @@ export default function ProjectBatch() {
               <Badge tone="primary">批次分配</Badge>
             </div>
             <p className="mb-3 text-xs text-gray-600">
-              一次上傳多張照片，系統可依檔名自動配對到對的學生（如 <code>小明.jpg</code>）；之後可拖曳調整。
+              一次上傳多張照片，依檔名或名單順序配給不同學生，但全部都會放到上方選定的同一個照片格。
             </p>
 
             <div className="mt-auto">
@@ -758,6 +803,8 @@ export default function ProjectBatch() {
           </Surface>
         </div>
       </div>
+      </div>
+
     </div>
   );
 
@@ -776,9 +823,24 @@ export default function ProjectBatch() {
         projectId={projectId}
         template={template}
         students={project.students}
+        scope="slot"
         pageIndex={activePage}
         slotId={selectedSharedPhotoSlotId}
         onClose={() => setIsBatchWizardOpen(false)}
+        onUploaded={() => {
+          setPreviewTimestamp(Date.now());
+          loadProjectData();
+        }}
+      />
+      <BatchPhotoWizard
+        isOpen={isFilenameBatchWizardOpen}
+        projectId={projectId}
+        template={template}
+        students={project.students}
+        scope="filename"
+        pageIndex={activePage}
+        slotId={null}
+        onClose={() => setIsFilenameBatchWizardOpen(false)}
         onUploaded={() => {
           setPreviewTimestamp(Date.now());
           loadProjectData();

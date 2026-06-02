@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
 from database import Template, TemplatePage, TemplatePeriod, User, get_db
+from services.photo_frame_geometry import PHOTO_SLOT_CONTENT_BOX_MODE, PHOTO_SLOT_DIMENSION_MODE_KEY
 from crud.template_crud import get_template_or_404, get_template_page_or_404
 from services.file_service import get_background_key, get_sticker_key, read_and_validate_image
 from services.render_service import render_page
@@ -429,6 +430,7 @@ def add_page(
     blank_layout = {
         "canvas_width": 794,
         "canvas_height": 1123,
+        PHOTO_SLOT_DIMENSION_MODE_KEY: PHOTO_SLOT_CONTENT_BOX_MODE,
         "photo_slots": [],
         "text_bubbles": [],
         "text_labels": [],

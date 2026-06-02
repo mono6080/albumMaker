@@ -195,10 +195,10 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
         </div>
         <div className="grid grid-cols-2 gap-3">
           {[
-            { key: "x",      label: "X 位置" },
-            { key: "y",      label: "Y 位置" },
-            { key: "width",  label: "寬度" },
-            { key: "height", label: "高度" },
+            { key: "x",      label: isPhotoSlot ? "照片 X" : "X 位置" },
+            { key: "y",      label: isPhotoSlot ? "照片 Y" : "Y 位置" },
+            { key: "width",  label: isPhotoSlot ? "照片寬度" : "寬度" },
+            { key: "height", label: isPhotoSlot ? "照片高度" : "高度" },
           ].map(field => (
             <label key={field.key} className="flex flex-col gap-1">
               <span className="text-xs text-gray-500">{field.label}</span>
@@ -236,7 +236,7 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
             <span className="text-sm">白色外框（拍立得風格）</span>
           </label>
 
-          {elementData.border && (
+          {elementData.border !== false && (
             <label className="flex flex-col gap-1">
               <span className="text-xs text-gray-500">外框寬度</span>
               <input

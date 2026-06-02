@@ -87,7 +87,7 @@ function addPhotoSlot(layer, data, elemIndex, pageIndex) {
       x: borderWidth,
       y: borderWidth,
       width: Math.max(1, model.box.width - borderWidth * 2),
-      height: Math.max(1, model.box.height - borderWidth * 3),
+      height: Math.max(1, model.box.height - borderWidth * 4),
       fill: "#EEEEEE",
       listening: false,
     }));

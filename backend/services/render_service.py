@@ -75,6 +75,7 @@ from services.element_renderers import (
     render_text_bubble,
     render_text_label,
 )
+from services.photo_frame_geometry import build_photo_frame_slot, get_photo_slot_dimension_mode
 
 BACKEND_DIR = Path(__file__).parent.parent
 UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uploads"))
@@ -203,8 +204,13 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     # 2. 依 z_index 排序所有元素並逐一渲染
     photos = page_data.get("photos", {})
     label_texts = page_data.get("label_texts", {})
+    photo_slot_dimension_mode = get_photo_slot_dimension_mode(layout)
+    photo_slots = [
+        build_photo_frame_slot(slot, photo_slot_dimension_mode)
+        for slot in layout.get("photo_slots", [])
+    ]
     elements_ordered = sorted([
-        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i), i) for i, slot    in enumerate(layout.get("photo_slots",  []))],
+        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i), i) for i, slot    in enumerate(photo_slots)],
         *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i), 0) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
         *[("text",    label,   label.get("z_index",   _TYPE_Z_BASE["text"]    + i), 0) for i, label   in enumerate(layout.get("text_labels",  []))],
         *[("sticker", sticker, sticker.get("z_index", _TYPE_Z_BASE["sticker"] + i), 0) for i, sticker in enumerate(layout.get("stickers",     []))],

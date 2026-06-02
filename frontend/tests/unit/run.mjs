@@ -17,6 +17,16 @@ import {
 import { getApiPath, getFilenameFromDisposition, isMobileDevice } from "../../src/utils/browserFiles.js";
 import { buildItems, clampPan, getPhotoCropBox, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
 import {
+  PHOTO_SLOT_CONTENT_BOX_MODE,
+  getPhotoContentRect,
+  getPhotoFrameRect,
+} from "../../src/utils/photoFrameGeometry.js";
+import {
+  matchPersonalFilesToSlots,
+  matchByNamePageSlot,
+  matchByNameSlotSequence,
+} from "../../src/utils/photoMatcher.js";
+import {
   CANVAS_DISPLAY_WIDTH,
   CANVAS_REAL_WIDTH,
   applyElementsToLayout,
@@ -158,6 +168,138 @@ test("photo crop boxes match backend bordered slot geometry", () => {
     width: 150,
     height: 120,
   });
+});
+
+
+test("photo frame geometry supports migrated content-box layouts", () => {
+  const frameSlot = { x: 40, y: 52, width: 150, height: 120, border: true, border_width: 8 };
+  const contentRect = getPhotoContentRect(frameSlot);
+  assert.deepEqual(contentRect, { x: 48, y: 60, width: 134, height: 88 });
+
+  const contentSlot = {
+    ...contentRect,
+    border: true,
+    border_width: 8,
+    dimensionMode: PHOTO_SLOT_CONTENT_BOX_MODE,
+  };
+  assert.deepEqual(getPhotoFrameRect(contentSlot), { x: 40, y: 52, width: 150, height: 120 });
+  assert.deepEqual(getPhotoCropBox({
+    slotW: contentRect.width,
+    slotH: contentRect.height,
+    border: true,
+    borderW: 8,
+    dimensionMode: PHOTO_SLOT_CONTENT_BOX_MODE,
+  }), {
+    x: 8,
+    y: 8,
+    right: 8,
+    bottom: 24,
+    width: 134,
+    height: 88,
+  });
+});
+
+
+test("photo matcher maps filenames to explicit page-slot targets", () => {
+  const students = [
+    { id: 1, name: "王小明", order_index: 0 },
+    { id: 2, name: "小明", order_index: 1 },
+    { id: 3, name: "陳美花", order_index: 2 },
+  ];
+  const pages = [
+    { layout: { photo_slots: [{ id: 101 }, { id: 102 }] } },
+    { layout: { photo_slots: [{ id: 201 }] } },
+  ];
+  const file = (name) => ({ name });
+  const files = [
+    file("王小明1-1.jpg"),
+    file("王小明1-2.heic"),
+    file("小明2-1.png"),
+    file("王小明9-9.jpg"),
+    file("阿華1-1.jpg"),
+  ];
+
+  const result = matchByNamePageSlot(students, files, pages);
+  assert.deepEqual(
+    result.assignments.map(({ studentId, pageIndex, slotId, file }) => `${studentId}:${pageIndex}:${slotId}:${file.name}`),
+    [
+      "1:0:101:王小明1-1.jpg",
+      "1:0:102:王小明1-2.heic",
+      "2:1:201:小明2-1.png",
+    ],
+  );
+  assert.deepEqual(result.unmatched, [3]);
+  assert.deepEqual(result.invalid.map(({ file, reason }) => `${file.name}:${reason}`), [
+    "王小明9-9.jpg:找不到對應照片格",
+    "阿華1-1.jpg:找不到學生姓名",
+  ]);
+  assert.deepEqual(result.unused.map((item) => item.name), ["王小明9-9.jpg", "阿華1-1.jpg"]);
+});
+
+
+test("photo matcher maps filenames to global slot sequence targets", () => {
+  const students = [
+    { id: 1, name: "王小明", order_index: 0 },
+    { id: 2, name: "小明", order_index: 1 },
+  ];
+  const pages = [
+    { layout: { photo_slots: [{ id: 101 }, { id: 102 }] } },
+    { layout: { photo_slots: [{ id: 201 }] } },
+  ];
+  const file = (name) => ({ name });
+  const files = [
+    file("王小明1.jpg"),
+    file("王小明02.jpg"),
+    file("小明3.png"),
+    file("王小明01.heic"),
+    file("小明4.jpg"),
+  ];
+
+  const result = matchByNameSlotSequence(students, files, pages);
+  assert.deepEqual(
+    result.assignments.map(({ studentId, pageIndex, slotId, file }) => `${studentId}:${pageIndex}:${slotId}:${file.name}`),
+    [
+      "1:0:101:王小明1.jpg",
+      "1:0:102:王小明02.jpg",
+      "2:1:201:小明3.png",
+    ],
+  );
+  assert.deepEqual(result.invalid.map(({ file, reason }) => `${file.name}:${reason}`), [
+    "王小明01.heic:同一學生同一格重複配對",
+    "小明4.jpg:找不到對應照片格",
+  ]);
+  assert.deepEqual(result.unused.map((item) => item.name), ["王小明01.heic", "小明4.jpg"]);
+});
+
+
+test("photo matcher maps personal multi-upload filenames by numeric suffix only", () => {
+  const pages = [
+    { layout: { photo_slots: [{ id: 101 }, { id: 102 }] } },
+    { layout: { photo_slots: [{ id: 201 }] } },
+  ];
+  const file = (name) => ({ name });
+  const files = [
+    file("王小明1-2.jpg"),
+    file("王小明3.heic"),
+    file("1-1.png"),
+    file("生活照.jpg"),
+    file("王小明.jpg"),
+    file("王小明4.jpg"),
+  ];
+
+  const result = matchPersonalFilesToSlots(files, pages);
+  assert.deepEqual(
+    result.assignments.map(({ pageIndex, slotId, file }) => `${pageIndex}:${slotId}:${file.name}`),
+    [
+      "0:102:王小明1-2.jpg",
+      "1:201:王小明3.heic",
+      "0:101:1-1.png",
+    ],
+  );
+  assert.deepEqual(result.unused.map((item) => item.name), ["生活照.jpg", "王小明.jpg"]);
+  assert.deepEqual(result.invalid.map(({ file, reason }) => `${file.name}:${reason}`), [
+    "王小明4.jpg:找不到對應照片格",
+  ]);
 });
 
 

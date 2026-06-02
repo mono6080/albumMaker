@@ -1,7 +1,7 @@
 // 模板編輯器頁面（Konva Canvas 版）
 // 以 Konva.js (Canvas 2D) 取代 CSS div 渲染，提高與 PIL 後端輸出的視覺一致性
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Fragment, useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Group, Transformer } from "react-konva";
@@ -24,6 +24,8 @@ import ConfirmModal from "../components/ConfirmModal";
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
+  CANVAS_REAL_HEIGHT,
+  CANVAS_REAL_WIDTH,
   applyElementsToLayout,
   getAllElementsSorted,
   getInitialStickerSize,
@@ -32,6 +34,13 @@ import {
   toDisplayCoord,
   toRealCoord,
 } from "../utils/renderLayoutModel";
+import {
+  buildPhotoSlotFromContentRect,
+  getPhotoContentRect,
+  getPhotoFrameInsets,
+  getPhotoFrameRect,
+  getPhotoSlotDimensionMode,
+} from "../utils/photoFrameGeometry.js";
 import { TEXT_LABEL_ROLES, isFillableTextLabel } from "../utils/textLabelRoles";
 import { buildTemplateSpreadPreviewUrl } from "../api/urls";
 import { startProductGuide } from "../utils/productGuide";
@@ -42,6 +51,8 @@ function clampValue(value, minValue, maxValue) {
 
 const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
 const MAX_LAYOUT_HISTORY = 100;
+const PHOTO_CONTENT_MIN_WIDTH = 60;
+const PHOTO_CONTENT_MIN_HEIGHT = 40;
 
 const EDITOR_GUIDE_STEPS = [
   {
@@ -141,6 +152,45 @@ function countTemplatePhotoSlots(template, draftLayouts) {
   }, 0);
 }
 
+function clampPhotoContentRect(contentRect) {
+  const width = Math.max(PHOTO_CONTENT_MIN_WIDTH, Math.round(Number(contentRect.width) || PHOTO_CONTENT_MIN_WIDTH));
+  const height = Math.max(PHOTO_CONTENT_MIN_HEIGHT, Math.round(Number(contentRect.height) || PHOTO_CONTENT_MIN_HEIGHT));
+  const maxX = Math.max(0, CANVAS_REAL_WIDTH - width);
+  const maxY = Math.max(0, CANVAS_REAL_HEIGHT - height);
+
+  return {
+    x: clampValue(Math.round(Number(contentRect.x) || 0), 0, maxX),
+    y: clampValue(Math.round(Number(contentRect.y) || 0), 0, maxY),
+    width,
+    height,
+  };
+}
+
+function getPhotoEditorElementData(slot, dimensionMode) {
+  if (!slot) return null;
+  const contentRect = getPhotoContentRect(slot, { dimensionMode });
+  return {
+    ...slot,
+    x: contentRect.x,
+    y: contentRect.y,
+    width: contentRect.width,
+    height: contentRect.height,
+  };
+}
+
+function applyPhotoEditorUpdates(slot, updates, dimensionMode) {
+  const currentContent = getPhotoContentRect(slot, { dimensionMode });
+  const nextStyleSlot = { ...slot, ...updates };
+  const nextContent = clampPhotoContentRect({
+    x: updates.x ?? currentContent.x,
+    y: updates.y ?? currentContent.y,
+    width: updates.width ?? currentContent.width,
+    height: updates.height ?? currentContent.height,
+  });
+
+  return buildPhotoSlotFromContentRect(nextStyleSlot, nextContent, { dimensionMode });
+}
+
 export default function TemplateEditor() {
   const { id: templateId } = useParams();
   const navigate = useNavigate();
@@ -166,6 +216,7 @@ export default function TemplateEditor() {
   const draftLayouts = useRef({});
   const layoutHistories = useRef({});
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+  const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
 
   const refreshHistoryAvailability = useCallback((pageId) => {
     if (!pageId) {
@@ -443,6 +494,17 @@ export default function TemplateEditor() {
     }));
   };
 
+  const updatePhotoElementFromEditor = (elementId, propertyUpdates) => {
+    commitPageLayout(currentLayout => ({
+      ...currentLayout,
+      photo_slots: (currentLayout.photo_slots || []).map(
+        slot => slot.id === elementId
+          ? applyPhotoEditorUpdates(slot, propertyUpdates, getPhotoSlotDimensionMode(currentLayout))
+          : slot
+      ),
+    }));
+  };
+
   const deleteSelectedElement = useCallback(() => {
     if (!selectedElement) return;
     const arrayKey = ELEMENT_ARRAY_KEY[selectedElement.type];
@@ -519,13 +581,22 @@ export default function TemplateEditor() {
     const realY = toRealCoord(pos.y);
 
     if (activeTool === "addPhoto") {
-      const newSlot = {
+      const newSlotStyle = {
         id: generateElementId(),
-        x: realX, y: realY,
-        width: 300, height: 220, rotation: 0,
+        rotation: 0,
         border: true, border_width: 8,
         z_index: getNextZIndex(pageLayout),
       };
+      const newSlot = buildPhotoSlotFromContentRect(
+        newSlotStyle,
+        clampPhotoContentRect({
+          x: realX,
+          y: realY,
+          width: 300,
+          height: 220,
+        }),
+        { dimensionMode: photoSlotDimensionMode },
+      );
       commitPageLayout(currentLayout => ({
         ...currentLayout,
         photo_slots: [...currentLayout.photo_slots, { ...newSlot, z_index: getNextZIndex(currentLayout) }],
@@ -635,6 +706,71 @@ export default function TemplateEditor() {
     };
   };
 
+  const makePhotoControlProps = (data) => {
+    const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
+    const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
+    const insets = getPhotoFrameInsets(data);
+    const displayContentW = toDisplayCoord(contentRect.width);
+    const displayContentH = toDisplayCoord(contentRect.height);
+    const isSelectMode = activeTool === "select";
+
+    return {
+      id: `photo-${data.id}`,
+      x: toDisplayCoord(frameRect.x + frameRect.width / 2),
+      y: toDisplayCoord(frameRect.y + frameRect.height / 2),
+      offsetX: toDisplayCoord(frameRect.width / 2 - insets.left),
+      offsetY: toDisplayCoord(frameRect.height / 2 - insets.top),
+      width: displayContentW,
+      height: displayContentH,
+      rotation: data.rotation ?? 0,
+      scaleX: 1,
+      scaleY: 1,
+      draggable: isSelectMode,
+      listening: isSelectMode,
+      onDragEnd: (e) => {
+        const node = e.target;
+        const nextSlot = applyPhotoEditorUpdates(data, {
+          x: toRealCoord(node.x() - node.offsetX()),
+          y: toRealCoord(node.y() - node.offsetY()),
+        }, photoSlotDimensionMode);
+        updateElement("photo", data.id, {
+          x: nextSlot.x,
+          y: nextSlot.y,
+          width: nextSlot.width,
+          height: nextSlot.height,
+        });
+      },
+      onTransformEnd: (e) => {
+        const node = e.target;
+        const scaleX = node.scaleX();
+        const scaleY = node.scaleY();
+        const newDisplayW = Math.max(toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH), node.width() * Math.abs(scaleX));
+        const newDisplayH = Math.max(toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT), node.height() * Math.abs(scaleY));
+        const nextSlot = applyPhotoEditorUpdates(data, {
+          x: toRealCoord(node.x() - node.offsetX() * scaleX),
+          y: toRealCoord(node.y() - node.offsetY() * scaleY),
+          width: Math.max(PHOTO_CONTENT_MIN_WIDTH, toRealCoord(newDisplayW)),
+          height: Math.max(PHOTO_CONTENT_MIN_HEIGHT, toRealCoord(newDisplayH)),
+          rotation: node.rotation(),
+        }, photoSlotDimensionMode);
+
+        node.scaleX(1); node.scaleY(1);
+        node.width(newDisplayW); node.height(newDisplayH);
+        updateElement("photo", data.id, {
+          x: nextSlot.x,
+          y: nextSlot.y,
+          width: nextSlot.width,
+          height: nextSlot.height,
+          rotation: nextSlot.rotation,
+        });
+      },
+      onClick: (e) => {
+        e.cancelBubble = true;
+        setSelectedElement({ type: "photo", id: data.id });
+      },
+    };
+  };
+
   // ── 渲染 ──────────────────────────────────────────────────────────────────
 
   if (!template) return <div className="text-gray-400">載入中...</div>;
@@ -655,6 +791,9 @@ export default function TemplateEditor() {
   }
 
   const selectedItem = selectedElement ? getElement(selectedElement) : null;
+  const selectedPanelItem = selectedElement?.type === "photo"
+    ? getPhotoEditorElementData(selectedItem, photoSlotDimensionMode)
+    : selectedItem;
 
   // ── Stage 元素渲染函式（閉包存取 toDisplayCoord / currentPageIndex 等） ─────
 
@@ -672,11 +811,18 @@ export default function TemplateEditor() {
     };
   };
 
-  const renderPhotoSlotNode = (data, elemIndex, isSelected, groupProps) => {
-    const displayW = toDisplayCoord(data.width);
-    const displayH = toDisplayCoord(data.height);
+  const renderPhotoSlotNode = (data, elemIndex, isSelected, controlProps) => {
+    const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
+    const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
+    const insets = getPhotoFrameInsets(data);
+    const displayW = toDisplayCoord(frameRect.width);
+    const displayH = toDisplayCoord(frameRect.height);
+    const contentDisplayW = toDisplayCoord(contentRect.width);
+    const contentDisplayH = toDisplayCoord(contentRect.height);
+    const contentDisplayX = toDisplayCoord(contentRect.x - frameRect.x);
+    const contentDisplayY = toDisplayCoord(contentRect.y - frameRect.y);
     const hasBorder = data.border !== false;
-    const borderDisplayW = toDisplayCoord(data.border_width ?? 8);
+    const borderDisplayW = toDisplayCoord(insets.borderWidth);
     const slotRadius = toDisplayCoord(data.border_radius ?? 0);
     const shadowEnabled = data.shadow_enabled ?? hasBorder;
     const shadowX = shadowEnabled ? toDisplayCoord(data.shadow_offset_x ?? 5) : 0;
@@ -686,44 +832,59 @@ export default function TemplateEditor() {
     const shadowBlur = shadowEnabled ? toDisplayCoord(data.shadow_blur ?? 14) * 1.74 : 0;
     const shadowOpacity = shadowEnabled ? (data.shadow_opacity ?? 120) / 255 : 0;
     return (
-      <Group key={`photo-${data.id}`} {...groupProps}>
-        <Rect
-          width={displayW} height={displayH}
-          fill={hasBorder ? "#ffffff" : "#EEEEEE"}
-          cornerRadius={slotRadius}
-          stroke={isSelected ? "#4F46E5" : hasBorder ? "#e2e8f0" : "#CCCCCC"}
-          strokeWidth={isSelected ? 2 : 1}
-          shadowColor="black"
-          shadowOpacity={shadowOpacity}
-          shadowOffsetX={shadowX}
-          shadowOffsetY={shadowY}
-          shadowBlur={shadowBlur}
+      <Fragment key={`photo-${data.id}`}>
+        <Group
+          key={`photo-visual-${data.id}`}
+          x={toDisplayCoord(frameRect.x + frameRect.width / 2)}
+          y={toDisplayCoord(frameRect.y + frameRect.height / 2)}
+          offsetX={displayW / 2}
+          offsetY={displayH / 2}
+          rotation={data.rotation ?? 0}
           listening={false}
-        />
-        {hasBorder && (
+        >
           <Rect
-            x={borderDisplayW}
-            y={borderDisplayW}
-            width={Math.max(1, displayW - borderDisplayW * 2)}
-            height={Math.max(1, displayH - borderDisplayW * 3)}
-            fill="#EEEEEE"
-            cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
+            width={displayW} height={displayH}
+            fill={hasBorder ? "#ffffff" : "#EEEEEE"}
+            cornerRadius={slotRadius}
+            stroke={hasBorder ? "#e2e8f0" : "#CCCCCC"}
+            strokeWidth={1}
+            shadowColor="black"
+            shadowOpacity={shadowOpacity}
+            shadowOffsetX={shadowX}
+            shadowOffsetY={shadowY}
+            shadowBlur={shadowBlur}
             listening={false}
           />
-        )}
-        <KonvaText
-          x={0} y={0}
-          width={displayW} height={displayH}
-          text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
-          fontSize={10}
-          fill="#AAAAAA"
-          align="center"
-          verticalAlign="middle"
-          listening={false}
-        />
-        {/* 透明點擊感應區 */}
-        <Rect width={displayW} height={displayH} fill="transparent" />
-      </Group>
+          {hasBorder && (
+            <Rect
+              x={contentDisplayX}
+              y={contentDisplayY}
+              width={contentDisplayW}
+              height={contentDisplayH}
+              fill="#EEEEEE"
+              cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
+              listening={false}
+            />
+          )}
+          <KonvaText
+            x={contentDisplayX} y={contentDisplayY}
+            width={contentDisplayW} height={contentDisplayH}
+            text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
+            fontSize={10}
+            fill="#AAAAAA"
+            align="center"
+            verticalAlign="middle"
+            listening={false}
+          />
+        </Group>
+        <Group key={`photo-control-${data.id}`} {...controlProps}>
+          <Rect
+            width={contentDisplayW}
+            height={contentDisplayH}
+            fill={isSelected ? "rgba(79,70,229,0.03)" : "rgba(255,255,255,0.01)"}
+          />
+        </Group>
+      </Fragment>
     );
   };
 
@@ -1129,8 +1290,8 @@ export default function TemplateEditor() {
                 {/* eslint-disable-next-line react-hooks/refs */}
                 {getAllElementsSorted(pageLayout).map(({ type, data, index: elemIndex }) => {
                   const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
+                  if (type === "photo") return renderPhotoSlotNode(data, elemIndex, isSelected, makePhotoControlProps(data));
                   const groupProps = makeGroupProps(type, data);
-                  if (type === "photo")   return renderPhotoSlotNode(data, elemIndex, isSelected, groupProps);
                   if (type === "bubble")  return renderBubbleNode(data, isSelected, groupProps);
                   if (type === "text")    return renderTextLabelNode(data, isSelected, groupProps);
                   if (type === "sticker") return (
@@ -1151,6 +1312,7 @@ export default function TemplateEditor() {
                 <Transformer
                   ref={transformerRef}
                   keepRatio={false}
+                  flipEnabled={false}
                   rotateEnabled={true}
                   borderStroke="#4F46E5"
                   borderStrokeWidth={1}
@@ -1182,11 +1344,17 @@ export default function TemplateEditor() {
 
         {/* 右側：屬性面板 */}
         <div className="flex-1 min-w-0 overflow-y-auto" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }} data-guide="property-region">
-          {selectedElement && selectedItem ? (
+          {selectedElement && selectedPanelItem ? (
             <PropertyPanel
               selectedElement={selectedElement}
-              elementData={selectedItem}
-              onPropertyChange={(updates) => updateElement(selectedElement.type, selectedElement.id, updates)}
+              elementData={selectedPanelItem}
+              onPropertyChange={(updates) => {
+                if (selectedElement.type === "photo") {
+                  updatePhotoElementFromEditor(selectedElement.id, updates);
+                  return;
+                }
+                updateElement(selectedElement.type, selectedElement.id, updates);
+              }}
               onLayerChange={handleLayerChange}
             />
           ) : (

@@ -32,6 +32,18 @@ def assert_pixel_close(image, xy: tuple[int, int], expected: tuple[int, int, int
     assert all(abs(channel - expected_channel) <= tolerance for channel, expected_channel in zip(actual, expected)), actual
 
 
+def migrate_photo_slots_to_content_box(layout: dict) -> dict:
+    migrated = deepcopy(layout)
+    migrated["photo_slot_dimension_mode"] = "content-box-v1"
+    for slot in migrated.get("photo_slots", []):
+        border_w = slot.get("border_width", 8) if slot.get("border", True) is not False else 0
+        slot["x"] += border_w
+        slot["y"] += border_w
+        slot["width"] -= border_w * 2
+        slot["height"] -= border_w * 4
+    return migrated
+
+
 def test_render_page_smoke_fixture_draws_expected_regions():
     layout = load_layout()
 
@@ -54,6 +66,16 @@ def test_render_page_smoke_fixture_draws_expected_regions():
     # Text label and footer regions should contain rendered glyph pixels.
     assert count_non_white_pixels(image, (58, 250, 358, 332)) > 20
     assert count_non_white_pixels(image, (36, 1058, 250, 1102)) > 20
+
+
+def test_render_page_supports_migrated_photo_slot_content_box_geometry():
+    layout = load_layout()
+    migrated_layout = migrate_photo_slots_to_content_box(layout)
+
+    legacy_image = render_page(layout, student_name="Ada", page_data={}, page_index=0)
+    migrated_image = render_page(migrated_layout, student_name="Ada", page_data={}, page_index=0)
+
+    assert ImageChops.difference(legacy_image, migrated_image).getbbox() is None
 
 
 def test_render_album_print_output_renders_on_native_canvas():

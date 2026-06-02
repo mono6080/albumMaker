@@ -1,6 +1,8 @@
 // 版型預覽縮圖：顯示模板頁面背景與所有照片格位置，目標格用靛藍高亮
 // 供 ProjectBatch 共用照片分頁與 BatchPhotoWizard 內使用
 
+import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
+
 export default function SlotLayoutPreview({
   page,
   templateId,
@@ -13,6 +15,7 @@ export default function SlotLayoutPreview({
   const canvasW = layout.canvas_width || 794;
   const canvasH = layout.canvas_height || 1123;
   const slots = layout.photo_slots || [];
+  const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
   const scale = height / canvasH;
   const previewW = Math.round(canvasW * scale);
   const previewH = Math.round(canvasH * scale);
@@ -35,6 +38,7 @@ export default function SlotLayoutPreview({
       )}
       {slots.map((slot) => {
         const isTarget = slotId != null && String(slot.id) === String(slotId);
+        const frameRect = getPhotoFrameRect(slot, { dimensionMode: photoSlotDimensionMode });
         return (
           <div
             key={slot.id}
@@ -44,10 +48,10 @@ export default function SlotLayoutPreview({
                 : "border border-dashed border-gray-400/70"
             }`}
             style={{
-              left: Math.round(slot.x * scale),
-              top: Math.round(slot.y * scale),
-              width: Math.round(slot.width * scale),
-              height: Math.round(slot.height * scale),
+              left: Math.round(frameRect.x * scale),
+              top: Math.round(frameRect.y * scale),
+              width: Math.round(frameRect.width * scale),
+              height: Math.round(frameRect.height * scale),
             }}
           />
         );

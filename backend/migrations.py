@@ -2,6 +2,8 @@
 # 負責在不刪除現有資料的前提下，對資料庫 schema 進行漸進式升級
 # 每次新增欄位或資料表時，在此模組追加對應的遷移函式（冪等設計）
 
+import json
+
 from sqlalchemy import text
 from database import engine
 from template_periods import (
@@ -9,6 +11,10 @@ from template_periods import (
     DEFAULT_TEMPLATE_PERIOD_NAME,
     TEMPLATE_DEPARTMENTS,
 )
+
+PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode"
+PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1"
+PHOTO_SLOT_MIGRATION_NAME = "photo_slot_content_box_v1"
 
 
 def run_migrations():
@@ -29,6 +35,8 @@ def run_migrations():
         _add_project_archive_columns(connection)
         _drop_bubble_texts_json_column(connection)
         _add_template_periods_and_scope_columns(connection)
+        _add_template_page_layout_migration_backups_table(connection)
+        _migrate_photo_slots_to_content_box(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -422,6 +430,127 @@ def _add_template_periods_and_scope_columns(connection):
     for index_name, create_sql in indexes:
         if index_name not in existing_indexes:
             connection.execute(text(create_sql))
+    connection.commit()
+
+
+def _add_template_page_layout_migration_backups_table(connection):
+    """保存 layout_json data migration 前的頁面資料，方便必要時回復。"""
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "template_page_layout_migration_backups" not in existing_tables:
+        connection.execute(text("""
+            CREATE TABLE template_page_layout_migration_backups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                migration_name VARCHAR NOT NULL,
+                template_page_id INTEGER NOT NULL,
+                layout_json TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(migration_name, template_page_id)
+            )
+        """))
+        connection.commit()
+
+
+def _migrate_photo_slots_to_content_box(connection):
+    """
+    將模板照片格 x/y/width/height 從「外框框」語意遷移成「實際照片內容框」語意。
+
+    冪等保護：
+    - layout_json.photo_slot_dimension_mode == content-box-v1 時跳過。
+    - 更新前會保存舊 layout_json 到 backup table。
+    - 若某頁照片格資料異常，跳過該頁並保留舊格式；新版程式仍可讀舊格式。
+    """
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "template_pages" not in existing_tables:
+        return
+
+    rows = list(connection.execute(text(
+        "SELECT id, layout_json FROM template_pages ORDER BY id"
+    )))
+    updated_pages = 0
+    updated_slots = 0
+    skipped_invalid_pages = 0
+
+    for page_id, layout_json in rows:
+        try:
+            layout = json.loads(layout_json or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            print(f"[migrations] skip template_page {page_id}: invalid layout_json ({exc})")
+            skipped_invalid_pages += 1
+            continue
+
+        if layout.get(PHOTO_SLOT_DIMENSION_MODE_KEY) == PHOTO_SLOT_CONTENT_BOX_MODE:
+            continue
+
+        next_layout = json.loads(json.dumps(layout))
+        slots = next_layout.get("photo_slots") or []
+        page_valid = True
+        page_updated_slots = 0
+
+        for slot in slots:
+            has_border = slot.get("border", True) is not False
+            try:
+                border_width = max(0.0, float(slot.get("border_width", 8))) if has_border else 0.0
+                x = float(slot.get("x", 0))
+                y = float(slot.get("y", 0))
+                width = float(slot.get("width", 0))
+                height = float(slot.get("height", 0))
+            except (TypeError, ValueError) as exc:
+                print(f"[migrations] skip template_page {page_id}: non-numeric photo slot {slot.get('id')} ({exc})")
+                page_valid = False
+                break
+
+            next_width = width - border_width * 2
+            next_height = height - border_width * 4
+            if next_width <= 0 or next_height <= 0:
+                print(
+                    f"[migrations] skip template_page {page_id}: photo slot {slot.get('id')} "
+                    f"would become non-positive ({next_width}x{next_height})"
+                )
+                page_valid = False
+                break
+
+            slot["x"] = int(round(x + border_width))
+            slot["y"] = int(round(y + border_width))
+            slot["width"] = int(round(next_width))
+            slot["height"] = int(round(next_height))
+            page_updated_slots += 1
+
+        if not page_valid:
+            skipped_invalid_pages += 1
+            continue
+
+        next_layout[PHOTO_SLOT_DIMENSION_MODE_KEY] = PHOTO_SLOT_CONTENT_BOX_MODE
+        connection.execute(
+            text("""
+                INSERT OR IGNORE INTO template_page_layout_migration_backups
+                    (migration_name, template_page_id, layout_json)
+                VALUES (:migration_name, :template_page_id, :layout_json)
+            """),
+            {
+                "migration_name": PHOTO_SLOT_MIGRATION_NAME,
+                "template_page_id": page_id,
+                "layout_json": layout_json or "{}",
+            },
+        )
+        connection.execute(
+            text("UPDATE template_pages SET layout_json = :layout_json WHERE id = :page_id"),
+            {"layout_json": json.dumps(next_layout, ensure_ascii=False), "page_id": page_id},
+        )
+        updated_pages += 1
+        updated_slots += page_updated_slots
+
+    if updated_pages or skipped_invalid_pages:
+        print(
+            f"[migrations] photo slot content-box migration: "
+            f"updated_pages={updated_pages}, updated_slots={updated_slots}, "
+            f"skipped_invalid_pages={skipped_invalid_pages}"
+        )
     connection.commit()
 
 

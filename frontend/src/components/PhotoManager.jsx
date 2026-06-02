@@ -5,6 +5,8 @@ import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan, getPhotoCropBox } from "../utils/photoUtils";
+import { matchPersonalFilesToSlots } from "../utils/photoMatcher";
+import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 
 const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
 
@@ -194,7 +196,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       (p.layout?.photo_slots || []).map((s, slotIndex) => ({
         pi, slotId: s.id, slotIndex,
         slotW: s.width, slotH: s.height,
-        border: s.border ?? false, borderW: s.border_width ?? 8,
+        dimensionMode: getPhotoSlotDimensionMode(p.layout),
+        border: s.border !== false, borderW: s.border_width ?? 8,
         borderRadius: s.border_radius ?? 0,
         shadowEnabled: s.shadow_enabled,
         shadowOffsetX: s.shadow_offset_x, shadowOffsetY: s.shadow_offset_y,
@@ -491,28 +494,71 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
   const handleMultiUpload = (files) => {
     const arr = Array.from(files);
-    const emptyCount = itemsRef.current.filter(it =>
-      !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
-    ).length;
-    if (emptyCount === 0) {
+    const currentItems = itemsRef.current;
+    const availableIndexes = currentItems
+      .map((it, idx) => (
+        !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath ? idx : -1
+      ))
+      .filter(idx => idx >= 0);
+    if (availableIndexes.length === 0) {
       toast.error("沒有剩餘空格可上傳");
       return;
     }
-    const acceptedFiles = arr.slice(0, emptyCount);
-    const skippedCount = arr.length - acceptedFiles.length;
-    if (skippedCount > 0) {
-      toast(`只上傳前 ${acceptedFiles.length} 張，已略過 ${skippedCount} 張`);
+
+    const availableIndexByTarget = new Map(
+      availableIndexes.map(idx => [`${currentItems[idx].pi}:${currentItems[idx].slotId}`, idx])
+    );
+    const matchedBySlot = matchPersonalFilesToSlots(arr, pages);
+    const assignmentsByIndex = new Map();
+    const usedFiles = new Set();
+    let namedAssignedCount = 0;
+    let unavailableNamedCount = 0;
+
+    matchedBySlot.assignments.forEach((assignment) => {
+      const targetKey = `${assignment.pageIndex}:${assignment.slotId}`;
+      const targetIndex = availableIndexByTarget.get(targetKey);
+      if (targetIndex == null || assignmentsByIndex.has(targetIndex)) {
+        unavailableNamedCount += 1;
+        return;
+      }
+      assignmentsByIndex.set(targetIndex, assignment.file);
+      usedFiles.add(assignment.file);
+      namedAssignedCount += 1;
+    });
+
+    const remainingIndexes = availableIndexes.filter(idx => !assignmentsByIndex.has(idx));
+    const fallbackFiles = matchedBySlot.unused.filter(file => !usedFiles.has(file));
+    const fallbackCount = Math.min(remainingIndexes.length, fallbackFiles.length);
+    for (let i = 0; i < fallbackCount; i += 1) {
+      assignmentsByIndex.set(remainingIndexes[i], fallbackFiles[i]);
+      usedFiles.add(fallbackFiles[i]);
     }
+
+    const skippedCount = arr.length - assignmentsByIndex.size;
+    if (assignmentsByIndex.size === 0) {
+      toast.error("沒有可放入的照片");
+      return;
+    }
+
     setItems(prev => {
       const next = prev.map(it => ({ ...it }));
-      let fi = 0;
-      for (let i = 0; i < prev.length && fi < acceptedFiles.length; i++) {
-        const it = prev[i];
-        if (disabled || skippedPages.has(it.pi) || it.pendingFile || it.serverPath) continue;
-        assignFile(next, i, acceptedFiles[fi++]);
-      }
+      assignmentsByIndex.forEach((file, idx) => assignFile(next, idx, file));
       return next;
     });
+
+    if (namedAssignedCount > 0) {
+      toast.success(
+        `已依檔名放入 ${namedAssignedCount} 張` +
+        (fallbackCount > 0 ? `，另依順序補入 ${fallbackCount} 張` : "")
+      );
+    }
+    if (skippedCount > 0) {
+      const invalidCount = matchedBySlot.invalid.length;
+      const reason = invalidCount + unavailableNamedCount > 0
+        ? `其中 ${invalidCount + unavailableNamedCount} 張指定格位無法使用`
+        : "空格不足";
+      toast(`已略過 ${skippedCount} 張（${reason}）`);
+    }
   };
 
   const handleReplace = (idx, file) => {
@@ -698,7 +744,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             disabled={disabled || availableEmptyCount === 0}
             data-guide="student-multi-upload"
             data-empty-count={availableEmptyCount}
-            title={availableEmptyCount > 0 ? `剩餘 ${availableEmptyCount} 格可上傳` : "沒有剩餘空格"}
+            title={availableEmptyCount > 0 ? `剩餘 ${availableEmptyCount} 格可上傳；檔名尾端可用 1-2 或 3 指定格位` : "沒有剩餘空格"}
             className="flex items-center justify-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:pointer-events-none transition-colors font-medium whitespace-nowrap"
           >
             <Upload className="w-3.5 h-3.5" />

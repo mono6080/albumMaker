@@ -1,5 +1,12 @@
 import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
 
+import {
+  getPhotoContentRect,
+  getPhotoFrameInsets,
+  getPhotoFrameRect,
+  getPhotoSlotDimensionMode,
+} from "./photoFrameGeometry.js";
+
 export const CANVAS_REAL_WIDTH = 794;
 export const CANVAS_REAL_HEIGHT = 1123;
 export const CANVAS_DISPLAY_WIDTH = 530;
@@ -90,10 +97,24 @@ export function getDisplayBox(data) {
   };
 }
 
-export function getPhotoSlotModel(data, elemIndex, pageIndex = 0) {
-  const box = getDisplayBox(data);
+export function getPhotoSlotModel(data, elemIndex, pageIndex = 0, dimensionMode) {
+  const frameRect = getPhotoFrameRect(data, { dimensionMode });
+  const frameW = toDisplayCoord(frameRect.width);
+  const frameH = toDisplayCoord(frameRect.height);
+  const box = {
+    x: toDisplayCoord(frameRect.x),
+    y: toDisplayCoord(frameRect.y),
+    width: frameW,
+    height: frameH,
+    centerX: toDisplayCoord(frameRect.x) + frameW / 2,
+    centerY: toDisplayCoord(frameRect.y) + frameH / 2,
+    offsetX: frameW / 2,
+    offsetY: frameH / 2,
+    rotation: data.rotation ?? 0,
+  };
   const hasBorder = data.border !== false;
-  const borderWidth = toDisplayCoord(data.border_width ?? 8);
+  const insets = getPhotoFrameInsets(data);
+  const contentRect = getPhotoContentRect(data, { dimensionMode });
   return {
     type: "photo",
     id: data.id,
@@ -102,12 +123,19 @@ export function getPhotoSlotModel(data, elemIndex, pageIndex = 0) {
     innerFill: "#EEEEEE",
     innerBox: hasBorder
       ? {
-          x: box.x + borderWidth,
-          y: box.y + borderWidth,
-          width: Math.max(1, box.width - borderWidth * 2),
-          height: Math.max(1, box.height - borderWidth * 3),
+          x: toDisplayCoord(contentRect.x),
+          y: toDisplayCoord(contentRect.y),
+          width: toDisplayCoord(contentRect.width),
+          height: toDisplayCoord(contentRect.height),
         }
       : box,
+    insets: {
+      left: toDisplayCoord(insets.left),
+      top: toDisplayCoord(insets.top),
+      right: toDisplayCoord(insets.right),
+      bottom: toDisplayCoord(insets.bottom),
+      borderWidth: toDisplayCoord(insets.borderWidth),
+    },
     placeholderText: `P${pageIndex + 1}·${elemIndex + 1}`,
   };
 }
@@ -160,8 +188,9 @@ export function getFooterModel(footer) {
 }
 
 export function buildRenderLayoutModel(layout, pageIndex = 0) {
+  const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
   const elements = getAllElementsSorted(layout).map(({ type, data, index }) => {
-    if (type === "photo") return getPhotoSlotModel(data, index, pageIndex);
+    if (type === "photo") return getPhotoSlotModel(data, index, pageIndex, photoSlotDimensionMode);
     if (type === "bubble") return getBubbleModel(data);
     if (type === "text") return getTextLabelModel(data);
     return { type, id: data.id, box: getDisplayBox(data) };

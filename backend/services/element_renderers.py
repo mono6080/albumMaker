@@ -87,15 +87,17 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         if border:
             frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
             fd = ImageDraw.Draw(frame)
+            inner_w = max(1, sw - border_w * 2)
+            inner_h = max(1, sh - border_w * 4)
             ix1, iy1 = border_w, border_w
-            ix2, iy2 = sw - border_w, sh - border_w * 2
+            ix2, iy2 = ix1 + inner_w - 1, iy1 + inner_h - 1
             inner_r = max(0, slot_radius - border_w)
             if inner_r > 0:
                 fd.rounded_rectangle([ix1, iy1, ix2, iy2], radius=inner_r, fill="#EEEEEE")
             else:
                 fd.rectangle([ix1, iy1, ix2, iy2], fill="#EEEEEE")
             fd.rectangle([0, 0, sw - 1, sh - 1], outline="#C8CDD8", width=1)
-            mid_x, mid_y = (ix1 + ix2) // 2, (iy1 + iy2) // 2
+            mid_x, mid_y = ix1 + inner_w // 2, iy1 + inner_h // 2
             fd.text((mid_x, mid_y), f"P{page_index+1}·{slot_index+1}", fill="#AAAAAA",
                     font=get_font(14), anchor="mm")
             frame = apply_rounded_corners(frame, slot_radius)
@@ -180,8 +182,8 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         return frame
 
     if border:
-        inner_w = sw - border_w * 2
-        inner_h = sh - border_w * 2 - border_w * 2
+        inner_w = max(1, sw - border_w * 2)
+        inner_h = max(1, sh - border_w * 4)
         photo = _cover_crop(img, inner_w, inner_h, user_scale, offset_x, offset_y)
         inner_r = max(0, slot_radius - border_w)
         if inner_r > 0:
