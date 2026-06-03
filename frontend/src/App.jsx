@@ -115,75 +115,86 @@ function Nav() {
   );
 }
 
+function AppContent() {
+  const loc = useLocation();
+  const mainClassName = loc.pathname === "/login"
+    ? "w-full flex-1"
+    : "p-4 sm:p-8 w-full flex-1";
+
+  return (
+    <AuthProvider>
+      <Toaster position="top-right" />
+      <PwaUpdateBanner />
+      <Nav />
+      <main className={mainClassName}>
+        <Routes>
+          {/* 登入頁（公開） */}
+          <Route path="/login" element={<Login />} />
+
+          {/* 首頁依角色導向 */}
+          <Route path="/" element={
+            <PrivateRoute>
+              <ProjectList />
+            </PrivateRoute>
+          } />
+
+          {/* 模板（admin + 美學組） */}
+          <Route path="/templates" element={
+            <PrivateRoute allowedRoles={["admin", "art_team"]}>
+              <TemplateList />
+            </PrivateRoute>
+          } />
+          <Route path="/templates/:id/edit" element={
+            <PrivateRoute allowedRoles={["admin", "art_team"]}>
+              <TemplateEditor />
+            </PrivateRoute>
+          } />
+
+          {/* 專案（admin + teacher + supervisor + art_team） */}
+          <Route path="/projects" element={
+            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
+              <ProjectList />
+            </PrivateRoute>
+          } />
+          <Route path="/projects/:id/batch" element={
+            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
+              <ProjectBatch />
+            </PrivateRoute>
+          } />
+          <Route path="/projects/:id/review" element={
+            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
+              <ProjectReview />
+            </PrivateRoute>
+          } />
+          <Route path="/projects/:projectId/students/:studentId/edit" element={
+            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
+              <StudentEdit />
+            </PrivateRoute>
+          } />
+
+          {/* 個人設定 */}
+          <Route path="/settings" element={
+            <PrivateRoute>
+              <SettingsPage />
+            </PrivateRoute>
+          } />
+
+          {/* 使用者管理（admin only） */}
+          <Route path="/admin/users" element={
+            <PrivateRoute allowedRoles={["admin"]}>
+              <UserManagement />
+            </PrivateRoute>
+          } />
+        </Routes>
+      </main>
+    </AuthProvider>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Toaster position="top-right" />
-        <PwaUpdateBanner />
-        <Nav />
-        <main className="p-4 sm:p-8 w-full">
-          <Routes>
-            {/* 登入頁（公開） */}
-            <Route path="/login" element={<Login />} />
-
-            {/* 首頁依角色導向 */}
-            <Route path="/" element={
-              <PrivateRoute>
-                <ProjectList />
-              </PrivateRoute>
-            } />
-
-            {/* 模板（admin + 美學組） */}
-            <Route path="/templates" element={
-              <PrivateRoute allowedRoles={["admin", "art_team"]}>
-                <TemplateList />
-              </PrivateRoute>
-            } />
-            <Route path="/templates/:id/edit" element={
-              <PrivateRoute allowedRoles={["admin", "art_team"]}>
-                <TemplateEditor />
-              </PrivateRoute>
-            } />
-
-            {/* 專案（admin + teacher + supervisor + art_team） */}
-            <Route path="/projects" element={
-              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
-                <ProjectList />
-              </PrivateRoute>
-            } />
-            <Route path="/projects/:id/batch" element={
-              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
-                <ProjectBatch />
-              </PrivateRoute>
-            } />
-            <Route path="/projects/:id/review" element={
-              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
-                <ProjectReview />
-              </PrivateRoute>
-            } />
-            <Route path="/projects/:projectId/students/:studentId/edit" element={
-              <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
-                <StudentEdit />
-              </PrivateRoute>
-            } />
-
-            {/* 個人設定 */}
-            <Route path="/settings" element={
-              <PrivateRoute>
-                <SettingsPage />
-              </PrivateRoute>
-            } />
-
-            {/* 使用者管理（admin only） */}
-            <Route path="/admin/users" element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <UserManagement />
-              </PrivateRoute>
-            } />
-          </Routes>
-        </main>
-      </AuthProvider>
+      <AppContent />
     </BrowserRouter>
   );
 }

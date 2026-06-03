@@ -2,6 +2,7 @@
 // 主動檢查 Service Worker 更新，避免手機 PWA 只靠瀏覽器背景檢查而漏掉新版。
 
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { RefreshCw, X } from "lucide-react";
 
 const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -9,6 +10,7 @@ const UPDATE_CHECK_DEBOUNCE_MS = 5000;
 const SERVICE_WORKER_URL = `/sw.js?v=${encodeURIComponent(import.meta.env.VITE_APP_BUILD_ID || "dev")}`;
 
 export default function PwaUpdateBanner() {
+  const location = useLocation();
   const [showBanner, setShowBanner] = useState(false);
   const dismissedRef = useRef(false);
   const registrationRef = useRef(null);
@@ -156,10 +158,10 @@ export default function PwaUpdateBanner() {
     };
   }, []);
 
-  if (!showBanner) return null;
+  if (!showBanner || location.pathname === "/login") return null;
 
   return (
-    <div className="fixed bottom-4 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 flex-wrap items-center gap-2 sm:gap-3 bg-gray-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg">
+    <div className="fixed right-4 top-16 z-50 flex w-[calc(100vw-2rem)] max-w-sm flex-wrap items-center gap-2 rounded-lg bg-gray-900 px-4 py-3 text-sm text-white shadow-lg">
       <RefreshCw className="w-4 h-4 flex-shrink-0 text-indigo-400" />
       <span className="min-w-0 flex-1">已更新到新版本</span>
       <button

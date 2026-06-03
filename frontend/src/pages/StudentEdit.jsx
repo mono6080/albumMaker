@@ -14,7 +14,7 @@ import {
   buildDownloadPdfUrl,
   buildStudentPagePreviewUrl,
 } from "../api/urls";
-import { apiClient, renderClient } from "../api/authApi";
+import { renderClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { usePermissions } from "../hooks/usePermissions";
 import {

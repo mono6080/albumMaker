@@ -78,6 +78,7 @@ export default function TemplateList() {
     mode: "blank",
     sourceTemplateId: "",
   });
+  const [showTemplateCreate, setShowTemplateCreate] = useState(false);
   const [creatingPeriod, setCreatingPeriod] = useState(false);
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
@@ -133,6 +134,12 @@ export default function TemplateList() {
       return template.department === selectedDepartment;
     });
   }, [templates, selectedDepartment, selectedPeriodId]);
+
+  useEffect(() => {
+    if (visibleTemplates.length === 0) {
+      setShowTemplateCreate(true);
+    }
+  }, [visibleTemplates.length]);
 
   const periodOptions = useMemo(
     () => periods.filter(period => period.department === selectedDepartment),
@@ -196,6 +203,7 @@ export default function TemplateList() {
       );
       toast.success(templateForm.mode === "copy" ? "模板已複製" : "模板已建立");
       setTemplateForm(form => ({ ...form, name: "", sourceTemplateId: "" }));
+      setShowTemplateCreate(false);
       await load();
     } catch (error) {
       const detail = error.response?.data?.detail;
@@ -339,75 +347,98 @@ export default function TemplateList() {
         </div>
       </Surface>
 
-      <Surface className="mb-8 border-indigo-100" padding="lg" data-guide="template-create-card">
-        <div className="mb-4 flex items-center gap-2">
-          <BookOpen className="h-4 w-4 text-indigo-500" />
-          <h2 className="text-sm font-semibold text-gray-800">建立新模板</h2>
-        </div>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_180px_220px_160px] lg:items-end">
-          <FormField label="模板名稱">
-            <input
-              id="template-name"
-              data-guide="template-name-input"
-              className={fieldControlClass}
-              placeholder="2026-06 12階 感官世界"
-              value={templateForm.name}
-              onChange={event => setTemplateForm(form => ({ ...form, name: event.target.value }))}
-              onKeyDown={event => event.key === "Enter" && handleCreateTemplate()}
-            />
-          </FormField>
-          <FormField label="目標期別">
-            <select
-              className={fieldControlClass}
-              value={templateForm.periodId || selectedPeriodId}
-              onChange={event => setTemplateForm(form => ({ ...form, periodId: event.target.value }))}
-            >
-              <option value="">請選擇...</option>
-              {periodOptions.map(period => (
-                <option key={period.id} value={period.id}>
-                  {period.name}（{period.status_label}）
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <FormField label="建立方式">
-            <select
-              className={fieldControlClass}
-              value={templateForm.mode}
-              onChange={event => setTemplateForm(form => ({ ...form, mode: event.target.value }))}
-            >
-              <option value="blank">從零開始</option>
-              <option value="copy">複製過往模板</option>
-            </select>
-          </FormField>
+      <Surface className="mb-6 border-indigo-100" padding={showTemplateCreate ? "lg" : "md"} data-guide="template-create-card">
+        <div className={`${showTemplateCreate ? "mb-4" : ""} flex items-center justify-between gap-3`}>
+          <div className="flex min-w-0 items-center gap-2">
+            <BookOpen className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-gray-800">建立新模板</h2>
+              {!showTemplateCreate && (
+                <p className="mt-0.5 truncate text-xs text-gray-400">
+                  目前期別：{selectedPeriod?.department_label ?? "未選擇"} / {selectedPeriod?.name ?? "未選擇"}
+                </p>
+              )}
+            </div>
+          </div>
           <Button
-            onClick={handleCreateTemplate}
-            disabled={creatingTemplate || !templateForm.name.trim()}
-            data-guide="template-create-button"
-            variant="primary"
-            fullWidth
+            type="button"
+            onClick={() => setShowTemplateCreate(value => !value)}
+            variant={showTemplateCreate ? "ghost" : "primary"}
+            size="sm"
           >
-            <Plus className="h-4 w-4" />
-            {creatingTemplate ? "建立中" : "建立"}
+            {showTemplateCreate ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {showTemplateCreate ? "收合" : "建立模板"}
           </Button>
         </div>
-        {templateForm.mode === "copy" && (
-          <div className="mt-4">
-            <FormField label="來源模板">
-              <select
-                className={fieldControlClass}
-                value={templateForm.sourceTemplateId}
-                onChange={event => setTemplateForm(form => ({ ...form, sourceTemplateId: event.target.value }))}
+
+        {showTemplateCreate && (
+          <>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_180px_220px_160px] lg:items-end">
+              <FormField label="模板名稱">
+                <input
+                  id="template-name"
+                  data-guide="template-name-input"
+                  className={fieldControlClass}
+                  placeholder="2026-06 12階 感官世界"
+                  value={templateForm.name}
+                  onChange={event => setTemplateForm(form => ({ ...form, name: event.target.value }))}
+                  onKeyDown={event => event.key === "Enter" && handleCreateTemplate()}
+                />
+              </FormField>
+              <FormField label="目標期別">
+                <select
+                  className={fieldControlClass}
+                  value={templateForm.periodId || selectedPeriodId}
+                  onChange={event => setTemplateForm(form => ({ ...form, periodId: event.target.value }))}
+                >
+                  <option value="">請選擇...</option>
+                  {periodOptions.map(period => (
+                    <option key={period.id} value={period.id}>
+                      {period.name}（{period.status_label}）
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="建立方式">
+                <select
+                  className={fieldControlClass}
+                  value={templateForm.mode}
+                  onChange={event => setTemplateForm(form => ({ ...form, mode: event.target.value }))}
+                >
+                  <option value="blank">從零開始</option>
+                  <option value="copy">複製過往模板</option>
+                </select>
+              </FormField>
+              <Button
+                onClick={handleCreateTemplate}
+                disabled={creatingTemplate || !templateForm.name.trim()}
+                data-guide="template-create-button"
+                variant="primary"
+                fullWidth
               >
-                <option value="">請選擇要複製的模板...</option>
-                {templates.map(template => (
-                  <option key={template.id} value={template.id}>
-                    {template.department_label || "未分類"} / {template.period_name || "未分類"} / {template.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-          </div>
+                <Plus className="h-4 w-4" />
+                {creatingTemplate ? "建立中" : "建立"}
+              </Button>
+            </div>
+            {templateForm.mode === "copy" && (
+              <div className="mt-4">
+                <FormField label="來源模板">
+                  <select
+                    className={fieldControlClass}
+                    value={templateForm.sourceTemplateId}
+                    onChange={event => setTemplateForm(form => ({ ...form, sourceTemplateId: event.target.value }))}
+                  >
+                    <option value="">請選擇要複製的模板...</option>
+                    {templates.map(template => (
+                      <option key={template.id} value={template.id}>
+                        {template.department_label || "未分類"} / {template.period_name || "未分類"} / {template.name}
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+              </div>
+            )}
+          </>
         )}
       </Surface>
 

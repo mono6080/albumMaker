@@ -421,6 +421,14 @@ export default function ProjectBatch() {
   const activePageLayout = templatePages[activePage]?.layout;
   const activePageTextLabels = getFillableTextLabels(activePageLayout);
   const activePagePhotoSlots = activePageLayout?.photo_slots || [];
+  const totalPhotoSlots = templatePages.reduce(
+    (total, templatePage) => total + (templatePage.layout?.photo_slots?.length ?? 0),
+    0
+  );
+  const totalFillableTextLabels = templatePages.reduce(
+    (total, templatePage) => total + getFillableTextLabels(templatePage.layout).length,
+    0
+  );
   const selectedSharedPhotoSlot = activePagePhotoSlots.find(
     slot => String(slot.id) === String(selectedSharedPhotoSlotId)
   );
@@ -537,6 +545,58 @@ export default function ProjectBatch() {
           />
         </div>
       </Surface>
+    </div>
+  );
+
+  const setupOverviewPanel = (
+    <div className="hidden space-y-4 xl:block">
+      <Surface>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-800">設定摘要</h2>
+            <p className="mt-0.5 text-xs text-gray-400">先完成名單，再補共用照片與文字。</p>
+          </div>
+          <Badge tone={project.students.length > 0 ? "success" : "warning"}>
+            {project.students.length > 0 ? "可編輯" : "待登記"}
+          </Badge>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-lg bg-gray-50 px-3 py-2">
+            <div className="text-lg font-semibold text-gray-900">{project.students.length}</div>
+            <div className="text-xs text-gray-500">學生</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 px-3 py-2">
+            <div className="text-lg font-semibold text-gray-900">{totalPhotoSlots}</div>
+            <div className="text-xs text-gray-500">照片格</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 px-3 py-2">
+            <div className="text-lg font-semibold text-gray-900">{totalFillableTextLabels}</div>
+            <div className="text-xs text-gray-500">文字欄</div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+          <Button type="button" onClick={() => setDesktopTab("photos")} variant="neutral" fullWidth>
+            <ImagePlus className="h-4 w-4" />
+            共用照片
+          </Button>
+          <Button type="button" onClick={() => setDesktopTab("texts")} variant="neutral" fullWidth>
+            <Type className="h-4 w-4" />
+            共用文字
+          </Button>
+          <Button
+            as={Link}
+            to={`/projects/${projectId}/review`}
+            variant="successSoft"
+            fullWidth
+          >
+            <Eye className="h-4 w-4" />
+            個人編輯
+          </Button>
+        </div>
+      </Surface>
+      {previewPanel}
     </div>
   );
 
@@ -912,119 +972,122 @@ export default function ProjectBatch() {
 
       {/* Tab 1：登記學生 */}
       {desktopTab === "students" && (
-        <div className="max-w-xl space-y-5">
-          {/* 新增學生輸入區 */}
-          <Surface>
-            <div className="flex items-center gap-2 mb-3">
-              <Users className="w-4 h-4 text-indigo-500" />
-              <h2 className="font-semibold text-gray-800 text-sm">新增學生名單</h2>
-              <span className="text-xs text-gray-400 ml-1">
-                （已有 {project.students.length} 位）
-              </span>
-            </div>
-            <div className="flex gap-2 sm:gap-3 min-w-0">
-              <textarea
-                rows={3}
-                data-guide="batch-student-input"
-                className={`${fieldControlClass} flex-1 resize-none sm:px-4 sm:py-2.5`}
-                placeholder="每行一位，或用逗號 / 頓號分隔"
-                value={studentNamesInput}
-                onChange={event => setStudentNamesInput(event.target.value)}
-              />
-              <Button
-                onClick={handleAddStudents}
-                disabled={isAddingStudents || !studentNamesInput.trim()}
-                data-guide="batch-add-students"
-                variant="primary"
-                className="self-stretch"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden sm:inline">新增</span>
-              </Button>
-            </div>
-          </Surface>
-
-          {/* 已登記學生清單 */}
-          {project.students.length > 0 && (
-            <Surface data-guide="batch-student-list">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                已登記學生（{project.students.length} 位）
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,36rem)_minmax(320px,1fr)] xl:items-start">
+          <div className="space-y-5">
+            {/* 新增學生輸入區 */}
+            <Surface>
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="w-4 h-4 text-indigo-500" />
+                <h2 className="font-semibold text-gray-800 text-sm">新增學生名單</h2>
+                <span className="text-xs text-gray-400 ml-1">
+                  （已有 {project.students.length} 位）
+                </span>
               </div>
-              <div className="space-y-1">
-                {project.students.map((student, studentIndex) => (
-                  <div
-                    key={student.id}
-                    className="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors min-w-0"
-                  >
-                    <span className="text-xs w-5 h-5 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center font-medium flex-shrink-0">
-                      {studentIndex + 1}
-                    </span>
-
-                    {editingStudentId === student.id ? (
-                      <>
-                        <input
-                          autoFocus
-                          className={`${fieldControlClass} flex-1 py-0.5`}
-                          value={editingStudentName}
-                          onChange={event => setEditingStudentName(event.target.value)}
-                          onKeyDown={event => {
-                            if (event.key === "Enter") saveEditStudent(student.id);
-                            if (event.key === "Escape") cancelEditStudent();
-                          }}
-                        />
-                        <IconButton
-                          label="儲存學生名稱"
-                          onClick={() => saveEditStudent(student.id)}
-                          variant="success"
-                          size="xs"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                        </IconButton>
-                        <IconButton
-                          label="取消編輯學生名稱"
-                          onClick={cancelEditStudent}
-                          size="xs"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </IconButton>
-                      </>
-                    ) : (
-                      <>
-                        <span className="min-w-0 flex-1 text-sm text-gray-800 font-medium truncate">
-                          {student.name}
-                        </span>
-                        <IconButton
-                          label="編輯學生名稱"
-                          onClick={() => startEditStudent(student.id, student.name)}
-                          variant="primary"
-                          size="xs"
-                          className={mobileVisibleHoverActionClass}
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </IconButton>
-                        <IconButton
-                          label="刪除學生"
-                          onClick={clickEvent => handleDeleteStudent(student.id, clickEvent)}
-                          variant="danger"
-                          size="xs"
-                          className={mobileVisibleHoverActionClass}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </IconButton>
-                      </>
-                    )}
-                  </div>
-                ))}
+              <div className="flex gap-2 sm:gap-3 min-w-0">
+                <textarea
+                  rows={3}
+                  data-guide="batch-student-input"
+                  className={`${fieldControlClass} flex-1 resize-none sm:px-4 sm:py-2.5`}
+                  placeholder="每行一位，或用逗號 / 頓號分隔"
+                  value={studentNamesInput}
+                  onChange={event => setStudentNamesInput(event.target.value)}
+                />
+                <Button
+                  onClick={handleAddStudents}
+                  disabled={isAddingStudents || !studentNamesInput.trim()}
+                  data-guide="batch-add-students"
+                  variant="primary"
+                  className="self-stretch"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="hidden sm:inline">新增</span>
+                </Button>
               </div>
             </Surface>
-          )}
 
-          {project.students.length === 0 && (
-            <div className="text-center py-12 text-gray-400">
-              <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              <p className="text-sm">尚未新增任何學生</p>
-            </div>
-          )}
+            {/* 已登記學生清單 */}
+            {project.students.length > 0 && (
+              <Surface data-guide="batch-student-list">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  已登記學生（{project.students.length} 位）
+                </div>
+                <div className="space-y-1">
+                  {project.students.map((student, studentIndex) => (
+                    <div
+                      key={student.id}
+                      className="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors min-w-0"
+                    >
+                      <span className="text-xs w-5 h-5 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center font-medium flex-shrink-0">
+                        {studentIndex + 1}
+                      </span>
+
+                      {editingStudentId === student.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            className={`${fieldControlClass} flex-1 py-0.5`}
+                            value={editingStudentName}
+                            onChange={event => setEditingStudentName(event.target.value)}
+                            onKeyDown={event => {
+                              if (event.key === "Enter") saveEditStudent(student.id);
+                              if (event.key === "Escape") cancelEditStudent();
+                            }}
+                          />
+                          <IconButton
+                            label="儲存學生名稱"
+                            onClick={() => saveEditStudent(student.id)}
+                            variant="success"
+                            size="xs"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </IconButton>
+                          <IconButton
+                            label="取消編輯學生名稱"
+                            onClick={cancelEditStudent}
+                            size="xs"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </IconButton>
+                        </>
+                      ) : (
+                        <>
+                          <span className="min-w-0 flex-1 text-sm text-gray-800 font-medium truncate">
+                            {student.name}
+                          </span>
+                          <IconButton
+                            label="編輯學生名稱"
+                            onClick={() => startEditStudent(student.id, student.name)}
+                            variant="primary"
+                            size="xs"
+                            className={mobileVisibleHoverActionClass}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </IconButton>
+                          <IconButton
+                            label="刪除學生"
+                            onClick={clickEvent => handleDeleteStudent(student.id, clickEvent)}
+                            variant="danger"
+                            size="xs"
+                            className={mobileVisibleHoverActionClass}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </IconButton>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Surface>
+            )}
+
+            {project.students.length === 0 && (
+              <div className="text-center py-12 text-gray-400">
+                <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">尚未新增任何學生</p>
+              </div>
+            )}
+          </div>
+          {setupOverviewPanel}
         </div>
       )}
 

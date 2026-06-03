@@ -21,6 +21,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Trash2,
   Users,
   X,
@@ -182,8 +183,8 @@ const ProjectCard = memo(function ProjectCard({
       className="group overflow-hidden transition-all hover:border-indigo-200 hover:shadow-md"
       data-guide="project-card"
     >
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-2 mb-3">
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             {isEditing ? (
               <div className="flex items-center gap-1 mb-1 min-w-0">
@@ -257,7 +258,7 @@ const ProjectCard = memo(function ProjectCard({
           <Link
             to={`/projects/${project.id}/batch`}
             data-guide="project-settings-link"
-            className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-3 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
+            className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" />
             專案設定
@@ -266,7 +267,7 @@ const ProjectCard = memo(function ProjectCard({
         <Link
           to={`/projects/${project.id}/review`}
           data-guide="project-review-link"
-          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-3 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
+          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
           {canEdit ? "個人編輯" : "審閱"}
@@ -349,6 +350,7 @@ export default function ProjectList() {
   const [nowMs] = useState(() => Date.now());
   const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState(DEFAULT_PROJECT_FILTERS);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
 
   const searchTerms = useMemo(
     () => normalizeSearchText(searchQuery).split(/\s+/).filter(Boolean),
@@ -571,6 +573,64 @@ export default function ProjectList() {
     }
   }, []);
 
+  const renderProjectFilterControls = (ownerDatalistId) => (
+    <>
+      <FormField label="部門">
+        <select
+          className={fieldControlClass}
+          value={filters.department}
+          onChange={event => updateFilter("department", event.target.value)}
+        >
+          <option value={ALL_FILTER_VALUE}>全部部門</option>
+          {departmentFilterOptions.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </FormField>
+      <FormField label="期別">
+        <select
+          className={fieldControlClass}
+          value={filters.period}
+          onChange={event => updateFilter("period", event.target.value)}
+        >
+          <option value={ALL_FILTER_VALUE}>全部期別</option>
+          {periodFilterOptions.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </FormField>
+      {showOwner && (
+        <FormField label="建立者">
+          <div className="relative">
+            <input
+              list={ownerDatalistId}
+              className={`${fieldControlClass} pr-10`}
+              value={filters.ownerQuery ?? ""}
+              onChange={event => updateFilter("ownerQuery", event.target.value)}
+              placeholder="輸入建立者"
+              aria-label="篩選建立者"
+            />
+            {filters.ownerQuery && (
+              <button
+                type="button"
+                onClick={() => updateFilter("ownerQuery", "")}
+                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                aria-label="清除建立者篩選"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <datalist id={ownerDatalistId}>
+              {ownerFilterOptions.map(option => (
+                <option key={option.value} value={option.label} />
+              ))}
+            </datalist>
+          </div>
+        </FormField>
+      )}
+    </>
+  );
+
   return (
     <div className="w-full">
       <ConfirmModal
@@ -781,72 +841,39 @@ export default function ProjectList() {
             </div>
           </FormField>
           {canUseProjectFilters && (
-            <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <FormField label="部門">
-                <select
-                  className={fieldControlClass}
-                  value={filters.department}
-                  onChange={event => updateFilter("department", event.target.value)}
-                >
-                  <option value={ALL_FILTER_VALUE}>全部部門</option>
-                  {departmentFilterOptions.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="期別">
-                <select
-                  className={fieldControlClass}
-                  value={filters.period}
-                  onChange={event => updateFilter("period", event.target.value)}
-                >
-                  <option value={ALL_FILTER_VALUE}>全部期別</option>
-                  {periodFilterOptions.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </FormField>
-              {showOwner && (
-                <FormField label="建立者">
-                  <div className="relative">
-                    <input
-                      list="project-owner-filter-options"
-                      className={`${fieldControlClass} pr-10`}
-                      value={filters.ownerQuery ?? ""}
-                      onChange={event => updateFilter("ownerQuery", event.target.value)}
-                      placeholder="輸入建立者"
-                      aria-label="篩選建立者"
-                    />
-                    {filters.ownerQuery && (
-                      <button
-                        type="button"
-                        onClick={() => updateFilter("ownerQuery", "")}
-                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                        aria-label="清除建立者篩選"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    <datalist id="project-owner-filter-options">
-                      {ownerFilterOptions.map(option => (
-                        <option key={option.value} value={option.label} />
-                      ))}
-                    </datalist>
-                  </div>
-                </FormField>
-              )}
+            <div className="hidden flex-1 grid-cols-1 gap-3 xl:grid xl:grid-cols-3">
+              {renderProjectFilterControls("project-owner-filter-options")}
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between gap-2 xl:flex-shrink-0 xl:justify-end xl:pb-0.5">
             <div className="text-xs text-gray-400">{listCountLabel}</div>
-            {hasListFilters && (
-              <Button type="button" onClick={clearListFilters} variant="ghost" size="sm">
-                <X className="h-3.5 w-3.5" />
-                清除
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {canUseProjectFilters && (
+                <Button
+                  type="button"
+                  onClick={() => setShowMobileFilters(value => !value)}
+                  variant={showMobileFilters || hasActiveFilters ? "secondary" : "ghost"}
+                  size="sm"
+                  className="xl:hidden"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  篩選
+                </Button>
+              )}
+              {hasListFilters && (
+                <Button type="button" onClick={clearListFilters} variant="ghost" size="sm">
+                  <X className="h-3.5 w-3.5" />
+                  清除
+                </Button>
+              )}
+            </div>
           </div>
         </div>
+        {canUseProjectFilters && (
+          <div className={`${showMobileFilters ? "grid" : "hidden"} grid-cols-1 gap-3 sm:grid-cols-2 xl:hidden`}>
+            {renderProjectFilterControls("project-owner-filter-options-mobile")}
+          </div>
+        )}
       </Surface>
 
       {projects.length === 0 ? (
