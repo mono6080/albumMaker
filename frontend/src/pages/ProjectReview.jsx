@@ -26,6 +26,7 @@ import {
 import {
   ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2, ImageOff,
+  Search, Users,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
 import {
@@ -41,7 +42,7 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-progress"]',
     title: "輸出進度",
-    description: "這裡會顯示已產生 PDF 的學生數，方便確認還有誰沒完成；批次輸出時也會顯示進度。",
+    description: "這裡會顯示已產生 PDF 的學生數，也能搜尋或只看待產生的學生，方便最後檢查。",
     side: "bottom",
     align: "start",
   },
@@ -269,6 +270,8 @@ export default function ProjectReview() {
   const [ts, setTs] = useState(() => Date.now());
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
+  const [studentStatusFilter, setStudentStatusFilter] = useState("all");
+  const [studentSearch, setStudentSearch] = useState("");
 
   // ── 留言 ──────────────────────────────────────────────────────────────────
   const [comments, setComments] = useState([]);
@@ -541,6 +544,26 @@ export default function ProjectReview() {
 
   const pageCount = template.pages.length;
   const doneCount = project.students.filter(s => s.output_filename).length;
+  const pendingCount = project.students.length - doneCount;
+  const trimmedStudentSearch = studentSearch.trim().toLowerCase();
+  const visibleStudents = project.students.filter(student => {
+    const matchesStatus =
+      studentStatusFilter === "all" ||
+      (studentStatusFilter === "done" && !!student.output_filename) ||
+      (studentStatusFilter === "pending" && !student.output_filename);
+    const matchesSearch =
+      !trimmedStudentSearch ||
+      (student.name ?? "").toLowerCase().includes(trimmedStudentSearch);
+    return matchesStatus && matchesSearch;
+  });
+  const reviewStatusFilterOptions = [
+    { value: "all", label: "全部", icon: Users, guideId: "review-filter-all" },
+    { value: "pending", label: "待產生", icon: Clock, guideId: "review-filter-pending" },
+    { value: "done", label: "已產生", icon: CheckCircle2, guideId: "review-filter-done" },
+  ];
+  const emptyFilteredStudentMessage = trimmedStudentSearch
+    ? `沒有符合「${studentSearch.trim()}」的學生`
+    : "目前篩選沒有學生";
   const isBatchRendering = renderingAll || renderingAllImages;
   const isAllImagesShareReady = isMobileDevice() && allImagesShareDraft?.files?.length > 0;
   const canEditCurrentProject = canEditProject(project.owner_id);
@@ -625,15 +648,57 @@ export default function ProjectReview() {
       {/* Progress bar */}
       {project.students.length > 0 && (
         <Surface className="mb-6" data-guide="review-progress">
-          <div className="flex justify-between text-sm mb-2">
-            <span className="text-gray-600">已產生</span>
-            <span className="font-medium text-gray-900">{doneCount} / {project.students.length}</span>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium text-gray-700">輸出進度</span>
+                <Badge tone={pendingCount > 0 ? "warning" : "success"}>
+                  {pendingCount > 0 ? `${pendingCount} 位待產生` : "全部完成"}
+                </Badge>
+                <span className="ml-auto font-medium text-gray-900">{doneCount} / {project.students.length}</span>
+              </div>
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all"
+                  style={{ width: `${project.students.length ? (doneCount / project.students.length) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
+            <div className="grid w-full grid-cols-3 gap-3 text-sm lg:w-80">
+              <div>
+                <div className="text-lg font-semibold text-gray-900">{project.students.length}</div>
+                <div className="text-xs text-gray-400">學生</div>
+              </div>
+              <div>
+                <div className="text-lg font-semibold text-amber-600">{pendingCount}</div>
+                <div className="text-xs text-gray-400">待產生</div>
+              </div>
+              <div>
+                <div className="text-lg font-semibold text-emerald-600">{doneCount}</div>
+                <div className="text-xs text-gray-400">已產生</div>
+              </div>
+            </div>
           </div>
-          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-emerald-500 rounded-full transition-all"
-              style={{ width: `${project.students.length ? (doneCount / project.students.length) * 100 : 0}%` }}
-            />
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
+            <label className="relative min-w-0" data-guide="review-student-search">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-300" />
+              <input
+                type="search"
+                value={studentSearch}
+                onChange={(event) => setStudentSearch(event.target.value)}
+                placeholder="搜尋學生"
+                className={`${fieldControlClass} pl-9`}
+              />
+            </label>
+            <div data-guide="review-status-filter">
+              <SegmentedControl
+                value={studentStatusFilter}
+                onChange={setStudentStatusFilter}
+                size="sm"
+                options={reviewStatusFilterOptions}
+              />
+            </div>
           </div>
         </Surface>
       )}
@@ -700,9 +765,13 @@ export default function ProjectReview() {
         <div className="text-center py-20 text-gray-400">
           <p className="text-sm">尚無學生，請先在「專案設定」新增</p>
         </div>
+      ) : visibleStudents.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-sm">{emptyFilteredStudentMessage}</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {project.students.map(student => {
+          {visibleStudents.map(student => {
             const isDone = !!student.output_filename;
             const isStudentRendering = rendering[student.id];
             const isStudentImageRendering = renderingImages[student.id];
