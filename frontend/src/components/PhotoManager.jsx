@@ -726,7 +726,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       {/* Photo grid */}
       <div
         data-guide="student-photo-grid"
-        className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5 gap-3"
+        className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:[grid-template-columns:repeat(auto-fit,minmax(12rem,1fr))]"
         onClick={e => {
           // Tap outside any cell deselects on touch
           if (isTouchDevice && e.target === e.currentTarget) setSelectedIdx(null);

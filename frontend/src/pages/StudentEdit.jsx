@@ -611,10 +611,13 @@ export default function StudentEdit() {
         ]}
       />
 
-      {/* 桌面版：左側預覽 | 右側照片 + 文字；行動版：單頁面板切換 */}
-      <div className="lg:flex lg:gap-6 lg:items-start">
+      {/* 桌面版：預覽 / 照片 / 文字工作台；行動版：單頁面板切換 */}
+      <div className="lg:grid lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] lg:gap-6 lg:items-start xl:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)_minmax(320px,0.9fr)]">
         {/* 預覽面板 */}
-        <div className={`lg:block lg:flex-shrink-0 lg:w-1/3 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`} data-guide="student-preview-panel">
+        <div
+          className={`lg:sticky lg:top-20 lg:col-start-1 lg:row-span-2 xl:row-span-1 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`}
+          data-guide="student-preview-panel"
+        >
           <StudentPreviewPanel
             activePage={activePage}
             pageCount={pageCount}
@@ -629,8 +632,8 @@ export default function StudentEdit() {
           />
         </div>
 
-        {/* 照片面板 + 桌面版文字面板 */}
-        <div className={`lg:block lg:flex-1 lg:min-w-0 ${mobileTab === "photo" ? "block" : "hidden lg:block"} lg:space-y-6`}>
+        {/* 照片面板 */}
+        <div className={`lg:block lg:col-start-2 lg:row-start-1 lg:min-w-0 xl:col-start-2 ${mobileTab === "photo" ? "block" : "hidden lg:block"}`}>
           <PhotoManager
             projectId={projectId}
             studentId={studentId}
@@ -640,23 +643,28 @@ export default function StudentEdit() {
             onPhotoSaved={() => { setImageShareDraft(null); refreshAllPreviews(); }}
             onSaved={() => { setImageShareDraft(null); loadStudentData(); refreshAllPreviews(); }}
           />
-          <div className="hidden lg:block" data-guide="student-text-panel">
-            <StudentTextPanel
-              activePage={activePage}
-              pageCount={pageCount}
-              onPageChange={setActivePage}
-              activePageLayout={activePageLayout}
-              projectLabelTexts={projectLabelTexts}
-              student={student}
-              getLabelText={getLabelText}
-              getLabelAlign={getLabelAlign}
-              hasLabelTextOverride={hasLabelTextOverride}
-              onLabelChange={setLabelText}
-              onLabelAlignChange={setLabelAlign}
-              onRestoreDefault={restoreDefaultLabelText}
-              onScheduleSave={() => { if (student) scheduleSave(); }}
-            />
-          </div>
+        </div>
+
+        {/* 桌面版文字面板 */}
+        <div
+          className="hidden lg:block lg:col-start-2 lg:row-start-2 lg:min-w-0 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1"
+          data-guide="student-text-panel"
+        >
+          <StudentTextPanel
+            activePage={activePage}
+            pageCount={pageCount}
+            onPageChange={setActivePage}
+            activePageLayout={activePageLayout}
+            projectLabelTexts={projectLabelTexts}
+            student={student}
+            getLabelText={getLabelText}
+            getLabelAlign={getLabelAlign}
+            hasLabelTextOverride={hasLabelTextOverride}
+            onLabelChange={setLabelText}
+            onLabelAlignChange={setLabelAlign}
+            onRestoreDefault={restoreDefaultLabelText}
+            onScheduleSave={() => { if (student) scheduleSave(); }}
+          />
         </div>
 
         {/* 行動版文字面板（獨立顯示） */}
