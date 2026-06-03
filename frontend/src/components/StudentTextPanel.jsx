@@ -5,6 +5,7 @@ import { Type } from "lucide-react";
 import AlbumPageNav from "./AlbumPageNav";
 import TextAlignControl from "./TextAlignControl";
 import TextVariableTextarea from "./TextVariableTextarea";
+import { AutoSaveStatus } from "./ui";
 import { getLabelEntryAlign, getLabelEntryText } from "../utils/labelTextEntries";
 import { getFillableTextLabels } from "../utils/textLabelRoles";
 
@@ -22,6 +23,7 @@ export default function StudentTextPanel({
   onLabelAlignChange,
   onRestoreDefault = () => {},
   onScheduleSave,
+  saveStatus = "idle",
 }) {
   const fillableTextLabels = getFillableTextLabels(activePageLayout);
 
@@ -32,7 +34,7 @@ export default function StudentTextPanel({
       </div>
       {fillableTextLabels.length > 0 ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-guide="student-text-fields">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
               第 {activePage + 1} 頁文字
@@ -40,6 +42,7 @@ export default function StudentTextPanel({
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
               ({"{name}"} 自動代入姓名，清空會輸出空白)
             </span>
+            <AutoSaveStatus status={saveStatus} className="ml-auto" />
           </div>
           <div className="space-y-3">
             {fillableTextLabels.map(label => {

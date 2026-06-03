@@ -142,22 +142,20 @@ export default function StudentEdit() {
 
   // ── 自動儲存對應文字（防抖 500ms） ────────────────────────────────────────
 
-  const { scheduleSave, flushSave } = useAutoSave(
+  const { scheduleSave, flushSave, saveStatus } = useAutoSave(
     labelTexts,
     async (currentLabelTexts) => {
       const payload = {};
       Object.entries(currentLabelTexts).forEach(([pageIndex, labels]) => {
         payload[pageIndex] = labels;
       });
-      try {
-        await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } });
-        // 更新所有有文字資料的頁面時間戳
-        const now = Date.now();
-        setPageTimestamps(prev => ({
-          ...prev,
-          ...Object.fromEntries(Object.keys(payload).map(pi => [pi, now])),
-        }));
-      } catch { /* 靜默失敗，不打擾使用者 */ }
+      await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } });
+      // 更新所有有文字資料的頁面時間戳
+      const now = Date.now();
+      setPageTimestamps(prev => ({
+        ...prev,
+        ...Object.fromEntries(Object.keys(payload).map(pi => [pi, now])),
+      }));
     },
     500
   );
@@ -664,6 +662,7 @@ export default function StudentEdit() {
             onLabelAlignChange={setLabelAlign}
             onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
+            saveStatus={saveStatus}
           />
         </div>
 
@@ -683,6 +682,7 @@ export default function StudentEdit() {
             onLabelAlignChange={setLabelAlign}
             onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
+            saveStatus={saveStatus}
           />
         </div>
       </div>

@@ -31,6 +31,7 @@ import TextVariableTextarea from "../components/TextVariableTextarea";
 import TextAlignControl from "../components/TextAlignControl";
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import {
+  AutoSaveStatus,
   Badge,
   Button,
   IconButton,
@@ -227,17 +228,15 @@ export default function ProjectBatch() {
 
   // ── 自動儲存對應文字（防抖 600ms） ────────────────────────────────────────
 
-  const { scheduleSave } = useAutoSave(
+  const { scheduleSave, saveStatus } = useAutoSave(
     labelTexts,
     async (currentLabelTexts) => {
       const payload = {};
       Object.entries(currentLabelTexts).forEach(([pageIndex, labels]) => {
         payload[String(pageIndex)] = labels;
       });
-      try {
-        await updateProjectLabelTexts(projectId, payload);
-        setPreviewTimestamp(Date.now());
-      } catch { /* 靜默失敗 */ }
+      await updateProjectLabelTexts(projectId, payload);
+      setPreviewTimestamp(Date.now());
     },
     600
   );
@@ -443,7 +442,7 @@ export default function ProjectBatch() {
 
       {activePageTextLabels.length > 0 ? (
         <Surface data-guide="batch-text-fields">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
             <Type className="w-4 h-4 text-indigo-500" />
             <h3 className="font-semibold text-gray-800 text-sm">
               文字 — 第 {activePage + 1} 頁
@@ -451,6 +450,7 @@ export default function ProjectBatch() {
             <span className="text-xs text-gray-400 hidden sm:inline">
               （{"{name}"} 會自動代入各學生姓名，清空會輸出空白）
             </span>
+            <AutoSaveStatus status={saveStatus} className="ml-auto" />
           </div>
           <div className="space-y-3">
             {activePageTextLabels.map(label => {

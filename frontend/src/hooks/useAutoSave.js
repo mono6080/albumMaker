@@ -15,7 +15,9 @@ import { useRef, useCallback, useEffect, useState } from "react";
  *   scheduleSave: Function,   // 手動排程一次儲存（觸發防抖計時）
  *   cancelSave:   Function,   // 取消尚未執行的排程儲存
  *   flushSave:    Function,   // 立即執行並等待儲存完成（Promise）
- *   latestDataRef: React.MutableRefObject  // 永遠持有最新 currentData 的 ref
+ *   latestDataRef: React.MutableRefObject, // 永遠持有最新 currentData 的 ref
+ *   isSaving:     boolean,    // 有儲存請求進行中
+ *   saveStatus:   "idle" | "pending" | "saving" | "saved" | "error"
  * }}
  */
 export function useAutoSave(currentData, saveCallback, delayMs = 500) {
@@ -27,6 +29,7 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
 
   // isSaving：儲存請求進行中時為 true，可用於 UI disable
   const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("idle");
 
   // 使用 ref 保存最新的儲存函式，避免因 callback 變動而重複觸發 useEffect
   const saveCallbackRef = useRef(saveCallback);
@@ -38,42 +41,81 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
   const timerRef = useRef(null);
   // AbortController ref，用於取消進行中的舊請求
   const abortControllerRef = useRef(null);
+  const saveRunIdRef = useRef(0);
+  const activeSaveCountRef = useRef(0);
+
+  const beginSave = useCallback(() => {
+    activeSaveCountRef.current += 1;
+    setIsSaving(true);
+  }, []);
+
+  const endSave = useCallback(() => {
+    activeSaveCountRef.current = Math.max(0, activeSaveCountRef.current - 1);
+    setIsSaving(activeSaveCountRef.current > 0);
+  }, []);
 
   /** 排程一次防抖儲存：重複呼叫只有最後一次會真正執行 */
   const scheduleSave = useCallback(() => {
+    saveRunIdRef.current += 1;
+    const runId = saveRunIdRef.current;
     clearTimeout(timerRef.current);
+    setSaveStatus("pending");
     timerRef.current = setTimeout(async () => {
       // 取消上一個尚未完成的請求
       abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
       const signal = abortControllerRef.current.signal;
-      setIsSaving(true);
+      if (runId === saveRunIdRef.current) setSaveStatus("saving");
+      beginSave();
       try {
         await saveCallbackRef.current(latestDataRef.current, signal);
+        if (!signal.aborted && runId === saveRunIdRef.current) {
+          setSaveStatus("saved");
+        }
+      } catch {
+        if (!signal.aborted && runId === saveRunIdRef.current) {
+          setSaveStatus("error");
+        }
       } finally {
-        if (!signal.aborted) setIsSaving(false);
+        endSave();
       }
     }, delayMs);
-  }, [delayMs]);
+  }, [beginSave, delayMs, endSave]);
 
   /** 取消尚未執行的排程儲存 */
   const cancelSave = useCallback(() => {
+    saveRunIdRef.current += 1;
     clearTimeout(timerRef.current);
+    timerRef.current = null;
     abortControllerRef.current?.abort();
+    setSaveStatus("idle");
   }, []);
 
   /** 立即執行儲存並等待完成（用於提交前的強制同步） */
   const flushSave = useCallback(async () => {
+    saveRunIdRef.current += 1;
+    const runId = saveRunIdRef.current;
     clearTimeout(timerRef.current);
+    timerRef.current = null;
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
-    setIsSaving(true);
+    const signal = abortControllerRef.current.signal;
+    setSaveStatus("saving");
+    beginSave();
     try {
-      await saveCallbackRef.current(latestDataRef.current, abortControllerRef.current.signal);
+      await saveCallbackRef.current(latestDataRef.current, signal);
+      if (!signal.aborted && runId === saveRunIdRef.current) {
+        setSaveStatus("saved");
+      }
+    } catch (error) {
+      if (!signal.aborted && runId === saveRunIdRef.current) {
+        setSaveStatus("error");
+      }
+      throw error;
     } finally {
-      setIsSaving(false);
+      endSave();
     }
-  }, []);
+  }, [beginSave, endSave]);
 
-  return { scheduleSave, cancelSave, flushSave, latestDataRef, isSaving };
+  return { scheduleSave, cancelSave, flushSave, latestDataRef, isSaving, saveStatus };
 }

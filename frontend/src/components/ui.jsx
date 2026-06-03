@@ -172,6 +172,39 @@ export function Badge({ tone = "neutral", className = "", children }) {
   );
 }
 
+const autoSaveStatusLabel = {
+  pending: "待儲存",
+  saving: "儲存中",
+  saved: "已儲存",
+  error: "儲存失敗",
+};
+
+const autoSaveStatusClass = {
+  pending: "bg-amber-50 text-amber-700 ring-1 ring-amber-100",
+  saving: "bg-sky-50 text-sky-700 ring-1 ring-sky-100",
+  saved: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100",
+  error: "bg-red-50 text-red-700 ring-1 ring-red-100",
+};
+
+export function AutoSaveStatus({ status = "idle", className = "" }) {
+  const label = autoSaveStatusLabel[status];
+  if (!label) return null;
+
+  return (
+    <span
+      role={status === "error" ? "alert" : "status"}
+      aria-live={status === "error" ? "assertive" : "polite"}
+      className={cn(
+        "inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        autoSaveStatusClass[status],
+        className,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 const headerIconToneClass = {
   primary: "border-indigo-100 bg-indigo-50 text-indigo-700",
   success: "border-emerald-100 bg-emerald-50 text-emerald-700",
