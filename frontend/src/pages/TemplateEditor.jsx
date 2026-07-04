@@ -102,7 +102,7 @@ const EDITOR_GUIDE_STEPS = [
   {
     element: '[data-guide="tool-add-photo"]',
     title: "連續新增照片格",
-    description: "選一次照片格後，可以在畫布上連續點擊新增，不需要每新增一格就重新選工具。",
+    description: "照片格分 3:4 直式與 4:3 橫式兩種固定比例。選一次工具後，可以在畫布上連續點擊新增，不需要每新增一格就重新選工具。",
     side: "right",
     align: "center",
   },
@@ -623,7 +623,11 @@ export default function TemplateEditor() {
     const realX = toRealCoord(pos.x);
     const realY = toRealCoord(pos.y);
 
-    if (activeTool === "addPhoto") {
+    if (activeTool === "addPhotoPortrait" || activeTool === "addPhotoLandscape") {
+      // 新照片格一律固定比例：3:4 直式或 4:3 橫式
+      const contentSize = activeTool === "addPhotoPortrait"
+        ? { width: 240, height: 320 }
+        : { width: 320, height: 240 };
       const newSlotStyle = {
         id: generateElementId(),
         rotation: 0,
@@ -635,8 +639,8 @@ export default function TemplateEditor() {
         clampPhotoContentRect({
           x: realX,
           y: realY,
-          width: 300,
-          height: 220,
+          width: contentSize.width,
+          height: contentSize.height,
         }),
         { dimensionMode: photoSlotDimensionMode },
       );
@@ -787,13 +791,21 @@ export default function TemplateEditor() {
         const node = e.target;
         const scaleX = node.scaleX();
         const scaleY = node.scaleY();
-        const newDisplayW = Math.max(toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH), node.width() * Math.abs(scaleX));
-        const newDisplayH = Math.max(toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT), node.height() * Math.abs(scaleY));
+        // 觸及最小尺寸時等比放大兩邊，維持照片格長寬比例不變
+        let newDisplayW = node.width() * Math.abs(scaleX);
+        let newDisplayH = node.height() * Math.abs(scaleY);
+        const minRatioScale = Math.max(
+          toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH) / newDisplayW,
+          toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT) / newDisplayH,
+          1,
+        );
+        newDisplayW *= minRatioScale;
+        newDisplayH *= minRatioScale;
         const nextSlot = applyPhotoEditorUpdates(data, {
           x: toRealCoord(node.x() - node.offsetX() * scaleX),
           y: toRealCoord(node.y() - node.offsetY() * scaleY),
-          width: Math.max(PHOTO_CONTENT_MIN_WIDTH, toRealCoord(newDisplayW)),
-          height: Math.max(PHOTO_CONTENT_MIN_HEIGHT, toRealCoord(newDisplayH)),
+          width: toRealCoord(newDisplayW),
+          height: toRealCoord(newDisplayH),
           rotation: node.rotation(),
         }, photoSlotDimensionMode);
 
@@ -1247,14 +1259,15 @@ export default function TemplateEditor() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">工具</p>
             <div className="flex flex-col gap-1">
               {[
-                { key: "select",    label: "↖ 選取" },
-                { key: "addPhoto",  label: "＋ 照片格" },
-                { key: "addText",   label: "＋ 純文字" },
+                { key: "select",            label: "↖ 選取" },
+                { key: "addPhotoPortrait",  label: "＋ 照片格 3:4 直式" },
+                { key: "addPhotoLandscape", label: "＋ 照片格 4:3 橫式" },
+                { key: "addText",           label: "＋ 純文字" },
               ].map(tool => (
                 <button
                   key={tool.key}
                   onClick={() => setActiveTool(tool.key)}
-                  data-guide={`tool-${tool.key === "addPhoto" ? "add-photo" : tool.key === "addText" ? "add-text" : "select"}`}
+                  data-guide={`tool-${tool.key === "addPhotoPortrait" ? "add-photo" : tool.key === "addPhotoLandscape" ? "add-photo-landscape" : tool.key === "addText" ? "add-text" : "select"}`}
                   className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
                     activeTool === tool.key
                       ? "bg-indigo-600 text-white border-indigo-600"
@@ -1395,7 +1408,7 @@ export default function TemplateEditor() {
                 {/* Transformer：顯示縮放/旋轉把手 */}
                 <Transformer
                   ref={transformerRef}
-                  keepRatio={false}
+                  keepRatio={selectedElement?.type === "photo"}
                   flipEnabled={false}
                   rotateEnabled={true}
                   borderStroke="#4F46E5"
@@ -1405,11 +1418,14 @@ export default function TemplateEditor() {
                   anchorStrokeWidth={1}
                   anchorSize={8}
                   rotateAnchorOffset={20}
-                  enabledAnchors={[
-                    "top-left", "top-center", "top-right",
-                    "middle-left", "middle-right",
-                    "bottom-left", "bottom-center", "bottom-right",
-                  ]}
+                  enabledAnchors={selectedElement?.type === "photo"
+                    // 照片格鎖定長寬比例：只留四角把手等比縮放
+                    ? ["top-left", "top-right", "bottom-left", "bottom-right"]
+                    : [
+                      "top-left", "top-center", "top-right",
+                      "middle-left", "middle-right",
+                      "bottom-left", "bottom-center", "bottom-right",
+                    ]}
                   boundBoxFunc={(oldBox, newBox) => {
                     if (newBox.width < toDisplayCoord(60) || newBox.height < toDisplayCoord(40)) {
                       return oldBox;

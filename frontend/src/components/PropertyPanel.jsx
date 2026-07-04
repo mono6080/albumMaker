@@ -205,7 +205,19 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
               <input
                 type="number"
                 value={elementData[field.key] ?? 0}
-                onChange={event => onPropertyChange({ [field.key]: Number(event.target.value) })}
+                onChange={event => {
+                  const nextValue = Number(event.target.value);
+                  // 照片格鎖定長寬比例：改寬度或高度時，另一邊等比連動
+                  const isSizeField = field.key === "width" || field.key === "height";
+                  if (isPhotoSlot && isSizeField && nextValue > 0 && elementData.width > 0 && elementData.height > 0) {
+                    const aspectRatio = elementData.width / elementData.height;
+                    onPropertyChange(field.key === "width"
+                      ? { width: nextValue, height: Math.round(nextValue / aspectRatio) }
+                      : { width: Math.round(nextValue * aspectRatio), height: nextValue });
+                    return;
+                  }
+                  onPropertyChange({ [field.key]: nextValue });
+                }}
                 className="border rounded px-2 py-1 text-sm"
               />
             </label>
