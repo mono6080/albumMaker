@@ -1,0 +1,117 @@
+# 資料模型
+
+> Owns：ORM 模型、label_texts 三層覆蓋、layout_json 格式、migrations 規則。
+> Storage key 格式見 [storage.md](storage.md)；端點與權限見 [api.md](api.md)。
+
+---
+
+## ORM 模型（`backend/database.py`）
+
+```
+User (id, username UNIQUE, display_name, hashed_password, role,
+      ui_font_scale, supervisor_id FK→User〔舊版單一主管，僅相容保留〕, created_at)
+  ├─ supervisors / managed_teachers  ← teacher_supervisors 多對多（現行機制）
+  ├─ owned_projects → Project.owner_id
+  └─ comments       → ProjectComment.author_id
+
+teacher_supervisors (teacher_id, supervisor_id)   — 一位老師可有多位主管
+
+TemplatePeriod (id, department, name, status, created_at)   — 期別；狀態掛在期別上
+  └─ templates → Template.period_id
+
+Template (id, name, period_id FK→TemplatePeriod, created_at)
+  └─ pages → TemplatePage[]（cascade delete-orphan，order_by page_number）
+
+TemplatePage (id, template_id FK, page_number, background_filename, layout_json TEXT)
+  └─ UNIQUE(template_id, page_number)
+
+Project (id, name, template_id FK, department, template_period_id FK,
+         owner_id FK→User, created_at, updated_at,
+         deleted_at, archive_expires_at,      ← 軟刪除：封存 30 天後到期
+         label_texts_json TEXT)
+  ├─ students → Student[]（cascade delete-orphan，order_by order_index）
+  └─ comments → ProjectComment[]（cascade delete-orphan）
+
+Student (id, project_id FK, name, order_index, pages_data_json TEXT,
+         output_filename, created_at, updated_at)
+  └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
+
+ProjectComment (id, project_id FK, author_id FK, content, created_at)
+```
+
+- SQLite 連線啟用 `PRAGMA foreign_keys=ON`；`check_same_thread=False`
+- 不設 `text_factory`，SQLAlchemy 以 UTF-8 存取；若用 raw sqlite3 讀取需自行處理 encoding
+- 角色定義與權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
+
+## 對應文字（label_texts）三層覆蓋
+
+低 → 高（高覆蓋低）：
+
+```
+模板預設        layout_json["text_labels"][i]["text"]
+   ↓
+專案層級覆蓋     projects.label_texts_json = {page_index: {label_id: text}}
+   ↓
+學生個別覆蓋     students.pages_data_json[i]["label_texts"] = {label_id: text}
+```
+
+- 合併唯一進入點：`project_service.py` 的 `merge_project_label_texts_into_pages()`。
+  學生值優先，專案值補足未覆寫處；學生尚無對應頁時以專案值補上空 photos 頁面
+- 資料結構工具（欄位↔entry 轉換、對齊正規化、樣式覆寫合併）集中在
+  `services/label_texts.py`
+- **Pydantic 型別陷阱**：專案層級 payload 是巢狀 dict
+  （`{page_index: {label_id: text}}`），端點必須宣告 `dict[str, Any]` —
+  Pydantic v2 的 `dict[str, str]` 在 lax mode 也會拒絕 value 為 dict 的資料（422）。
+  學生／單頁層級是平坦 `{label_id: text}`，用 `dict[str, str]` 即可
+
+## layout_json 格式
+
+每個 `TemplatePage.layout_json` 儲存：
+
+```jsonc
+{
+  "canvas_width": 794,          // A4 直式 @96dpi
+  "canvas_height": 1123,
+  "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
+    { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3 }
+  ],
+  "text_bubbles": [             // 氣泡框：模板固定文字，不被覆蓋
+    { "id": 1, "x": 500, "y": 150, "width": 200, "height": 120,
+      "shape": "ellipse", "fill": "#FDED6E",
+      "border_color": "#888", "border_width": 2,
+      "text": "{name}正在進行飛機飛平衡！",
+      "font_size": 20, "font_color": "#3B6B8C" }
+  ],
+  "text_labels": [              // 對應文字：可被專案/學生層覆蓋
+    { "id": 1, "x": 80, "y": 820, "width": 640, "height": 80,
+      "text": "{name}今天完成了平衡挑戰！",
+      "font_size": 28, "font_color": "#333333",
+      "text_align": "center", "line_height": 1.4 }
+  ],
+  "stickers": [
+    { "id": 1, "path": "templates/tmpl1/stickers/star.png",
+      "filename": "star.png", "x": 10, "y": 10, "width": 60, "height": 60 }
+  ],
+  "footer": { "text": "{name} · 2026年1月" }
+}
+```
+
+- `{name}` 渲染時替換為學生姓名（變數處理見 `frontend/src/utils/textVariables.js`
+  與後端渲染層）
+- **photo_slots 尺寸模式**：現行為 `content-box-v1`（照片內容區與外框 insets 分離），
+  由 `_migrate_photo_slots_to_content_box` 遷移既有資料並寫入備份表；
+  幾何計算集中在 `services/photo_frame_geometry.py` 與前端
+  `utils/photoFrameGeometry.js`，兩邊必須同步修改
+
+## Migrations 規則（`backend/migrations.py`）
+
+- `run_migrations()` 在後端**每次啟動**時執行；每個子函式必須**冪等**
+  （先以 `PRAGMA table_info` / `sqlite_master` 檢查存在再操作）
+- 新遷移加在 `run_migrations()` 執行序列**尾端**，不改既有遷移
+- **SQLite ADD COLUMN 不支援非常數預設值**（如 `CURRENT_TIMESTAMP`）：
+  先加無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填
+- **SQLite 舊版不支援 DROP COLUMN**：用「建新表 → 複製 → 刪舊 → 改名」流程，
+  期間暫時關閉外鍵約束（範例見 `_drop_bubble_texts_json_column`）
+- 大型資料遷移（如 content-box）先寫備份表
+  （`template_page_layout_migration_backups`）再改寫
+- 首次啟動自動建立 admin 帳號，隨機初始密碼印在啟動日誌

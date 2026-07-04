@@ -1,0 +1,66 @@
+# 部署與環境變數
+
+> Owns：啟動腳本、Docker / nginx 部署、環境變數表。
+> R2 維運操作（資料遷移、integration test）見 [storage.md](storage.md#r2-設定與維運)。
+
+---
+
+## 本機啟動腳本（repo 根目錄）
+
+| 腳本 | 用途 |
+|------|------|
+| `start.bat` | 啟動後端（本機 uploads），Windows 雙擊即可 |
+| `start_r2_local.bat` | 啟動後端並連 R2 staging（只從 `.env` 載入 storage / R2 變數） |
+| `build_frontend.bat` | 前端 production build |
+| `kill.bat` | 終止 port 8765 後端 |
+
+手動啟動指令見 [README.md 的快速開始](../../README.md#快速開始)。
+
+## Docker 部署
+
+- **Multi-stage Dockerfile**：Stage 1 Node 20 編前端 → Stage 2 Python 3.12
+  serve 後端與 `frontend/dist`
+- Stage 1 用 `npm ci --legacy-peer-deps`（vite-plugin-pwa 與 vite 8 有
+  peer dep 衝突）
+- 容器內安裝 fonts-noto-cjk / fonts-wqy-*，替代 Windows 的
+  `C:/Windows/Fonts/`（缺字型的後果見 [rendering.md 字型](rendering.md#字型)）
+- 容器**不對外暴露 port**，透過 Unix socket 接 nginx
+  （設定範本 `deploy/album_maker.conf`）
+- uploads 與 DB 掛 named volumes
+
+```bash
+cp .env.example .env      # 填入 SECRET_KEY（產生方式見下表）
+docker compose up -d --build
+```
+
+正式部署：上傳專案至 VPS → 建 `.env` → `docker compose up -d --build` →
+把 `deploy/album_maker.conf` 加入現有 nginx compose 並重啟 nginx。
+
+## 環境變數
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SECRET_KEY` | 無（**必設**） | JWT 簽名密鑰；`python -c "import secrets; print(secrets.token_hex(32))"` 產生。`PRODUCTION=1` 未設則拒絕啟動；開發模式用內建預設值並警告 |
+| `PRODUCTION` | 未設定 | 設 `1`：Cookie 加 Secure flag（需 HTTPS）+ 強制 SECRET_KEY |
+| `DATABASE_URL` | `sqlite:///./album_maker.db` | 資料庫連線字串（僅支援 SQLite，見 architecture.md 非目標） |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,...` | CORS 允許來源，逗號分隔 |
+| `STORAGE_BACKEND` | `local` | `local` / `r2` |
+| `R2_ACCOUNT_ID` | 未設定 | Cloudflare account ID；r2 模式且未設 `R2_ENDPOINT_URL` 時必填 |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | 未設定 | R2 API 金鑰；r2 模式必填 |
+| `R2_BUCKET` | 未設定 | bucket 名稱；r2 模式必填 |
+| `R2_ENDPOINT_URL` | 未設定 | 自訂 endpoint；未設時用 `https://<account>.r2.cloudflarestorage.com` |
+| `R2_SERVE_MODE` | `proxy` | `proxy` 後端代理回傳；`redirect` 轉址到 `R2_PUBLIC_BASE_URL` |
+| `R2_PUBLIC_BASE_URL` | 未設定 | redirect 模式必填 |
+| `R2_KEY_PREFIX` | 未設定 | key 前綴；e2e / staging 隔離用（如 `__e2e/<run-id>`） |
+| `R2_READ_CACHE_MAX_BYTES` | `157286400` | 記憶體讀取快取上限；`0` 停用 |
+| `R2_LOCAL_CACHE_DIR` | 未設定 | 本機寫入快取目錄（僅本機測試建議） |
+| `R2_LOCAL_CACHE_MAX_BYTES` | `1073741824` | 本機寫入快取容量；超過刪最舊；`0` 停用 |
+| `R2_LOCAL_MIRROR_DIR` | 未設定 | 本機唯讀鏡像目錄（僅本機測試建議） |
+
+`.env` 已被 `.gitignore` 排除；金鑰不得 commit。
+
+## 網路邊界
+
+- `:8765` — uvicorn（API + SPA + 圖片 GET）；Docker 模式下不對外，走 Unix socket
+- `:5173` — Vite dev server，`/api` proxy → `:8765`
+- 遠端主機資訊不入 repo（見私人筆記 / 部署密件）
