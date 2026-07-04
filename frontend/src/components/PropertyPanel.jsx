@@ -210,6 +210,17 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
                   // 照片格鎖定長寬比例：改寬度或高度時，另一邊等比連動
                   const isSizeField = field.key === "width" || field.key === "height";
                   if (isPhotoSlot && isSizeField && nextValue > 0 && elementData.width > 0 && elementData.height > 0) {
+                    const isPortraitSlot = elementData.width * 4 === elementData.height * 3;
+                    const isLandscapeSlot = elementData.width * 3 === elementData.height * 4;
+                    if (isPortraitSlot || isLandscapeSlot) {
+                      // 標準比例格 snap 到整數倍尺寸，維持數學上精確的 3:4 / 4:3
+                      const [widthMultiple, heightMultiple] = isPortraitSlot ? [3, 4] : [4, 3];
+                      const ratioUnit = Math.max(15, Math.round(
+                        field.key === "width" ? nextValue / widthMultiple : nextValue / heightMultiple
+                      ));
+                      onPropertyChange({ width: ratioUnit * widthMultiple, height: ratioUnit * heightMultiple });
+                      return;
+                    }
                     const aspectRatio = elementData.width / elementData.height;
                     onPropertyChange(field.key === "width"
                       ? { width: nextValue, height: Math.round(nextValue / aspectRatio) }

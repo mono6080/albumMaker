@@ -801,11 +801,23 @@ export default function TemplateEditor() {
         );
         newDisplayW *= minRatioScale;
         newDisplayH *= minRatioScale;
+        // 標準比例照片格縮放後 snap 回整數精確的 3:4 / 4:3，避免捨入誤差累積
+        let nextRealW = toRealCoord(newDisplayW);
+        let nextRealH = toRealCoord(newDisplayH);
+        if (data.width * 4 === data.height * 3) {
+          const ratioUnit = Math.max(20, Math.round(nextRealW / 3));
+          nextRealW = ratioUnit * 3;
+          nextRealH = ratioUnit * 4;
+        } else if (data.width * 3 === data.height * 4) {
+          const ratioUnit = Math.max(15, Math.round(nextRealW / 4));
+          nextRealW = ratioUnit * 4;
+          nextRealH = ratioUnit * 3;
+        }
         const nextSlot = applyPhotoEditorUpdates(data, {
           x: toRealCoord(node.x() - node.offsetX() * scaleX),
           y: toRealCoord(node.y() - node.offsetY() * scaleY),
-          width: toRealCoord(newDisplayW),
-          height: toRealCoord(newDisplayH),
+          width: nextRealW,
+          height: nextRealH,
           rotation: node.rotation(),
         }, photoSlotDimensionMode);
 

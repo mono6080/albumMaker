@@ -2,8 +2,9 @@
 將現有模板照片格批次轉換為標準比例（3:4 直式或 4:3 橫式）。
 
 轉換規則：
-- 已符合標準比例（誤差 2% 內）的照片格不動。
-- 其餘照片格 snap 到最接近的標準比例（以比例的對數距離判斷遠近）。
+- 已是「整數精確」標準比例（4*w == 3*h 或 3*w == 4*h）的照片格不動。
+- 其餘照片格 snap 到最接近的標準比例（以比例的對數距離判斷遠近），
+  輸出為 3u x 4u 或 4u x 3u 的整數倍尺寸，比例數學上精確。
 - 以「面積不變、中心點不變」轉換，把視覺位移平均分攤到寬高兩邊。
 - 轉換後的內容框 clamp 回畫布範圍（794 x 1123）。
 
@@ -32,16 +33,6 @@ CANVAS_REAL_HEIGHT = 1123
 
 PORTRAIT_RATIO = 3 / 4
 LANDSCAPE_RATIO = 4 / 3
-RATIO_TOLERANCE = 0.02
-
-
-def pick_target_ratio(ratio):
-    """回傳最接近的標準比例；已在容差內則回傳 None（不需轉換）。"""
-    if abs(ratio - PORTRAIT_RATIO) < RATIO_TOLERANCE or abs(ratio - LANDSCAPE_RATIO) < RATIO_TOLERANCE:
-        return None
-    portrait_distance = abs(math.log(ratio / PORTRAIT_RATIO))
-    landscape_distance = abs(math.log(ratio / LANDSCAPE_RATIO))
-    return PORTRAIT_RATIO if portrait_distance < landscape_distance else LANDSCAPE_RATIO
 
 
 def normalize_slot(slot):
@@ -51,14 +42,22 @@ def normalize_slot(slot):
     if old_width <= 0 or old_height <= 0:
         return False, None
 
-    target_ratio = pick_target_ratio(old_width / old_height)
-    if target_ratio is None:
+    # 已是整數精確的標準比例則不動
+    if old_width * 4 == old_height * 3 or old_width * 3 == old_height * 4:
         return False, None
 
-    # 面積不變、中心點不變
+    ratio = old_width / old_height
+    portrait_distance = abs(math.log(ratio / PORTRAIT_RATIO))
+    landscape_distance = abs(math.log(ratio / LANDSCAPE_RATIO))
+    target_ratio = PORTRAIT_RATIO if portrait_distance < landscape_distance else LANDSCAPE_RATIO
+
+    # 面積不變、中心點不變；以 3u x 4u / 4u x 3u 整數倍輸出，比例精確
     area = old_width * old_height
-    new_width = round(math.sqrt(area * target_ratio))
-    new_height = round(new_width / target_ratio)
+    unit = max(15, round(math.sqrt(area / 12)))
+    if target_ratio == PORTRAIT_RATIO:
+        new_width, new_height = unit * 3, unit * 4
+    else:
+        new_width, new_height = unit * 4, unit * 3
 
     center_x = (slot.get("x") or 0) + old_width / 2
     center_y = (slot.get("y") or 0) + old_height / 2
