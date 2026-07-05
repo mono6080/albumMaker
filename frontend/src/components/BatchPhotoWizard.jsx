@@ -4,21 +4,13 @@
 //   Step 3 確認對應表 → 上傳
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  DndContext,
-  DragOverlay,
-  MouseSensor,
-  TouchSensor,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import toast from "react-hot-toast";
 import {
   AlertTriangle, Check, ChevronLeft, ChevronRight, Image as ImageIcon,
   Loader2, Upload, X,
 } from "lucide-react";
+import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
 import { Badge, Button, Surface } from "./ui";
 import { batchUploadPhotos } from "../api/projectApi";
@@ -822,7 +814,7 @@ function fileKey(file) {
 
 function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onClear, onSwap }) {
   const [focusedFileKey, setFocusedFileKey] = useState(null);
-  const [activeDragData, setActiveDragData] = useState(null); // { type: "file"|"student", fileK?, studentId? }
+  const [activeDragData, setActiveDragData] = useState(null); // { type: "file"|"student", fileKeyValue?, studentId? }
 
   const assignmentByStudent = useMemo(() => {
     const map = new Map();
@@ -850,13 +842,8 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
 
   const focusedFile = focusedFileKey ? fileByKey.get(focusedFileKey) : null;
 
-  // ── dnd-kit 拖曳：滑鼠移動 4px 啟動；觸控長按 250ms 啟動（與捲動手勢區分）──
   // 邊緣自動捲動由 DndContext 內建處理，長清單拖到畫面外目標時會自動捲動
-
-  const dndSensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
-  );
+  const dndSensors = useDndPhotoSensors();
 
   const handleDragStart = (event) => {
     setFocusedFileKey(null);
@@ -872,7 +859,7 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
     const source = active.data.current;
     const target = over.data.current;
     if (source.type === "file" && target?.type === "student") {
-      const file = fileByKey.get(source.fileK);
+      const file = fileByKey.get(source.fileKeyValue);
       if (file) onAssign(target.studentId, file);
       return;
     }
@@ -914,7 +901,7 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
   // 拖曳殘影顯示的照片
   const activeDragFile = activeDragData
     ? activeDragData.type === "file"
-      ? fileByKey.get(activeDragData.fileK)
+      ? fileByKey.get(activeDragData.fileKeyValue)
       : assignmentByStudent.get(activeDragData.studentId)
     : null;
 
@@ -925,7 +912,14 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="space-y-3">
+      <div
+        className="space-y-3"
+        // dnd-kit 拖曳走 pointer event,不會觸發這裡的原生 HTML5 drag 事件；
+        // 這兩個 handler 只會攔到「從作業系統拖檔案進來」的情境，避免瀏覽器
+        // 用預設的開檔導覽把整個精靈換掉、弄丟尚未完成的指派
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => e.preventDefault()}
+      >
         <div className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-800">
           💡 拖曳（手機長按後拖）照片到學生指派、拖學生互換、拖到照片池取消；
           或先點照片、再點目標學生。點已配對學生的照片可直接拿起改分給別人。
@@ -1051,7 +1045,11 @@ function StudentCell({ student, index, file, url, canTapAssign, onTap, onClearAs
       </div>
       <div className="relative aspect-square bg-gray-50">
         {url ? (
-          <img src={url} alt={file.name} className="h-full w-full object-cover" />
+          <img
+            src={url} alt={file.name} draggable={false}
+            className="h-full w-full object-cover"
+            style={{ WebkitTouchCallout: "none", userSelect: "none" }}
+          />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-amber-600">
             <ImageIcon className="h-5 w-5 opacity-60" />
@@ -1085,7 +1083,7 @@ function PoolArea({ isEmpty, children }) {
 function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `file-${fileKey(file)}`,
-    data: { type: "file", fileK: fileKey(file) },
+    data: { type: "file", fileKeyValue: fileKey(file) },
   });
 
   return (
@@ -1104,7 +1102,11 @@ function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
       title={assignedName ? `已配對給 ${assignedName}` : "未使用，拖到學生上指派"}
     >
       {url ? (
-        <img src={url} alt={file.name} className="h-full w-full object-cover" />
+        <img
+          src={url} alt={file.name} draggable={false}
+          className="h-full w-full object-cover"
+          style={{ WebkitTouchCallout: "none", userSelect: "none" }}
+        />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-gray-300">
           <ImageIcon className="h-5 w-5" />

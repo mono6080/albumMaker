@@ -2,6 +2,16 @@
 
 import { getPhotoContentRect, getPhotoFrameRect } from "./photoFrameGeometry.js";
 
+// 亮度/對比的 CSS filter 字串：唯一組字串的地方，PhotoSlotCard 與
+// PhotoEditModal 皆須引用，避免 parity-critical 公式各自維護、日後跑偏
+// （後端對應公式在 backend/services/element_renderers.py 的
+// _apply_photo_adjustments，兩邊需保持一致，見 docs/dev/rendering.md）。
+export function buildPhotoFilterCss(brightness, contrast) {
+  const b = brightness ?? 1;
+  const c = contrast ?? 1;
+  return b === 1 && c === 1 ? undefined : `brightness(${b}) contrast(${c})`;
+}
+
 export function normalizePhotoData(raw) {
   if (!raw) return null;
   if (typeof raw === "string") return { path: raw, scale: 1.0, offsetX: 0, offsetY: 0, brightness: 1.0, contrast: 1.0 };

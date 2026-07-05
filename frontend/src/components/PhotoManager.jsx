@@ -1,35 +1,42 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import {
-  DndContext,
-  DragOverlay,
-  MouseSensor,
-  TouchSensor,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import PhotoSlotCard from "./PhotoSlotCard";
-import { buildItems, photoDims, clampPan, getPhotoCropBox } from "../utils/photoUtils";
+import { buildItems, photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
+import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
 const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
 
+// 照片格重置（清空/替換/刪除）用的預設 transform；buildItems 產生的 item 一律
+// 帶齊這五個欄位，reset 位置也必須帶齊，否則下游要靠散落的 `?? 1` 補洞
+const DEFAULT_PHOTO_TRANSFORM = { scale: 1.0, offsetX: 0, offsetY: 0, brightness: 1.0, contrast: 1.0 };
+
+// 兩個 transform 是否需要重新儲存（scale / 位移 / 亮度 / 對比任一改變）
+function isTransformDirty(transform, origTransform) {
+  return (
+    Math.abs(transform.scale - origTransform.scale) > 0.001 ||
+    Math.abs(transform.offsetX - origTransform.offsetX) > 0.001 ||
+    Math.abs(transform.offsetY - origTransform.offsetY) > 0.001 ||
+    Math.abs((transform.brightness ?? 1) - (origTransform.brightness ?? 1)) > 0.001 ||
+    Math.abs((transform.contrast ?? 1) - (origTransform.contrast ?? 1)) > 0.001
+  );
+}
+
 // dnd-kit 包裝：照片格同時是拖曳來源與放置目標。
 // 不展開 attributes（會加 aria-disabled 誤導輔助工具），只取 listeners。
-function DndCell({ idx, dragDisabled, dropDisabled, children }) {
+function DndCell({ cellIndex, dragDisabled, dropDisabled, children }) {
   const { setNodeRef: setDragRef, listeners, isDragging } = useDraggable({
-    id: `photo-cell-${idx}`,
-    data: { idx },
+    id: `photo-cell-${cellIndex}`,
+    data: { cellIndex },
     disabled: dragDisabled,
   });
   const { setNodeRef: setDropRef, isOver } = useDroppable({
-    id: `photo-drop-${idx}`,
-    data: { idx },
+    id: `photo-drop-${cellIndex}`,
+    data: { cellIndex },
     disabled: dropDisabled,
   });
   return children({
@@ -93,9 +100,7 @@ function PhotoEditModal({
 
   const it = items[editModal.idx];
   const url = displayUrl(it);
-  const { cropW, cropH, scale, panX, panY, imgAspect } = editModal;
-  const brightness = editModal.brightness ?? 1;
-  const contrast = editModal.contrast ?? 1;
+  const { cropW, cropH, scale, panX, panY, imgAspect, brightness, contrast } = editModal;
   const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
   const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
   const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
@@ -154,8 +159,8 @@ function PhotoEditModal({
                 userSelect: "none", pointerEvents: "none",
                 opacity: imgAspect ? 1 : 0,
                 transition: "opacity 0.15s",
-                // 與後端 PIL 渲染同公式的即時預覽
-                filter: `brightness(${brightness}) contrast(${contrast})`,
+                // 與後端 PIL 渲染同公式的即時預覽（見 buildPhotoFilterCss）
+                filter: buildPhotoFilterCss(brightness, contrast) ?? "none",
               }}
             />
           )}
@@ -278,7 +283,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const thumbImgRefs = useRef({});
   // editModal: null | { idx, scale, panX, panY, imgAspect, cropW, cropH }
   const [editModal, setEditModal] = useState(null);
-  const [activeDragIdx, setActiveDragIdx] = useState(null); // dnd-kit 拖曳中的格子
+  const [activeDragIndex, setActiveDragIndex] = useState(null); // dnd-kit 拖曳中的格子
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
   // uploadStatus: null = 閒置；otherwise { phase, percent }
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -309,11 +314,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   useEffect(() => {
     const hasDirty = items.some(it =>
       it.pendingFile !== null || it.serverPath !== it.origServerPath ||
-      Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
-      Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-      Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
-      Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
-      Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001
+      isTransformDirty(it.transform, it.origTransform)
     );
     if (!hasDirty || !studentId) return;
     clearTimeout(autoSaveTimerRef.current);
@@ -375,19 +376,13 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         const pagesMap = {};
         for (const it of cur) {
           if (it.pendingFile) continue;
-          const dirty =
-            it.serverPath !== it.origServerPath ||
-            Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
-            Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-            Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
-            Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
-            Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001;
+          const dirty = it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
           if (!dirty) continue;
           if (!pagesMap[it.pi]) pagesMap[it.pi] = {};
           pagesMap[it.pi][String(it.slotId)] = it.serverPath === null ? null : {
             path: it.serverPath, scale: it.transform.scale,
             offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
-            brightness: it.transform.brightness ?? 1, contrast: it.transform.contrast ?? 1,
+            brightness: it.transform.brightness, contrast: it.transform.contrast,
           };
         }
         // 儲存 mapping；renames 保留相容舊後端，新後端交換照片不再重命名 R2 物件
@@ -523,15 +518,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   }, []);
 
   // ── Dirty detection ───────────────────────────────────────────────────────
-  const transformDirty = (it) =>
-    Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
-    Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-    Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
-    Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
-    Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001;
-
   const isDirty = (it) =>
-    it.pendingFile !== null || it.serverPath !== it.origServerPath || transformDirty(it);
+    it.pendingFile !== null || it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
   const hasDirty = items.some(isDirty);
   const availableEmptyCount = items.filter(it =>
     !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
@@ -561,7 +549,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   function assignFile(arr, i, file) {
     if (arr[i].previewUrl) URL.revokeObjectURL(arr[i].previewUrl);
     arr[i] = { ...arr[i], pendingFile: file, previewUrl: URL.createObjectURL(file),
-      serverPath: null, origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+      serverPath: null, origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
   }
 
   const handleMultiUpload = (files) => {
@@ -596,7 +584,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       const it = { ...next[idx] };
       if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
       next[idx] = { ...it, pendingFile: file, previewUrl: URL.createObjectURL(file),
-        serverPath: null, origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+        serverPath: null, origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
     setEditModal(null);
@@ -608,7 +596,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       const it = { ...next[idx] };
       if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
       next[idx] = { ...it, pendingFile: null, previewUrl: null, serverPath: null,
-        origPi: null, origSlotId: null, transform: { scale: 1.0, offsetX: 0, offsetY: 0 } };
+        origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
     setEditModal(null);
@@ -627,22 +615,18 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     });
   };
 
-  // ── dnd-kit 拖曳：滑鼠移動 4px 啟動；觸控長按 250ms 啟動（與捲動手勢區分）──
-  const dndSensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
-  );
+  const dndSensors = useDndPhotoSensors();
 
   const handleCellDragStart = (event) => {
     setSelectedIdx(null);
-    setActiveDragIdx(event.active.data.current.idx);
+    setActiveDragIndex(event.active.data.current.cellIndex);
   };
-  const handleCellDragCancel = () => setActiveDragIdx(null);
+  const handleCellDragCancel = () => setActiveDragIndex(null);
   const handleCellDragEnd = (event) => {
     const { active, over } = event;
-    setActiveDragIdx(null);
-    const from = active.data.current.idx;
-    const to = over?.data.current?.idx;
+    setActiveDragIndex(null);
+    const from = active.data.current.cellIndex;
+    const to = over?.data.current?.cellIndex;
     if (to != null && from !== to) handleSwap(from, to);
   };
 
@@ -666,8 +650,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     const cropH = Math.round(cropW * rawAspect);
     setEditModal({
       idx, scale: it.transform.scale, panX: 0, panY: 0, imgAspect: null, cropW, cropH,
-      brightness: it.transform.brightness ?? 1,
-      contrast: it.transform.contrast ?? 1,
+      brightness: it.transform.brightness,
+      contrast: it.transform.contrast,
     });
   };
 
@@ -723,8 +707,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       scale,
       offsetX: Math.max(-1, Math.min(1, sx > 0 ? -panX / sx : 0)),
       offsetY: Math.max(-1, Math.min(1, sy > 0 ? -panY / sy : 0)),
-      brightness: brightness ?? 1,
-      contrast: contrast ?? 1,
+      brightness,
+      contrast,
     });
     setEditModal(null);
   };
@@ -736,7 +720,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
 
   return (
-    <div className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden" data-guide="student-photo-manager">
+    <div
+      className="w-full bg-white border border-gray-200 rounded-2xl p-5 shadow-sm overflow-hidden"
+      data-guide="student-photo-manager"
+      // dnd-kit 拖曳走 pointer event,不會觸發這裡的原生 HTML5 drag 事件；
+      // 這兩個 handler 只會攔到「從作業系統拖檔案進來」的情境，避免瀏覽器
+      // 用預設的開檔導覽把整個 SPA 換掉、弄丟尚未儲存的編輯
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => e.preventDefault()}
+    >
       {/* Edit Modal */}
       {editModal && (
         <PhotoEditModal
@@ -837,9 +829,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           };
 
           return (
-            <DndCell key={rk} idx={idx} dragDisabled={!url || isItemDisabled} dropDisabled={isItemDisabled}>
+            <DndCell key={rk} cellIndex={idx} dragDisabled={!url || isItemDisabled} dropDisabled={isItemDisabled}>
               {({ dndRef, dndListeners, isDragging, isOver }) => {
-                const isDragOver = isOver && activeDragIdx !== null && activeDragIdx !== idx;
+                const isDragOver = isOver && activeDragIndex !== null && activeDragIndex !== idx;
                 return (
             <div
               data-guide="student-photo-cell"
@@ -949,11 +941,11 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
       {/* 拖曳殘影：跟著游標/手指移動的縮圖 */}
       <DragOverlay dropAnimation={null}>
-        {activeDragIdx != null && items[activeDragIdx] ? (
+        {activeDragIndex != null && items[activeDragIndex] ? (
           <div className="h-20 w-20 overflow-hidden rounded-xl border-2 border-indigo-400 bg-white shadow-lg">
-            {(thumbnailUrl(items[activeDragIdx]) || displayUrl(items[activeDragIdx])) && (
+            {(thumbnailUrl(items[activeDragIndex]) || displayUrl(items[activeDragIndex])) && (
               <img
-                src={thumbnailUrl(items[activeDragIdx]) || displayUrl(items[activeDragIdx])}
+                src={thumbnailUrl(items[activeDragIndex]) || displayUrl(items[activeDragIndex])}
                 alt=""
                 className="h-full w-full object-cover"
               />

@@ -82,12 +82,24 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 ### 照片亮度/對比：LUT 公式與 CSS filter 一致
 
 - 照片資料的 `brightness` / `contrast`（預設 1.0，UI 範圍 0.5–1.5）在
-  `render_photo_slot()` 的 `_apply_photo_adjustments()` 以 LUT 套用：
-  brightness 線性乘法、contrast 以 **128 為樞軸**、先亮度後對比 —
-  與前端預覽的 CSS `filter: brightness() contrast()`（sRGB 值域直接運算）
-  完全同公式。只調 RGB，保留 alpha
-- 違反：改用 PIL `ImageEnhance.Contrast`（以影像灰階平均為樞軸）會讓
-  編輯器預覽與 PDF 輸出的對比效果不一致
+  `render_photo_slot()` 的 `_apply_photo_adjustments()` 以 LUT 套用，
+  逐步比照瀏覽器 CSS `filter: brightness() contrast()` 的實際行為：
+  1. `value * brightness`
+  2. **clamp 回 [0,255]**（CSS 的 `brightness()` 與 `contrast()` 是兩個獨立
+     filter 函式，瀏覽器會把前一個函式的輸出 clamp 到值域後才送進下一個）
+  3. 以 **127.5 為樞軸**做對比（CSS `contrast()` 的 intercept 是 `[0,1]`
+     值域的 `0.5`，換算 8-bit 是 127.5，**不是** 128）
+  4. 最終再 clamp 回 [0,255]
+
+  只調整 RGB，保留 alpha。前端預覽（PhotoEditModal / PhotoSlotCard）
+  直接用瀏覽器原生 CSS filter，天生跟這個公式一致；`utils/photoUtils.js`
+  的 `buildPhotoFilterCss()` 是唯一組字串的地方，兩邊都要引用它
+- **違反（已修過的坑）**：
+  - 用 PIL `ImageEnhance.Contrast`（以影像灰階平均為樞軸）會讓編輯器預覽與
+    PDF 輸出的對比效果不一致
+  - 漏掉步驟 2 的中間 clamp：brightness > 1 疊加 contrast < 1 時，
+    連續運算比瀏覽器的「先 clamp 再算」结果更亮，PDF 會比預覽亮
+  - 樞軸誤用 128：與 CSS 實際的 127.5 有 ±0.25 個灰階的系統性偏差
 
 ### EXIF 方向：open_image 統一 transpose
 

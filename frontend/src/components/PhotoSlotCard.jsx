@@ -1,6 +1,6 @@
 // 照片格縮圖卡片（純顯示，含 PIL 精確位移縮放計算）
 
-import { getPhotoCropBox, photoDims } from "../utils/photoUtils";
+import { getPhotoCropBox, photoDims, buildPhotoFilterCss } from "../utils/photoUtils";
 
 export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRefCallback }) {
   const SHADOW_SCALE = 110 / it.slotH;
@@ -24,12 +24,8 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
 
   // PIL-accurate positioning: pixel-based (card fixed at 110px tall)
   const physScale = 110 / it.slotH;
-  // 亮度/對比即時預覽:公式與後端 PIL 渲染一致(CSS brightness/contrast)
-  const photoBrightness = it.transform.brightness ?? 1;
-  const photoContrast = it.transform.contrast ?? 1;
-  const photoFilter = photoBrightness !== 1 || photoContrast !== 1
-    ? `brightness(${photoBrightness}) contrast(${photoContrast})`
-    : undefined;
+  // 亮度/對比即時預覽:公式與後端 PIL 渲染一致(見 buildPhotoFilterCss)
+  const photoFilter = buildPhotoFilterCss(it.transform.brightness, it.transform.contrast);
 
   let imgStyle = null;
   if (nat && url) {
@@ -53,6 +49,9 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
       userSelect: "none", pointerEvents: "none",
       maxWidth: "none", maxHeight: "none",
       filter: photoFilter,
+      // 抑制 iOS 長按圖片跳出的原生「儲存圖片」選單，避免搶在 dnd-kit
+      // 的長按拖曳門檻(250ms)之前彈出，讓手機拖曳交換照片格失效
+      WebkitTouchCallout: "none",
     };
   }
 
@@ -89,6 +88,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
               objectPosition: `${50 + it.transform.offsetX * 50}% ${50 + it.transform.offsetY * 50}%`,
               userSelect: "none", pointerEvents: "none",
               filter: photoFilter,
+              WebkitTouchCallout: "none",
             }}
             onLoad={onImgLoad}
           />

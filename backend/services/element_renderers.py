@@ -186,14 +186,17 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
 
     def _apply_photo_adjustments(photo_img, brightness, contrast):
         """亮度/對比調整。公式與前端 CSS filter 完全一致：
-        brightness 為線性乘法、contrast 以 128 為樞軸（CSS 在 sRGB 值域直接運算），
-        依 CSS filter 串接順序先亮度後對比。只調整 RGB，保留 alpha。"""
+        brightness 為線性乘法、contrast 以 127.5 為樞軸（CSS contrast() 的
+        intercept 是 [0,1] 值域的 0.5，換算 8-bit 為 127.5，不是 128）。
+        依 CSS filter 串接順序先亮度後對比，且瀏覽器會在兩個 filter 函式之間
+        把中間結果 clamp 回 [0,255] 才送進下一個函式，這裡必須比照，否則
+        brightness > 1 與 contrast < 1 疊加時 PDF 會比預覽亮。只調整 RGB，保留 alpha。"""
         if brightness == 1.0 and contrast == 1.0:
             return photo_img
         lut = []
         for value in range(256):
-            adjusted = value * brightness
-            adjusted = (adjusted - 128.0) * contrast + 128.0
+            adjusted = max(0.0, min(255.0, value * brightness))
+            adjusted = (adjusted - 127.5) * contrast + 127.5
             lut.append(max(0, min(255, int(round(adjusted)))))
         red, green, blue, alpha = photo_img.split()
         return Image.merge("RGBA", (red.point(lut), green.point(lut), blue.point(lut), alpha))
