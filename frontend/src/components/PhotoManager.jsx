@@ -1,4 +1,14 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
@@ -8,6 +18,27 @@ import { buildItems, photoDims, clampPan, getPhotoCropBox } from "../utils/photo
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 
 const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
+
+// dnd-kit 包裝：照片格同時是拖曳來源與放置目標。
+// 不展開 attributes（會加 aria-disabled 誤導輔助工具），只取 listeners。
+function DndCell({ idx, dragDisabled, dropDisabled, children }) {
+  const { setNodeRef: setDragRef, listeners, isDragging } = useDraggable({
+    id: `photo-cell-${idx}`,
+    data: { idx },
+    disabled: dragDisabled,
+  });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: `photo-drop-${idx}`,
+    data: { idx },
+    disabled: dropDisabled,
+  });
+  return children({
+    dndRef: (node) => { setDragRef(node); setDropRef(node); },
+    dndListeners: listeners,
+    isDragging,
+    isOver,
+  });
+}
 
 function uploadStatusLabel(status) {
   if (!status) return "";
@@ -211,8 +242,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const thumbImgRefs = useRef({});
   // editModal: null | { idx, scale, panX, panY, imgAspect, cropW, cropH }
   const [editModal, setEditModal] = useState(null);
-  const [dragOverIdx, setDragOverIdx] = useState(null);
-  const dragIdxRef = useRef(null);
+  const [activeDragIdx, setActiveDragIdx] = useState(null); // dnd-kit 拖曳中的格子
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
   // uploadStatus: null = 閒置；otherwise { phase, percent }
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -554,29 +584,23 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     });
   };
 
-  // ── Drag-and-drop handlers ────────────────────────────────────────────────
-  const handleDragStart = (e, idx) => {
-    dragIdxRef.current = idx;
-    e.dataTransfer.effectAllowed = "move";
+  // ── dnd-kit 拖曳：滑鼠移動 4px 啟動；觸控長按 250ms 啟動（與捲動手勢區分）──
+  const dndSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+  );
+
+  const handleCellDragStart = (event) => {
+    setSelectedIdx(null);
+    setActiveDragIdx(event.active.data.current.idx);
   };
-  const handleDragOver = (e, idx) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (dragIdxRef.current !== idx) setDragOverIdx(idx);
-  };
-  const handleDragLeave = (e) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) setDragOverIdx(null);
-  };
-  const handleDrop = (e, idx) => {
-    e.preventDefault();
-    const from = dragIdxRef.current;
-    dragIdxRef.current = null;
-    setDragOverIdx(null);
-    if (from !== null && from !== idx) handleSwap(from, idx);
-  };
-  const handleDragEnd = () => {
-    dragIdxRef.current = null;
-    setDragOverIdx(null);
+  const handleCellDragCancel = () => setActiveDragIdx(null);
+  const handleCellDragEnd = (event) => {
+    const { active, over } = event;
+    setActiveDragIdx(null);
+    const from = active.data.current.idx;
+    const to = over?.data.current?.idx;
+    if (to != null && from !== to) handleSwap(from, to);
   };
 
   const updateTransform = (idx, t) =>
@@ -724,6 +748,12 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       )}
 
       {/* Photo grid */}
+      <DndContext
+        sensors={dndSensors}
+        onDragStart={handleCellDragStart}
+        onDragEnd={handleCellDragEnd}
+        onDragCancel={handleCellDragCancel}
+      >
       <div
         data-guide="student-photo-grid"
         className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:[grid-template-columns:repeat(auto-fit,minmax(12rem,1fr))]"
@@ -737,7 +767,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           const thumbUrl = thumbnailUrl(it);
           const dirty = isDirty(it);
           const rk = `${it.pi}_${it.slotId}`;
-          const isDragOver = dragOverIdx === idx && dragIdxRef.current !== idx;
           const nat = aspectMap[rk];
           const isSelected = isTouchDevice && selectedIdx === idx;
           const isItemDisabled = disabled || skippedPages.has(it.pi);
@@ -745,6 +774,12 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           const handleCellClick = () => {
             if (isItemDisabled) return;
             if (isTouchDevice) {
+              // 已選取另一格 → 點此格直接交換（空格 = 移動過去）
+              if (selectedIdx != null && selectedIdx !== idx) {
+                handleSwap(selectedIdx, idx);
+                setSelectedIdx(null);
+                return;
+              }
               if (!url) { replaceRefs.current[rk]?.click(); return; }
               setSelectedIdx(prev => prev === idx ? null : idx);
             } else {
@@ -753,24 +788,24 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           };
 
           return (
+            <DndCell key={rk} idx={idx} dragDisabled={!url || isItemDisabled} dropDisabled={isItemDisabled}>
+              {({ dndRef, dndListeners, isDragging, isOver }) => {
+                const isDragOver = isOver && activeDragIdx !== null && activeDragIdx !== idx;
+                return (
             <div
               data-guide="student-photo-cell"
               data-slot-id={it.slotId}
               data-page-index={it.pi}
-              key={rk}
-              draggable={!!url && !isItemDisabled && !isTouchDevice}
-              onDragStart={e => handleDragStart(e, idx)}
-              onDragOver={e => handleDragOver(e, idx)}
-              onDragLeave={handleDragLeave}
-              onDrop={e => handleDrop(e, idx)}
-              onDragEnd={handleDragEnd}
+              ref={dndRef}
+              {...dndListeners}
               onClick={handleCellClick}
               className="group aspect-square relative flex items-center justify-center rounded-xl transition-all"
               style={{
+                touchAction: "manipulation",
                 background: isItemDisabled ? "#f8fafc" : isSelected ? "rgba(99,102,241,0.1)" : isDragOver ? "rgba(99,102,241,0.08)" : dirty ? "rgba(251,191,36,0.08)" : "#f3f4f6",
                 outline: isItemDisabled ? "2px dashed #e2e8f0" : isSelected ? "2px solid #6366f1" : isDragOver ? "2px solid #6366f1" : dirty ? "2px solid #fbbf24" : "2px solid transparent",
-                cursor: isItemDisabled ? "default" : (url && !isTouchDevice ? "grab" : "pointer"),
-                opacity: isItemDisabled ? 0.5 : 1,
+                cursor: isItemDisabled ? "default" : (url ? "grab" : "pointer"),
+                opacity: isItemDisabled ? 0.5 : isDragging ? 0.4 : 1,
               }}
             >
               {/* Pure display */}
@@ -810,6 +845,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
               {/* Mobile tap-selected overlay */}
               {url && !isItemDisabled && isTouchDevice && isSelected && (
                 <div className="absolute inset-0 rounded-xl bg-black/55 flex flex-col items-center justify-center gap-2">
+                  <span className="text-[10px] text-white/90">點另一格可交換，或長按拖曳</span>
                   {/* Top row: move left / move right */}
                   <div className="flex gap-2">
                     <button
@@ -855,9 +891,28 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
                 type="file" accept="image/*,.heic,.heif,.hif" className="hidden"
                 onChange={e => { if (e.target.files?.[0]) { handleReplace(idx, e.target.files[0]); e.target.value = ""; } }} />
             </div>
+                );
+              }}
+            </DndCell>
           );
         })}
       </div>
+
+      {/* 拖曳殘影：跟著游標/手指移動的縮圖 */}
+      <DragOverlay dropAnimation={null}>
+        {activeDragIdx != null && items[activeDragIdx] ? (
+          <div className="h-20 w-20 overflow-hidden rounded-xl border-2 border-indigo-400 bg-white shadow-lg">
+            {(thumbnailUrl(items[activeDragIdx]) || displayUrl(items[activeDragIdx])) && (
+              <img
+                src={thumbnailUrl(items[activeDragIdx]) || displayUrl(items[activeDragIdx])}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            )}
+          </div>
+        ) : null}
+      </DragOverlay>
+      </DndContext>
 
     </div>
   );

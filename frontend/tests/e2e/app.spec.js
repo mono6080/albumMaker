@@ -177,6 +177,25 @@ async function closeProductGuide(page) {
   await expect(page.locator(".driver-popover")).toHaveCount(0);
 }
 
+// dnd-kit 的 MouseSensor 需要漸進式滑鼠移動才會啟動與計算 over 目標，
+// Playwright 內建 dragTo 只做單步跳躍，無法觸發。
+async function dragWithSteps(page, sourceLocator, targetLocator) {
+  const sourceBox = await sourceLocator.boundingBox();
+  const targetBox = await targetLocator.boundingBox();
+  const startX = sourceBox.x + sourceBox.width / 2;
+  const startY = sourceBox.y + sourceBox.height / 2;
+  const endX = targetBox.x + targetBox.width / 2;
+  const endY = targetBox.y + targetBox.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  const steps = 12;
+  for (let i = 1; i <= steps; i++) {
+    await page.mouse.move(startX + (endX - startX) * i / steps, startY + (endY - startY) * i / steps);
+    await page.waitForTimeout(20);
+  }
+  await page.mouse.up();
+}
+
 
 async function waitForResponseAfter(page, predicate, action) {
   const responsePromise = page.waitForResponse(predicate);
@@ -604,7 +623,7 @@ test("student photo manager resyncs slot URLs after drag swap", async ({ page })
   const mappingResponse = page.waitForResponse(
     response => response.url().includes("/photos/mapping") && response.request().method() === "PUT" && response.ok(),
   );
-  await firstCell.dragTo(secondCell);
+  await dragWithSteps(page, firstCell, secondCell);
   await mappingResponse;
 
   await expect.poll(async () => {
