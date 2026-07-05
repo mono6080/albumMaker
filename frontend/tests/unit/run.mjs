@@ -140,11 +140,11 @@ test("photo utilities normalize records and build slot items", () => {
   );
 
   assert.equal(items[0].serverPath, "projects/p.jpg");
-  assert.deepEqual(items[0].transform, { scale: 1.2, offsetX: 0.1, offsetY: -0.1 });
+  assert.deepEqual(items[0].transform, { scale: 1.2, offsetX: 0.1, offsetY: -0.1, brightness: 1.0, contrast: 1.0 });
   assert.equal(items[0].slotW, 320);
   assert.equal(items[0].border, true);
   assert.equal(items[1].serverPath, null);
-  assert.deepEqual(items[1].transform, { scale: 1.0, offsetX: 0, offsetY: 0 });
+  assert.deepEqual(items[1].transform, { scale: 1.0, offsetX: 0, offsetY: 0, brightness: 1.0, contrast: 1.0 });
 });
 
 
