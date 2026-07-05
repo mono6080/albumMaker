@@ -345,7 +345,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   expect(alice).toBeTruthy();
   expect(bob).toBeTruthy();
 
-  await page.getByRole("link", { name: /個人編輯/ }).click();
+  await page.locator('[data-guide="batch-review-link"]').click();
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "製作教學" }).click();
   await expect(page.locator(".driver-popover")).toContainText("輸出進度");
