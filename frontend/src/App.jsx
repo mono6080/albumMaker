@@ -123,7 +123,8 @@ function AppContent() {
 
   return (
     <AuthProvider>
-      <Toaster position="top-right" />
+      {/* toast 純提示用途，關閉 pointer events 避免蓋住其下方的按鈕（如雙頁預覽關閉鈕） */}
+      <Toaster position="top-right" toastOptions={{ style: { pointerEvents: "none" } }} />
       <PwaUpdateBanner />
       <Nav />
       <main className={mainClassName}>

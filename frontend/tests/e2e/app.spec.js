@@ -313,7 +313,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   await expect(page.locator(".driver-popover")).toContainText("一行一位");
   await closeProductGuide(page);
 
-  await page.getByRole("button", { name: "文字" }).click();
+  await page.getByRole("button", { name: "文字", exact: true }).click();
   await expect(page.getByText("樣版預覽")).toBeVisible();
   const projectTextArea = page.locator('[data-guide="batch-text-fields"] textarea').first();
   await expect(projectTextArea).toHaveValue("Default label");
@@ -328,7 +328,7 @@ test("admin can create a project and batch students from the browser", async ({ 
     () => projectTextArea.fill("共用 {name}"),
   );
 
-  await page.getByRole("button", { name: "登記學生" }).click();
+  await page.getByRole("button", { name: "登記", exact: true }).click();
   await page.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
   await page.getByRole("button", { name: "新增" }).click();
   await expect(page.getByText("已登記學生（2 位）")).toBeVisible();
@@ -394,8 +394,8 @@ test("project shared photo upload applies one slot to every student", async ({ p
 
   await page.goto(`/projects/${project.id}/batch`);
   await expect(page.getByText(projectName)).toBeVisible();
-  await page.getByRole("button", { name: "共用照片" }).click();
-  await expect(page.getByText("全班共用照片")).toBeVisible();
+  await page.getByRole("button", { name: "照片", exact: true }).click();
+  await expect(page.getByText("所有人同一張")).toBeVisible();
 
   await page
     .locator('[data-guide="batch-shared-photo-slots"]')
