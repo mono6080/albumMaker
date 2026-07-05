@@ -79,6 +79,16 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   `to_srgb()` 內含 `img.convert("RGB")` 會把透明通道填白
 - 違反：貼圖透明背景變白色方塊
 
+### 照片亮度/對比：LUT 公式與 CSS filter 一致
+
+- 照片資料的 `brightness` / `contrast`（預設 1.0，UI 範圍 0.5–1.5）在
+  `render_photo_slot()` 的 `_apply_photo_adjustments()` 以 LUT 套用：
+  brightness 線性乘法、contrast 以 **128 為樞軸**、先亮度後對比 —
+  與前端預覽的 CSS `filter: brightness() contrast()`（sRGB 值域直接運算）
+  完全同公式。只調 RGB，保留 alpha
+- 違反：改用 PIL `ImageEnhance.Contrast`（以影像灰階平均為樞軸）會讓
+  編輯器預覽與 PDF 輸出的對比效果不一致
+
 ### EXIF 方向：open_image 統一 transpose
 
 - `LocalStorageAdapter.open_image()` 開檔後立即 `ImageOps.exif_transpose(img)`

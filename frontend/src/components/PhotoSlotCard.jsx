@@ -24,6 +24,13 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
 
   // PIL-accurate positioning: pixel-based (card fixed at 110px tall)
   const physScale = 110 / it.slotH;
+  // 亮度/對比即時預覽:公式與後端 PIL 渲染一致(CSS brightness/contrast)
+  const photoBrightness = it.transform.brightness ?? 1;
+  const photoContrast = it.transform.contrast ?? 1;
+  const photoFilter = photoBrightness !== 1 || photoContrast !== 1
+    ? `brightness(${photoBrightness}) contrast(${photoContrast})`
+    : undefined;
+
   let imgStyle = null;
   if (nat && url) {
     const cropTW = cropBox.width;
@@ -45,6 +52,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
       top: Math.round(top * physScale),
       userSelect: "none", pointerEvents: "none",
       maxWidth: "none", maxHeight: "none",
+      filter: photoFilter,
     };
   }
 
@@ -80,6 +88,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
               width: "100%", height: "100%", objectFit: "cover",
               objectPosition: `${50 + it.transform.offsetX * 50}% ${50 + it.transform.offsetY * 50}%`,
               userSelect: "none", pointerEvents: "none",
+              filter: photoFilter,
             }}
             onLoad={onImgLoad}
           />

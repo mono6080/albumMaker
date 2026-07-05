@@ -94,6 +94,8 @@ function PhotoEditModal({
   const it = items[editModal.idx];
   const url = displayUrl(it);
   const { cropW, cropH, scale, panX, panY, imgAspect } = editModal;
+  const brightness = editModal.brightness ?? 1;
+  const contrast = editModal.contrast ?? 1;
   const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
   const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
   const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
@@ -152,6 +154,8 @@ function PhotoEditModal({
                 userSelect: "none", pointerEvents: "none",
                 opacity: imgAspect ? 1 : 0,
                 transition: "opacity 0.15s",
+                // 與後端 PIL 渲染同公式的即時預覽
+                filter: `brightness(${brightness}) contrast(${contrast})`,
               }}
             />
           )}
@@ -187,12 +191,44 @@ function PhotoEditModal({
               {scale.toFixed(2)}×
             </span>
           </div>
+
+          {/* 亮度 / 對比 */}
+          <div className="mt-2.5 flex items-center gap-3">
+            <span className="w-8 text-xs text-gray-500">亮度</span>
+            <input
+              type="range" min="0.5" max="1.5" step="0.01"
+              value={brightness}
+              onChange={e => {
+                const value = parseFloat(e.target.value);
+                setEditModal(prev => prev ? { ...prev, brightness: value } : prev);
+              }}
+              className="flex-1 accent-amber-500"
+            />
+            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
+              {brightness >= 1 ? "+" : ""}{Math.round((brightness - 1) * 100)}%
+            </span>
+          </div>
+          <div className="mt-1.5 flex items-center gap-3">
+            <span className="w-8 text-xs text-gray-500">對比</span>
+            <input
+              type="range" min="0.5" max="1.5" step="0.01"
+              value={contrast}
+              onChange={e => {
+                const value = parseFloat(e.target.value);
+                setEditModal(prev => prev ? { ...prev, contrast: value } : prev);
+              }}
+              className="flex-1 accent-sky-500"
+            />
+            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
+              {contrast >= 1 ? "+" : ""}{Math.round((contrast - 1) * 100)}%
+            </span>
+          </div>
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
           <button
-            onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0 } : prev)}
+            onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0, brightness: 1, contrast: 1 } : prev)}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -275,7 +311,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       it.pendingFile !== null || it.serverPath !== it.origServerPath ||
       Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
       Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-      Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001
+      Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
+      Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
+      Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001
     );
     if (!hasDirty || !studentId) return;
     clearTimeout(autoSaveTimerRef.current);
@@ -341,12 +379,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
             it.serverPath !== it.origServerPath ||
             Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
             Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-            Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001;
+            Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
+            Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
+            Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001;
           if (!dirty) continue;
           if (!pagesMap[it.pi]) pagesMap[it.pi] = {};
           pagesMap[it.pi][String(it.slotId)] = it.serverPath === null ? null : {
             path: it.serverPath, scale: it.transform.scale,
             offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
+            brightness: it.transform.brightness ?? 1, contrast: it.transform.contrast ?? 1,
           };
         }
         // 儲存 mapping；renames 保留相容舊後端，新後端交換照片不再重命名 R2 物件
@@ -485,7 +526,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const transformDirty = (it) =>
     Math.abs(it.transform.scale - it.origTransform.scale) > 0.001 ||
     Math.abs(it.transform.offsetX - it.origTransform.offsetX) > 0.001 ||
-    Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001;
+    Math.abs(it.transform.offsetY - it.origTransform.offsetY) > 0.001 ||
+    Math.abs((it.transform.brightness ?? 1) - (it.origTransform.brightness ?? 1)) > 0.001 ||
+    Math.abs((it.transform.contrast ?? 1) - (it.origTransform.contrast ?? 1)) > 0.001;
 
   const isDirty = (it) =>
     it.pendingFile !== null || it.serverPath !== it.origServerPath || transformDirty(it);
@@ -621,7 +664,11 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
     const cropW = rawAspect > CROP_MAX_H / CROP_MAX_W
       ? Math.round(CROP_MAX_H / rawAspect) : CROP_MAX_W;
     const cropH = Math.round(cropW * rawAspect);
-    setEditModal({ idx, scale: it.transform.scale, panX: 0, panY: 0, imgAspect: null, cropW, cropH });
+    setEditModal({
+      idx, scale: it.transform.scale, panX: 0, panY: 0, imgAspect: null, cropW, cropH,
+      brightness: it.transform.brightness ?? 1,
+      contrast: it.transform.contrast ?? 1,
+    });
   };
 
   const onEditImgLoad = (e) => {
@@ -669,13 +716,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const applyEditModal = () => {
     const m = editModalRef.current;
     if (!m?.imgAspect) return;
-    const { idx, scale, panX, panY, imgAspect, cropW, cropH } = m;
+    const { idx, scale, panX, panY, imgAspect, cropW, cropH, brightness, contrast } = m;
     const { w, h } = photoDims(cropW, cropH, imgAspect, scale);
     const sx = (w - cropW) / 2, sy = (h - cropH) / 2;
     updateTransform(idx, {
       scale,
       offsetX: Math.max(-1, Math.min(1, sx > 0 ? -panX / sx : 0)),
       offsetY: Math.max(-1, Math.min(1, sy > 0 ? -panY / sy : 0)),
+      brightness: brightness ?? 1,
+      contrast: contrast ?? 1,
     });
     setEditModal(null);
   };

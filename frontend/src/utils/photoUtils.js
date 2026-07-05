@@ -4,8 +4,15 @@ import { getPhotoContentRect, getPhotoFrameRect } from "./photoFrameGeometry.js"
 
 export function normalizePhotoData(raw) {
   if (!raw) return null;
-  if (typeof raw === "string") return { path: raw, scale: 1.0, offsetX: 0, offsetY: 0 };
-  return { path: raw.path ?? null, scale: raw.scale ?? 1.0, offsetX: raw.offset_x ?? 0, offsetY: raw.offset_y ?? 0 };
+  if (typeof raw === "string") return { path: raw, scale: 1.0, offsetX: 0, offsetY: 0, brightness: 1.0, contrast: 1.0 };
+  return {
+    path: raw.path ?? null,
+    scale: raw.scale ?? 1.0,
+    offsetX: raw.offset_x ?? 0,
+    offsetY: raw.offset_y ?? 0,
+    brightness: raw.brightness ?? 1.0,
+    contrast: raw.contrast ?? 1.0,
+  };
 }
 
 export function buildItems(allSlots, student) {
@@ -24,7 +31,13 @@ export function buildItems(allSlots, student) {
     }, { dimensionMode });
     const raw = pagesDataMap[pi]?.photos?.[String(slotId)] ?? null;
     const photo = normalizePhotoData(raw);
-    const transform = { scale: photo?.scale ?? 1.0, offsetX: photo?.offsetX ?? 0, offsetY: photo?.offsetY ?? 0 };
+    const transform = {
+      scale: photo?.scale ?? 1.0,
+      offsetX: photo?.offsetX ?? 0,
+      offsetY: photo?.offsetY ?? 0,
+      brightness: photo?.brightness ?? 1.0,
+      contrast: photo?.contrast ?? 1.0,
+    };
     return {
       pi, slotId, slotIndex, slotW: frameRect.width, slotH: frameRect.height,
       border: border !== false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,

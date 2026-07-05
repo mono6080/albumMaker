@@ -123,15 +123,18 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
                           font=get_font(16), anchor="mm")
         return
 
-    # 解析照片資料（支援路徑字串與含位移縮放的 dict）
+    # 解析照片資料（支援路徑字串與含位移縮放/亮度對比的 dict）
     if isinstance(photo_val, dict):
         photo_path = photo_val.get("path", "")
         user_scale = float(photo_val.get("scale", 1.0))
         offset_x   = float(photo_val.get("offset_x", 0.0))
         offset_y   = float(photo_val.get("offset_y", 0.0))
+        user_brightness = float(photo_val.get("brightness", 1.0))
+        user_contrast   = float(photo_val.get("contrast", 1.0))
     else:
         photo_path = photo_val
         user_scale, offset_x, offset_y = 1.0, 0.0, 0.0
+        user_brightness, user_contrast = 1.0, 1.0
 
     if not photo_path:
         return
@@ -181,10 +184,25 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         frame.paste(crop, (dst_x, dst_y), crop)
         return frame
 
+    def _apply_photo_adjustments(photo_img, brightness, contrast):
+        """亮度/對比調整。公式與前端 CSS filter 完全一致：
+        brightness 為線性乘法、contrast 以 128 為樞軸（CSS 在 sRGB 值域直接運算），
+        依 CSS filter 串接順序先亮度後對比。只調整 RGB，保留 alpha。"""
+        if brightness == 1.0 and contrast == 1.0:
+            return photo_img
+        lut = []
+        for value in range(256):
+            adjusted = value * brightness
+            adjusted = (adjusted - 128.0) * contrast + 128.0
+            lut.append(max(0, min(255, int(round(adjusted)))))
+        red, green, blue, alpha = photo_img.split()
+        return Image.merge("RGBA", (red.point(lut), green.point(lut), blue.point(lut), alpha))
+
     if border:
         inner_w = max(1, sw - border_w * 2)
         inner_h = max(1, sh - border_w * 4)
         photo = _cover_crop(img, inner_w, inner_h, user_scale, offset_x, offset_y)
+        photo = _apply_photo_adjustments(photo, user_brightness, user_contrast)
         inner_r = max(0, slot_radius - border_w)
         if inner_r > 0:
             photo = apply_rounded_corners(photo, inner_r)
@@ -198,6 +216,7 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
             img = frame
     else:
         img = _cover_crop(img, sw, sh, user_scale, offset_x, offset_y)
+        img = _apply_photo_adjustments(img, user_brightness, user_contrast)
         img = apply_rounded_corners(img.convert("RGBA"), slot_radius)
         if sh_enabled:
             img = add_drop_shadow(img, offset=(sh_ox, sh_oy), blur=sh_blur,
