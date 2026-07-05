@@ -106,13 +106,21 @@ test("photo utilities normalize records and build slot items", () => {
     scale: 1.0,
     offsetX: 0,
     offsetY: 0,
+    brightness: 1.0,
+    contrast: 1.0,
   });
   assert.deepEqual(normalizePhotoData({ path: "projects/p.jpg", scale: 1.4, offset_x: -0.2, offset_y: 0.3 }), {
     path: "projects/p.jpg",
     scale: 1.4,
     offsetX: -0.2,
     offsetY: 0.3,
+    brightness: 1.0,
+    contrast: 1.0,
   });
+  assert.deepEqual(
+    normalizePhotoData({ path: "projects/p.jpg", scale: 1, offset_x: 0, offset_y: 0, brightness: 1.3, contrast: 0.9 }),
+    { path: "projects/p.jpg", scale: 1, offsetX: 0, offsetY: 0, brightness: 1.3, contrast: 0.9 },
+  );
 
   const items = buildItems(
     [
