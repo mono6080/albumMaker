@@ -44,6 +44,7 @@ function chunkAssignments(assignments, size) {
 
 function uploadStatusLabel(status) {
   if (!status) return "";
+  if (status.retrying) return "重試中";
   if (status.phase === "processing") return "處理中";
   if (status.phase === "saving") return "整理結果中";
   return "上傳中";
@@ -53,6 +54,35 @@ function mergeBatchOutcome(target, source) {
   target.succeeded.push(...(source.succeeded ?? []));
   target.failed.push(...(source.failed ?? []));
   target.skipped.push(...(source.skipped ?? []));
+}
+
+// ── chunk 失敗自動重試 ─────────────────────────────────────────────────────
+
+const CHUNK_MAX_ATTEMPTS = 3;      // 每個 chunk 最多嘗試次數（含第一次）
+const CHUNK_RETRY_DELAY_MS = 4000; // 無 Retry-After 指示時的重試等待
+
+// 可重試：連線逾時、網路中斷、503（上傳槽位滿）與其他 5xx；4xx（413/415/422）為永久失敗
+function isRetryableUploadError(error) {
+  if (error?.code === "ECONNABORTED") return true;
+  if (!error?.response) return true;
+  const status = error.response.status;
+  return status === 503 || status >= 500;
+}
+
+// 503 回應帶 Retry-After（秒），依伺服器指示等待
+function chunkRetryDelayMs(error) {
+  const retryAfterSeconds = Number(error?.response?.headers?.["retry-after"]);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return (retryAfterSeconds + 1) * 1000;
+  }
+  return CHUNK_RETRY_DELAY_MS;
+}
+
+function chunkFailureReason(error) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (error?.code === "ECONNABORTED") return "連線逾時（伺服器可能仍在處理，補傳時會自動略過或覆蓋）";
+  return "上傳失敗";
 }
 
 function isNamedSlotStrategy(strategy) {
@@ -159,6 +189,7 @@ export default function BatchPhotoWizard({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadOutcome, setUploadOutcome] = useState(null);
+  const [failedChunks, setFailedChunks] = useState([]); // 重試後仍失敗的 chunk，供「補傳」使用
   const fileInputRef = useRef(null);
 
   const pages = useMemo(() => template?.pages || [], [template]);
@@ -232,62 +263,78 @@ export default function BatchPhotoWizard({
 
   // ── 上傳 ───────────────────────────────────────────────────────────────
 
-  const handleUpload = async () => {
-    if (matchResult.assignments.length === 0) {
-      toast.error("沒有可上傳的配對");
-      return;
-    }
+  // 逐 chunk 上傳（含自動重試）；chunk 最終失敗不中斷整批，記錄後繼續
+  const runUploadChunks = async (uploadChunks, baseOutcome) => {
+    const totalAssignments = uploadChunks.reduce((sum, chunk) => sum + chunk.assignments.length, 0);
+    const merged = {
+      ok: true,
+      succeeded: [...(baseOutcome?.succeeded ?? [])],
+      failed: [],
+      skipped: [...(baseOutcome?.skipped ?? [])],
+    };
+    const stillFailedChunks = [];
+    let completedAssignments = 0;
+
     setIsUploading(true);
     setUploadStatus({ phase: "uploading", percent: 0 });
     setUploadOutcome(null);
     try {
-      const assignments = matchResult.assignments;
-      const groups = groupAssignmentsByTarget(assignments, pageIndex, slotId, targetSlotIndex);
-      const uploadChunks = groups.flatMap((group) =>
-        chunkAssignments(group.assignments, UPLOAD_CHUNK_SIZE).map((chunk) => ({
-          ...group,
-          assignments: chunk,
-        }))
-      );
-      const merged = {
-        ok: true,
-        succeeded: [],
-        failed: [],
-        skipped: [],
-      };
-      let completedAssignments = 0;
-
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex++) {
         const chunk = uploadChunks[chunkIndex];
-        const updateChunkStatus = (phase, chunkPercent) => {
+        const updateChunkStatus = (phase, chunkPercent, retrying = false) => {
           const weightedProgress = completedAssignments + (chunkPercent / 100) * chunk.assignments.length;
           setUploadStatus({
             phase,
-            percent: Math.round((weightedProgress / assignments.length) * 100),
+            retrying,
+            percent: Math.round((weightedProgress / totalAssignments) * 100),
             completed: completedAssignments,
-            total: assignments.length,
+            total: totalAssignments,
             chunk: chunkIndex + 1,
             chunks: uploadChunks.length,
             targetLabel: getTargetLabel(chunk),
           });
         };
 
-        updateChunkStatus("uploading", 0);
-        const response = await batchUploadPhotos(
-          projectId,
-          chunk.pageIndex,
-          chunk.slotId,
-          chunk.assignments,
-          { overwriteExisting },
-          pct => updateChunkStatus(pct >= 100 ? "processing" : "uploading", pct),
-        );
-        mergeBatchOutcome(merged, response.data ?? {});
+        let response = null;
+        let chunkError = null;
+        for (let attempt = 1; attempt <= CHUNK_MAX_ATTEMPTS; attempt++) {
+          try {
+            updateChunkStatus("uploading", 0, attempt > 1);
+            response = await batchUploadPhotos(
+              projectId,
+              chunk.pageIndex,
+              chunk.slotId,
+              chunk.assignments,
+              { overwriteExisting },
+              pct => updateChunkStatus(pct >= 100 ? "processing" : "uploading", pct, attempt > 1),
+            );
+            chunkError = null;
+            break;
+          } catch (error) {
+            chunkError = error;
+            if (!isRetryableUploadError(error) || attempt === CHUNK_MAX_ATTEMPTS) break;
+            updateChunkStatus("uploading", 0, true);
+            await new Promise(resolve => setTimeout(resolve, chunkRetryDelayMs(error)));
+          }
+        }
+
+        if (chunkError) {
+          const reason = chunkFailureReason(chunkError);
+          merged.failed.push(...chunk.assignments.map(assignment => ({
+            student_id: assignment.studentId,
+            filename: assignment.file?.name ?? "",
+            reason,
+          })));
+          stillFailedChunks.push(chunk);
+        } else {
+          mergeBatchOutcome(merged, response.data ?? {});
+        }
         completedAssignments += chunk.assignments.length;
         setUploadStatus({
           phase: chunkIndex === uploadChunks.length - 1 ? "saving" : "uploading",
-          percent: Math.round((completedAssignments / assignments.length) * 100),
+          percent: Math.round((completedAssignments / totalAssignments) * 100),
           completed: completedAssignments,
-          total: assignments.length,
+          total: totalAssignments,
           chunk: chunkIndex + 1,
           chunks: uploadChunks.length,
           targetLabel: getTargetLabel(chunk),
@@ -295,13 +342,14 @@ export default function BatchPhotoWizard({
       }
 
       setUploadOutcome(merged);
+      setFailedChunks(stillFailedChunks);
       const okCount = merged.succeeded.length;
       const failCount = merged.failed.length;
       const skipCount = merged.skipped.length;
       if (failCount === 0) {
         toast.success(`已上傳 ${okCount} 張` + (skipCount > 0 ? `（跳過 ${skipCount}）` : ""));
       } else {
-        toast.error(`完成 ${okCount} 張，失敗 ${failCount} 張`);
+        toast.error(`完成 ${okCount} 張，失敗 ${failCount} 張，可按「補傳失敗照片」重試`);
       }
       onUploaded?.(merged);
     } catch (error) {
@@ -310,6 +358,30 @@ export default function BatchPhotoWizard({
       setIsUploading(false);
       setUploadStatus(null);
     }
+  };
+
+  const handleUpload = async () => {
+    if (matchResult.assignments.length === 0) {
+      toast.error("沒有可上傳的配對");
+      return;
+    }
+    const groups = groupAssignmentsByTarget(matchResult.assignments, pageIndex, slotId, targetSlotIndex);
+    const uploadChunks = groups.flatMap((group) =>
+      chunkAssignments(group.assignments, UPLOAD_CHUNK_SIZE).map((chunk) => ({
+        ...group,
+        assignments: chunk,
+      }))
+    );
+    await runUploadChunks(uploadChunks, null);
+  };
+
+  // 只重傳失敗的 chunk；先前成功與跳過的結果保留
+  const handleRetryFailed = async () => {
+    if (failedChunks.length === 0) return;
+    await runUploadChunks(failedChunks, {
+      succeeded: uploadOutcome?.succeeded ?? [],
+      skipped: uploadOutcome?.skipped ?? [],
+    });
   };
 
   // ── 共用元件 ───────────────────────────────────────────────────────────
@@ -614,6 +686,11 @@ export default function BatchPhotoWizard({
             </Button>
           )}
 
+          {step === 3 && uploadOutcome && failedChunks.length > 0 && (
+            <Button variant="success" onClick={handleRetryFailed} disabled={isUploading}>
+              補傳失敗的 {failedChunks.reduce((sum, chunk) => sum + chunk.assignments.length, 0)} 張
+            </Button>
+          )}
           {step === 3 && uploadOutcome && (
             <Button variant="primary" onClick={onClose}>完成</Button>
           )}

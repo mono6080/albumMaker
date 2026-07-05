@@ -66,6 +66,9 @@ export const setStudentPageSkip = (projectId, studentId, pageIndex, skip) =>
 
 // ── 照片管理 ──────────────────────────────────────────────────────────────────
 
+// 上傳需涵蓋檔案傳輸 + 伺服器逐張解碼壓縮，15 秒的 apiClient 預設不夠用
+const UPLOAD_TIMEOUT_MS = 120000;
+
 /** 上傳學生照片至指定頁面欄位，onProgress(0~100) 可選 */
 export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, onProgress) => {
   const formData = new FormData();
@@ -73,7 +76,10 @@ export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, 
   return apiClient.post(
     `/projects/${projectId}/students/${studentId}/pages/${pageIndex}/photos/${slotId}`,
     formData,
-    onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}
+    {
+      timeout: UPLOAD_TIMEOUT_MS,
+      ...(onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}),
+    }
   );
 };
 
@@ -84,7 +90,10 @@ export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile
   return apiClient.post(
     `/projects/${projectId}/photos/shared/pages/${pageIndex}/slots/${slotId}`,
     formData,
-    onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}
+    {
+      timeout: UPLOAD_TIMEOUT_MS,
+      ...(onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}),
+    }
   );
 };
 
@@ -112,9 +121,12 @@ export const batchUploadPhotos = (
   return apiClient.post(
     `/projects/${projectId}/photos/batch/pages/${pageIndex}/slots/${slotId}`,
     formData,
-    onProgress
-      ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) }
-      : {},
+    {
+      timeout: UPLOAD_TIMEOUT_MS,
+      ...(onProgress
+        ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) }
+        : {}),
+    },
   );
 };
 
