@@ -4,6 +4,16 @@
 //   Step 3 確認對應表 → 上傳
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import toast from "react-hot-toast";
 import {
   AlertTriangle, Check, ChevronLeft, ChevronRight, Image as ImageIcon,
@@ -806,17 +816,13 @@ function NamedSlotAssignmentTable({ assignments, invalid = [], students }) {
   );
 }
 
-// 拖曳用：DataTransfer 自訂 MIME，不污染瀏覽器其他 drag 事件
-const DRAG_FILE = "application/x-batch-photo-file";
-const DRAG_STUDENT = "application/x-batch-photo-student";
-
 function fileKey(file) {
   return `${file.name}__${file.size}__${file.lastModified}`;
 }
 
 function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onClear, onSwap }) {
   const [focusedFileKey, setFocusedFileKey] = useState(null);
-  const [dropHintTarget, setDropHintTarget] = useState(null); // { kind: "student"|"pool", id? }
+  const [activeDragData, setActiveDragData] = useState(null); // { type: "file"|"student", fileK?, studentId? }
 
   const assignmentByStudent = useMemo(() => {
     const map = new Map();
@@ -844,62 +850,42 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
 
   const focusedFile = focusedFileKey ? fileByKey.get(focusedFileKey) : null;
 
-  // ── 拖曳事件 ──────────────────────────────────────────────────────────
+  // ── dnd-kit 拖曳：滑鼠移動 4px 啟動；觸控長按 250ms 啟動（與捲動手勢區分）──
+  // 邊緣自動捲動由 DndContext 內建處理，長清單拖到畫面外目標時會自動捲動
 
-  const handleFileDragStart = (file) => (event) => {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(DRAG_FILE, fileKey(file));
+  const dndSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+  );
+
+  const handleDragStart = (event) => {
+    setFocusedFileKey(null);
+    setActiveDragData(event.active.data.current);
   };
 
-  const handleStudentDragStart = (studentId) => (event) => {
-    // 沒有照片的學生不能拖（沒東西可搬）
-    if (!assignmentByStudent.get(studentId)) {
-      event.preventDefault();
+  const handleDragCancel = () => setActiveDragData(null);
+
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+    setActiveDragData(null);
+    if (!over) return;
+    const source = active.data.current;
+    const target = over.data.current;
+    if (source.type === "file" && target?.type === "student") {
+      const file = fileByKey.get(source.fileK);
+      if (file) onAssign(target.studentId, file);
       return;
     }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(DRAG_STUDENT, String(studentId));
-  };
-
-  const allowDrop = (kind, id) => (event) => {
-    if (event.dataTransfer.types.includes(DRAG_FILE) || event.dataTransfer.types.includes(DRAG_STUDENT)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      const next = { kind, id };
-      if (!dropHintTarget || dropHintTarget.kind !== kind || dropHintTarget.id !== id) {
-        setDropHintTarget(next);
-      }
-    }
-  };
-
-  const handleDragLeave = () => setDropHintTarget(null);
-
-  const handleDropOnStudent = (studentId) => (event) => {
-    event.preventDefault();
-    setDropHintTarget(null);
-    const fileK = event.dataTransfer.getData(DRAG_FILE);
-    if (fileK) {
-      const file = fileByKey.get(fileK);
-      if (file) onAssign(studentId, file);
+    if (source.type === "student" && target?.type === "student") {
+      if (source.studentId !== target.studentId) onSwap(source.studentId, target.studentId);
       return;
     }
-    const srcStudent = event.dataTransfer.getData(DRAG_STUDENT);
-    if (srcStudent) {
-      const srcId = Number(srcStudent);
-      if (srcId !== studentId) onSwap(srcId, studentId);
+    if (source.type === "student" && target?.type === "pool") {
+      onClear(source.studentId);
     }
   };
 
-  const handleDropOnPool = (event) => {
-    event.preventDefault();
-    setDropHintTarget(null);
-    const srcStudent = event.dataTransfer.getData(DRAG_STUDENT);
-    if (srcStudent) {
-      onClear(Number(srcStudent));
-    }
-  };
-
-  // ── 點選備援（行動裝置） ──────────────────────────────────────────────
+  // ── 點選模式：點照片（含已配對學生身上的照片）「拿起」，再點目標學生「放下」 ──
 
   const handleFileTap = (file) => () => {
     const key = fileKey(file);
@@ -908,134 +894,229 @@ function AssignmentBoard({ students, matchResult, files, getUrl, onAssign, onCle
 
   const handleStudentTap = (studentId) => () => {
     if (focusedFile) {
+      // 點到照片目前的主人視為取消拿起
+      if (studentByFileKey.get(focusedFileKey) === studentId) {
+        setFocusedFileKey(null);
+        return;
+      }
       onAssign(studentId, focusedFile);
       setFocusedFileKey(null);
+      return;
     }
+    // 沒有拿起中的照片時，點已配對的學生 → 拿起他身上的照片
+    const assignedFile = assignmentByStudent.get(studentId);
+    if (assignedFile) setFocusedFileKey(fileKey(assignedFile));
   };
 
   const usedKeys = new Set(matchResult.assignments.map((a) => fileKey(a.file)));
-  const unusedFiles = files.filter((f) => !usedKeys.has(f));
+  const unusedFiles = files.filter((f) => !usedKeys.has(fileKey(f)));
+
+  // 拖曳殘影顯示的照片
+  const activeDragFile = activeDragData
+    ? activeDragData.type === "file"
+      ? fileByKey.get(activeDragData.fileK)
+      : assignmentByStudent.get(activeDragData.studentId)
+    : null;
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-800">
-        💡 拖照片到學生 → 指派；拖學生 A → 學生 B 交換；拖學生 → 下方照片池取消分配。
-        <span className="hidden sm:inline">手機可改用點選：先點照片再點學生。</span>
-      </div>
+    <DndContext
+      sensors={dndSensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <div className="space-y-3">
+        <div className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-800">
+          💡 拖曳（手機長按後拖）照片到學生指派、拖學生互換、拖到照片池取消；
+          或先點照片、再點目標學生。點已配對學生的照片可直接拿起改分給別人。
+        </div>
 
-      {/* 學生列 */}
-      <div className="grid grid-cols-2 gap-2 rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-3 lg:grid-cols-4">
-        {students.map((student, index) => {
-          const file = assignmentByStudent.get(student.id);
-          const url = file ? getUrl(file) : null;
-          const isHinted = dropHintTarget?.kind === "student" && dropHintTarget.id === student.id;
-          const canTapAssign = !!focusedFile;
-          return (
-            <div
-              key={student.id}
-              draggable={!!file}
-              onDragStart={handleStudentDragStart(student.id)}
-              onDragOver={allowDrop("student", student.id)}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDropOnStudent(student.id)}
-              onClick={handleStudentTap(student.id)}
-              className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white transition-all ${
-                isHinted
-                  ? "border-indigo-500 ring-2 ring-indigo-300"
-                  : file
-                  ? "border-emerald-200"
-                  : canTapAssign
-                  ? "border-indigo-300 ring-1 ring-indigo-200"
-                  : "border-dashed border-amber-300 bg-amber-50/30"
-              } ${file ? "cursor-grab active:cursor-grabbing" : canTapAssign ? "cursor-pointer" : "cursor-default"}`}
-              title={file ? `${student.name} ← ${file.name}（拖移可交換）` : `${student.name}（未配對）`}
+        {/* 拿起中的照片提示列：黏在頂端，捲動時仍可見 */}
+        {focusedFile && (
+          <div className="sticky top-0 z-10 flex items-center gap-2 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2 shadow-sm">
+            {getUrl(focusedFile) && (
+              <img src={getUrl(focusedFile)} alt={focusedFile.name} className="h-8 w-8 rounded object-cover" />
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-indigo-800">
+              已拿起 {focusedFile.name} — 點目標學生完成指派
+            </span>
+            <button
+              type="button"
+              onClick={() => setFocusedFileKey(null)}
+              className="rounded border border-indigo-200 px-2 py-0.5 text-xs text-indigo-700 hover:bg-indigo-100"
             >
-              <div className="flex items-center gap-1 px-2 py-1 text-[11px]">
-                <span className="text-gray-400">{index + 1}.</span>
-                <span className="min-w-0 flex-1 truncate font-medium text-gray-800">{student.name}</span>
-                {file && (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onClear(student.id); }}
-                    className="rounded-full p-0.5 text-gray-300 hover:bg-red-100 hover:text-red-600"
-                    aria-label={`取消 ${student.name} 的配對`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-              <div className="relative aspect-square bg-gray-50">
-                {url ? (
-                  <img src={url} alt={file.name} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-amber-600">
-                    <ImageIcon className="h-5 w-5 opacity-60" />
-                    <span className="text-[10px]">未配對</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* 照片池 */}
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-        照片池（{files.length}）
-        {unusedFiles.length > 0 && <span className="ml-2 text-amber-700">未使用 {unusedFiles.length}</span>}
-        {focusedFile && <span className="ml-2 text-indigo-600">已選：{focusedFile.name}（點學生套用）</span>}
-      </div>
-      <div
-        onDragOver={allowDrop("pool")}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDropOnPool}
-        className={`grid grid-cols-3 gap-2 rounded-lg border bg-gray-50/60 p-2 sm:grid-cols-6 md:grid-cols-8 ${
-          dropHintTarget?.kind === "pool"
-            ? "border-red-400 ring-2 ring-red-200"
-            : "border-gray-200"
-        }`}
-      >
-        {files.length === 0 && (
-          <div className="col-span-full py-6 text-center text-xs text-gray-400">尚未選任何照片</div>
+              取消
+            </button>
+          </div>
         )}
-        {files.map((file) => {
-          const url = getUrl(file);
-          const assignedTo = studentByFileKey.get(fileKey(file));
-          const assignedName = assignedTo ? studentById.get(assignedTo)?.name : null;
-          const isFocused = fileKey(file) === focusedFileKey;
-          return (
-            <div
+
+        {/* 學生列 */}
+        <div className="grid grid-cols-2 gap-2 rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-3 lg:grid-cols-4">
+          {students.map((student, index) => (
+            <StudentCell
+              key={student.id}
+              student={student}
+              index={index}
+              file={assignmentByStudent.get(student.id) ?? null}
+              url={assignmentByStudent.get(student.id) ? getUrl(assignmentByStudent.get(student.id)) : null}
+              canTapAssign={!!focusedFile}
+              onTap={handleStudentTap(student.id)}
+              onClearAssignment={() => onClear(student.id)}
+            />
+          ))}
+        </div>
+
+        {/* 照片池 */}
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+          照片池（{files.length}）
+          {unusedFiles.length > 0 && <span className="ml-2 text-amber-700">未使用 {unusedFiles.length}</span>}
+        </div>
+        <PoolArea isEmpty={files.length === 0}>
+          {files.map((file) => (
+            <PoolPhoto
               key={fileKey(file)}
-              draggable
-              onDragStart={handleFileDragStart(file)}
-              onClick={handleFileTap(file)}
-              className={`group relative aspect-square cursor-grab overflow-hidden rounded-md border bg-white transition-all active:cursor-grabbing ${
-                isFocused
-                  ? "border-indigo-500 ring-2 ring-indigo-300"
-                  : assignedTo
-                  ? "border-emerald-300"
-                  : "border-amber-300"
-              }`}
-              title={assignedName ? `已配對給 ${assignedName}` : "未使用，拖到學生上指派"}
-            >
-              {url ? (
-                <img src={url} alt={file.name} className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-gray-300">
-                  <ImageIcon className="h-5 w-5" />
-                </div>
-              )}
-              {assignedTo && (
-                <div className="absolute inset-x-0 top-0 truncate bg-emerald-600/85 px-1 py-0.5 text-center text-[10px] font-medium text-white">
-                  → {assignedName}
-                </div>
-              )}
-              <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
-                {file.name}
-              </div>
-            </div>
-          );
-        })}
+              file={file}
+              url={getUrl(file)}
+              assignedName={(() => {
+                const assignedTo = studentByFileKey.get(fileKey(file));
+                return assignedTo ? studentById.get(assignedTo)?.name ?? null : null;
+              })()}
+              isFocused={fileKey(file) === focusedFileKey}
+              onTap={handleFileTap(file)}
+            />
+          ))}
+        </PoolArea>
+      </div>
+
+      {/* 拖曳殘影：跟著游標/手指移動的縮圖 */}
+      <DragOverlay dropAnimation={null}>
+        {activeDragFile ? (
+          <div className="h-16 w-16 overflow-hidden rounded-md border-2 border-indigo-400 bg-white shadow-lg">
+            {getUrl(activeDragFile) && (
+              <img src={getUrl(activeDragFile)} alt={activeDragFile.name} className="h-full w-full object-cover" />
+            )}
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+// 學生格：可放（指派目標）也可拖（有照片時，拖去交換或退回照片池）
+function StudentCell({ student, index, file, url, canTapAssign, onTap, onClearAssignment }) {
+  // 不展開 dnd-kit 的 attributes：它會加 role="button" 與 aria-disabled，
+  // 使「未配對但可點選指派」的格被輔助工具誤判為停用
+  const { setNodeRef: setDragRef, listeners, isDragging } = useDraggable({
+    id: `student-${student.id}`,
+    data: { type: "student", studentId: student.id },
+    disabled: !file,
+  });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: `student-drop-${student.id}`,
+    data: { type: "student", studentId: student.id },
+  });
+
+  return (
+    <div
+      ref={(node) => { setDragRef(node); setDropRef(node); }}
+      {...listeners}
+      onClick={onTap}
+      style={{ touchAction: "manipulation" }}
+      className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white transition-all ${
+        isOver
+          ? "border-indigo-500 ring-2 ring-indigo-300"
+          : file
+          ? "border-emerald-200"
+          : canTapAssign
+          ? "border-indigo-300 ring-1 ring-indigo-200"
+          : "border-dashed border-amber-300 bg-amber-50/30"
+      } ${file ? "cursor-grab active:cursor-grabbing" : canTapAssign ? "cursor-pointer" : "cursor-default"} ${
+        isDragging ? "opacity-40" : ""
+      }`}
+      title={file ? `${student.name} ← ${file.name}（拖移可交換）` : `${student.name}（未配對）`}
+    >
+      <div className="flex items-center gap-1 px-2 py-1 text-[11px]">
+        <span className="text-gray-400">{index + 1}.</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-gray-800">{student.name}</span>
+        {file && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onClearAssignment(); }}
+            className="rounded-full p-0.5 text-gray-300 hover:bg-red-100 hover:text-red-600"
+            aria-label={`取消 ${student.name} 的配對`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+      <div className="relative aspect-square bg-gray-50">
+        {url ? (
+          <img src={url} alt={file.name} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-amber-600">
+            <ImageIcon className="h-5 w-5 opacity-60" />
+            <span className="text-[10px]">未配對</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 照片池容器：接收「拖學生 → 取消分配」的放置目標
+function PoolArea({ isEmpty, children }) {
+  const { setNodeRef, isOver } = useDroppable({ id: "pool", data: { type: "pool" } });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`grid grid-cols-3 gap-2 rounded-lg border bg-gray-50/60 p-2 sm:grid-cols-6 md:grid-cols-8 ${
+        isOver ? "border-red-400 ring-2 ring-red-200" : "border-gray-200"
+      }`}
+    >
+      {isEmpty && (
+        <div className="col-span-full py-6 text-center text-xs text-gray-400">尚未選任何照片</div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+// 照片池單張照片：可拖去指派，也可點選拿起
+function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: `file-${fileKey(file)}`,
+    data: { type: "file", fileK: fileKey(file) },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      onClick={onTap}
+      style={{ touchAction: "manipulation" }}
+      className={`group relative aspect-square cursor-grab overflow-hidden rounded-md border bg-white transition-all active:cursor-grabbing ${
+        isFocused
+          ? "border-indigo-500 ring-2 ring-indigo-300"
+          : assignedName
+          ? "border-emerald-300"
+          : "border-amber-300"
+      } ${isDragging ? "opacity-40" : ""}`}
+      title={assignedName ? `已配對給 ${assignedName}` : "未使用，拖到學生上指派"}
+    >
+      {url ? (
+        <img src={url} alt={file.name} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-gray-300">
+          <ImageIcon className="h-5 w-5" />
+        </div>
+      )}
+      {assignedName && (
+        <div className="absolute inset-x-0 top-0 truncate bg-emerald-600/85 px-1 py-0.5 text-center text-[10px] font-medium text-white">
+          → {assignedName}
+        </div>
+      )}
+      <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
+        {file.name}
       </div>
     </div>
   );
