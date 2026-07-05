@@ -88,9 +88,8 @@ def png_bytes(size: tuple[int, int], color: tuple[int, int, int, int] = (240, 72
 def count_non_whiteish_pixels(image: Image.Image, box: tuple[int, int, int, int], threshold: int = 245) -> int:
     sample = image.crop(box).convert("RGB")
     return sum(
-        1
+        any(channel < threshold for channel in pixel)
         for pixel in sample.getdata()
-        if any(channel < threshold for channel in pixel)
     )
 
 

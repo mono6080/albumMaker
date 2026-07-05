@@ -220,7 +220,7 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   const canvas = page.locator(".konvajs-content canvas").first();
   await expect(canvas).toBeVisible();
 
-  await page.getByRole("button", { name: /照片格/ }).click();
+  await page.getByRole("button", { name: /照片格 3:4 直式/ }).click();
   await canvas.click({ position: { x: 90, y: 90 } });
   await expect(page.getByText("照片總計 1 張")).toBeVisible();
   await page.getByRole("button", { name: /純文字/ }).click();
