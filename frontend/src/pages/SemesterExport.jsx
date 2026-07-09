@@ -259,15 +259,16 @@ export default function SemesterExport() {
 
       {/* 分組預覽表 */}
       {preview && (
-        <Surface padding="none" className="mb-4 overflow-x-auto">
+        <Surface padding="none" className="mb-4 max-h-[70vh] overflow-auto">
           <table className="w-full min-w-max text-sm">
+            {/* 表頭與左右欄固定：表格改為容器內部滾動，th/td 各自 sticky 並帶實色背景 */}
             <thead>
-              <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500">
-                <th className="px-4 py-2.5 font-medium">孩子（{preview.children.length}）</th>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
+                <th className="sticky left-0 top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">孩子（{preview.children.length}）</th>
                 {periodColumns.map(period => (
-                  <th key={period.id} className="px-4 py-2.5 font-medium">{period.name}</th>
+                  <th key={period.id} className="sticky top-0 z-20 border-b border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">{period.name}</th>
                 ))}
-                <th className="px-4 py-2.5 font-medium">合併</th>
+                <th className="sticky right-0 top-0 z-30 border-b border-l border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">合併</th>
               </tr>
             </thead>
             <tbody>
@@ -279,14 +280,15 @@ export default function SemesterExport() {
                   !previousGroup || previousGroup.latest_project_name !== group.latest_project_name;
                 return [
                   isNewClassSection && (
-                    <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50/60">
-                      <td colSpan={periodColumns.length + 2} className="px-4 py-1.5 text-xs font-bold text-indigo-700">
-                        {group.latest_project_name}
+                    <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50">
+                      <td colSpan={periodColumns.length + 2} className="py-1.5 text-xs font-bold text-indigo-700">
+                        {/* 班級標題跟著橫向捲動固定在左側 */}
+                        <span className="sticky left-4 inline-block">{group.latest_project_name}</span>
                       </td>
                     </tr>
                   ),
                   <tr key={group.roster_child_id} className="border-b border-gray-100 last:border-0">
-                    <td className="px-4 py-2.5 font-medium text-gray-900">{group.name}</td>
+                    <td className="sticky left-0 z-10 border-r border-gray-100 bg-white px-4 py-2.5 font-medium text-gray-900">{group.name}</td>
                     {periodColumns.map(period => (
                       <td key={period.id} className="px-4 py-2.5">
                         {(entriesByPeriod[period.id] ?? []).length === 0 ? (
@@ -305,8 +307,9 @@ export default function SemesterExport() {
                         )}
                       </td>
                     ))}
-                    <td className="px-4 py-2.5">
+                    <td className="sticky right-0 z-10 border-l border-gray-100 bg-white px-4 py-2.5">
                       <div className="flex items-center gap-1">
+                        {/* fieldControlClass 內含 w-full，用外層 div 限寬避免合併欄過寬 */}
                         <select
                           value={mergeTargets[group.roster_child_id] ?? ""}
                           onChange={event =>
@@ -315,7 +318,8 @@ export default function SemesterExport() {
                               [group.roster_child_id]: event.target.value,
                             }))
                           }
-                          className={`${fieldControlClass} w-36 py-1 text-xs`}
+                          style={{ width: "9rem" }}
+                          className={`${fieldControlClass} py-1 text-xs`}
                         >
                           <option value="">同一個孩子是…</option>
                           {preview.children
@@ -352,9 +356,9 @@ export default function SemesterExport() {
         </Surface>
       )}
 
-      {/* 下載 */}
+      {/* 下載（固定在視窗底部） */}
       {preview && preview.children.length > 0 && (
-        <div className="flex items-center justify-end gap-3">
+        <div className="sticky bottom-3 z-20 flex items-center justify-end gap-3 rounded-lg border border-gray-200 bg-white/90 p-3 shadow-sm backdrop-blur">
           {preview.unlinked.length > 0 && (
             <span className="text-xs text-amber-600">
               尚有 {preview.unlinked.length} 位學生未配對，不會納入匯出
