@@ -24,6 +24,20 @@ import { Badge, Button, PageHeader, SegmentedControl, Surface, fieldControlClass
 
 const PERIOD_STATUS_LABELS = { draft: "草稿", active: "使用中", archived: "已封存" };
 
+/** 支援「部分勾選」顯示的 checkbox（indeterminate 只能用 DOM 屬性設定） */
+function TriStateCheckbox({ checked, indeterminate, onChange, title }) {
+  return (
+    <input
+      type="checkbox"
+      className="accent-indigo-600"
+      checked={checked}
+      ref={element => { if (element) element.indeterminate = !checked && indeterminate; }}
+      onChange={onChange}
+      title={title}
+    />
+  );
+}
+
 export default function SemesterExport() {
   const [departments, setDepartments] = useState([]);
   const [activeDepartment, setActiveDepartment] = useState(null);
@@ -35,6 +49,8 @@ export default function SemesterExport() {
   const [confirmModal, setConfirmModal] = useState(null);
   // 各孩子列的合併目標選擇（roster_child_id → 目標 id 字串）
   const [mergeTargets, setMergeTargets] = useState({});
+  // 勾選要匯出的孩子（roster_child_id 集合），載入預覽時預設全選
+  const [selectedChildIds, setSelectedChildIds] = useState(new Set());
 
   useEffect(() => {
     const loadOptions = async () => {
@@ -78,6 +94,7 @@ export default function SemesterExport() {
       const response = await fetchSemesterExportPreview(selectedPeriodIds);
       setPreview(response.data);
       setMergeTargets({});
+      setSelectedChildIds(new Set(response.data.children.map(group => group.roster_child_id)));
     } catch {
       toast.error("載入匯出預覽失敗");
     }
@@ -135,9 +152,15 @@ export default function SemesterExport() {
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
+      // 全選時不帶篩選參數，避免大量孩子撐爆 query string
+      const isAllSelected = selectedChildIds.size === preview.children.length;
       await downloadApiBlob(
         renderClient,
-        buildSemesterExportDownloadUrl(selectedPeriodIds, "print"),
+        buildSemesterExportDownloadUrl(
+          selectedPeriodIds,
+          "print",
+          isAllSelected ? null : [...selectedChildIds],
+        ),
         "semester_export.zip",
       );
     } catch {
@@ -145,6 +168,26 @@ export default function SemesterExport() {
     }
     setIsDownloading(false);
   };
+
+  // ── 匯出勾選：單一孩子 / 整班 / 全部 ────────────────────────────────────────
+
+  const toggleChildSelected = (rosterChildId) => {
+    setSelectedChildIds(prev => {
+      const next = new Set(prev);
+      if (next.has(rosterChildId)) next.delete(rosterChildId);
+      else next.add(rosterChildId);
+      return next;
+    });
+  };
+
+  const setManySelected = (rosterChildIds, isSelected) => {
+    setSelectedChildIds(prev => {
+      const next = new Set(prev);
+      rosterChildIds.forEach(childId => (isSelected ? next.add(childId) : next.delete(childId)));
+      return next;
+    });
+  };
+
 
   const periodColumns = preview?.periods ?? [];
 
@@ -268,7 +311,17 @@ export default function SemesterExport() {
             {/* 表頭與左右欄固定：表格改為容器內部滾動，th/td 各自 sticky 並帶實色背景 */}
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
-                <th className="sticky left-0 top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">孩子（{preview.children.length}）</th>
+                <th className="sticky left-0 top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">
+                  <span className="flex items-center gap-2">
+                    <TriStateCheckbox
+                      checked={selectedChildIds.size === preview.children.length && preview.children.length > 0}
+                      indeterminate={selectedChildIds.size > 0}
+                      onChange={event => setManySelected(preview.children.map(group => group.roster_child_id), event.target.checked)}
+                      title="全部全選 / 取消"
+                    />
+                    孩子（已選 {selectedChildIds.size}/{preview.children.length}）
+                  </span>
+                </th>
                 {periodColumns.map(period => (
                   <th key={period.id} className="sticky top-0 z-20 border-b border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">{period.name}</th>
                 ))}
@@ -282,15 +335,25 @@ export default function SemesterExport() {
                 const previousGroup = preview.children[groupIndex - 1];
                 const isNewClassSection =
                   !previousGroup || previousGroup.latest_project_name !== group.latest_project_name;
+                const classChildIds = preview.children
+                  .filter(other => other.latest_project_name === group.latest_project_name)
+                  .map(other => other.roster_child_id);
+                const classSelectedCount = classChildIds.filter(childId => selectedChildIds.has(childId)).length;
                 return [
                   isNewClassSection && (
                     <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50">
                       <td colSpan={periodColumns.length + 2} className="py-1.5 text-xs text-indigo-700">
                         {/* 班級標題跟著橫向捲動固定在左側 */}
-                        <span className="sticky left-4 inline-block">
+                        <span className="sticky left-4 inline-flex items-center gap-2">
+                          <TriStateCheckbox
+                            checked={classSelectedCount === classChildIds.length}
+                            indeterminate={classSelectedCount > 0}
+                            onChange={event => setManySelected(classChildIds, event.target.checked)}
+                            title="整班全選 / 取消"
+                          />
                           <span className="font-bold">{group.latest_project_name}</span>
                           {group.latest_project_owner_name && (
-                            <span className="ml-2 font-normal text-indigo-500">
+                            <span className="font-normal text-indigo-500">
                               老師：{group.latest_project_owner_name}
                             </span>
                           )}
@@ -299,7 +362,17 @@ export default function SemesterExport() {
                     </tr>
                   ),
                   <tr key={group.roster_child_id} className="border-b border-gray-100 last:border-0">
-                    <td className="sticky left-0 z-10 border-r border-gray-100 bg-white px-4 py-2.5 font-medium text-gray-900">{group.name}</td>
+                    <td className="sticky left-0 z-10 border-r border-gray-100 bg-white px-4 py-2.5 font-medium text-gray-900">
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="accent-indigo-600"
+                          checked={selectedChildIds.has(group.roster_child_id)}
+                          onChange={() => toggleChildSelected(group.roster_child_id)}
+                        />
+                        {group.name}
+                      </label>
+                    </td>
                     {periodColumns.map(period => (
                       <td key={period.id} className="px-4 py-2.5">
                         {(entriesByPeriod[period.id] ?? []).length === 0 ? (
@@ -375,11 +448,11 @@ export default function SemesterExport() {
               尚有 {preview.unlinked.length} 位學生未配對，不會納入匯出
             </span>
           )}
-          <Button variant="primary" onClick={handleDownload} disabled={isDownloading}>
+          <Button variant="primary" onClick={handleDownload} disabled={isDownloading || selectedChildIds.size === 0}>
             {isDownloading
               ? <Loader2 className="h-4 w-4 animate-spin" />
               : <Download className="h-4 w-4" />}
-            下載學期彙整 ZIP（列印畫質）
+            下載學期彙整 ZIP（{selectedChildIds.size} 位孩子・列印畫質）
           </Button>
         </div>
       )}

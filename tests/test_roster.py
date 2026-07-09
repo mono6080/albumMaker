@@ -229,3 +229,18 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         # 未渲染的李小華不進 ZIP，但列在匯出說明
         assert not any("/李小華/" in name for name in entry_names)
         assert "匯出說明.txt" in entry_names
+
+        # roster_child_ids 篩選：只勾李小華 → ZIP 不含王小明
+        hua_child_id = roster_child_id_of(students_a["李小華"])
+        filtered = client.get(
+            "/api/roster/semester-export/download",
+            params={
+                "period_ids": [period_a["id"], period_b["id"]],
+                "mode": "print",
+                "roster_child_ids": [hua_child_id],
+            },
+        )
+        assert_status(filtered, 200)
+        with ZipFile(BytesIO(filtered.content)) as zip_archive:
+            filtered_names = zip_archive.namelist()
+        assert not any("/王小明/" in name for name in filtered_names)

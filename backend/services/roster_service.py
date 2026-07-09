@@ -161,9 +161,23 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
     }
 
 
-def build_semester_export_zip(db: Session, period_ids: list[int], output_mode: str) -> bytes:
-    """打包學期匯出 ZIP：班級（最新期別專案）/孩子/序號_期別-專案.pdf，附匯出說明列出缺漏。"""
+def build_semester_export_zip(
+    db: Session,
+    period_ids: list[int],
+    output_mode: str,
+    roster_child_ids: list[int] | None = None,
+) -> bytes:
+    """打包學期匯出 ZIP：班級（最新期別專案）/孩子/序號_期別-專案.pdf，附匯出說明列出缺漏。
+
+    roster_child_ids 給定時只匯出勾選的孩子（None 代表全部）。
+    """
     preview = build_semester_export_preview(db, period_ids)
+    if roster_child_ids is not None:
+        selected_ids = set(roster_child_ids)
+        preview["children"] = [
+            group for group in preview["children"]
+            if group["roster_child_id"] in selected_ids
+        ]
     period_order = {period["id"]: index for index, period in enumerate(preview["periods"])}
     period_names = {period["id"]: period["name"] for period in preview["periods"]}
     storage = get_storage()

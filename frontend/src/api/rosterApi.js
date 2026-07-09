@@ -23,6 +23,10 @@ export const linkStudentToNewRosterChild = (studentId) =>
 export const mergeRosterChildren = (sourceChildId, targetChildId) =>
   apiClient.post(`/roster/children/${sourceChildId}/merge/${targetChildId}`);
 
-/** 學期匯出 ZIP 下載 URL（孩子資料夾/序號_期別-專案.pdf） */
-export const buildSemesterExportDownloadUrl = (periodIds, outputMode = "print") =>
-  `/api/roster/semester-export/download?${buildPeriodIdsQuery(periodIds)}&mode=${outputMode}`;
+/** 學期匯出 ZIP 下載 URL（班級/孩子/序號_期別-專案.pdf）；rosterChildIds 不給代表全部 */
+export const buildSemesterExportDownloadUrl = (periodIds, outputMode = "print", rosterChildIds = null) => {
+  const childIdsQuery = rosterChildIds
+    ? rosterChildIds.map(childId => `&roster_child_ids=${encodeURIComponent(childId)}`).join("")
+    : "";
+  return `/api/roster/semester-export/download?${buildPeriodIdsQuery(periodIds)}&mode=${outputMode}${childIdsQuery}`;
+};

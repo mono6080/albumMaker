@@ -79,12 +79,13 @@ def merge_roster_child_into(
 def download_semester_export_zip(
     period_ids: list[int] = Query(..., min_length=1),
     mode: str = Query("print", pattern="^(print|screen)$"),
+    roster_child_ids: list[int] | None = Query(None, description="只匯出勾選的孩子；不給代表全部"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
-    """下載學期匯出 ZIP：孩子資料夾/序號_期別-專案.pdf，附缺漏說明。"""
+    """下載學期匯出 ZIP：班級/孩子/序號_期別-專案.pdf，附缺漏說明。"""
     with zip_build_limiter.acquire("學期匯出 ZIP 正在產生中，請稍後再試"):
-        zip_bytes = build_semester_export_zip(db, period_ids, mode)
+        zip_bytes = build_semester_export_zip(db, period_ids, mode, roster_child_ids)
     content_disposition = build_content_disposition_header("學期彙整匯出.zip")
     return StreamingResponse(
         io.BytesIO(zip_bytes),
