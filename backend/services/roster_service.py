@@ -124,7 +124,19 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
             })
             group["entries"].append(entry)
 
-    children = sorted(children_by_id.values(), key=lambda group: group["name"])
+    # 每個孩子的「班級」＝所選範圍內最新期別的專案（孩子最近待的班）
+    period_order = {period.id: index for index, period in enumerate(periods)}
+    for group in children_by_id.values():
+        latest_entry = max(
+            group["entries"], key=lambda entry: period_order.get(entry["period_id"], -1)
+        )
+        group["latest_project_id"] = latest_entry["project_id"]
+        group["latest_project_name"] = latest_entry["project_name"]
+
+    children = sorted(
+        children_by_id.values(),
+        key=lambda group: (group["latest_project_name"], group["name"]),
+    )
     # 待確認學生的可選名冊項：同正規化姓名的既有名冊項
     for entry in unlinked_students:
         normalized_name = normalize_child_name(entry["student_name"])
@@ -145,7 +157,7 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
 
 
 def build_semester_export_zip(db: Session, period_ids: list[int], output_mode: str) -> bytes:
-    """打包學期匯出 ZIP：孩子資料夾/序號_期別-專案.pdf，附匯出說明列出缺漏。"""
+    """打包學期匯出 ZIP：班級（最新期別專案）/孩子/序號_期別-專案.pdf，附匯出說明列出缺漏。"""
     preview = build_semester_export_preview(db, period_ids)
     period_order = {period["id"]: index for index, period in enumerate(preview["periods"])}
     period_names = {period["id"]: period["name"] for period in preview["periods"]}
@@ -161,9 +173,10 @@ def build_semester_export_zip(db: Session, period_ids: list[int], output_mode: s
     output_buffer = io.BytesIO()
     with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
         for group in preview["children"]:
-            folder_name = make_safe_filename(group["name"])
+            class_folder = make_safe_filename(group["latest_project_name"])
+            folder_name = f"{class_folder}/{make_safe_filename(group['name'])}"
             if folder_name in used_folder_names:
-                # 同名不同人（admin 拆分過）：附 id 區分資料夾
+                # 同班同名不同人（admin 拆分過）：附 id 區分資料夾
                 folder_name = f"{folder_name}_{group['roster_child_id']}"
             used_folder_names.add(folder_name)
 

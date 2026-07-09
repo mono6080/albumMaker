@@ -219,11 +219,13 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
 
         with ZipFile(BytesIO(download.content)) as zip_archive:
             entry_names = zip_archive.namelist()
-        ming_entries = sorted(name for name in entry_names if name.startswith("王小明/"))
+        # 班級資料夾 = 所選範圍內最新期別的專案（王小明最後在期2的 project_b）
+        project_b_name = client.get(f"/api/projects/{project_b}").json()["name"]
+        ming_entries = sorted(name for name in entry_names if "/王小明/" in name)
         assert len(ming_entries) == 2
-        assert ming_entries[0].startswith("王小明/01_")
-        assert ming_entries[1].startswith("王小明/02_")
+        assert ming_entries[0].startswith(f"{project_b_name}/王小明/01_")
+        assert ming_entries[1].startswith(f"{project_b_name}/王小明/02_")
         assert all(name.endswith(".pdf") for name in ming_entries)
         # 未渲染的李小華不進 ZIP，但列在匯出說明
-        assert not any(name.startswith("李小華/") for name in entry_names)
+        assert not any("/李小華/" in name for name in entry_names)
         assert "匯出說明.txt" in entry_names

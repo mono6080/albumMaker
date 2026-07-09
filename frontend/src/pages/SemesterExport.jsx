@@ -271,9 +271,20 @@ export default function SemesterExport() {
               </tr>
             </thead>
             <tbody>
-              {preview.children.map(group => {
+              {preview.children.map((group, groupIndex) => {
                 const entriesByPeriod = buildEntriesByPeriod(group);
-                return (
+                // 班級（最新期別的專案）變化時插入分段列
+                const previousGroup = preview.children[groupIndex - 1];
+                const isNewClassSection =
+                  !previousGroup || previousGroup.latest_project_name !== group.latest_project_name;
+                return [
+                  isNewClassSection && (
+                    <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50/60">
+                      <td colSpan={periodColumns.length + 2} className="px-4 py-1.5 text-xs font-bold text-indigo-700">
+                        {group.latest_project_name}
+                      </td>
+                    </tr>
+                  ),
                   <tr key={group.roster_child_id} className="border-b border-gray-100 last:border-0">
                     <td className="px-4 py-2.5 font-medium text-gray-900">{group.name}</td>
                     {periodColumns.map(period => (
@@ -311,7 +322,7 @@ export default function SemesterExport() {
                             .filter(other => other.roster_child_id !== group.roster_child_id)
                             .map(other => (
                               <option key={other.roster_child_id} value={other.roster_child_id}>
-                                {other.name}
+                                {other.name}（{other.latest_project_name}）
                               </option>
                             ))}
                         </select>
@@ -326,8 +337,8 @@ export default function SemesterExport() {
                         </Button>
                       </div>
                     </td>
-                  </tr>
-                );
+                  </tr>,
+                ];
               })}
               {preview.children.length === 0 && (
                 <tr>

@@ -127,7 +127,7 @@
 | GET | `/semester-export?period_ids=…` | 匯出預覽：依名冊孩子分組的各期狀態 + 待確認清單 |
 | PUT | `/students/{sid}/link` | 配對到既有名冊項（`roster_child_id`）或建新項（`create_new`） |
 | POST | `/children/{cid}/merge/{target_cid}` | 名冊項合併（改名/誤拆修正） |
-| GET | `/semester-export/download?period_ids=…&mode=…` | ZIP：`孩子/序號_期別-專案.pdf`，缺漏列在 `匯出說明.txt` |
+| GET | `/semester-export/download?period_ids=…&mode=…` | ZIP：`班級/孩子/序號_期別-專案.pdf`（班級＝最新期別的專案），缺漏列在 `匯出說明.txt` |
 
 其他：`GET /api/health` 健康檢查。
 
