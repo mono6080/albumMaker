@@ -170,6 +170,48 @@ def test_ambiguous_name_requires_manual_link_and_merge():
         assert_status(missing_merge, 404)
 
 
+def roster_child_count(name: str) -> int:
+    from database import RosterChild
+
+    db = SessionLocal()
+    try:
+        return db.query(RosterChild).filter(RosterChild.name == name).count()
+    finally:
+        db.close()
+
+
+def test_orphaned_roster_children_are_cleaned_up():
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        project = create_period_template_project(client, period["id"])
+        students = add_students(client, project, ["孤兒測試甲", "孤兒測試乙"])
+
+        # 改名：舊名冊項變孤兒 → 刪除
+        rename = client.put(
+            f"/api/projects/{project}/students/{students['孤兒測試甲']}",
+            data={"name": "孤兒測試丙"},
+        )
+        assert_status(rename, 200)
+        assert roster_child_count("孤兒測試甲") == 0
+        assert roster_child_count("孤兒測試丙") == 1
+
+        # 刪學生：名冊項孤兒 → 刪除
+        delete = client.delete(f"/api/projects/{project}/students/{students['孤兒測試乙']}")
+        assert_status(delete, 200)
+        assert roster_child_count("孤兒測試乙") == 0
+
+        # link create_new 拆分：來源仍有其他學生時保留
+        project_b = create_period_template_project(client, period["id"])
+        students_b = add_students(client, project_b, ["孤兒測試丙"])
+        split = client.put(
+            f"/api/roster/students/{students_b['孤兒測試丙']}/link",
+            json={"create_new": True},
+        )
+        assert_status(split, 200)
+        assert roster_child_count("孤兒測試丙") == 2  # 原項仍有專案 A 的學生
+
+
 def test_copy_students_preserves_roster_links():
     with started_client() as client:
         login(client)

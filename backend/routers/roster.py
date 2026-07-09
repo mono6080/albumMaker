@@ -17,6 +17,7 @@ from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.roster_service import (
     build_semester_export_preview,
     build_semester_export_zip,
+    delete_roster_child_if_orphaned,
     link_student_to_new_child,
     merge_roster_children,
     render_missing_semester_albums,
@@ -62,14 +63,18 @@ def link_student_to_roster_child(
 ):
     """把學生連到指定名冊項，或建立新名冊項（同名不同人的拆分）。"""
     student = get_any_student_or_404(student_id, db)
+    previous_child_id = student.roster_child_id
     if payload.create_new:
         new_child = link_student_to_new_child(db, student)
-        db.commit()
-        return {"ok": True, "roster_child_id": new_child.id}
-    roster_child = get_roster_child_or_404(payload.roster_child_id, db)
-    student.roster_child_id = roster_child.id
+    else:
+        new_child = get_roster_child_or_404(payload.roster_child_id, db)
+        student.roster_child_id = new_child.id
+    # 換連結後舊名冊項變孤兒則清掉
+    if previous_child_id != new_child.id:
+        db.flush()
+        delete_roster_child_if_orphaned(db, previous_child_id)
     db.commit()
-    return {"ok": True, "roster_child_id": roster_child.id}
+    return {"ok": True, "roster_child_id": new_child.id}
 
 
 @router.post("/children/{child_id}/merge/{target_child_id}")

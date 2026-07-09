@@ -56,8 +56,10 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 - **自動連結**（`roster_service.resolve_roster_child_id()`，掛在學生批次新增與改名）：
   同名唯一命中 → 連既有名冊項；查無 → 自動建立；同名多筆（admin 拆分過）→
   `roster_child_id = NULL` 待確認，由學期匯出頁的複核流程處理
-- **name 不設 UNIQUE**：同名不同人時 admin 用 link `create_new` 拆成兩筆；
-  誤拆或改名造成的重複用 merge 併回
+- **name 不設 UNIQUE**：同名不同人時 admin 用 link `create_new` 拆成兩筆
+  （學期匯出頁的待確認區與各期明細的「拆分」按鈕）；誤拆或改名造成的重複用 merge 併回
+- **孤兒自動清理**：改名、換連結、刪學生後若名冊項沒有任何學生，
+  由 `delete_roster_child_if_orphaned()` 順手刪除，避免污染歧義判斷與合併選單
 - migration `_add_roster_children_and_backfill` 依同一正規化規則回填既有學生；
   冪等檢查鎖在 `students.roster_child_id` 欄位是否存在（避免覆蓋 admin 手動拆分）
 

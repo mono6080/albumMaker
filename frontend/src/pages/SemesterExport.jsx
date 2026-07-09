@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Archive, Download, GitMerge, Hammer, Loader2, RefreshCw, Search } from "lucide-react";
+import { Archive, Download, GitMerge, Hammer, Loader2, RefreshCw, Search, Unlink } from "lucide-react";
 
 import {
   fetchTemplateDepartments,
@@ -203,6 +203,24 @@ export default function SemesterExport() {
           await loadPreview();
         } catch {
           toast.error("建立失敗");
+        }
+      },
+    });
+  };
+
+  // 拆分：這筆學生其實是另一個同名孩子 → 拆成新名冊項（錯誤合併的反向操作）
+  const handleSplitEntry = (entry) => {
+    setConfirmModal({
+      message: `確定「${entry.project_name}」的「${entry.student_name}」不是同一個孩子？將把這筆拆成新的名冊項，其他期別不受影響。`,
+      confirmLabel: "拆分",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        try {
+          await linkStudentToNewRosterChild(entry.student_id);
+          toast.success("已拆成新名冊項");
+          await loadPreview();
+        } catch {
+          toast.error("拆分失敗");
         }
       },
     });
@@ -578,7 +596,7 @@ export default function SemesterExport() {
                         ) : (
                           <div className="flex flex-col gap-1">
                             {entriesByPeriod[period.id].map(entry => (
-                              <div key={entry.student_id} className="flex items-center gap-1.5">
+                              <div key={entry.student_id} className="group/entry flex items-center gap-1.5">
                                 <Badge tone={entry.has_pdf ? "success" : "warning"}>
                                   {entry.has_pdf ? "已渲染" : "未渲染"}
                                 </Badge>
@@ -592,6 +610,17 @@ export default function SemesterExport() {
                                 >
                                   {entry.project_name}
                                 </a>
+                                {/* 拆分：孩子有多筆時才有意義（錯誤合併的反向操作） */}
+                                {isAdmin && group.entries.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSplitEntry(entry)}
+                                    className="invisible rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500 group-hover/entry:visible"
+                                    title="這筆不是同一個孩子，拆成新名冊項"
+                                  >
+                                    <Unlink className="h-3 w-3" />
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>

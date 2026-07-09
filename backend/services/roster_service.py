@@ -48,6 +48,21 @@ def resolve_roster_child_id(db: Session, student_name: str) -> int | None:
     return new_child.id
 
 
+def delete_roster_child_if_orphaned(db: Session, roster_child_id: int | None) -> None:
+    """名冊項沒有任何學生連結時刪除（改名/換連結/刪學生後的孤兒清理）。
+
+    呼叫端須先 flush 讓連結變更生效；孤兒留著會污染同名歧義判斷與合併選單。
+    """
+    if roster_child_id is None:
+        return
+    still_linked = db.query(Student.id).filter(Student.roster_child_id == roster_child_id).first()
+    if still_linked:
+        return
+    orphaned_child = db.query(RosterChild).filter(RosterChild.id == roster_child_id).first()
+    if orphaned_child:
+        db.delete(orphaned_child)
+
+
 def link_student_to_new_child(db: Session, student: Student) -> RosterChild:
     """為學生建立全新名冊項並連結（同名不同人的拆分情境）。"""
     new_child = RosterChild(name=normalize_child_name(student.name) or student.name)

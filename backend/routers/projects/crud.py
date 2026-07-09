@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Student, Template, User, get_db
-from services.roster_service import resolve_roster_child_id
+from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
 from services.storage import get_storage
 from template_periods import department_label
 
@@ -338,9 +338,13 @@ def update_student(
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     if name:
+        previous_child_id = student.roster_child_id
         student.name = name
-        # 改名後重新解析名冊連結（改回同名孩子或成為新孩子）
+        # 改名後重新解析名冊連結（改回同名孩子或成為新孩子），舊名冊項變孤兒則清掉
         student.roster_child_id = resolve_roster_child_id(db, name)
+        if previous_child_id != student.roster_child_id:
+            db.flush()
+            delete_roster_child_if_orphaned(db, previous_child_id)
     db.commit()
     return {"ok": True}
 
@@ -356,7 +360,10 @@ def delete_student(
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
+    previous_child_id = student.roster_child_id
     db.delete(student)
+    db.flush()
+    delete_roster_child_if_orphaned(db, previous_child_id)
     db.commit()
     get_storage().delete_prefix(f"projects/proj{project_id}/photos/student{student_id}")
     return {"ok": True}
