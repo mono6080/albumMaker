@@ -30,6 +30,7 @@
 | 審閱留言 | ✓ | ✓ | ✓ | 唯讀 | — |
 | 完整（列印）畫質 PDF | ✓ | — | — | — | — |
 | 名冊配對與學期彙整匯出 | ✓ | — | — | — | — |
+| 學期進度檢視 | 全部 | — | 管轄老師的（唯讀） | — | — |
 | 使用者管理 | ✓ | — | — | — | — |
 | 登入 | ✓ | ✓ | ✓ | ✓ | 拒絕 |
 
@@ -118,15 +119,16 @@
 | GET | `…/{sid}/images`、`…/{sid}/images/{page_number}` | 學生圖片 ZIP / 單張 |
 | GET | `/{id}/download/all`、`/{id}/download/all/images` | 全體 PDF / 圖片 ZIP |
 
-### 名冊與學期匯出 `/api/roster`（皆 admin）
+### 名冊與學期匯出 `/api/roster`（admin；preview 另開放 supervisor）
 
 名冊自動連結與待確認規則見 [data-model.md 的孩子名冊](data-model.md#孩子名冊rosterchild自動長出不需維護)。
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | `/semester-export?period_ids=…` | 匯出預覽：依名冊孩子分組的各期狀態 + 待確認清單 |
+| GET | `/semester-export?period_ids=…` | 匯出預覽：依名冊孩子分組的各期狀態 + 待確認清單（supervisor 只回管轄老師的專案） |
 | PUT | `/students/{sid}/link` | 配對到既有名冊項（`roster_child_id`）或建新項（`create_new`） |
 | POST | `/children/{cid}/merge/{target_cid}` | 名冊項合併（改名/誤拆修正） |
+| POST | `/semester-export/render-missing` | 批次補渲染缺列印 PDF 的相冊（body：`period_ids`、選填 `roster_child_ids`） |
 | GET | `/semester-export/download?period_ids=…&mode=…&roster_child_ids=…` | ZIP：`班級/孩子/序號_期別-專案.pdf`（班級＝最新期別的專案），`roster_child_ids` 選填（不給＝全部），缺漏列在 `匯出說明.txt` |
 
 其他：`GET /api/health` 健康檢查。

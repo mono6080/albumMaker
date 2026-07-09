@@ -10,14 +10,16 @@ from sqlalchemy.orm import Session
 
 from auth import require_role
 from crud.roster_crud import get_any_student_or_404, get_roster_child_or_404
+from crud.user_crud import get_subordinate_user_ids
 from database import User, get_db
 from services.project_service import build_content_disposition_header
-from services.request_limiter import zip_build_limiter
+from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.roster_service import (
     build_semester_export_preview,
     build_semester_export_zip,
     link_student_to_new_child,
     merge_roster_children,
+    render_missing_semester_albums,
 )
 
 router = APIRouter(prefix="/api/roster", tags=["roster"])
@@ -29,14 +31,26 @@ class LinkStudentPayload(BaseModel):
     create_new: bool = False
 
 
+class RenderMissingPayload(BaseModel):
+    """補渲染 payload：期別範圍與（選填）勾選的孩子清單。"""
+    period_ids: list[int]
+    roster_child_ids: list[int] | None = None
+
+
 @router.get("/semester-export")
 def get_semester_export_preview(
     period_ids: list[int] = Query(..., min_length=1),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("admin", "supervisor")),
 ):
-    """回傳學期匯出預覽：依名冊孩子分組的各期狀態與待確認學生清單。"""
-    return build_semester_export_preview(db, period_ids)
+    """回傳學期匯出預覽：依名冊孩子分組的各期狀態與待確認學生清單。
+
+    主管唯讀：只看得到自己管轄老師（含自己）的專案，匯出與名冊操作仍限 admin。
+    """
+    owner_user_ids = None
+    if current_user.role == "supervisor":
+        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    return build_semester_export_preview(db, period_ids, owner_user_ids)
 
 
 @router.put("/students/{student_id}/link")
@@ -73,6 +87,17 @@ def merge_roster_child_into(
     moved_count = merge_roster_children(db, source_child, target_child)
     db.commit()
     return {"ok": True, "moved": moved_count}
+
+
+@router.post("/semester-export/render-missing")
+def render_missing_albums(
+    payload: RenderMissingPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """批次補渲染範圍內缺列印 PDF 的學生相冊。"""
+    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
+        return render_missing_semester_albums(db, payload.period_ids, payload.roster_child_ids)
 
 
 @router.get("/semester-export/download")

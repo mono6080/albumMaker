@@ -47,8 +47,11 @@ function Nav() {
   if (["admin", "teacher", "supervisor", "art_team"].includes(currentUser?.role)) {
     navLinks.push({ path: "/projects", label: "相本專案" });
   }
-  if (currentUser?.role === "admin") {
+  // 學期匯出：admin 可匯出，supervisor 唯讀檢視管轄老師的進度
+  if (["admin", "supervisor"].includes(currentUser?.role)) {
     navLinks.push({ path: "/admin/semester-export", label: "學期匯出" });
+  }
+  if (currentUser?.role === "admin") {
     navLinks.push({ path: "/admin/users", label: "使用者管理" });
   }
 
@@ -189,9 +192,9 @@ function AppContent() {
             </PrivateRoute>
           } />
 
-          {/* 學期彙整匯出（admin only） */}
+          {/* 學期彙整匯出（admin 匯出；supervisor 唯讀檢視） */}
           <Route path="/admin/semester-export" element={
-            <PrivateRoute allowedRoles={["admin"]}>
+            <PrivateRoute allowedRoles={["admin", "supervisor"]}>
               <SemesterExport />
             </PrivateRoute>
           } />

@@ -1,16 +1,23 @@
 # 名冊服務
 # 園所層級孩子名冊（RosterChild）的姓名正規化、自動連結，
-# 以及學期彙整匯出的分組預覽與 ZIP 打包
+# 以及學期彙整匯出的分組預覽、缺漏補渲染與 ZIP 打包
 
 import io
+import logging
 import re
 import zipfile
 
 from sqlalchemy.orm import Session, joinedload
 
 from database import Project, RosterChild, Student, TemplatePeriod
-from services.project_service import make_safe_filename
+from services.project_service import (
+    get_template_page_layouts,
+    make_safe_filename,
+    render_and_save_student_album,
+)
 from services.storage import get_storage
+
+logger = logging.getLogger(__name__)
 
 # 涵蓋半形與全形空白，正規化時一律移除
 _WHITESPACE_PATTERN = re.compile(r"[\s　]+")
@@ -76,9 +83,14 @@ def _load_export_periods(db: Session, period_ids: list[int]) -> list[TemplatePer
     )
 
 
-def _load_export_projects(db: Session, period_ids: list[int]) -> list[Project]:
-    """讀取匯出範圍內的專案（排除封存），含學生、名冊連結與帶班老師。"""
-    return (
+def _load_export_projects(
+    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+) -> list[Project]:
+    """讀取匯出範圍內的專案（排除封存），含學生、名冊連結與帶班老師。
+
+    owner_user_ids 給定時只回傳這些使用者擁有的專案（主管檢視自己管轄老師用）。
+    """
+    query = (
         db.query(Project)
         .options(
             joinedload(Project.students).joinedload(Student.roster_child),
@@ -86,8 +98,10 @@ def _load_export_projects(db: Session, period_ids: list[int]) -> list[Project]:
         )
         .filter(Project.template_period_id.in_(period_ids))
         .filter(Project.deleted_at.is_(None))
-        .all()
     )
+    if owner_user_ids is not None:
+        query = query.filter(Project.owner_id.in_(owner_user_ids))
+    return query.all()
 
 
 def _student_pdf_key(student: Student, output_mode: str) -> str | None:
@@ -98,10 +112,15 @@ def _student_pdf_key(student: Student, output_mode: str) -> str | None:
     return base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
 
 
-def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
-    """組出學期匯出預覽：依名冊孩子分組的各期狀態 + 待確認學生清單。"""
+def build_semester_export_preview(
+    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+) -> dict:
+    """組出學期匯出預覽：依名冊孩子分組的各期狀態 + 待確認學生清單。
+
+    owner_user_ids 給定時只納入這些使用者的專案（主管唯讀檢視）。
+    """
     periods = _load_export_periods(db, period_ids)
-    projects = _load_export_projects(db, period_ids)
+    projects = _load_export_projects(db, period_ids, owner_user_ids)
     storage = get_storage()
 
     children_by_id: dict[int, dict] = {}
@@ -159,6 +178,40 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
         "children": children,
         "unlinked": unlinked_students,
     }
+
+
+def render_missing_semester_albums(
+    db: Session,
+    period_ids: list[int],
+    roster_child_ids: list[int] | None = None,
+) -> dict:
+    """補渲染：找出範圍內缺列印 PDF 的學生相冊並逐一渲染，回傳成功數與失敗清單。
+
+    roster_child_ids 給定時只處理勾選的孩子（None 代表全部，含未配對學生）。
+    """
+    storage = get_storage()
+    selected_ids = set(roster_child_ids) if roster_child_ids is not None else None
+    rendered_count = 0
+    render_errors = []
+    for project in _load_export_projects(db, period_ids):
+        shared_page_layouts = None
+        for student in project.students:
+            if selected_ids is not None and student.roster_child_id not in selected_ids:
+                continue
+            pdf_key = _student_pdf_key(student, "print")
+            if pdf_key and storage.exists(pdf_key):
+                continue
+            # 版型逐專案讀一次，避免每個學生重複查詢
+            if shared_page_layouts is None:
+                shared_page_layouts = get_template_page_layouts(project)
+            try:
+                render_and_save_student_album(project, student, project.id, db, shared_page_layouts)
+                rendered_count += 1
+            except Exception as render_error:
+                db.rollback()
+                render_errors.append({"student": student.name, "project": project.name, "error": "渲染失敗"})
+                logger.error("補渲染失敗 project_id=%s student=%s: %s", project.id, student.name, render_error)
+    return {"rendered": rendered_count, "errors": render_errors}
 
 
 def build_semester_export_zip(

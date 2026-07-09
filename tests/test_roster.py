@@ -184,6 +184,101 @@ def test_roster_endpoints_require_admin():
         assert_status(link, 403)
 
 
+def test_supervisor_scoped_preview_and_no_export():
+    with started_client() as client:
+        login(client)
+        supervisor, supervisor_password = create_user(client, "supervisor")
+        managed_teacher, teacher_password = create_user(client, "teacher", supervisor_ids=[supervisor["id"]])
+        period = create_active_period(client)
+        # admin 自己的專案（主管不該看到）
+        admin_project = create_period_template_project(client, period["id"])
+        add_students(client, admin_project, ["管理員的學生"])
+
+        # 管轄老師的專案
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        teacher_detail = client.get("/api/projects/")
+        assert_status(teacher_detail, 200)
+        # 老師用 admin 建好的模板開自己的專案
+        client.cookies.clear()
+        login(client)
+        templates = client.get("/api/templates/")
+        template_id = templates.json()[0]["id"]
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        teacher_project_response = client.post(
+            "/api/projects/",
+            data={"name": unique_name("teacher_proj"), "template_id": str(template_id)},
+        )
+        assert_status(teacher_project_response, 201)
+        teacher_project = teacher_project_response.json()["id"]
+        add_students(client, teacher_project, ["老師的學生"])
+
+        # 主管：preview 只看得到管轄老師的專案
+        client.cookies.clear()
+        login(client, supervisor["username"], supervisor_password)
+        preview = client.get("/api/roster/semester-export", params={"period_ids": [period["id"]]})
+        assert_status(preview, 200)
+        child_names = {group["name"] for group in preview.json()["children"]}
+        assert "老師的學生" in child_names
+        assert "管理員的學生" not in child_names
+
+        # 匯出、補渲染、名冊操作對主管一律 403
+        download = client.get(
+            "/api/roster/semester-export/download", params={"period_ids": [period["id"]]}
+        )
+        assert_status(download, 403)
+        render_missing = client.post(
+            "/api/roster/semester-export/render-missing", json={"period_ids": [period["id"]]}
+        )
+        assert_status(render_missing, 403)
+
+
+def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        project = create_period_template_project(client, period["id"])
+        students = add_students(client, project, ["王小明", "李小華"])
+        # 只給王小明照片；兩人都未渲染
+        photo = client.post(
+            f"/api/projects/{project}/students/{students['王小明']}/pages/0/photos/1",
+            files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo, 200)
+
+        before = client.get("/api/roster/semester-export", params={"period_ids": [period["id"]]})
+        assert all(
+            not entry["has_pdf"]
+            for group in before.json()["children"]
+            for entry in group["entries"]
+        )
+
+        render_missing = client.post(
+            "/api/roster/semester-export/render-missing", json={"period_ids": [period["id"]]}
+        )
+        assert_status(render_missing, 200)
+        result = render_missing.json()
+        assert result["rendered"] == 2
+        assert result["errors"] == []
+
+        after = client.get("/api/roster/semester-export", params={"period_ids": [period["id"]]})
+        assert all(
+            entry["has_pdf"]
+            for group in after.json()["children"]
+            for entry in group["entries"]
+        )
+
+        # 再跑一次：已全數渲染，rendered=0（冪等）
+        rerun = client.post(
+            "/api/roster/semester-export/render-missing", json={"period_ids": [period["id"]]}
+        )
+        assert_status(rerun, 200)
+        assert rerun.json()["rendered"] == 0
+
+
 def test_semester_export_zip_structure(monkeypatch, tmp_path):
     use_tmp_uploads(monkeypatch, tmp_path)
 

@@ -1,10 +1,10 @@
-// 學期彙整匯出頁（admin 專用）
-// 選擇部門與期別範圍 → 依名冊孩子分組預覽各期相冊狀態 →
-// 處理待確認的同名歧義配對 → 下載「孩子/期別.pdf」結構的 ZIP
+// 學期彙整匯出頁（admin 匯出；supervisor 唯讀檢視管轄老師）
+// 選擇部門與期別範圍 → 整備度摘要 + 搜尋過濾 → 依名冊孩子分組預覽各期相冊狀態 →
+// 處理待確認配對、補渲染缺漏 → 勾選並下載「班級/孩子/期別.pdf」結構的 ZIP
 
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Archive, Download, GitMerge, Loader2, RefreshCw } from "lucide-react";
+import { Archive, Download, GitMerge, Hammer, Loader2, RefreshCw, Search } from "lucide-react";
 
 import {
   fetchTemplateDepartments,
@@ -16,9 +16,11 @@ import {
   linkStudentToNewRosterChild,
   linkStudentToRosterChild,
   mergeRosterChildren,
+  renderMissingSemesterAlbums,
 } from "../api/rosterApi";
 import { renderClient } from "../api/authApi";
 import { downloadApiBlob } from "../utils/browserFiles";
+import { usePermissions } from "../hooks/usePermissions";
 import ConfirmModal from "../components/ConfirmModal";
 import { Badge, Button, PageHeader, SegmentedControl, Surface, fieldControlClass } from "../components/ui";
 
@@ -38,7 +40,29 @@ function TriStateCheckbox({ checked, indeterminate, onChange, title }) {
   );
 }
 
+/** 整備度摘要的可點擊過濾 chip */
+function StatChip({ label, count, tone, isActive, onClick }) {
+  const toneClass = {
+    success: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    warning: "bg-amber-50 text-amber-700 border-amber-200",
+    neutral: "bg-gray-50 text-gray-600 border-gray-200",
+  }[tone] ?? "bg-gray-50 text-gray-600 border-gray-200";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-shadow ${toneClass} ${
+        isActive ? "ring-2 ring-indigo-400" : "hover:shadow-sm"
+      }`}
+    >
+      {label}
+      <span className="font-bold">{count}</span>
+    </button>
+  );
+}
+
 export default function SemesterExport() {
+  const { isAdmin } = usePermissions();
   const [departments, setDepartments] = useState([]);
   const [activeDepartment, setActiveDepartment] = useState(null);
   const [allPeriods, setAllPeriods] = useState([]);
@@ -46,11 +70,15 @@ export default function SemesterExport() {
   const [preview, setPreview] = useState(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isRenderingMissing, setIsRenderingMissing] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
   // 各孩子列的合併目標選擇（roster_child_id → 目標 id 字串）
   const [mergeTargets, setMergeTargets] = useState({});
   // 勾選要匯出的孩子（roster_child_id 集合），載入預覽時預設全選
   const [selectedChildIds, setSelectedChildIds] = useState(new Set());
+  // 搜尋與快速過濾（all / unrendered / missingPeriod）
+  const [searchText, setSearchText] = useState("");
+  const [quickFilter, setQuickFilter] = useState("all");
 
   useEffect(() => {
     const loadOptions = async () => {
@@ -94,12 +122,64 @@ export default function SemesterExport() {
       const response = await fetchSemesterExportPreview(selectedPeriodIds);
       setPreview(response.data);
       setMergeTargets({});
+      setSearchText("");
+      setQuickFilter("all");
       setSelectedChildIds(new Set(response.data.children.map(group => group.roster_child_id)));
     } catch {
       toast.error("載入匯出預覽失敗");
     }
     setIsLoadingPreview(false);
   };
+
+  // ── 整備度統計與缺期判斷 ────────────────────────────────────────────────────
+  // 缺期定義：孩子首次出現的期別之後（含中斷與後段）沒有資料的期別
+
+  const exportStats = useMemo(() => {
+    if (!preview) return null;
+    const periodIndexById = new Map(preview.periods.map((period, index) => [period.id, index]));
+    let readyBooks = 0;
+    let missingBooks = 0;
+    const unrenderedChildIds = new Set();
+    const missingPeriodChildIds = new Set();
+    const firstPresentIndexByChild = new Map();
+    for (const group of preview.children) {
+      const presentIndexes = new Set(group.entries.map(entry => periodIndexById.get(entry.period_id)));
+      const firstPresentIndex = Math.min(...presentIndexes);
+      firstPresentIndexByChild.set(group.roster_child_id, firstPresentIndex);
+      for (const entry of group.entries) {
+        if (entry.has_pdf) readyBooks += 1;
+        else missingBooks += 1;
+      }
+      if (group.entries.some(entry => !entry.has_pdf)) {
+        unrenderedChildIds.add(group.roster_child_id);
+      }
+      for (let periodIndex = firstPresentIndex + 1; periodIndex < preview.periods.length; periodIndex++) {
+        if (!presentIndexes.has(periodIndex)) {
+          missingPeriodChildIds.add(group.roster_child_id);
+          break;
+        }
+      }
+    }
+    return { readyBooks, missingBooks, unrenderedChildIds, missingPeriodChildIds, firstPresentIndexByChild };
+  }, [preview]);
+
+  // ── 搜尋與快速過濾 ──────────────────────────────────────────────────────────
+
+  const filteredChildren = useMemo(() => {
+    if (!preview || !exportStats) return [];
+    const query = searchText.replace(/[\s\u3000]+/g, "");  // u3000＝全形空白
+    return preview.children.filter(group => {
+      if (query) {
+        const haystack = `${group.name}${group.latest_project_name}${group.latest_project_owner_name ?? ""}`;
+        if (!haystack.includes(query)) return false;
+      }
+      if (quickFilter === "unrendered") return exportStats.unrenderedChildIds.has(group.roster_child_id);
+      if (quickFilter === "missingPeriod") return exportStats.missingPeriodChildIds.has(group.roster_child_id);
+      return true;
+    });
+  }, [preview, exportStats, searchText, quickFilter]);
+
+  // ── 名冊配對與合併（admin） ──────────────────────────────────────────────────
 
   const handleLinkStudent = async (studentId, rosterChildId) => {
     try {
@@ -149,6 +229,29 @@ export default function SemesterExport() {
     });
   };
 
+  // ── 補渲染缺漏（admin） ─────────────────────────────────────────────────────
+
+  const handleRenderMissing = (rosterChildIds, missingCount, scopeLabel) => {
+    setConfirmModal({
+      message: `將補渲染${scopeLabel}缺漏的 ${missingCount} 本相冊，依數量可能需要數分鐘，期間請不要關閉頁面。`,
+      confirmLabel: "開始渲染",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        setIsRenderingMissing(true);
+        try {
+          const response = await renderMissingSemesterAlbums(selectedPeriodIds, rosterChildIds);
+          const { rendered, errors } = response.data;
+          if (errors.length > 0) toast.error(`完成 ${rendered} 本，失敗 ${errors.length} 本`);
+          else toast.success(`已渲染 ${rendered} 本`);
+          await loadPreview();
+        } catch {
+          toast.error("補渲染失敗");
+        }
+        setIsRenderingMissing(false);
+      },
+    });
+  };
+
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
@@ -188,8 +291,11 @@ export default function SemesterExport() {
     });
   };
 
-
   const periodColumns = preview?.periods ?? [];
+  // 合併欄只有 admin 看得到，表格總欄數隨之增減
+  const totalColumnCount = periodColumns.length + 1 + (isAdmin ? 1 : 0);
+  const visibleChildIds = filteredChildren.map(group => group.roster_child_id);
+  const visibleSelectedCount = visibleChildIds.filter(childId => selectedChildIds.has(childId)).length;
 
   // 每個孩子依期別整理格位：period_id → entries
   const buildEntriesByPeriod = (group) => {
@@ -207,7 +313,9 @@ export default function SemesterExport() {
         icon={Archive}
         iconTone="review"
         title="學期彙整匯出"
-        subtitle="選擇期別範圍，依名冊孩子分組下載整學期相冊 PDF"
+        subtitle={isAdmin
+          ? "選擇期別範圍，依名冊孩子分組下載整學期相冊 PDF"
+          : "檢視管轄老師各期相冊的完成進度（唯讀）"}
       />
 
       {/* 期別選擇 */}
@@ -261,6 +369,63 @@ export default function SemesterExport() {
         </div>
       </Surface>
 
+      {/* 整備度摘要 + 搜尋過濾 */}
+      {preview && exportStats && (
+        <Surface padding="sm" className="mb-4 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                value={searchText}
+                onChange={event => setSearchText(event.target.value)}
+                placeholder="搜尋孩子 / 班級 / 老師"
+                className="w-48 rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+            <StatChip
+              label="全部孩子"
+              count={preview.children.length}
+              tone="neutral"
+              isActive={quickFilter === "all"}
+              onClick={() => setQuickFilter("all")}
+            />
+            <StatChip label="已就緒" count={`${exportStats.readyBooks} 本`} tone="success" isActive={false} onClick={() => setQuickFilter("all")} />
+            <StatChip
+              label="未渲染"
+              count={`${exportStats.missingBooks} 本`}
+              tone="warning"
+              isActive={quickFilter === "unrendered"}
+              onClick={() => setQuickFilter(quickFilter === "unrendered" ? "all" : "unrendered")}
+            />
+            <StatChip
+              label="缺期"
+              count={`${exportStats.missingPeriodChildIds.size} 位`}
+              tone="warning"
+              isActive={quickFilter === "missingPeriod"}
+              onClick={() => setQuickFilter(quickFilter === "missingPeriod" ? "all" : "missingPeriod")}
+            />
+            {preview.unlinked.length > 0 && (
+              <StatChip label="待確認" count={`${preview.unlinked.length} 位`} tone="warning" isActive={false} onClick={() => {}} />
+            )}
+            {isAdmin && exportStats.missingBooks > 0 && (
+              <Button
+                variant="secondary"
+                size="xs"
+                className="ml-auto"
+                disabled={isRenderingMissing}
+                onClick={() => handleRenderMissing(null, exportStats.missingBooks, "全部")}
+              >
+                {isRenderingMissing
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Hammer className="h-3.5 w-3.5" />}
+                補渲染全部缺漏（{exportStats.missingBooks} 本）
+              </Button>
+            )}
+          </div>
+        </Surface>
+      )}
+
       {/* 待確認配對 */}
       {preview && preview.unlinked.length > 0 && (
         <Surface className="mb-4 max-h-52 shrink-0 overflow-auto border-amber-200 bg-amber-50/60">
@@ -283,21 +448,23 @@ export default function SemesterExport() {
                     <span className="ml-2 text-xs text-gray-400">老師:{entry.owner_name}</span>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {entry.candidates.map(candidate => (
-                    <Button
-                      key={candidate.roster_child_id}
-                      variant="secondary"
-                      size="xs"
-                      onClick={() => handleLinkStudent(entry.student_id, candidate.roster_child_id)}
-                    >
-                      就是「{candidate.name}」#{candidate.roster_child_id}
+                {isAdmin && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {entry.candidates.map(candidate => (
+                      <Button
+                        key={candidate.roster_child_id}
+                        variant="secondary"
+                        size="xs"
+                        onClick={() => handleLinkStudent(entry.student_id, candidate.roster_child_id)}
+                      >
+                        就是「{candidate.name}」#{candidate.roster_child_id}
+                      </Button>
+                    ))}
+                    <Button variant="neutral" size="xs" onClick={() => handleCreateNewChild(entry)}>
+                      是新的孩子
                     </Button>
-                  ))}
-                  <Button variant="neutral" size="xs" onClick={() => handleCreateNewChild(entry)}>
-                    是新的孩子
-                  </Button>
-                </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -313,49 +480,71 @@ export default function SemesterExport() {
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
                 <th className="sticky left-0 top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">
                   <span className="flex items-center gap-2">
-                    <TriStateCheckbox
-                      checked={selectedChildIds.size === preview.children.length && preview.children.length > 0}
-                      indeterminate={selectedChildIds.size > 0}
-                      onChange={event => setManySelected(preview.children.map(group => group.roster_child_id), event.target.checked)}
-                      title="全部全選 / 取消"
-                    />
-                    孩子（已選 {selectedChildIds.size}/{preview.children.length}）
+                    {isAdmin && (
+                      <TriStateCheckbox
+                        checked={visibleSelectedCount === visibleChildIds.length && visibleChildIds.length > 0}
+                        indeterminate={visibleSelectedCount > 0}
+                        onChange={event => setManySelected(visibleChildIds, event.target.checked)}
+                        title="全部全選 / 取消（套用到目前過濾結果）"
+                      />
+                    )}
+                    孩子（{isAdmin ? `已選 ${selectedChildIds.size}/` : ""}{preview.children.length}）
                   </span>
                 </th>
                 {periodColumns.map(period => (
                   <th key={period.id} className="sticky top-0 z-20 border-b border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">{period.name}</th>
                 ))}
-                <th className="sticky right-0 top-0 z-30 border-b border-l border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">合併</th>
+                {isAdmin && (
+                  <th className="sticky right-0 top-0 z-30 border-b border-l border-gray-200 bg-gray-50 px-4 py-2.5 font-medium">合併</th>
+                )}
               </tr>
             </thead>
             <tbody>
-              {preview.children.map((group, groupIndex) => {
+              {filteredChildren.map((group, groupIndex) => {
                 const entriesByPeriod = buildEntriesByPeriod(group);
+                const firstPresentIndex = exportStats.firstPresentIndexByChild.get(group.roster_child_id) ?? 0;
                 // 班級（最新期別的專案）變化時插入分段列
-                const previousGroup = preview.children[groupIndex - 1];
+                const previousGroup = filteredChildren[groupIndex - 1];
                 const isNewClassSection =
                   !previousGroup || previousGroup.latest_project_name !== group.latest_project_name;
-                const classChildIds = preview.children
-                  .filter(other => other.latest_project_name === group.latest_project_name)
-                  .map(other => other.roster_child_id);
+                const classChildren = filteredChildren.filter(
+                  other => other.latest_project_name === group.latest_project_name
+                );
+                const classChildIds = classChildren.map(other => other.roster_child_id);
                 const classSelectedCount = classChildIds.filter(childId => selectedChildIds.has(childId)).length;
+                const classMissingCount = classChildren.reduce(
+                  (count, other) => count + other.entries.filter(entry => !entry.has_pdf).length,
+                  0,
+                );
                 return [
                   isNewClassSection && (
                     <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50">
-                      <td colSpan={periodColumns.length + 2} className="py-1.5 text-xs text-indigo-700">
+                      <td colSpan={totalColumnCount} className="py-1.5 text-xs text-indigo-700">
                         {/* 班級標題跟著橫向捲動固定在左側 */}
                         <span className="sticky left-4 inline-flex items-center gap-2">
-                          <TriStateCheckbox
-                            checked={classSelectedCount === classChildIds.length}
-                            indeterminate={classSelectedCount > 0}
-                            onChange={event => setManySelected(classChildIds, event.target.checked)}
-                            title="整班全選 / 取消"
-                          />
+                          {isAdmin && (
+                            <TriStateCheckbox
+                              checked={classSelectedCount === classChildIds.length}
+                              indeterminate={classSelectedCount > 0}
+                              onChange={event => setManySelected(classChildIds, event.target.checked)}
+                              title="整班全選 / 取消"
+                            />
+                          )}
                           <span className="font-bold">{group.latest_project_name}</span>
                           {group.latest_project_owner_name && (
                             <span className="font-normal text-indigo-500">
                               老師：{group.latest_project_owner_name}
                             </span>
+                          )}
+                          {isAdmin && classMissingCount > 0 && (
+                            <button
+                              type="button"
+                              disabled={isRenderingMissing}
+                              onClick={() => handleRenderMissing(classChildIds, classMissingCount, `「${group.latest_project_name}」`)}
+                              className="rounded border border-indigo-200 bg-white px-1.5 py-0.5 text-[11px] text-indigo-600 hover:bg-indigo-100 disabled:opacity-40"
+                            >
+                              補渲染 {classMissingCount}
+                            </button>
                           )}
                         </span>
                       </td>
@@ -363,20 +552,29 @@ export default function SemesterExport() {
                   ),
                   <tr key={group.roster_child_id} className="border-b border-gray-100 last:border-0">
                     <td className="sticky left-0 z-10 border-r border-gray-100 bg-white px-4 py-2.5 font-medium text-gray-900">
-                      <label className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          className="accent-indigo-600"
-                          checked={selectedChildIds.has(group.roster_child_id)}
-                          onChange={() => toggleChildSelected(group.roster_child_id)}
-                        />
-                        {group.name}
-                      </label>
+                      {isAdmin ? (
+                        <label className="flex cursor-pointer items-center gap-2">
+                          <input
+                            type="checkbox"
+                            className="accent-indigo-600"
+                            checked={selectedChildIds.has(group.roster_child_id)}
+                            onChange={() => toggleChildSelected(group.roster_child_id)}
+                          />
+                          {group.name}
+                        </label>
+                      ) : (
+                        group.name
+                      )}
                     </td>
-                    {periodColumns.map(period => (
+                    {periodColumns.map((period, periodIndex) => (
                       <td key={period.id} className="px-4 py-2.5">
                         {(entriesByPeriod[period.id] ?? []).length === 0 ? (
-                          <span className="text-gray-300">—</span>
+                          // 缺期標記：入園後的期別沒資料（可能漏建或離園）用 amber 提示
+                          periodIndex > firstPresentIndex ? (
+                            <Badge tone="warning">無資料</Badge>
+                          ) : (
+                            <span className="text-gray-300" title="該期尚未入園">—</span>
+                          )
                         ) : (
                           <div className="flex flex-col gap-1">
                             {entriesByPeriod[period.id].map(entry => (
@@ -384,54 +582,65 @@ export default function SemesterExport() {
                                 <Badge tone={entry.has_pdf ? "success" : "warning"}>
                                   {entry.has_pdf ? "已渲染" : "未渲染"}
                                 </Badge>
-                                <span className="text-xs text-gray-500">{entry.project_name}</span>
+                                {/* 點擊班級名直接開該專案的審閱頁 */}
+                                <a
+                                  href={`/projects/${entry.project_id}/review`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-gray-500 underline-offset-2 hover:text-indigo-600 hover:underline"
+                                  title="開啟專案審閱頁"
+                                >
+                                  {entry.project_name}
+                                </a>
                               </div>
                             ))}
                           </div>
                         )}
                       </td>
                     ))}
-                    <td className="sticky right-0 z-10 border-l border-gray-100 bg-white px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        {/* fieldControlClass 內含 w-full，用外層 div 限寬避免合併欄過寬 */}
-                        <select
-                          value={mergeTargets[group.roster_child_id] ?? ""}
-                          onChange={event =>
-                            setMergeTargets(prev => ({
-                              ...prev,
-                              [group.roster_child_id]: event.target.value,
-                            }))
-                          }
-                          style={{ width: "9rem" }}
-                          className={`${fieldControlClass} py-1 text-xs`}
-                        >
-                          <option value="">同一個孩子是…</option>
-                          {preview.children
-                            .filter(other => other.roster_child_id !== group.roster_child_id)
-                            .map(other => (
-                              <option key={other.roster_child_id} value={other.roster_child_id}>
-                                {other.name}（{other.latest_project_name}）
-                              </option>
-                            ))}
-                        </select>
-                        <Button
-                          variant="neutral"
-                          size="xs"
-                          disabled={!mergeTargets[group.roster_child_id]}
-                          onClick={() => handleMerge(group, mergeTargets[group.roster_child_id])}
-                          title="把這一列併入所選孩子"
-                        >
-                          <GitMerge className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </td>
+                    {isAdmin && (
+                      <td className="sticky right-0 z-10 border-l border-gray-100 bg-white px-4 py-2.5">
+                        <div className="flex items-center gap-1">
+                          {/* fieldControlClass 內含 w-full，改用 style 限寬避免合併欄過寬 */}
+                          <select
+                            value={mergeTargets[group.roster_child_id] ?? ""}
+                            onChange={event =>
+                              setMergeTargets(prev => ({
+                                ...prev,
+                                [group.roster_child_id]: event.target.value,
+                              }))
+                            }
+                            style={{ width: "9rem" }}
+                            className={`${fieldControlClass} py-1 text-xs`}
+                          >
+                            <option value="">同一個孩子是…</option>
+                            {preview.children
+                              .filter(other => other.roster_child_id !== group.roster_child_id)
+                              .map(other => (
+                                <option key={other.roster_child_id} value={other.roster_child_id}>
+                                  {other.name}（{other.latest_project_name}）
+                                </option>
+                              ))}
+                          </select>
+                          <Button
+                            variant="neutral"
+                            size="xs"
+                            disabled={!mergeTargets[group.roster_child_id]}
+                            onClick={() => handleMerge(group, mergeTargets[group.roster_child_id])}
+                            title="把這一列併入所選孩子"
+                          >
+                            <GitMerge className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    )}
                   </tr>,
                 ];
               })}
-              {preview.children.length === 0 && (
+              {filteredChildren.length === 0 && (
                 <tr>
-                  <td colSpan={periodColumns.length + 2} className="px-4 py-8 text-center text-gray-400">
-                    所選期別內沒有學生
+                  <td colSpan={totalColumnCount} className="px-4 py-8 text-center text-gray-400">
+                    {preview.children.length === 0 ? "所選期別內沒有學生" : "沒有符合搜尋 / 過濾條件的孩子"}
                   </td>
                 </tr>
               )}
@@ -440,8 +649,8 @@ export default function SemesterExport() {
         </Surface>
       )}
 
-      {/* 下載（常駐佈局底部，不覆蓋表格卷軸） */}
-      {preview && preview.children.length > 0 && (
+      {/* 下載（admin；常駐佈局底部，不覆蓋表格卷軸） */}
+      {isAdmin && preview && preview.children.length > 0 && (
         <div className="flex shrink-0 items-center justify-end gap-3">
           {preview.unlinked.length > 0 && (
             <span className="text-xs text-amber-600">
