@@ -17,10 +17,12 @@ frontend/dist/
 
 # Uploads & generated output
 backend/uploads/
+backend/uploads_bak*/
 backend/.r2-cache/
 
 # DB
 *.db
+*.db.bak*
 *.sqlite
 *.sqlite3
 
