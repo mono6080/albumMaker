@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import {
   fetchAllProjects,
   fetchArchivedProjects,
+  copyStudentsFromProject,
   createProject,
   deleteProject,
   renameProject,
@@ -341,6 +342,7 @@ export default function ProjectList() {
     department: "infant",
     period_id: "",
     template_id: "",
+    copy_source_id: "",  // 從既有專案複製學生名單（選填）
   });
   const [showForm, setShowForm] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
@@ -498,9 +500,19 @@ export default function ProjectList() {
     if (!composedName.trim()) return toast.error("請填寫名稱");
     setCreating(true);
     try {
-      await createProject(composedName, form.template_id, form.department, form.period_id);
-      toast.success("專案已建立");
-      setForm(current => ({ ...current, customName: "", template_id: "" }));
+      const created = await createProject(composedName, form.template_id, form.department, form.period_id);
+      // 選了來源專案就順帶複製學生名單（名冊連結一併延續）
+      if (form.copy_source_id) {
+        try {
+          const copyResult = await copyStudentsFromProject(created.data.id, Number(form.copy_source_id));
+          toast.success(`專案已建立，已複製 ${copyResult.data.created.length} 位學生`);
+        } catch {
+          toast.error("專案已建立，但複製學生名單失敗，請至名單頁手動新增");
+        }
+      } else {
+        toast.success("專案已建立");
+      }
+      setForm(current => ({ ...current, customName: "", template_id: "", copy_source_id: "" }));
       setShowForm(false);
       // 建立後 fetch 完整清單以取得 id / student_count / owner_name
       const r = await fetchAllProjects();
@@ -792,6 +804,22 @@ export default function ProjectList() {
                 value={form.customName}
                 onChange={e => setForm(f => ({ ...f, customName: e.target.value }))}
               />
+            </FormField>
+            <FormField label="複製學生名單（選填）" hint="從上一期的專案帶入全班名單，不複製照片與文字">
+              <select
+                className={fieldControlClass}
+                value={form.copy_source_id}
+                onChange={e => setForm(f => ({ ...f, copy_source_id: e.target.value }))}
+              >
+                <option value="">不複製</option>
+                {projects
+                  .filter(project => project.student_count > 0)
+                  .map(project => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}（{project.student_count} 位學生）
+                    </option>
+                  ))}
+              </select>
             </FormField>
           </div>
           {composedName && (

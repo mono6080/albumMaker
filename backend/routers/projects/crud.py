@@ -21,7 +21,15 @@ from ._helpers import (
     assert_project_readable,
     assert_project_writable,
 )
-from .schemas import BatchAddResult, OkResult, PageSkipPayload, ProjectCreated, ProjectDetail, ProjectSummary
+from .schemas import (
+    BatchAddResult,
+    CopyStudentsPayload,
+    OkResult,
+    PageSkipPayload,
+    ProjectCreated,
+    ProjectDetail,
+    ProjectSummary,
+)
 
 router = APIRouter()
 PROJECT_ARCHIVE_DAYS = 30
@@ -268,6 +276,49 @@ def batch_add_students(
         )
         db.add(new_student)
         created_names.append(student_name)
+        next_order_index += 1
+
+    db.commit()
+    return {"created": created_names, "skipped": skipped_names}
+
+
+@router.post("/{project_id}/students/copy", response_model=BatchAddResult)
+def copy_students_from_project(
+    project_id: int,
+    payload: CopyStudentsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """從既有專案複製學生名單（含名冊連結），同名學生自動跳過。
+
+    直接沿用來源學生的 roster_child_id，跨期身分 100% 延續、不經同名解析。
+    """
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
+    source_project = get_project_or_404(payload.source_project_id, db)
+    assert_project_readable(source_project, current_user, db)
+
+    existing_names = {student.name for student in project.students}
+    created_names = []
+    skipped_names = []
+    next_order_index = max(
+        (student.order_index for student in project.students),
+        default=-1
+    ) + 1
+
+    for source_student in source_project.students:
+        if source_student.name in existing_names:
+            skipped_names.append(source_student.name)
+            continue
+        existing_names.add(source_student.name)
+        db.add(Student(
+            project_id=project_id,
+            name=source_student.name,
+            order_index=next_order_index,
+            pages_data_json="[]",
+            roster_child_id=source_student.roster_child_id,
+        ))
+        created_names.append(source_student.name)
         next_order_index += 1
 
     db.commit()

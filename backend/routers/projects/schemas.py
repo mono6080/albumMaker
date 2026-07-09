@@ -120,6 +120,11 @@ class BatchAddResult(BaseModel):
     skipped: list[str]
 
 
+class CopyStudentsPayload(BaseModel):
+    """從既有專案複製學生名單的 payload"""
+    source_project_id: int
+
+
 class RenderStudentError(BaseModel):
     """單生渲染失敗紀錄"""
     student: str

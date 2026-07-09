@@ -49,6 +49,10 @@ export const restoreProject = (projectId) =>
 export const batchAddStudents = (projectId, studentNames) =>
   apiClient.post(`/projects/${projectId}/students/batch`, studentNames);
 
+/** 從既有專案複製學生名單（含名冊連結），同名學生自動跳過 */
+export const copyStudentsFromProject = (projectId, sourceProjectId) =>
+  apiClient.post(`/projects/${projectId}/students/copy`, { source_project_id: sourceProjectId });
+
 /** 更新學生姓名 */
 export const renameStudent = (projectId, studentId, newName) =>
   apiClient.put(

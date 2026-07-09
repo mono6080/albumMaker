@@ -101,6 +101,7 @@
 | GET / PATCH / DELETE | `/{id}` | 詳情（含學生）/ 改名 / 軟刪封存 |
 | POST | `/{id}/restore` | 復原封存 |
 | POST | `/{id}/students/batch` | 批次加學生 |
+| POST | `/{id}/students/copy` | 從既有專案複製學生名單（沿用名冊連結，同名跳過） |
 | PUT / DELETE | `/{id}/students/{sid}` | 改名 / 刪除 |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |

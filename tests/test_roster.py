@@ -170,6 +170,37 @@ def test_ambiguous_name_requires_manual_link_and_merge():
         assert_status(missing_merge, 404)
 
 
+def test_copy_students_preserves_roster_links():
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        source_project = create_period_template_project(client, period["id"])
+        target_project = create_period_template_project(client, period["id"])
+
+        source_students = add_students(client, source_project, ["王小明", "李小華"])
+        # 目標專案先有一位同名學生 → 複製時跳過
+        add_students(client, target_project, ["王小明"])
+
+        copy_response = client.post(
+            f"/api/projects/{target_project}/students/copy",
+            json={"source_project_id": source_project},
+        )
+        assert_status(copy_response, 200)
+        assert copy_response.json() == {"created": ["李小華"], "skipped": ["王小明"]}
+
+        # 名冊連結直接沿用來源，不經同名解析
+        target_detail = client.get(f"/api/projects/{target_project}")
+        target_ids = {student["name"]: student["id"] for student in target_detail.json()["students"]}
+        assert roster_child_id_of(target_ids["李小華"]) == roster_child_id_of(source_students["李小華"])
+
+        # 來源專案不存在 → 404
+        missing_source = client.post(
+            f"/api/projects/{target_project}/students/copy",
+            json={"source_project_id": 999999},
+        )
+        assert_status(missing_source, 404)
+
+
 def test_roster_endpoints_require_admin():
     with started_client() as client:
         login(client)
