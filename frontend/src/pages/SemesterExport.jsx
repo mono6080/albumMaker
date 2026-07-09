@@ -158,7 +158,8 @@ export default function SemesterExport() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto">
+    // 滿版直欄佈局：表格吃剩餘高度並內部滾動，X 卷軸落在表格底、下載列上方不被遮蓋
+    <div className="mx-auto flex h-[calc(100svh-6rem)] max-w-6xl flex-col sm:h-[calc(100svh-8rem)]">
       <PageHeader
         icon={Archive}
         iconTone="review"
@@ -167,7 +168,7 @@ export default function SemesterExport() {
       />
 
       {/* 期別選擇 */}
-      <Surface className="mb-4">
+      <Surface className="mb-4 shrink-0">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {departments.length > 0 && (
             <SegmentedControl
@@ -219,7 +220,7 @@ export default function SemesterExport() {
 
       {/* 待確認配對 */}
       {preview && preview.unlinked.length > 0 && (
-        <Surface className="mb-4 border-amber-200 bg-amber-50/60">
+        <Surface className="mb-4 max-h-52 shrink-0 overflow-auto border-amber-200 bg-amber-50/60">
           <h2 className="mb-2 text-sm font-bold text-amber-800">
             待確認配對（{preview.unlinked.length}）
           </h2>
@@ -259,7 +260,7 @@ export default function SemesterExport() {
 
       {/* 分組預覽表 */}
       {preview && (
-        <Surface padding="none" className="mb-4 max-h-[70vh] overflow-auto">
+        <Surface padding="none" className="mb-4 min-h-0 flex-1 overflow-auto">
           <table className="w-full min-w-max text-sm">
             {/* 表頭與左右欄固定：表格改為容器內部滾動，th/td 各自 sticky 並帶實色背景 */}
             <thead>
@@ -356,9 +357,9 @@ export default function SemesterExport() {
         </Surface>
       )}
 
-      {/* 下載（固定在視窗底部） */}
+      {/* 下載（常駐佈局底部，不覆蓋表格卷軸） */}
       {preview && preview.children.length > 0 && (
-        <div className="sticky bottom-3 z-20 flex items-center justify-end gap-3 rounded-lg border border-gray-200 bg-white/90 p-3 shadow-sm backdrop-blur">
+        <div className="flex shrink-0 items-center justify-end gap-3">
           {preview.unlinked.length > 0 && (
             <span className="text-xs text-amber-600">
               尚有 {preview.unlinked.length} 位學生未配對，不會納入匯出
