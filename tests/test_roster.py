@@ -1,0 +1,229 @@
+# 名冊與學期彙整匯出測試
+# 覆蓋：學生建立/改名的名冊自動連結、同名歧義待確認、link/merge 端點、
+# 學期匯出預覽分組與 ZIP 下載結構
+
+from io import BytesIO
+from zipfile import ZipFile
+
+from fastapi.testclient import TestClient
+
+from tests.test_api_smoke import (
+    assert_status,
+    create_user,
+    jpeg_bytes,
+    login,
+    smoke_layout,
+    started_client,
+    unique_name,
+    use_tmp_uploads,
+)
+
+from database import SessionLocal, Student
+
+
+def create_active_period(client: TestClient, department: str = "infant") -> dict:
+    response = client.post(
+        "/api/templates/periods",
+        data={"name": unique_name("period"), "department": department, "status": "active"},
+    )
+    assert_status(response, 200)
+    return response.json()
+
+
+def create_period_template_project(client: TestClient, period_id: int) -> int:
+    """建立掛在指定期別下的模板（含一頁版型）與專案，回傳 project_id。"""
+    template_response = client.post(
+        "/api/templates/",
+        data={"name": unique_name("template"), "period_id": str(period_id)},
+    )
+    assert_status(template_response, 200)
+    template_id = template_response.json()["id"]
+
+    page_response = client.post(f"/api/templates/{template_id}/pages")
+    assert_status(page_response, 200)
+    layout_response = client.put(
+        f"/api/templates/{template_id}/pages/{page_response.json()['id']}/layout",
+        json=smoke_layout(),
+    )
+    assert_status(layout_response, 200)
+
+    project_response = client.post(
+        "/api/projects/",
+        data={"name": unique_name("project"), "template_id": str(template_id)},
+    )
+    assert_status(project_response, 201)
+    return project_response.json()["id"]
+
+
+def add_students(client: TestClient, project_id: int, names: list[str]) -> dict[str, int]:
+    """批次新增學生並回傳 name → student_id 對照。"""
+    response = client.post(f"/api/projects/{project_id}/students/batch", json=names)
+    assert_status(response, 200)
+    detail = client.get(f"/api/projects/{project_id}")
+    assert_status(detail, 200)
+    return {student["name"]: student["id"] for student in detail.json()["students"]}
+
+
+def roster_child_id_of(student_id: int) -> int | None:
+    db = SessionLocal()
+    try:
+        return db.query(Student).filter(Student.id == student_id).one().roster_child_id
+    finally:
+        db.close()
+
+
+def test_autolink_same_name_across_projects_and_rename_relink():
+    with started_client() as client:
+        login(client)
+        period_a = create_active_period(client)
+        period_b = create_active_period(client)
+        project_a = create_period_template_project(client, period_a["id"])
+        project_b = create_period_template_project(client, period_b["id"])
+
+        students_a = add_students(client, project_a, ["王小明", "李小華"])
+        students_b = add_students(client, project_b, ["王 小明"])  # 空白視為同名
+
+        ming_a = roster_child_id_of(students_a["王小明"])
+        ming_b = roster_child_id_of(students_b["王 小明"])
+        hua_a = roster_child_id_of(students_a["李小華"])
+        assert ming_a is not None
+        assert ming_a == ming_b  # 跨專案同名自動連到同一名冊孩子
+        assert hua_a is not None and hua_a != ming_a
+
+        # 匯出預覽依名冊孩子分組
+        preview = client.get(
+            "/api/roster/semester-export",
+            params={"period_ids": [period_a["id"], period_b["id"]]},
+        )
+        assert_status(preview, 200)
+        preview_data = preview.json()
+        assert [period["id"] for period in preview_data["periods"]] == [period_a["id"], period_b["id"]]
+        groups_by_name = {group["name"]: group for group in preview_data["children"]}
+        assert len(groups_by_name["王小明"]["entries"]) == 2
+        assert len(groups_by_name["李小華"]["entries"]) == 1
+        assert preview_data["unlinked"] == []
+        assert all(entry["has_pdf"] is False for entry in groups_by_name["王小明"]["entries"])
+
+        # 改名後重新解析：李小華 改成 王小明 → 連到既有的王小明名冊項
+        rename = client.put(
+            f"/api/projects/{project_a}/students/{students_a['李小華']}",
+            data={"name": "王小明二號"},
+        )
+        assert_status(rename, 200)
+        renamed_child = roster_child_id_of(students_a["李小華"])
+        assert renamed_child is not None and renamed_child not in (ming_a, hua_a)
+
+
+def test_ambiguous_name_requires_manual_link_and_merge():
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        project_a = create_period_template_project(client, period["id"])
+        project_b = create_period_template_project(client, period["id"])
+        project_c = create_period_template_project(client, period["id"])
+
+        students_a = add_students(client, project_a, ["王小明"])
+        students_b = add_students(client, project_b, ["王小明"])
+        child_original = roster_child_id_of(students_a["王小明"])
+
+        # admin 把 B 的學生拆成新名冊項 → 名冊出現兩個「王小明」
+        split = client.put(
+            f"/api/roster/students/{students_b['王小明']}/link",
+            json={"create_new": True},
+        )
+        assert_status(split, 200)
+        child_split = split.json()["roster_child_id"]
+        assert child_split != child_original
+
+        # 之後再新增同名學生 → 歧義，留待確認
+        students_c = add_students(client, project_c, ["王小明"])
+        assert roster_child_id_of(students_c["王小明"]) is None
+
+        preview = client.get(
+            "/api/roster/semester-export",
+            params={"period_ids": [period["id"]]},
+        )
+        assert_status(preview, 200)
+        unlinked = preview.json()["unlinked"]
+        assert len(unlinked) == 1
+        assert unlinked[0]["student_id"] == students_c["王小明"]
+        candidate_ids = {candidate["roster_child_id"] for candidate in unlinked[0]["candidates"]}
+        assert candidate_ids == {child_original, child_split}
+
+        # 手動配對到既有名冊項
+        link = client.put(
+            f"/api/roster/students/{students_c['王小明']}/link",
+            json={"roster_child_id": child_original},
+        )
+        assert_status(link, 200)
+        assert roster_child_id_of(students_c["王小明"]) == child_original
+
+        # 合併誤拆的名冊項
+        self_merge = client.post(f"/api/roster/children/{child_split}/merge/{child_split}")
+        assert_status(self_merge, 400)
+        merge = client.post(f"/api/roster/children/{child_split}/merge/{child_original}")
+        assert_status(merge, 200)
+        assert merge.json()["moved"] == 1
+        assert roster_child_id_of(students_b["王小明"]) == child_original
+
+        missing_merge = client.post(f"/api/roster/children/{child_split}/merge/{child_original}")
+        assert_status(missing_merge, 404)
+
+
+def test_roster_endpoints_require_admin():
+    with started_client() as client:
+        login(client)
+        supervisor, _ = create_user(client, "supervisor")
+        teacher, teacher_password = create_user(client, "teacher", supervisor_ids=[supervisor["id"]])
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        preview = client.get("/api/roster/semester-export", params={"period_ids": [1]})
+        assert_status(preview, 403)
+        link = client.put("/api/roster/students/1/link", json={"create_new": True})
+        assert_status(link, 403)
+
+
+def test_semester_export_zip_structure(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        period_a = create_active_period(client)
+        period_b = create_active_period(client)
+        project_a = create_period_template_project(client, period_a["id"])
+        project_b = create_period_template_project(client, period_b["id"])
+
+        students_a = add_students(client, project_a, ["王小明", "李小華"])
+        students_b = add_students(client, project_b, ["王小明"])
+
+        # 王小明兩期都渲染；李小華不渲染（應出現在匯出說明）
+        for project_id, student_id in (
+            (project_a, students_a["王小明"]),
+            (project_b, students_b["王小明"]),
+        ):
+            photo = client.post(
+                f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+                files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
+            )
+            assert_status(photo, 200)
+            render = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
+            assert_status(render, 200)
+
+        download = client.get(
+            "/api/roster/semester-export/download",
+            params={"period_ids": [period_a["id"], period_b["id"]], "mode": "print"},
+        )
+        assert_status(download, 200)
+        assert download.headers["content-type"] == "application/zip"
+
+        with ZipFile(BytesIO(download.content)) as zip_archive:
+            entry_names = zip_archive.namelist()
+        ming_entries = sorted(name for name in entry_names if name.startswith("王小明/"))
+        assert len(ming_entries) == 2
+        assert ming_entries[0].startswith("王小明/01_")
+        assert ming_entries[1].startswith("王小明/02_")
+        assert all(name.endswith(".pdf") for name in ming_entries)
+        # 未渲染的李小華不進 ZIP，但列在匯出說明
+        assert not any(name.startswith("李小華/") for name in entry_names)
+        assert "匯出說明.txt" in entry_names

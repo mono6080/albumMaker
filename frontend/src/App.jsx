@@ -14,6 +14,7 @@ import ProjectBatch from "./pages/ProjectBatch";
 import ProjectReview from "./pages/ProjectReview";
 import StudentEdit from "./pages/StudentEdit";
 import UserManagement from "./pages/UserManagement";
+import SemesterExport from "./pages/SemesterExport";
 import SettingsPage from "./pages/Settings";
 import './App.css';
 
@@ -47,6 +48,7 @@ function Nav() {
     navLinks.push({ path: "/projects", label: "相本專案" });
   }
   if (currentUser?.role === "admin") {
+    navLinks.push({ path: "/admin/semester-export", label: "學期匯出" });
     navLinks.push({ path: "/admin/users", label: "使用者管理" });
   }
 
@@ -184,6 +186,13 @@ function AppContent() {
           <Route path="/admin/users" element={
             <PrivateRoute allowedRoles={["admin"]}>
               <UserManagement />
+            </PrivateRoute>
+          } />
+
+          {/* 學期彙整匯出（admin only） */}
+          <Route path="/admin/semester-export" element={
+            <PrivateRoute allowedRoles={["admin"]}>
+              <SemesterExport />
             </PrivateRoute>
           } />
         </Routes>

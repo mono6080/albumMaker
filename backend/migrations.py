@@ -37,6 +37,7 @@ def run_migrations():
         _add_template_periods_and_scope_columns(connection)
         _add_template_page_layout_migration_backups_table(connection)
         _migrate_photo_slots_to_content_box(connection)
+        _add_roster_children_and_backfill(connection)
 
 
 def _add_bubble_texts_json_column(connection):
@@ -579,6 +580,64 @@ def _migrate_single_supervisors_to_many(connection):
           AND supervisor.role = 'supervisor'
           AND teacher.supervisor_id IS NOT NULL
     """))
+    connection.commit()
+
+
+def _add_roster_children_and_backfill(connection):
+    """建立孩子名冊表、為 students 加名冊連結欄位，並依正規化姓名回填既有學生。
+
+    回填規則與 roster_service 相同：姓名去除空白後同名視為同一個孩子。
+    冪等：students.roster_child_id 已存在則整段跳過（避免覆蓋 admin 事後的手動拆分）。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(students)"))
+    }
+    if "roster_child_id" in existing_columns:
+        return
+
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "roster_children" not in existing_tables:
+        connection.execute(text("""
+            CREATE TABLE roster_children (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_roster_children_name ON roster_children (name)"
+        ))
+    connection.execute(text(
+        "ALTER TABLE students ADD COLUMN roster_child_id INTEGER REFERENCES roster_children(id)"
+    ))
+    connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_students_roster_child_id ON students (roster_child_id)"
+    ))
+
+    # 回填：同正規化姓名的學生連到同一個名冊項
+    from services.roster_service import normalize_child_name
+
+    all_students = connection.execute(text("SELECT id, name FROM students")).fetchall()
+    child_id_by_name: dict[str, int] = {}
+    for student_id, student_name in all_students:
+        normalized_name = normalize_child_name(student_name)
+        if not normalized_name:
+            continue
+        if normalized_name not in child_id_by_name:
+            connection.execute(
+                text("INSERT INTO roster_children (name) VALUES (:name)"),
+                {"name": normalized_name},
+            )
+            new_child_id = connection.execute(text("SELECT last_insert_rowid()")).scalar()
+            child_id_by_name[normalized_name] = new_child_id
+        connection.execute(
+            text("UPDATE students SET roster_child_id = :child_id WHERE id = :student_id"),
+            {"child_id": child_id_by_name[normalized_name], "student_id": student_id},
+        )
     connection.commit()
 
 

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Student, Template, User, get_db
+from services.roster_service import resolve_roster_child_id
 from services.storage import get_storage
 from template_periods import department_label
 
@@ -262,6 +263,8 @@ def batch_add_students(
             name=student_name,
             order_index=next_order_index,
             pages_data_json="[]",
+            # 自動連結名冊：同名唯一則連既有孩子、查無自動建立、歧義留 None 待確認
+            roster_child_id=resolve_roster_child_id(db, student_name),
         )
         db.add(new_student)
         created_names.append(student_name)
@@ -285,6 +288,8 @@ def update_student(
     student = get_student_or_404(student_id, project_id, db)
     if name:
         student.name = name
+        # 改名後重新解析名冊連結（改回同名孩子或成為新孩子）
+        student.roster_child_id = resolve_roster_child_id(db, name)
     db.commit()
     return {"ok": True}
 

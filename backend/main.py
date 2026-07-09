@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from database import init_db
 from migrations import run_migrations
-from routers import templates, projects, auth, users
+from routers import templates, projects, auth, users, roster
 
 logger = logging.getLogger("album_maker.requests")
 
@@ -115,6 +115,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(templates.router)
 app.include_router(projects.router)
+app.include_router(roster.router)
 
 
 @app.get("/api/health")

@@ -27,7 +27,7 @@ npm run build                # production bundle（改前端後必跑）
 - **後端 pytest**（`tests/`）：
   - `test_auth.py`、`test_migrations.py`（驗證 init_db + run_migrations 可重複執行）、
     `test_storage.py`（含 traversal shared-prefix regression）、
-    `test_project_service.py`
+    `test_project_service.py`、`test_roster.py`（名冊自動連結、歧義配對、學期匯出 ZIP）
   - `test_api_smoke.py`：TestClient 覆蓋 health、login/logout cookie roundtrip、
     模板/專案/學生 CRUD、對應文字、留言角色、照片上傳/mapping、預覽、渲染、
     PDF / ZIP 下載；每個 TestClient context 會 reset slowapi limiter state

@@ -33,8 +33,12 @@ Project (id, name, template_id FK, department, template_period_id FK,
   └─ comments → ProjectComment[]（cascade delete-orphan）
 
 Student (id, project_id FK, name, order_index, pages_data_json TEXT,
-         output_filename, created_at, updated_at)
+         output_filename, roster_child_id FK→RosterChild〔NULL=同名歧義待確認〕,
+         created_at, updated_at)
   └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
+
+RosterChild (id, name〔正規化後、不設 UNIQUE〕, created_at)   — 園所層級孩子名冊
+  └─ students → Student.roster_child_id
 
 ProjectComment (id, project_id FK, author_id FK, content, created_at)
 ```
@@ -42,6 +46,20 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 - SQLite 連線啟用 `PRAGMA foreign_keys=ON`；`check_same_thread=False`
 - 不設 `text_factory`，SQLAlchemy 以 UTF-8 存取；若用 raw sqlite3 讀取需自行處理 encoding
 - 角色定義與權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
+
+## 孩子名冊（RosterChild）：自動長出、不需維護
+
+跨專案識別「同一個孩子」，供學期彙整匯出分組。設計原則：老師流程零改動，
+名冊由學生建立/改名時自動長出，admin 只處理例外。
+
+- **正規化**：`roster_service.normalize_child_name()` 移除所有空白（含全形）後比對
+- **自動連結**（`roster_service.resolve_roster_child_id()`，掛在學生批次新增與改名）：
+  同名唯一命中 → 連既有名冊項；查無 → 自動建立；同名多筆（admin 拆分過）→
+  `roster_child_id = NULL` 待確認，由學期匯出頁的複核流程處理
+- **name 不設 UNIQUE**：同名不同人時 admin 用 link `create_new` 拆成兩筆；
+  誤拆或改名造成的重複用 merge 併回
+- migration `_add_roster_children_and_backfill` 依同一正規化規則回填既有學生；
+  冪等檢查鎖在 `students.roster_child_id` 欄位是否存在（避免覆蓋 admin 手動拆分）
 
 ## 對應文字（label_texts）三層覆蓋
 

@@ -114,6 +114,19 @@ class Project(Base):
     comments = relationship("ProjectComment", back_populates="project", cascade="all, delete-orphan", order_by="ProjectComment.created_at")
 
 
+class RosterChild(Base):
+    """園所層級的孩子名冊：跨專案識別「同一個孩子」，供學期彙整匯出分組使用。
+
+    名冊項由學生建立/改名時自動長出（見 services/roster_service.py），
+    admin 只在同名歧義時介入。name 不設 UNIQUE — 同名不同人時由 admin 手動拆成兩筆。
+    """
+    __tablename__ = "roster_children"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    students = relationship("Student", back_populates="roster_child")
+
+
 class Student(Base):
     __tablename__ = "students"
     id = Column(Integer, primary_key=True, index=True)
@@ -122,9 +135,12 @@ class Student(Base):
     order_index = Column(Integer, default=0)
     pages_data_json = Column(Text, nullable=False, default="[]")
     output_filename = Column(String, nullable=True)
+    # 名冊連結：NULL 代表同名歧義待 admin 確認（見 roster_service.resolve_roster_child_id）
+    roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     project = relationship("Project", back_populates="students")
+    roster_child = relationship("RosterChild", back_populates="students")
 
 
 class ProjectComment(Base):

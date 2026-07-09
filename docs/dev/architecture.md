@@ -37,11 +37,12 @@ backend/
   migrations.py        啟動時自動執行的冪等 schema 遷移（規則見 data-model.md）
   auth.py              JWT 產生/驗證、bcrypt 密碼、get_current_user / require_role
   template_periods.py  模板期別的部門常數與狀態邏輯
-  crud/                template_crud / project_crud / user_crud（get_or_404 輔助）
+  crud/                template_crud / project_crud / user_crud / roster_crud（get_or_404 輔助）
   schemas/             Pydantic schema（跨路由共用者）
   routers/
     auth.py            /api/auth/*（login / logout / me）
     users.py           /api/users/*（admin only，含 .xlsx 批次匯入）
+    roster.py          /api/roster/*（admin only：名冊配對、學期彙整匯出）
     templates.py       /api/templates/*（模板、期別、頁面、背景、貼圖、預覽）
     projects/          /api/projects/*，拆分子模組：
       __init__.py        路由組合
@@ -60,6 +61,7 @@ backend/
     project_service.py   PDF 輸出、ZIP 打包、label_texts 合併、安全檔名
     file_service.py      Storage key 計算、上傳驗證與壓縮（支援 HEIF、超大圖自動壓縮）
     label_texts.py       label_texts 資料結構工具（欄位↔entry 轉換、對齊正規化、合併）
+    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 打包
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
     storage.py           StorageAdapter 抽象（見 storage.md）
     request_limiter.py   BusyLimiter：照片上傳並發槽位限制
@@ -94,6 +96,7 @@ utils/       純函式工具（photoUtils / bubbleGeometry / renderLayoutModel /
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
+| SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
 | Offline | — | PWA 離線頁 |
 
