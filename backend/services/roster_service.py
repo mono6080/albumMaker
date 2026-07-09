@@ -77,10 +77,13 @@ def _load_export_periods(db: Session, period_ids: list[int]) -> list[TemplatePer
 
 
 def _load_export_projects(db: Session, period_ids: list[int]) -> list[Project]:
-    """讀取匯出範圍內的專案（排除封存），含學生與名冊連結。"""
+    """讀取匯出範圍內的專案（排除封存），含學生、名冊連結與帶班老師。"""
     return (
         db.query(Project)
-        .options(joinedload(Project.students).joinedload(Student.roster_child))
+        .options(
+            joinedload(Project.students).joinedload(Student.roster_child),
+            joinedload(Project.owner),
+        )
         .filter(Project.template_period_id.in_(period_ids))
         .filter(Project.deleted_at.is_(None))
         .all()
@@ -110,6 +113,7 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
                 "period_id": project.template_period_id,
                 "project_id": project.id,
                 "project_name": project.name,
+                "owner_name": project.owner.display_name if project.owner else None,
                 "student_id": student.id,
                 "student_name": student.name,
                 "has_pdf": bool(pdf_key and storage.exists(pdf_key)),
@@ -132,6 +136,7 @@ def build_semester_export_preview(db: Session, period_ids: list[int]) -> dict:
         )
         group["latest_project_id"] = latest_entry["project_id"]
         group["latest_project_name"] = latest_entry["project_name"]
+        group["latest_project_owner_name"] = latest_entry["owner_name"]
 
     children = sorted(
         children_by_id.values(),

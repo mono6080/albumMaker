@@ -236,6 +236,9 @@ export default function SemesterExport() {
                 <div className="min-w-0 flex-1 text-sm">
                   <span className="font-medium text-gray-900">{entry.student_name}</span>
                   <span className="ml-2 text-gray-500">{entry.project_name}</span>
+                  {entry.owner_name && (
+                    <span className="ml-2 text-xs text-gray-400">老師:{entry.owner_name}</span>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {entry.candidates.map(candidate => (
@@ -282,9 +285,16 @@ export default function SemesterExport() {
                 return [
                   isNewClassSection && (
                     <tr key={`class-${group.latest_project_id}-${group.roster_child_id}`} className="border-b border-gray-200 bg-indigo-50">
-                      <td colSpan={periodColumns.length + 2} className="py-1.5 text-xs font-bold text-indigo-700">
+                      <td colSpan={periodColumns.length + 2} className="py-1.5 text-xs text-indigo-700">
                         {/* 班級標題跟著橫向捲動固定在左側 */}
-                        <span className="sticky left-4 inline-block">{group.latest_project_name}</span>
+                        <span className="sticky left-4 inline-block">
+                          <span className="font-bold">{group.latest_project_name}</span>
+                          {group.latest_project_owner_name && (
+                            <span className="ml-2 font-normal text-indigo-500">
+                              老師：{group.latest_project_owner_name}
+                            </span>
+                          )}
+                        </span>
                       </td>
                     </tr>
                   ),
