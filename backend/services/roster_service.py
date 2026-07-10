@@ -6,6 +6,7 @@ import io
 import logging
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -120,6 +121,20 @@ def _load_export_projects(
     return query.all()
 
 
+def _load_output_keys_by_project(storage, project_ids: list[int]) -> dict[int, set[str]]:
+    """並行列舉各專案的輸出目錄 key 集合（R2 上逐專案序列列舉仍有數秒延遲）。
+
+    boto3 client 是 thread-safe，LocalStorageAdapter 只讀檔案系統，皆可並行。
+    """
+    def list_project_output_keys(project_id: int) -> tuple[int, set[str]]:
+        return project_id, set(storage.list_keys(get_project_output_prefix(project_id)))
+
+    if not project_ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        return dict(executor.map(list_project_output_keys, project_ids))
+
+
 def _student_pdf_key(student: Student, output_mode: str) -> str | None:
     """回傳學生指定畫質的 PDF storage key；尚未渲染回 None。"""
     if not student.output_filename:
@@ -141,9 +156,12 @@ def build_semester_export_preview(
 
     children_by_id: dict[int, dict] = {}
     unlinked_students = []
+    # 批次存在性檢查：並行列舉輸出目錄；逐檔 exists 在 R2 上會慢到 timeout
+    output_keys_by_project = _load_output_keys_by_project(
+        storage, [project.id for project in projects]
+    )
     for project in projects:
-        # 每專案列一次輸出目錄做批次存在性檢查；逐檔 exists 在 R2 上會慢到 timeout
-        existing_output_keys = set(storage.list_keys(get_project_output_prefix(project.id)))
+        existing_output_keys = output_keys_by_project[project.id]
         for student in project.students:
             pdf_key = _student_pdf_key(student, "print")
             entry = {
@@ -211,9 +229,13 @@ def render_missing_semester_albums(
     selected_ids = set(roster_child_ids) if roster_child_ids is not None else None
     rendered_count = 0
     render_errors = []
-    for project in _load_export_projects(db, period_ids):
-        # 批次列舉輸出目錄取代逐檔 exists（R2 上逐檔會慢到 timeout）
-        existing_output_keys = set(storage.list_keys(get_project_output_prefix(project.id)))
+    render_projects = _load_export_projects(db, period_ids)
+    # 批次列舉輸出目錄取代逐檔 exists（R2 上逐檔會慢到 timeout）
+    output_keys_by_project = _load_output_keys_by_project(
+        storage, [project.id for project in render_projects]
+    )
+    for project in render_projects:
+        existing_output_keys = output_keys_by_project[project.id]
         shared_page_layouts = None
         for student in project.students:
             if selected_ids is not None and student.roster_child_id not in selected_ids:
@@ -256,12 +278,12 @@ def build_semester_export_zip(
     storage = get_storage()
 
     students_by_id = {}
-    # 每專案列一次輸出目錄做批次存在性檢查（screen/print key 都在同一目錄下）
-    output_keys_by_project: dict[int, set[str]] = {}
-    for project in _load_export_projects(db, period_ids):
-        output_keys_by_project[project.id] = set(
-            storage.list_keys(get_project_output_prefix(project.id))
-        )
+    zip_projects = _load_export_projects(db, period_ids)
+    # 批次存在性檢查（screen/print key 都在同一目錄下）
+    output_keys_by_project = _load_output_keys_by_project(
+        storage, [project.id for project in zip_projects]
+    )
+    for project in zip_projects:
         for student in project.students:
             students_by_id[student.id] = student
 
