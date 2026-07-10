@@ -422,11 +422,12 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         with ZipFile(BytesIO(download.content)) as zip_archive:
             entry_names = zip_archive.namelist()
             manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
-        # 結構：孩子/期別_孩子.pdf（期別依所選順序排列）
-        ming_entries = sorted(name for name in entry_names if name.startswith("王小明/"))
-        assert len(ming_entries) == 2
-        assert ming_entries[0] == f"王小明/{period_a['name']}_王小明.pdf"
-        assert ming_entries[1] == f"王小明/{period_b['name']}_王小明.pdf"
+        # 結構：孩子/期別_孩子.pdf（期別名隨機生成，用集合比對不依賴排序）
+        ming_entries = {name for name in entry_names if name.startswith("王小明/")}
+        assert ming_entries == {
+            f"王小明/{period_a['name']}_王小明.pdf",
+            f"王小明/{period_b['name']}_王小明.pdf",
+        }
         # 未渲染的李小華不進 ZIP，但列在匯出說明；班級對照含兩位孩子
         assert not any(name.startswith("李小華/") for name in entry_names)
         assert "【班級對照】" in manifest
