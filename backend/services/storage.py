@@ -48,6 +48,10 @@ class StorageAdapter(ABC):
         """檢查 key 是否存在。"""
 
     @abstractmethod
+    def list_keys(self, key_prefix: str) -> list[str]:
+        """列出所有以 key_prefix 開頭的 key（批次存在性檢查用，避免逐檔 exists）。"""
+
+    @abstractmethod
     def get_bytes(self, key: str) -> bytes:
         """讀取 key 的完整內容並回傳 bytes。"""
 
@@ -98,6 +102,17 @@ class LocalStorageAdapter(StorageAdapter):
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    def list_keys(self, key_prefix: str) -> list[str]:
+        prefix_path = self._path(key_prefix)
+        if not prefix_path.is_dir():
+            return []
+        base = self._base.resolve()
+        return [
+            file_path.relative_to(base).as_posix()
+            for file_path in prefix_path.rglob("*")
+            if file_path.is_file()
+        ]
 
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
@@ -401,6 +416,20 @@ class R2StorageAdapter(StorageAdapter):
             if self._is_not_found(exc):
                 return False
             raise
+
+    def list_keys(self, key_prefix: str) -> list[str]:
+        prefix = self._key(key_prefix)
+        # 物件 key 含命名空間前綴，回傳前剝掉，與呼叫端使用的 key 形式一致
+        namespace = f"{self._key_prefix}/" if self._key_prefix else ""
+        matched_keys = []
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            matched_keys.extend(
+                obj["Key"].removeprefix(namespace)
+                for obj in page.get("Contents", [])
+                if self._prefix_matches(prefix, obj["Key"])
+            )
+        return matched_keys
 
     def get_bytes(self, key: str) -> bytes:
         clean_key = self._key(key)

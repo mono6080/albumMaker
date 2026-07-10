@@ -10,7 +10,10 @@
 - 所有檔案 I/O 透過 `services/storage.py` 的 `get_storage()` 取得 adapter，
   **不直接操作 `Path`**（跨模組 invariant，見
   [conventions.md](conventions.md#跨模組-invariants)）
-- 介面：save / open_image / response / delete / delete_prefix / move / exists / read_bytes
+- 介面：put / open_image / serve / delete / delete_prefix / move / exists / list_keys / get_bytes
+- **批次存在性檢查用 `list_keys(prefix)`**：R2 上逐檔 `exists()` 是一次 head_object
+  網路往返，數百檔會慢到 timeout（學期匯出預覽曾因此 29 秒）；改為每目錄列舉一次
+  再做集合比對
 - 兩個實作：
   - `LocalStorageAdapter` — 本機磁碟，base 為 `backend/uploads/`
   - `R2StorageAdapter` — Cloudflare R2（S3 相容，boto3）

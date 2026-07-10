@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from database import Project, RosterChild, Student, TemplatePeriod
 from services.project_service import (
+    get_project_output_prefix,
     get_template_page_layouts,
     make_safe_filename,
     render_and_save_student_album,
@@ -141,6 +142,8 @@ def build_semester_export_preview(
     children_by_id: dict[int, dict] = {}
     unlinked_students = []
     for project in projects:
+        # 每專案列一次輸出目錄做批次存在性檢查；逐檔 exists 在 R2 上會慢到 timeout
+        existing_output_keys = set(storage.list_keys(get_project_output_prefix(project.id)))
         for student in project.students:
             pdf_key = _student_pdf_key(student, "print")
             entry = {
@@ -150,7 +153,7 @@ def build_semester_export_preview(
                 "owner_name": project.owner.display_name if project.owner else None,
                 "student_id": student.id,
                 "student_name": student.name,
-                "has_pdf": bool(pdf_key and storage.exists(pdf_key)),
+                "has_pdf": bool(pdf_key and pdf_key in existing_output_keys),
             }
             if student.roster_child_id is None:
                 unlinked_students.append(entry)
@@ -209,12 +212,14 @@ def render_missing_semester_albums(
     rendered_count = 0
     render_errors = []
     for project in _load_export_projects(db, period_ids):
+        # 批次列舉輸出目錄取代逐檔 exists（R2 上逐檔會慢到 timeout）
+        existing_output_keys = set(storage.list_keys(get_project_output_prefix(project.id)))
         shared_page_layouts = None
         for student in project.students:
             if selected_ids is not None and student.roster_child_id not in selected_ids:
                 continue
             pdf_key = _student_pdf_key(student, "print")
-            if pdf_key and storage.exists(pdf_key):
+            if pdf_key and pdf_key in existing_output_keys:
                 continue
             # 版型逐專案讀一次，避免每個學生重複查詢
             if shared_page_layouts is None:
@@ -251,7 +256,12 @@ def build_semester_export_zip(
     storage = get_storage()
 
     students_by_id = {}
+    # 每專案列一次輸出目錄做批次存在性檢查（screen/print key 都在同一目錄下）
+    output_keys_by_project: dict[int, set[str]] = {}
     for project in _load_export_projects(db, period_ids):
+        output_keys_by_project[project.id] = set(
+            storage.list_keys(get_project_output_prefix(project.id))
+        )
         for student in project.students:
             students_by_id[student.id] = student
 
@@ -274,7 +284,7 @@ def build_semester_export_zip(
             for entry in sorted_entries:
                 student = students_by_id.get(entry["student_id"])
                 pdf_key = _student_pdf_key(student, output_mode) if student else None
-                if not pdf_key or not storage.exists(pdf_key):
+                if not pdf_key or pdf_key not in output_keys_by_project.get(entry["project_id"], set()):
                     missing_notes.append(
                         f"{group['name']}：{period_names.get(entry['period_id'], '?')}"
                         f"（{entry['project_name']}）尚未渲染，未納入"
