@@ -276,29 +276,24 @@ def build_teacher_overview_workbook(
 
     summary_sheet = workbook.active
     summary_sheet.title = "摘要"
-    summary_sheet.append(["老師", "專案數", "學生數", "已渲染", "未渲染"])
+    summary_sheet.append(["老師", "專案數", "學生數"])
     per_teacher: dict[str, dict] = {}
     for entry in all_entries:
         teacher_name = entry["owner_name"] or "（未指定老師）"
-        stats = per_teacher.setdefault(teacher_name, {"projects": set(), "students": 0, "rendered": 0})
+        stats = per_teacher.setdefault(teacher_name, {"projects": set(), "students": 0})
         stats["projects"].add(entry["project_id"])
         stats["students"] += 1
-        stats["rendered"] += 1 if entry["has_pdf"] else 0
     for teacher_name, stats in sorted(per_teacher.items()):
-        summary_sheet.append([
-            teacher_name, len(stats["projects"]), stats["students"],
-            stats["rendered"], stats["students"] - stats["rendered"],
-        ])
+        summary_sheet.append([teacher_name, len(stats["projects"]), stats["students"]])
 
     detail_sheet = workbook.create_sheet("明細")
-    detail_sheet.append(["老師", "期別", "專案（班級）", "學生", "已渲染"])
+    detail_sheet.append(["老師", "期別", "專案（班級）", "學生"])
     for entry in all_entries:
         detail_sheet.append([
             entry["owner_name"] or "（未指定老師）",
             period_names.get(entry["period_id"], "?"),
             entry["project_name"],
             entry["student_name"],
-            "是" if entry["has_pdf"] else "否",
         ])
 
     for sheet in (summary_sheet, detail_sheet):

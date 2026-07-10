@@ -92,7 +92,6 @@ export default function TeacherOverview() {
       project.students.push({
         studentId: entry.student_id,
         studentName: entry.student_name,
-        hasPdf: entry.has_pdf,
       });
       teacher.projectsById.set(entry.project_id, project);
       teachersById.set(teacherKey, teacher);
@@ -106,11 +105,7 @@ export default function TeacherOverview() {
             a.projectName.localeCompare(b.projectName, "zh-TW"),
         );
         const studentTotal = projects.reduce((count, project) => count + project.students.length, 0);
-        const renderedTotal = projects.reduce(
-          (count, project) => count + project.students.filter(student => student.hasPdf).length,
-          0,
-        );
-        return { ...teacher, projects, studentTotal, renderedTotal };
+        return { ...teacher, projects, studentTotal };
       })
       .sort((a, b) => a.teacherName.localeCompare(b.teacherName, "zh-TW"));
   }, [preview]);
@@ -205,9 +200,6 @@ export default function TeacherOverview() {
               <h2 className="text-base font-bold text-gray-900">{teacher.teacherName}</h2>
               <Badge tone="neutral">{teacher.projects.length} 個專案</Badge>
               <Badge tone="neutral">{teacher.studentTotal} 位學生</Badge>
-              <Badge tone={teacher.renderedTotal === teacher.studentTotal ? "success" : "warning"}>
-                已渲染 {teacher.renderedTotal}/{teacher.studentTotal}
-              </Badge>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {teacher.projects.map(project => (
@@ -225,21 +217,15 @@ export default function TeacherOverview() {
                       <ExternalLink className="h-3 w-3 text-gray-400" />
                     </a>
                     <span className="ml-auto text-xs text-gray-400">
-                      {project.students.filter(student => student.hasPdf).length}/{project.students.length} 已渲染
+                      {project.students.length} 位學生
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {project.students.map(student => (
                       <span
                         key={student.studentId}
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
-                          student.hasPdf
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-amber-50 text-amber-700"
-                        }`}
-                        title={student.hasPdf ? "已渲染" : "未渲染"}
+                        className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700"
                       >
-                        <span className={`h-1.5 w-1.5 rounded-full ${student.hasPdf ? "bg-emerald-500" : "bg-amber-400"}`} />
                         {student.studentName}
                       </span>
                     ))}
