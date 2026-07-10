@@ -620,6 +620,15 @@ export default function SemesterExport() {
                                 >
                                   {entry.project_name}
                                 </a>
+                                {/* 老師手動刪除的頁面標註（非漏印） */}
+                                {entry.skipped_pages?.length > 0 && (
+                                  <span
+                                    className="rounded bg-orange-50 px-1 py-0.5 text-[10px] text-orange-600"
+                                    title={`老師刪除了第 ${entry.skipped_pages.join("、")} 頁`}
+                                  >
+                                    缺頁 {entry.skipped_pages.join(",")}
+                                  </span>
+                                )}
                                 {/* 拆分：孩子有多筆時才有意義（錯誤合併的反向操作） */}
                                 {isAdmin && group.entries.length > 1 && (
                                   <button

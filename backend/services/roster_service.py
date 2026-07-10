@@ -3,6 +3,7 @@
 # 以及學期彙整匯出的分組預覽、缺漏補渲染與 ZIP 打包
 
 import io
+import json
 import logging
 import re
 import zipfile
@@ -144,6 +145,19 @@ def _student_pdf_key(student: Student, output_mode: str) -> str | None:
     return base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
 
 
+def _student_skipped_pages(student: Student) -> list[int]:
+    """回傳老師手動略過（刪除）的頁碼清單（1 起算）；資料異常時視為無略過。"""
+    try:
+        pages_data = json.loads(student.pages_data_json or "[]")
+    except ValueError:
+        return []
+    return [
+        page_index + 1
+        for page_index, page_data in enumerate(pages_data)
+        if isinstance(page_data, dict) and page_data.get("skip")
+    ]
+
+
 def build_semester_export_preview(
     db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
 ) -> dict:
@@ -172,6 +186,8 @@ def build_semester_export_preview(
                 "student_id": student.id,
                 "student_name": student.name,
                 "has_pdf": bool(pdf_key and pdf_key in existing_output_keys),
+                # 老師手動刪除（略過）的頁碼，供介面與匯出說明標註
+                "skipped_pages": _student_skipped_pages(student),
             }
             if student.roster_child_id is None:
                 unlinked_students.append(entry)
@@ -316,7 +332,7 @@ def build_semester_export_zip(
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ) -> bytes:
-    """打包學期匯出 ZIP：班級（最新期別專案）/孩子/序號_期別-專案.pdf，附匯出說明列出缺漏。
+    """打包學期匯出 ZIP：孩子/期別_孩子.pdf，匯出說明含規則、班級對照與缺漏。
 
     roster_child_ids 給定時只匯出勾選的孩子（None 代表全部）。
     """
@@ -344,11 +360,15 @@ def build_semester_export_zip(
     output_buffer = io.BytesIO()
     with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
         for group in preview["children"]:
-            class_folder = make_safe_filename(group["latest_project_name"])
-            folder_name = f"{class_folder}/{make_safe_filename(group['name'])}"
+            child_name = make_safe_filename(group["name"])
+            # 資料夾＝孩子姓名；同名不同人以（最新班級）區分，仍撞名才加流水號
+            folder_name = child_name
             if folder_name in used_folder_names:
-                # 同班同名不同人（admin 拆分過）：附 id 區分資料夾
-                folder_name = f"{folder_name}_{group['roster_child_id']}"
+                folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）"
+            suffix_number = 2
+            while folder_name in used_folder_names:
+                folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）{suffix_number}"
+                suffix_number += 1
             used_folder_names.add(folder_name)
 
             used_file_names: set[str] = set()
@@ -364,11 +384,11 @@ def build_semester_export_zip(
                         f"（{entry['project_name']}）尚未渲染，未納入"
                     )
                     continue
-                sequence = period_order.get(entry["period_id"], 98) + 1
-                file_name = (
-                    f"{sequence:02d}_{make_safe_filename(period_names.get(entry['period_id'], '期別'))}"
-                    f"-{make_safe_filename(entry['project_name'])}.pdf"
-                )
+                # 檔名＝期別_孩子；同期有多個專案（轉班等）才附專案名區分
+                period_label = make_safe_filename(period_names.get(entry["period_id"], "期別"))
+                file_name = f"{period_label}_{child_name}.pdf"
+                if file_name in used_file_names:
+                    file_name = f"{period_label}_{child_name}_{make_safe_filename(entry['project_name'])}.pdf"
                 if file_name in used_file_names:
                     file_name = f"{file_name[:-4]}_{entry['student_id']}.pdf"
                 used_file_names.add(file_name)
@@ -379,8 +399,48 @@ def build_semester_export_zip(
                 f"待確認：{entry['student_name']}（{entry['project_name']}）"
                 f"未完成名冊配對，未納入"
             )
-        if missing_notes:
-            zip_archive.writestr("匯出說明.txt", "\n".join(missing_notes))
+        zip_archive.writestr(
+            "匯出說明.txt", _build_export_manifest(preview, missing_notes)
+        )
 
     output_buffer.seek(0)
     return output_buffer.read()
+
+
+def _build_export_manifest(preview: dict, missing_notes: list[str]) -> str:
+    """組出匯出說明：分類規則、班級對照（依最新期別）、缺頁備註與缺漏清單。"""
+    lines = [
+        "【分類方式】",
+        "每個孩子一個資料夾，檔名為「期別_孩子姓名」。",
+        "孩子的班級以「所選範圍內最新期別的專案」為準，對照如下。",
+        "",
+        "【班級對照】",
+    ]
+    sorted_children = sorted(
+        preview["children"], key=lambda group: (group["latest_project_name"], group["name"])
+    )
+    for group in sorted_children:
+        owner_label = (
+            f"（老師：{group['latest_project_owner_name']}）"
+            if group.get("latest_project_owner_name") else ""
+        )
+        lines.append(f"- {group['name']}：{group['latest_project_name']}{owner_label}")
+
+    # 缺頁備註：老師手動刪除的頁面，提醒統整成冊時這些不是漏印
+    period_names = {period["id"]: period["name"] for period in preview["periods"]}
+    skipped_notes = [
+        f"- {group['name']}：{period_names.get(entry['period_id'], '?')}"
+        f"（{entry['project_name']}）老師刪除了第 "
+        f"{'、'.join(str(page) for page in entry['skipped_pages'])} 頁"
+        for group in sorted_children
+        for entry in group["entries"]
+        if entry.get("skipped_pages")
+    ]
+    if skipped_notes:
+        lines += ["", "【缺頁備註（老師手動刪除的頁面，非漏印）】"]
+        lines += skipped_notes
+
+    if missing_notes:
+        lines += ["", "【缺漏，未納入這包】"]
+        lines += [f"- {note}" for note in missing_notes]
+    return "\n".join(lines)

@@ -405,6 +405,13 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
             render = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
             assert_status(render, 200)
 
+        # 老師手動刪除王小明期1 的第 1 頁 → 匯出說明應標註缺頁
+        skip_response = client.patch(
+            f"/api/projects/{project_a}/students/{students_a['王小明']}/pages/0/skip",
+            json={"skip": True},
+        )
+        assert_status(skip_response, 200)
+
         download = client.get(
             "/api/roster/semester-export/download",
             params={"period_ids": [period_a["id"], period_b["id"]], "mode": "print"},
@@ -414,16 +421,19 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
 
         with ZipFile(BytesIO(download.content)) as zip_archive:
             entry_names = zip_archive.namelist()
-        # 班級資料夾 = 所選範圍內最新期別的專案（王小明最後在期2的 project_b）
-        project_b_name = client.get(f"/api/projects/{project_b}").json()["name"]
-        ming_entries = sorted(name for name in entry_names if "/王小明/" in name)
+            manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
+        # 結構：孩子/期別_孩子.pdf（期別依所選順序排列）
+        ming_entries = sorted(name for name in entry_names if name.startswith("王小明/"))
         assert len(ming_entries) == 2
-        assert ming_entries[0].startswith(f"{project_b_name}/王小明/01_")
-        assert ming_entries[1].startswith(f"{project_b_name}/王小明/02_")
-        assert all(name.endswith(".pdf") for name in ming_entries)
-        # 未渲染的李小華不進 ZIP，但列在匯出說明
-        assert not any("/李小華/" in name for name in entry_names)
-        assert "匯出說明.txt" in entry_names
+        assert ming_entries[0] == f"王小明/{period_a['name']}_王小明.pdf"
+        assert ming_entries[1] == f"王小明/{period_b['name']}_王小明.pdf"
+        # 未渲染的李小華不進 ZIP，但列在匯出說明；班級對照含兩位孩子
+        assert not any(name.startswith("李小華/") for name in entry_names)
+        assert "【班級對照】" in manifest
+        assert "李小華" in manifest and "尚未渲染" in manifest
+        # 缺頁備註：王小明期1 老師刪除了第 1 頁
+        assert "缺頁備註" in manifest
+        assert "老師刪除了第 1 頁" in manifest
 
         # roster_child_ids 篩選：只勾李小華 → ZIP 不含王小明
         hua_child_id = roster_child_id_of(students_a["李小華"])
