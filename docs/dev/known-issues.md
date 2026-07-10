@@ -35,6 +35,9 @@
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）
 - **刪除 user 的專案過繼無 audit log**：`delete_user` 把專案過繼給執行的
   admin，未留紀錄；日後加 audit log 表時要涵蓋
+- **學期匯出 ZIP 在記憶體組裝**：`build_semester_export_zip` 用 BytesIO，
+  5 位孩子實測 232MB；若全園全期一次匯出（數百本列印 PDF）可能達數 GB，
+  會撐爆容器記憶體。屆時需改 streaming zip（zipstream 或 spooled temp file）
 
 ## 測試缺口（未來高 leverage gate）
 

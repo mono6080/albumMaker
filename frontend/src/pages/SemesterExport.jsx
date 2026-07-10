@@ -18,8 +18,6 @@ import {
   mergeRosterChildren,
   renderMissingSemesterAlbums,
 } from "../api/rosterApi";
-import { renderClient } from "../api/authApi";
-import { downloadApiBlob } from "../utils/browserFiles";
 import { usePermissions } from "../hooks/usePermissions";
 import ConfirmModal from "../components/ConfirmModal";
 import { Badge, Button, PageHeader, SegmentedControl, Surface, fieldControlClass } from "../components/ui";
@@ -69,7 +67,6 @@ export default function SemesterExport() {
   const [selectedPeriodIds, setSelectedPeriodIds] = useState([]);
   const [preview, setPreview] = useState(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [isRenderingMissing, setIsRenderingMissing] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
   // 各孩子列的合併目標選擇（roster_child_id → 目標 id 字串）
@@ -270,24 +267,23 @@ export default function SemesterExport() {
     });
   };
 
-  const handleDownload = async () => {
-    setIsDownloading(true);
-    try {
-      // 全選時不帶篩選參數，避免大量孩子撐爆 query string
-      const isAllSelected = selectedChildIds.size === preview.children.length;
-      await downloadApiBlob(
-        renderClient,
-        buildSemesterExportDownloadUrl(
-          selectedPeriodIds,
-          "print",
-          isAllSelected ? null : [...selectedChildIds],
-        ),
-        "semester_export.zip",
-      );
-    } catch {
-      toast.error("下載失敗");
-    }
-    setIsDownloading(false);
+  const handleDownload = () => {
+    // 全選時不帶篩選參數，避免大量孩子撐爆 query string
+    const isAllSelected = selectedChildIds.size === preview.children.length;
+    const downloadUrl = buildSemesterExportDownloadUrl(
+      selectedPeriodIds,
+      "print",
+      isAllSelected ? null : [...selectedChildIds],
+    );
+    // ZIP 動輒數百 MB：走瀏覽器原生下載（cookie 認證照常帶），
+    // 不經 axios blob — 避免 timeout 與整包塞進記憶體
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    toast.success("已開始產生並下載，請留意瀏覽器的下載列");
   };
 
   // ── 匯出勾選：單一孩子 / 整班 / 全部 ────────────────────────────────────────
@@ -709,10 +705,8 @@ export default function SemesterExport() {
               </Button>
             </span>
           )}
-          <Button variant="primary" onClick={handleDownload} disabled={isDownloading || selectedChildIds.size === 0}>
-            {isDownloading
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <Download className="h-4 w-4" />}
+          <Button variant="primary" onClick={handleDownload} disabled={selectedChildIds.size === 0}>
+            <Download className="h-4 w-4" />
             下載學期彙整 ZIP（{selectedChildIds.size} 位孩子・列印畫質）
           </Button>
         </div>
