@@ -167,6 +167,7 @@ def build_semester_export_preview(
                 "period_id": project.template_period_id,
                 "project_id": project.id,
                 "project_name": project.name,
+                "owner_id": project.owner_id,
                 "owner_name": project.owner.display_name if project.owner else None,
                 "student_id": student.id,
                 "student_name": student.name,

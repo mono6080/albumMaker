@@ -96,7 +96,8 @@ utils/       純函式工具（photoUtils / bubbleGeometry / renderLayoutModel /
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
-| SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin） |
+| SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin；supervisor 唯讀） |
+| TeacherOverview | `/admin/teacher-overview` | 老師進度：各老師的期別專案、學生與渲染進度（admin 全部；supervisor 管轄老師） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
 | Offline | — | PWA 離線頁 |
 
