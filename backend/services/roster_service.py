@@ -121,16 +121,17 @@ def _load_export_projects(
     return query.all()
 
 
-def _load_output_keys_by_project(storage, project_ids: list[int]) -> dict[int, set[str]]:
+def _load_output_keys_by_project(storage, projects: list[Project]) -> dict[int, set[str]]:
     """並行列舉各專案的輸出目錄 key 集合（R2 上逐專案序列列舉仍有數秒延遲）。
 
     boto3 client 是 thread-safe，LocalStorageAdapter 只讀檔案系統，皆可並行。
     """
-    def list_project_output_keys(project_id: int) -> tuple[int, set[str]]:
+    def list_project_output_keys(project_id) -> tuple:
         return project_id, set(storage.list_keys(get_project_output_prefix(project_id)))
 
-    if not project_ids:
+    if not projects:
         return {}
+    project_ids = [project.id for project in projects]
     with ThreadPoolExecutor(max_workers=8) as executor:
         return dict(executor.map(list_project_output_keys, project_ids))
 
@@ -157,9 +158,7 @@ def build_semester_export_preview(
     children_by_id: dict[int, dict] = {}
     unlinked_students = []
     # 批次存在性檢查：並行列舉輸出目錄；逐檔 exists 在 R2 上會慢到 timeout
-    output_keys_by_project = _load_output_keys_by_project(
-        storage, [project.id for project in projects]
-    )
+    output_keys_by_project = _load_output_keys_by_project(storage, projects)
     for project in projects:
         existing_output_keys = output_keys_by_project[project.id]
         for student in project.students:
@@ -231,9 +230,7 @@ def render_missing_semester_albums(
     render_errors = []
     render_projects = _load_export_projects(db, period_ids)
     # 批次列舉輸出目錄取代逐檔 exists（R2 上逐檔會慢到 timeout）
-    output_keys_by_project = _load_output_keys_by_project(
-        storage, [project.id for project in render_projects]
-    )
+    output_keys_by_project = _load_output_keys_by_project(storage, render_projects)
     for project in render_projects:
         existing_output_keys = output_keys_by_project[project.id]
         shared_page_layouts = None
@@ -280,9 +277,7 @@ def build_semester_export_zip(
     students_by_id = {}
     zip_projects = _load_export_projects(db, period_ids)
     # 批次存在性檢查（screen/print key 都在同一目錄下）
-    output_keys_by_project = _load_output_keys_by_project(
-        storage, [project.id for project in zip_projects]
-    )
+    output_keys_by_project = _load_output_keys_by_project(storage, zip_projects)
     for project in zip_projects:
         for student in project.students:
             students_by_id[student.id] = student
