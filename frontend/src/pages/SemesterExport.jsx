@@ -314,6 +314,15 @@ export default function SemesterExport() {
   const totalColumnCount = periodColumns.length + 1 + (isAdmin ? 1 : 0);
   const visibleChildIds = filteredChildren.map(group => group.roster_child_id);
   const visibleSelectedCount = visibleChildIds.filter(childId => selectedChildIds.has(childId)).length;
+  // 過濾中：表頭 checkbox 與數字都以「畫面上的孩子」為視角，全域勾選數只在下載鈕呈現
+  const isFilterActive = Boolean(preview) && filteredChildren.length !== preview.children.length;
+  // 被篩選藏住的勾選（畫面外仍勾著的孩子），下載前要讓使用者知道
+  const hiddenSelectedCount = selectedChildIds.size - visibleSelectedCount;
+
+  /** 只保留畫面上的勾選（把畫面外的勾選全部取消） */
+  const keepOnlyVisibleSelected = () => {
+    setSelectedChildIds(new Set(visibleChildIds.filter(childId => selectedChildIds.has(childId))));
+  };
 
   // 每個孩子依期別整理格位：period_id → entries
   const buildEntriesByPeriod = (group) => {
@@ -503,10 +512,15 @@ export default function SemesterExport() {
                         checked={visibleSelectedCount === visibleChildIds.length && visibleChildIds.length > 0}
                         indeterminate={visibleSelectedCount > 0}
                         onChange={event => setManySelected(visibleChildIds, event.target.checked)}
-                        title="全部全選 / 取消（套用到目前過濾結果）"
+                        title={isFilterActive ? "全選 / 取消目前過濾結果" : "全部全選 / 取消"}
                       />
                     )}
-                    孩子（{isAdmin ? `已選 ${selectedChildIds.size}/` : ""}{preview.children.length}）
+                    {/* 數字與 checkbox 同視角：過濾中顯示畫面上的勾選數，全域數字在下載鈕 */}
+                    {isAdmin
+                      ? (isFilterActive
+                        ? `孩子（已選 ${visibleSelectedCount}/${visibleChildIds.length}・過濾中）`
+                        : `孩子（已選 ${selectedChildIds.size}/${preview.children.length}）`)
+                      : `孩子（${preview.children.length}）`}
                   </span>
                 </th>
                 {periodColumns.map(period => (
@@ -680,10 +694,19 @@ export default function SemesterExport() {
 
       {/* 下載（admin；常駐佈局底部，不覆蓋表格卷軸） */}
       {isAdmin && preview && preview.children.length > 0 && (
-        <div className="flex shrink-0 items-center justify-end gap-3">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
           {preview.unlinked.length > 0 && (
             <span className="text-xs text-amber-600">
               尚有 {preview.unlinked.length} 位學生未配對，不會納入匯出
+            </span>
+          )}
+          {/* 過濾把已勾選的孩子藏在畫面外時，下載前明確提示並提供一鍵修正 */}
+          {isFilterActive && hiddenSelectedCount > 0 && (
+            <span className="flex items-center gap-1.5 text-xs text-amber-600">
+              勾選中含 {hiddenSelectedCount} 位不在目前篩選的孩子
+              <Button variant="neutral" size="xs" onClick={keepOnlyVisibleSelected}>
+                只保留畫面上的
+              </Button>
             </span>
           )}
           <Button variant="primary" onClick={handleDownload} disabled={isDownloading || selectedChildIds.size === 0}>
