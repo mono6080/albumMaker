@@ -31,6 +31,10 @@ export const renderMissingSemesterAlbums = (periodIds, rosterChildIds = null) =>
     { timeout: 600000 },
   );
 
+/** 老師進度 Excel 下載 URL（摘要 + 明細；supervisor 只含管轄老師） */
+export const buildTeacherOverviewExcelUrl = (periodIds) =>
+  `/api/roster/teacher-overview/export?${buildPeriodIdsQuery(periodIds)}`;
+
 /** 學期匯出 ZIP 下載 URL（班級/孩子/序號_期別-專案.pdf）；rosterChildIds 不給代表全部 */
 export const buildSemesterExportDownloadUrl = (periodIds, outputMode = "print", rosterChildIds = null) => {
   const childIdsQuery = rosterChildIds

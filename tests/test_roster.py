@@ -307,6 +307,35 @@ def test_supervisor_scoped_preview_and_no_export():
         assert_status(render_missing, 403)
 
 
+def test_teacher_overview_excel_export():
+    from openpyxl import load_workbook
+
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        project = create_period_template_project(client, period["id"])
+        add_students(client, project, ["王小明", "李小華"])
+
+        export = client.get(
+            "/api/roster/teacher-overview/export", params={"period_ids": [period["id"]]}
+        )
+        assert_status(export, 200)
+        assert export.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+        workbook = load_workbook(BytesIO(export.content))
+        assert workbook.sheetnames == ["摘要", "明細"]
+        summary_rows = list(workbook["摘要"].iter_rows(values_only=True))
+        assert summary_rows[0] == ("老師", "專案數", "學生數", "已渲染", "未渲染")
+        admin_row = next(row for row in summary_rows[1:] if row[2] == 2)
+        assert admin_row[3] == 0 and admin_row[4] == 2  # 兩位學生皆未渲染
+
+        detail_rows = list(workbook["明細"].iter_rows(values_only=True))
+        assert detail_rows[0] == ("老師", "期別", "專案（班級）", "學生", "已渲染")
+        student_names = {row[3] for row in detail_rows[1:]}
+        assert {"王小明", "李小華"} <= student_names
+        assert all(row[4] == "否" for row in detail_rows[1:] if row[3] in ("王小明", "李小華"))
+
+
 def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
     use_tmp_uploads(monkeypatch, tmp_path)
 

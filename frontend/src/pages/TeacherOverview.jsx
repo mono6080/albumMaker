@@ -4,14 +4,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { ExternalLink, Loader2, Search, Users } from "lucide-react";
+import { ExternalLink, FileSpreadsheet, Loader2, Search, Users } from "lucide-react";
 
 import {
   fetchTemplateDepartments,
   fetchTemplatePeriods,
 } from "../api/templateApi";
-import { fetchSemesterExportPreview } from "../api/rosterApi";
-import { Badge, PageHeader, SegmentedControl, Surface } from "../components/ui";
+import { buildTeacherOverviewExcelUrl, fetchSemesterExportPreview } from "../api/rosterApi";
+import { apiClient } from "../api/authApi";
+import { downloadApiBlob } from "../utils/browserFiles";
+import { Badge, Button, PageHeader, SegmentedControl, Surface } from "../components/ui";
 
 export default function TeacherOverview() {
   const [departments, setDepartments] = useState([]);
@@ -19,6 +21,7 @@ export default function TeacherOverview() {
   const [allPeriods, setAllPeriods] = useState([]);
   const [preview, setPreview] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
@@ -112,6 +115,20 @@ export default function TeacherOverview() {
       .sort((a, b) => a.teacherName.localeCompare(b.teacherName, "zh-TW"));
   }, [preview]);
 
+  const handleExportExcel = async () => {
+    const departmentPeriodIds = allPeriods
+      .filter(period => period.department === activeDepartment)
+      .map(period => period.id);
+    if (departmentPeriodIds.length === 0) return;
+    setIsExporting(true);
+    try {
+      await downloadApiBlob(apiClient, buildTeacherOverviewExcelUrl(departmentPeriodIds), "老師進度.xlsx");
+    } catch {
+      toast.error("匯出 Excel 失敗");
+    }
+    setIsExporting(false);
+  };
+
   const filteredTeachers = useMemo(() => {
     const query = searchText.replace(/[\s\u3000]+/g, "");  // u3000＝全形空白
     if (!query) return teacherGroups;
@@ -160,6 +177,18 @@ export default function TeacherOverview() {
             />
           </div>
           {isLoading && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+          <Button
+            variant="secondary"
+            size="sm"
+            className="sm:ml-auto sm:flex-shrink-0"
+            onClick={handleExportExcel}
+            disabled={isExporting || !preview || teacherGroups.length === 0}
+          >
+            {isExporting
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <FileSpreadsheet className="h-4 w-4" />}
+            匯出 Excel
+          </Button>
         </div>
       </Surface>
 

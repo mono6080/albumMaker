@@ -130,6 +130,7 @@
 | PUT | `/students/{sid}/link` | 配對到既有名冊項（`roster_child_id`）或建新項（`create_new`） |
 | POST | `/children/{cid}/merge/{target_cid}` | 名冊項合併（改名/誤拆修正） |
 | POST | `/semester-export/render-missing` | 批次補渲染缺列印 PDF 的相冊（body：`period_ids`、選填 `roster_child_ids`） |
+| GET | `/teacher-overview/export?period_ids=…` | 老師進度 Excel（摘要+明細；admin 全部、supervisor 限管轄老師） |
 | GET | `/semester-export/download?period_ids=…&mode=…&roster_child_ids=…` | ZIP：`班級/孩子/序號_期別-專案.pdf`（班級＝最新期別的專案），`roster_child_ids` 選填（不給＝全部），缺漏列在 `匯出說明.txt` |
 
 其他：`GET /api/health` 健康檢查。

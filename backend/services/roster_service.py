@@ -254,6 +254,67 @@ def render_missing_semester_albums(
     return {"rendered": rendered_count, "errors": render_errors}
 
 
+def build_teacher_overview_workbook(
+    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+) -> bytes:
+    """產出老師進度 Excel：摘要（每師一列）與明細（每生一列）兩張工作表。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    preview = build_semester_export_preview(db, period_ids, owner_user_ids)
+    period_names = {period["id"]: period["name"] for period in preview["periods"]}
+    all_entries = [
+        *[entry for group in preview["children"] for entry in group["entries"]],
+        *preview["unlinked"],
+    ]
+    all_entries.sort(key=lambda entry: (
+        entry["owner_name"] or "", entry["period_id"], entry["project_name"], entry["student_name"]
+    ))
+
+    workbook = Workbook()
+    header_font = Font(bold=True)
+
+    summary_sheet = workbook.active
+    summary_sheet.title = "摘要"
+    summary_sheet.append(["老師", "專案數", "學生數", "已渲染", "未渲染"])
+    per_teacher: dict[str, dict] = {}
+    for entry in all_entries:
+        teacher_name = entry["owner_name"] or "（未指定老師）"
+        stats = per_teacher.setdefault(teacher_name, {"projects": set(), "students": 0, "rendered": 0})
+        stats["projects"].add(entry["project_id"])
+        stats["students"] += 1
+        stats["rendered"] += 1 if entry["has_pdf"] else 0
+    for teacher_name, stats in sorted(per_teacher.items()):
+        summary_sheet.append([
+            teacher_name, len(stats["projects"]), stats["students"],
+            stats["rendered"], stats["students"] - stats["rendered"],
+        ])
+
+    detail_sheet = workbook.create_sheet("明細")
+    detail_sheet.append(["老師", "期別", "專案（班級）", "學生", "已渲染"])
+    for entry in all_entries:
+        detail_sheet.append([
+            entry["owner_name"] or "（未指定老師）",
+            period_names.get(entry["period_id"], "?"),
+            entry["project_name"],
+            entry["student_name"],
+            "是" if entry["has_pdf"] else "否",
+        ])
+
+    for sheet in (summary_sheet, detail_sheet):
+        for cell in sheet[1]:
+            cell.font = header_font
+        # 依內容粗略調整欄寬，避免中文擠成一團
+        for column_cells in sheet.columns:
+            max_length = max(len(str(cell.value or "")) for cell in column_cells)
+            sheet.column_dimensions[column_cells[0].column_letter].width = min(max_length * 2 + 4, 40)
+
+    output_buffer = io.BytesIO()
+    workbook.save(output_buffer)
+    output_buffer.seek(0)
+    return output_buffer.read()
+
+
 def build_semester_export_zip(
     db: Session,
     period_ids: list[int],

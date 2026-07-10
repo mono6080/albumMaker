@@ -3,7 +3,7 @@
 
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.roster_service import (
     build_semester_export_preview,
     build_semester_export_zip,
+    build_teacher_overview_workbook,
     delete_roster_child_if_orphaned,
     link_student_to_new_child,
     merge_roster_children,
@@ -52,6 +53,24 @@ def get_semester_export_preview(
     if current_user.role == "supervisor":
         owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
     return build_semester_export_preview(db, period_ids, owner_user_ids)
+
+
+@router.get("/teacher-overview/export")
+def export_teacher_overview_excel(
+    period_ids: list[int] = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "supervisor")),
+):
+    """下載老師進度 Excel（摘要 + 明細）。supervisor 只含管轄老師的資料。"""
+    owner_user_ids = None
+    if current_user.role == "supervisor":
+        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    workbook_bytes = build_teacher_overview_workbook(db, period_ids, owner_user_ids)
+    return Response(
+        content=workbook_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": build_content_disposition_header("老師進度.xlsx")},
+    )
 
 
 @router.put("/students/{student_id}/link")
