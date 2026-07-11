@@ -11,13 +11,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session, joinedload
 
-from database import Project, RosterChild, Student, TemplatePeriod
+from database import Project, RosterChild, Student, TemplatePeriod, User
+from services.label_texts import get_label_entry_text
 from services.project_service import (
     get_project_output_prefix,
     get_template_page_layouts,
     make_safe_filename,
     render_and_save_student_album,
 )
+from services.request_limiter import zip_build_limiter
 from services.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -236,81 +238,222 @@ def render_missing_semester_albums(
     db: Session,
     period_ids: list[int],
     roster_child_ids: list[int] | None = None,
+    progress_callback=None,
 ) -> dict:
     """補渲染：找出範圍內缺列印 PDF 的學生相冊並逐一渲染，回傳成功數與失敗清單。
 
     roster_child_ids 給定時只處理勾選的孩子（None 代表全部，含未配對學生）。
+    progress_callback(done, total) 供背景 job 回報進度（先掃出總數再逐本渲染）。
     """
     storage = get_storage()
     selected_ids = set(roster_child_ids) if roster_child_ids is not None else None
-    rendered_count = 0
-    render_errors = []
     render_projects = _load_export_projects(db, period_ids)
     # 批次列舉輸出目錄取代逐檔 exists（R2 上逐檔會慢到 timeout）
     output_keys_by_project = _load_output_keys_by_project(storage, render_projects)
+
+    # 第一遍先掃出待渲染清單，讓進度回報有分母
+    missing_pairs: list[tuple[Project, Student]] = []
     for project in render_projects:
         existing_output_keys = output_keys_by_project[project.id]
-        shared_page_layouts = None
         for student in project.students:
             if selected_ids is not None and student.roster_child_id not in selected_ids:
                 continue
             pdf_key = _student_pdf_key(student, "print")
             if pdf_key and pdf_key in existing_output_keys:
                 continue
-            # 版型逐專案讀一次，避免每個學生重複查詢
-            if shared_page_layouts is None:
-                shared_page_layouts = get_template_page_layouts(project)
-            try:
-                render_and_save_student_album(project, student, project.id, db, shared_page_layouts)
-                rendered_count += 1
-            except Exception as render_error:
-                db.rollback()
-                render_errors.append({"student": student.name, "project": project.name, "error": "渲染失敗"})
-                logger.error("補渲染失敗 project_id=%s student=%s: %s", project.id, student.name, render_error)
+            missing_pairs.append((project, student))
+
+    total_count = len(missing_pairs)
+    if progress_callback:
+        progress_callback(0, total_count)
+    rendered_count = 0
+    render_errors = []
+    # 版型逐專案讀一次，避免每個學生重複查詢
+    layouts_by_project_id: dict[int, list[dict]] = {}
+    for done_count, (project, student) in enumerate(missing_pairs, start=1):
+        if project.id not in layouts_by_project_id:
+            layouts_by_project_id[project.id] = get_template_page_layouts(project)
+        try:
+            render_and_save_student_album(
+                project, student, project.id, db, layouts_by_project_id[project.id]
+            )
+            rendered_count += 1
+        except Exception as render_error:
+            db.rollback()
+            render_errors.append({"student": student.name, "project": project.name, "error": "產生失敗"})
+            logger.error("補渲染失敗 project_id=%s student=%s: %s", project.id, student.name, render_error)
+        if progress_callback:
+            progress_callback(done_count, total_count)
     return {"rendered": rendered_count, "errors": render_errors}
+
+
+def _summarize_student_progress(
+    pages_data: list, page_layouts: list[dict], project_label_texts: dict
+) -> tuple[int, int, int]:
+    """單一學生的（照片已填格數, 照片總格數, 空白輸出文字格數）；略過 skip 頁。
+
+    空白輸出＝依「學生覆寫 > 專案覆寫 > 模板預設」合併後渲染會是空白的文字格
+    （含刻意設為空白），供主管抽查用。
+    """
+    photo_filled_count = 0
+    photo_total_count = 0
+    blank_text_count = 0
+    for page_index, layout in enumerate(page_layouts):
+        page_data = pages_data[page_index] if page_index < len(pages_data) else {}
+        if not isinstance(page_data, dict):
+            page_data = {}
+        if page_data.get("skip"):
+            continue
+        page_photos = page_data.get("photos") or {}
+        for photo_slot in layout.get("photo_slots", []):
+            photo_total_count += 1
+            if page_photos.get(str(photo_slot.get("id"))):
+                photo_filled_count += 1
+        student_page_label_texts = page_data.get("label_texts") or {}
+        project_page_label_texts = project_label_texts.get(str(page_index)) or {}
+        for text_label in layout.get("text_labels", []):
+            label_id = str(text_label.get("id"))
+            effective_text = get_label_entry_text(student_page_label_texts.get(label_id))
+            if effective_text is None:
+                effective_text = get_label_entry_text(project_page_label_texts.get(label_id))
+            if effective_text is None:
+                effective_text = text_label.get("text")
+            if not str(effective_text or "").strip():
+                blank_text_count += 1
+    return photo_filled_count, photo_total_count, blank_text_count
+
+
+def build_teacher_progress_overview(
+    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+) -> dict:
+    """老師進度總覽：範圍內每位可帶班使用者（含尚未建專案者）的各期專案與完成度。
+
+    owner_user_ids 給定時只列這些使用者（主管檢視管轄老師）。
+    尚未建立任何專案的老師以空 projects 呈現——這正是主管追進度要看的對象。
+    """
+    periods = _load_export_periods(db, period_ids)
+    projects = _load_export_projects(db, period_ids, owner_user_ids)
+
+    listed_users_query = db.query(User).filter(User.role.in_(("teacher", "supervisor")))
+    if owner_user_ids is not None:
+        listed_users_query = listed_users_query.filter(User.id.in_(owner_user_ids))
+    teacher_groups: dict = {}
+    for listed_user in listed_users_query.all():
+        teacher_groups[listed_user.id] = {
+            "user_id": listed_user.id,
+            "display_name": listed_user.display_name,
+            "projects": [],
+        }
+
+    # 版型逐模板讀一次；owner 是 admin（過繼）或未指定時補一組群組
+    layouts_by_template: dict[int, list[dict]] = {}
+    for project in projects:
+        if project.template_id not in layouts_by_template:
+            layouts_by_template[project.template_id] = get_template_page_layouts(project)
+        page_layouts = layouts_by_template[project.template_id]
+        try:
+            project_label_texts = json.loads(project.label_texts_json or "{}")
+        except ValueError:
+            project_label_texts = {}
+
+        owner_display_name = project.owner.display_name if project.owner else "（未指定老師）"
+        group_key = project.owner_id if project.owner_id is not None else f"name:{owner_display_name}"
+        teacher_group = teacher_groups.setdefault(group_key, {
+            "user_id": project.owner_id,
+            "display_name": owner_display_name,
+            "projects": [],
+        })
+
+        students_payload = []
+        project_photo_filled = 0
+        project_photo_total = 0
+        project_blank_text_count = 0
+        for student in project.students:
+            try:
+                pages_data = json.loads(student.pages_data_json or "[]")
+            except ValueError:
+                pages_data = []
+            photo_filled, photo_total, blank_text_count = _summarize_student_progress(
+                pages_data if isinstance(pages_data, list) else [],
+                page_layouts,
+                project_label_texts,
+            )
+            project_photo_filled += photo_filled
+            project_photo_total += photo_total
+            project_blank_text_count += blank_text_count
+            students_payload.append({
+                "student_id": student.id,
+                "student_name": student.name,
+                "photo_filled": photo_filled,
+                "photo_total": photo_total,
+                "blank_text_count": blank_text_count,
+            })
+
+        teacher_group["projects"].append({
+            "project_id": project.id,
+            "project_name": project.name,
+            "period_id": project.template_period_id,
+            "student_count": len(students_payload),
+            "photo_filled": project_photo_filled,
+            "photo_total": project_photo_total,
+            "blank_text_count": project_blank_text_count,
+            # 全班完成時間：非 NULL 代表老師已按下「全班完成」
+            "completed_at": project.completed_at.isoformat() if project.completed_at else None,
+            "students": students_payload,
+        })
+
+    return {
+        "periods": [
+            {"id": period.id, "name": period.name, "department": period.department}
+            for period in periods
+        ],
+        "teachers": sorted(teacher_groups.values(), key=lambda group: group["display_name"]),
+    }
 
 
 def build_teacher_overview_workbook(
     db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
 ) -> bytes:
-    """產出老師進度 Excel：摘要（每師一列）與明細（每生一列）兩張工作表。"""
+    """產出老師進度 Excel：摘要（每師一列，含完成度）與明細（每生一列）兩張工作表。"""
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
-    preview = build_semester_export_preview(db, period_ids, owner_user_ids)
-    period_names = {period["id"]: period["name"] for period in preview["periods"]}
-    all_entries = [
-        *[entry for group in preview["children"] for entry in group["entries"]],
-        *preview["unlinked"],
-    ]
-    all_entries.sort(key=lambda entry: (
-        entry["owner_name"] or "", entry["period_id"], entry["project_name"], entry["student_name"]
-    ))
+    overview = build_teacher_progress_overview(db, period_ids, owner_user_ids)
+    period_names = {period["id"]: period["name"] for period in overview["periods"]}
 
     workbook = Workbook()
     header_font = Font(bold=True)
 
     summary_sheet = workbook.active
     summary_sheet.title = "摘要"
-    summary_sheet.append(["老師", "專案數", "學生數"])
-    per_teacher: dict[str, dict] = {}
-    for entry in all_entries:
-        teacher_name = entry["owner_name"] or "（未指定老師）"
-        stats = per_teacher.setdefault(teacher_name, {"projects": set(), "students": 0})
-        stats["projects"].add(entry["project_id"])
-        stats["students"] += 1
-    for teacher_name, stats in sorted(per_teacher.items()):
-        summary_sheet.append([teacher_name, len(stats["projects"]), stats["students"]])
+    summary_sheet.append(["老師", "專案數", "已完成專案", "學生數", "照片已填/總格數", "空白文字格"])
+    for teacher_group in overview["teachers"]:
+        teacher_projects = teacher_group["projects"]
+        photo_filled = sum(project["photo_filled"] for project in teacher_projects)
+        photo_total = sum(project["photo_total"] for project in teacher_projects)
+        summary_sheet.append([
+            teacher_group["display_name"],
+            len(teacher_projects),
+            sum(1 for project in teacher_projects if project["completed_at"]),
+            sum(project["student_count"] for project in teacher_projects),
+            f"{photo_filled}/{photo_total}" if photo_total else ("—" if teacher_projects else "尚未開始"),
+            sum(project["blank_text_count"] for project in teacher_projects),
+        ])
 
     detail_sheet = workbook.create_sheet("明細")
-    detail_sheet.append(["老師", "期別", "專案（班級）", "學生"])
-    for entry in all_entries:
-        detail_sheet.append([
-            entry["owner_name"] or "（未指定老師）",
-            period_names.get(entry["period_id"], "?"),
-            entry["project_name"],
-            entry["student_name"],
-        ])
+    detail_sheet.append(["老師", "期別", "專案（班級）", "學生", "照片已填", "照片總格", "空白文字格"])
+    for teacher_group in overview["teachers"]:
+        for project in teacher_group["projects"]:
+            for student in project["students"]:
+                detail_sheet.append([
+                    teacher_group["display_name"],
+                    period_names.get(project["period_id"], "?"),
+                    project["project_name"],
+                    student["student_name"],
+                    student["photo_filled"],
+                    student["photo_total"],
+                    student["blank_text_count"],
+                ])
 
     for sheet in (summary_sheet, detail_sheet):
         for cell in sheet[1]:
@@ -326,14 +469,34 @@ def build_teacher_overview_workbook(
     return output_buffer.read()
 
 
-def build_semester_export_zip(
+class _StreamingZipBuffer(io.RawIOBase):
+    """收集 zipfile 寫出的 bytes 供逐段吐出（非 seekable，zipfile 自動改走 data descriptor）。"""
+
+    def __init__(self):
+        self._pending_chunks: list[bytes] = []
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        self._pending_chunks.append(bytes(data))
+        return len(data)
+
+    def drain(self) -> list[bytes]:
+        drained_chunks, self._pending_chunks = self._pending_chunks, []
+        return drained_chunks
+
+
+def _plan_semester_export_zip(
     db: Session,
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
-) -> bytes:
-    """打包學期匯出 ZIP：孩子/期別_孩子.pdf，匯出說明含規則、班級對照與缺漏。
+) -> tuple[list[tuple[str, str]], str]:
+    """規劃 ZIP 內容：回傳（[(壓縮檔內路徑, storage key)], 匯出說明文字）。
 
+    所有 DB 查詢與 storage 列舉都在此完成，串流階段只逐檔讀 bytes —
+    避免 StreamingResponse 送出期間相依的 DB session 已被回收。
     roster_child_ids 給定時只匯出勾選的孩子（None 代表全部）。
     """
     preview = build_semester_export_preview(db, period_ids)
@@ -355,56 +518,87 @@ def build_semester_export_zip(
         for student in project.students:
             students_by_id[student.id] = student
 
+    zip_entries: list[tuple[str, str]] = []
     missing_notes = []
     used_folder_names: set[str] = set()
-    output_buffer = io.BytesIO()
-    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
-        for group in preview["children"]:
-            child_name = make_safe_filename(group["name"])
-            # 資料夾＝孩子姓名；同名不同人以（最新班級）區分，仍撞名才加流水號
-            folder_name = child_name
-            if folder_name in used_folder_names:
-                folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）"
-            suffix_number = 2
-            while folder_name in used_folder_names:
-                folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）{suffix_number}"
-                suffix_number += 1
-            used_folder_names.add(folder_name)
+    for group in preview["children"]:
+        child_name = make_safe_filename(group["name"])
+        # 資料夾＝孩子姓名；同名不同人以（最新班級）區分，仍撞名才加流水號
+        folder_name = child_name
+        if folder_name in used_folder_names:
+            folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）"
+        suffix_number = 2
+        while folder_name in used_folder_names:
+            folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）{suffix_number}"
+            suffix_number += 1
+        used_folder_names.add(folder_name)
 
-            used_file_names: set[str] = set()
-            sorted_entries = sorted(
-                group["entries"], key=lambda entry: period_order.get(entry["period_id"], 99)
-            )
-            for entry in sorted_entries:
-                student = students_by_id.get(entry["student_id"])
-                pdf_key = _student_pdf_key(student, output_mode) if student else None
-                if not pdf_key or pdf_key not in output_keys_by_project.get(entry["project_id"], set()):
-                    missing_notes.append(
-                        f"{group['name']}：{period_names.get(entry['period_id'], '?')}"
-                        f"（{entry['project_name']}）尚未渲染，未納入"
-                    )
-                    continue
-                # 檔名＝期別_孩子；同期有多個專案（轉班等）才附專案名區分
-                period_label = make_safe_filename(period_names.get(entry["period_id"], "期別"))
-                file_name = f"{period_label}_{child_name}.pdf"
-                if file_name in used_file_names:
-                    file_name = f"{period_label}_{child_name}_{make_safe_filename(entry['project_name'])}.pdf"
-                if file_name in used_file_names:
-                    file_name = f"{file_name[:-4]}_{entry['student_id']}.pdf"
-                used_file_names.add(file_name)
-                zip_archive.writestr(f"{folder_name}/{file_name}", storage.get_bytes(pdf_key))
-
-        for entry in preview["unlinked"]:
-            missing_notes.append(
-                f"待確認：{entry['student_name']}（{entry['project_name']}）"
-                f"未完成名冊配對，未納入"
-            )
-        zip_archive.writestr(
-            "匯出說明.txt", _build_export_manifest(preview, missing_notes)
+        used_file_names: set[str] = set()
+        sorted_entries = sorted(
+            group["entries"], key=lambda entry: period_order.get(entry["period_id"], 99)
         )
+        for entry in sorted_entries:
+            student = students_by_id.get(entry["student_id"])
+            pdf_key = _student_pdf_key(student, output_mode) if student else None
+            if not pdf_key or pdf_key not in output_keys_by_project.get(entry["project_id"], set()):
+                missing_notes.append(
+                    f"{group['name']}：{period_names.get(entry['period_id'], '?')}"
+                    f"（{entry['project_name']}）尚未產生 PDF，未納入"
+                )
+                continue
+            # 檔名＝期別_孩子；同期有多個專案（轉班等）才附專案名區分
+            period_label = make_safe_filename(period_names.get(entry["period_id"], "期別"))
+            file_name = f"{period_label}_{child_name}.pdf"
+            if file_name in used_file_names:
+                file_name = f"{period_label}_{child_name}_{make_safe_filename(entry['project_name'])}.pdf"
+            if file_name in used_file_names:
+                file_name = f"{file_name[:-4]}_{entry['student_id']}.pdf"
+            used_file_names.add(file_name)
+            zip_entries.append((f"{folder_name}/{file_name}", pdf_key))
 
-    output_buffer.seek(0)
-    return output_buffer.read()
+    for entry in preview["unlinked"]:
+        missing_notes.append(
+            f"待確認：{entry['student_name']}（{entry['project_name']}）"
+            f"未完成名冊配對，未納入"
+        )
+    return zip_entries, _build_export_manifest(preview, missing_notes)
+
+
+def open_semester_export_zip_stream(
+    db: Session,
+    period_ids: list[int],
+    output_mode: str,
+    roster_child_ids: list[int] | None = None,
+):
+    """學期匯出 ZIP 串流：先佔 zip 併發槽（滿載回 503），回傳逐段 chunk 產生器。
+
+    邊壓邊送取代整包 BytesIO：峰值記憶體從整包 ZIP 降為單一 PDF，
+    下載也會立即開始而不是等整包組完。產生器結束（含中斷）時釋放併發槽。
+    """
+    limiter_context = zip_build_limiter.acquire("學期匯出 ZIP 正在產生中，請稍後再試")
+    limiter_context.__enter__()
+    try:
+        zip_entries, manifest_text = _plan_semester_export_zip(
+            db, period_ids, output_mode, roster_child_ids
+        )
+    except BaseException:
+        limiter_context.__exit__(None, None, None)
+        raise
+    storage = get_storage()
+
+    def stream_zip_chunks():
+        try:
+            zip_buffer = _StreamingZipBuffer()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
+                for archive_path, pdf_key in zip_entries:
+                    zip_archive.writestr(archive_path, storage.get_bytes(pdf_key))
+                    yield from zip_buffer.drain()
+                zip_archive.writestr("匯出說明.txt", manifest_text)
+            yield from zip_buffer.drain()
+        finally:
+            limiter_context.__exit__(None, None, None)
+
+    return stream_zip_chunks()
 
 
 def _build_export_manifest(preview: dict, missing_notes: list[str]) -> str:

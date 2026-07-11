@@ -93,7 +93,7 @@ export default function PhotoSlotCard({ it, url, nat, disabled, onImgLoad, imgRe
             onLoad={onImgLoad}
           />
         ) : (
-          !disabled && <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none", pointerEvents: "none" }}>P{it.pi + 1}·{it.slotIndex + 1}</span>
+          !disabled && <span style={{ fontSize: 10, color: "#AAAAAA", userSelect: "none", pointerEvents: "none" }}>格{it.slotIndex + 1}</span>
         )}
       </div>
     </div>

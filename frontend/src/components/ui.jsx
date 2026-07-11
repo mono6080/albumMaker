@@ -7,6 +7,8 @@ function cn(...classes) {
 const buttonBaseClass =
   "inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg text-center font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40";
 
+// 色彩語意約定：indigo＝主要動作/導航、violet(review)＝班級總覽相關、
+// emerald(success)＝下載 PDF 與完成狀態、sky(info)＝圖片相關、red＝破壞性
 const buttonVariantClass = {
   primary: "bg-indigo-600 text-white shadow-sm hover:bg-indigo-700",
   secondary: "border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100",
@@ -16,6 +18,8 @@ const buttonVariantClass = {
   successSoft: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
   info: "bg-sky-600 text-white shadow-sm hover:bg-sky-700",
   infoSoft: "bg-sky-50 text-sky-700 hover:bg-sky-100",
+  review: "bg-violet-600 text-white shadow-sm hover:bg-violet-700",
+  reviewSoft: "border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100",
   danger: "bg-red-600 text-white shadow-sm hover:bg-red-700",
   dangerSoft: "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
   ghost: "text-gray-500 hover:bg-gray-100 hover:text-gray-700",
@@ -69,10 +73,12 @@ export const Button = forwardRef(function Button(
   );
 });
 
+// IconButton 的 variant 一律是「淡色 tint」（非實心），與 Button 的同名 variant 視覺權重不同
 const iconButtonVariantClass = {
   neutral: "text-gray-400 hover:bg-gray-100 hover:text-gray-600",
   primary: "text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700",
   success: "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700",
+  info: "text-sky-600 hover:bg-sky-50 hover:text-sky-700",
   danger: "text-gray-400 hover:bg-red-50 hover:text-red-500",
   subtle: "text-gray-300 hover:bg-gray-100 hover:text-gray-600",
 };
@@ -158,9 +164,10 @@ const badgeToneClass = {
   review: "bg-violet-100 text-violet-700",
 };
 
-export function Badge({ tone = "neutral", className = "", children }) {
+export function Badge({ tone = "neutral", className = "", title, children }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
         badgeToneClass[tone] ?? badgeToneClass.neutral,

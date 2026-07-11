@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
+import ConfirmModal from "./ConfirmModal";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
@@ -120,7 +121,7 @@ function PhotoEditModal({
         {/* Modal header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
           <div>
-            <div className="font-semibold text-gray-900 text-sm">編輯照片 — P{it.pi+1} 格{it.slotIndex + 1}</div>
+            <div className="font-semibold text-gray-900 text-sm">編輯照片 — 第{it.pi + 1}頁 格{it.slotIndex + 1}</div>
             <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
           </div>
           <button
@@ -261,7 +262,11 @@ function PhotoEditModal({
 }
 
 
-export default function PhotoManager({ projectId, studentId, pages, student, onSaved, onPhotoSaved, disabled = false, skippedPages = new Set() }) {
+// activePage：與預覽/文字面板同步的當前頁（null＝顯示全部頁，相容舊用法）；
+// 檢視範圍可切「本頁／整本」：顯示、多選上傳與空格計算跟著檢視走，
+// 整本模式可一次上傳全書照片、跨頁拖曳調換；存檔邏輯永遠涵蓋整本。
+// onPageFocus：整本模式點某格時回報該頁，讓預覽/文字面板同步跳頁
+export default function PhotoManager({ projectId, studentId, pages, student, onPhotoSaved, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
       (p.layout?.photo_slots || []).map((s, slotIndex) => ({
@@ -288,6 +293,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   // uploadStatus: null = 閒置；otherwise { phase, percent }
   const [uploadStatus, setUploadStatus] = useState(null);
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
+  // 本次進入頁面後是否成功存過照片：給「✓ 已儲存」正向回饋（與文字面板的存檔指示對齊）
+  const [hasSavedPhotos, setHasSavedPhotos] = useState(false);
+  // 待確認刪除的格位索引（刪照片要重傳，先確認再刪）
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(null);
   const [isTouchDevice] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(hover: none)").matches
   );
@@ -304,8 +313,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   // Refs for auto-save (avoid stale closures)
   const itemsRef = useRef(items);
   useEffect(() => { itemsRef.current = items; }, [items]);
-  const onSavedRef = useRef(onSaved);
-  useEffect(() => { onSavedRef.current = onSaved; }, [onSaved]);
   const onPhotoSavedRef = useRef(onPhotoSaved);
   useEffect(() => { onPhotoSavedRef.current = onPhotoSaved; }, [onPhotoSaved]);
   const autoSaveTimerRef = useRef(null);
@@ -442,6 +449,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
         if (Object.keys(uploadedPaths).length || Object.keys(pagesMap).length) {
           setPhotoRefreshKey(Date.now());
+          setHasSavedPhotos(true);
           onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
         }
         const failureList = Object.values(uploadFailures);
@@ -521,8 +529,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const isDirty = (it) =>
     it.pendingFile !== null || it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
   const hasDirty = items.some(isDirty);
+  // 檢視範圍：page＝跟著全域頁碼、book＝整本（一次上傳全書、跨頁調換用）
+  const [viewScope, setViewScope] = useState("page");
+  const effectiveActivePage = viewScope === "book" ? null : activePage;
+  const isOnActivePage = (it) => effectiveActivePage == null || it.pi === effectiveActivePage;
+  // 換頁或換檢視時清除觸控選取：被選格會因過濾隱藏，殘留選取會讓
+  // 下一次點擊和「看不見的格子」交換照片
+  useEffect(() => { setSelectedIdx(null); }, [activePage, viewScope]);
   const availableEmptyCount = items.filter(it =>
-    !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
+    !disabled && isOnActivePage(it) && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
   ).length;
 
   const photoUrlVersion = (it) => [
@@ -555,10 +570,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   const handleMultiUpload = (files) => {
     const arr = Array.from(files);
     const emptyCount = itemsRef.current.filter(it =>
-      !disabled && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
+      !disabled && isOnActivePage(it) && !skippedPages.has(it.pi) && !it.pendingFile && !it.serverPath
     ).length;
     if (emptyCount === 0) {
-      toast.error("沒有剩餘空格可上傳");
+      toast.error(effectiveActivePage != null ? "本頁沒有剩餘空格可上傳" : "沒有剩餘空格可上傳");
       return;
     }
     const acceptedFiles = arr.slice(0, emptyCount);
@@ -571,7 +586,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       let fi = 0;
       for (let i = 0; i < prev.length && fi < acceptedFiles.length; i++) {
         const it = prev[i];
-        if (disabled || skippedPages.has(it.pi) || it.pendingFile || it.serverPath) continue;
+        if (disabled || !isOnActivePage(it) || skippedPages.has(it.pi) || it.pendingFile || it.serverPath) continue;
         assignFile(next, i, acceptedFiles[fi++]);
       }
       return next;
@@ -604,6 +619,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
   const handleSwap = (i, j) => {
     if (i === j || i == null || j == null) return;
+    // 不把照片搬進/搬出已刪除頁：DnD 有 dropDisabled 擋，
+    // 但觸控點擊與左右移按鈕路徑也會走到這裡
+    if (skippedPages.has(items[i]?.pi) || skippedPages.has(items[j]?.pi)) return;
     setItems(prev => {
       const next = [...prev];
       const a = prev[i], b = prev[j];
@@ -714,7 +732,21 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const filledCount = items.filter(it => displayUrl(it)).length;
+  const visibleItems = items.filter(isOnActivePage);
+  // 計數排除已刪除頁：已刪除頁的格子照樣渲染（標示已刪除），但不算進度
+  const countableItems = visibleItems.filter(it => !skippedPages.has(it.pi));
+  const filledCount = countableItems.filter(it => displayUrl(it)).length;
+  // 照片卡固定 110px 高、寬依格位長寬比（見 PhotoSlotCard），取最寬者決定格線欄寬
+  const maxSlotCardWidth = visibleItems.length
+    ? Math.max(...visibleItems.map(it => Math.round(110 * it.slotW / it.slotH)))
+    : 110;
+  // 左右移的合法目標：目前檢視中、非刪除頁的格子（依 items 原始順序）
+  const swappableIndexes = items
+    .map((it, itemIndex) => ({ it, itemIndex }))
+    .filter(({ it }) => isOnActivePage(it) && !skippedPages.has(it.pi))
+    .map(({ itemIndex }) => itemIndex);
+  // 整本檢視時在每頁第一格前插入頁標，維持方向感
+  const showPageGroupHeaders = effectiveActivePage == null && activePage != null;
   const uploadPercent = uploadStatus?.percent ?? 0;
   const uploadLabel = uploadStatusLabel(uploadStatus);
 
@@ -748,19 +780,51 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
         />
       )}
 
+      {/* 刪除照片確認：刪了要重傳，成本不低 */}
+      <ConfirmModal
+        isOpen={confirmDeleteIdx !== null}
+        message="確定刪除這格照片？刪除後需要重新上傳。"
+        confirmLabel="刪除照片"
+        onConfirm={() => { handleDelete(confirmDeleteIdx); setConfirmDeleteIdx(null); }}
+        onCancel={() => setConfirmDeleteIdx(null)}
+      />
+
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <Images className="w-4 h-4 text-amber-500 flex-shrink-0" />
         <h3 className="font-semibold text-gray-800 text-sm flex-shrink-0">照片管理</h3>
         <span className="text-xs text-gray-400 min-w-0">
-          {filledCount} / {allSlots.length} 格
+          {activePage != null && (effectiveActivePage != null ? `第 ${activePage + 1} 頁・` : "整本・")}{filledCount} / {countableItems.length} 格
           {uploadStatus !== null
             ? <span className="text-indigo-600 ml-1">↑ {uploadLabel} {uploadPercent}%</span>
-            : hasDirty && <span className="text-amber-600 ml-1">● 未儲存</span>
+            : hasDirty
+              ? <span className="text-amber-600 ml-1">● 未儲存</span>
+              : hasSavedPhotos && <span className="text-emerald-600 ml-1">✓ 已儲存</span>
           }
         </span>
-        <div className="ml-auto flex flex-shrink-0 gap-2" style={{ visibility: disabled ? "hidden" : "visible" }}>
+        <div className="ml-auto flex flex-shrink-0 gap-2">
+          {/* 檢視範圍切換：整本＝一次上傳全書、跨頁拖曳調換（唯讀時仍可切換瀏覽） */}
+          {activePage != null && (
+            <div data-guide="student-photo-scope" className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+              {[{ value: "page", label: "本頁" }, { value: "book", label: "整本" }].map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setViewScope(option.value)}
+                  aria-pressed={viewScope === option.value}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    viewScope === option.value
+                      ? "bg-white text-gray-900 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
           <button
+            style={{ visibility: disabled ? "hidden" : "visible" }}
             onClick={() => multiRef.current?.click()}
             disabled={disabled || availableEmptyCount === 0}
             data-guide="student-multi-upload"
@@ -797,13 +861,20 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
       >
       <div
         data-guide="student-photo-grid"
-        className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:[grid-template-columns:repeat(auto-fit,minmax(12rem,1fr))]"
+        className="grid gap-3"
+        // 欄寬跟著最寬的照片卡走：卡片是固定像素尺寸（PIL 對位需要），
+        // 固定欄數在窄螢幕會讓寬格位溢出格子
+        style={{
+          gridTemplateColumns: `repeat(auto-fill, minmax(min(${maxSlotCardWidth + 24}px, 100%), 1fr))`,
+        }}
         onClick={e => {
           // Tap outside any cell deselects on touch
           if (isTouchDevice && e.target === e.currentTarget) setSelectedIdx(null);
         }}
       >
         {items.map((it, idx) => {
+          // 只渲染當前頁的格子；items 索引保留給拖曳/交換 handler 使用
+          if (!isOnActivePage(it)) return null;
           const url = displayUrl(it);
           const thumbUrl = thumbnailUrl(it);
           const dirty = isDirty(it);
@@ -811,9 +882,19 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           const nat = aspectMap[rk];
           const isSelected = isTouchDevice && selectedIdx === idx;
           const isItemDisabled = disabled || skippedPages.has(it.pi);
+          // 左右移只在「目前檢視中、非刪除頁」的格子間移動，避免把照片搬進看不見的頁
+          const swapPosition = swappableIndexes.indexOf(idx);
+          const swapPrevIdx = swapPosition > 0 ? swappableIndexes[swapPosition - 1] : null;
+          const swapNextIdx = swapPosition >= 0 && swapPosition < swappableIndexes.length - 1
+            ? swappableIndexes[swapPosition + 1]
+            : null;
+          // 整本檢視的頁界標示
+          const isFirstOfPage = idx === 0 || items[idx - 1]?.pi !== it.pi;
 
           const handleCellClick = () => {
             if (isItemDisabled) return;
+            // 整本模式：點格讓預覽/文字面板同步跳到該頁
+            if (effectiveActivePage == null && activePage != null && it.pi !== activePage) onPageFocus?.(it.pi);
             if (isTouchDevice) {
               // 已選取另一格 → 點此格直接交換（空格 = 移動過去）
               if (selectedIdx != null && selectedIdx !== idx) {
@@ -829,7 +910,16 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
           };
 
           return (
-            <DndCell key={rk} cellIndex={idx} dragDisabled={!url || isItemDisabled} dropDisabled={isItemDisabled}>
+            <Fragment key={rk}>
+            {showPageGroupHeaders && isFirstOfPage && (
+              <div className="col-span-full -mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-gray-500">
+                第 {it.pi + 1} 頁
+                {skippedPages.has(it.pi) && (
+                  <span className="rounded bg-red-50 px-1 py-0.5 text-[10px] font-medium text-red-400">已刪除</span>
+                )}
+              </div>
+            )}
+            <DndCell cellIndex={idx} dragDisabled={!url || isItemDisabled} dropDisabled={isItemDisabled}>
               {({ dndRef, dndListeners, isDragging, isOver }) => {
                 const isDragOver = isOver && activeDragIndex !== null && activeDragIndex !== idx;
                 return (
@@ -875,7 +965,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
                       className="w-7 h-7 bg-white/20 hover:bg-white/40 rounded-lg flex items-center justify-center transition-colors">
                       <RefreshCw className="w-3 h-3 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); handleDelete(idx); }} title="刪除"
+                    <button onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); }} title="刪除"
                       className="w-7 h-7 bg-red-500/70 hover:bg-red-600 rounded-lg flex items-center justify-center transition-colors">
                       <X className="w-3 h-3 text-white" />
                     </button>
@@ -890,15 +980,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
                   {/* Top row: move left / move right */}
                   <div className="flex gap-2">
                     <button
-                      onClick={e => { e.stopPropagation(); if (idx > 0) { handleSwap(idx, idx - 1); setSelectedIdx(idx - 1); } }}
-                      disabled={idx === 0}
+                      onClick={e => { e.stopPropagation(); if (swapPrevIdx != null) { handleSwap(idx, swapPrevIdx); setSelectedIdx(swapPrevIdx); } }}
+                      disabled={swapPrevIdx == null}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
                     >
                       <ChevronLeft className="w-4 h-4 text-white" />
                     </button>
                     <button
-                      onClick={e => { e.stopPropagation(); if (idx < items.length - 1) { handleSwap(idx, idx + 1); setSelectedIdx(idx + 1); } }}
-                      disabled={idx === items.length - 1}
+                      onClick={e => { e.stopPropagation(); if (swapNextIdx != null) { handleSwap(idx, swapNextIdx); setSelectedIdx(swapNextIdx); } }}
+                      disabled={swapNextIdx == null}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
                     >
                       <ChevronRight className="w-4 h-4 text-white" />
@@ -914,7 +1004,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center transition-colors">
                       <RefreshCw className="w-4 h-4 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); handleDelete(idx); setSelectedIdx(null); }}
+                    <button onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); setSelectedIdx(null); }}
                       className="w-9 h-9 bg-red-500/70 active:bg-red-600 rounded-xl flex items-center justify-center transition-colors">
                       <X className="w-4 h-4 text-white" />
                     </button>
@@ -924,7 +1014,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
 
               {/* Slot label */}
               <div className="absolute bottom-1 left-0 right-0 text-center text-[10px] text-gray-400 pointer-events-none select-none">
-                P{it.pi + 1}·{it.slotIndex + 1}
+                第{it.pi + 1}頁·格{it.slotIndex + 1}
               </div>
 
               {/* File input lives in the cell, not the card */}
@@ -935,6 +1025,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onS
                 );
               }}
             </DndCell>
+            </Fragment>
           );
         })}
       </div>

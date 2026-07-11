@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { fetchProject as getProject, renderStudent } from "../api/projectApi";
+import { completeProject, fetchProject as getProject, renderStudent, reopenProject } from "../api/projectApi";
 import { fetchTemplate as getTemplate } from "../api/templateApi";
 import {
   buildStudentPagePreviewUrl as previewUrl,
@@ -13,7 +13,6 @@ import {
 import { apiClient, renderClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
-import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import {
   Badge,
   Button,
@@ -24,11 +23,15 @@ import {
   fieldControlClass,
 } from "../components/ui";
 import {
-  ChevronRight, CircleHelp, Download, ImageDown, Loader2, Eye, Pencil, Package,
+  ChevronRight, CircleHelp, Download, ImageDown, Loader2, Pencil, Package,
   CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2, ImageOff,
-  Search, Users,
+  RotateCcw, Search, Users,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
+import { showRetryToast } from "../utils/retryToast";
+import { computeStudentPhotoProgress } from "../utils/photoProgress";
+import ConfirmModal from "../components/ConfirmModal";
+import RosterModal from "../components/RosterModal";
 import {
   createFileFromBlob,
   downloadApiBlob,
@@ -41,45 +44,45 @@ import {
 const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-progress"]',
-    title: "輸出進度",
-    description: "這裡會顯示已產生 PDF 的學生數，也能搜尋或只看待產生的學生，方便最後檢查。",
+    title: "班級進度與下一步",
+    description: "一條看完班級進度：照片進度、缺照片人數（點它會篩選出誰還缺），右側依階段建議下一步：製作 → 全班完成 → 交件。",
     side: "bottom",
     align: "start",
+  },
+  {
+    element: '[data-guide="review-roster-button"]',
+    title: "學生名單",
+    description: "在這裡管理學生：批次貼上新增、行內改名或刪除。名單就緒後再放素材與照片。",
+    side: "bottom",
+    align: "end",
   },
   {
     element: '[data-guide="review-student-card"]',
     title: "學生卡片",
-    description: "每張卡片是一位學生，可看縮圖、進入個人編輯、快速預覽或下載單位學生檔案。",
+    description: "每張卡片是一位學生：照片進度、PDF 狀態一目了然，點卡片直接進入編輯。",
     side: "top",
-    align: "start",
-  },
-  {
-    element: '[data-guide="review-edit-student"]',
-    title: "編輯學生",
-    description: "進入個人編輯頁，上傳照片、覆寫文字、切換學生並確認預覽。",
-    side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="review-preview-student"]',
     title: "快速預覽",
-    description: "不進入編輯頁也能快速打開此學生的頁面預覽。",
+    description: "點任一頁縮圖即可放大預覽，不用進編輯頁。",
     side: "bottom",
     align: "center",
   },
   {
     element: '[data-guide="review-download-student"]',
-    title: "下載單位學生",
+    title: "下載單一學生",
     description: "只產出並下載這位學生的 PDF；圖片按鈕在電腦下載 ZIP，手機會開啟系統分享。",
     side: "bottom",
     align: "end",
   },
   {
     element: '[data-guide="review-download-all"]',
-    title: "下載全部 ZIP",
-    description: "所有學生確認完成後，用這裡批次產生並下載 PDF ZIP；全部圖片在電腦下載 ZIP，手機會準備圖片後開啟分享。",
-    side: "bottom",
-    align: "end",
+    title: "交件下載",
+    description: "批次產生並下載全班 PDF ZIP；全部圖片在電腦下載 ZIP，手機會準備圖片後開啟分享。",
+    side: "left",
+    align: "center",
   },
   {
     element: '[data-guide="review-comments"]',
@@ -272,6 +275,8 @@ export default function ProjectReview() {
   const [outputMode, setOutputMode] = useState("print");
   const [studentStatusFilter, setStudentStatusFilter] = useState("all");
   const [studentSearch, setStudentSearch] = useState("");
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [isRosterOpen, setIsRosterOpen] = useState(false);
 
   // ── 留言 ──────────────────────────────────────────────────────────────────
   const [comments, setComments] = useState([]);
@@ -311,26 +316,6 @@ export default function ProjectReview() {
     return Array.from({ length: template?.pages.length ?? 0 }, (_, pageIndex) => pageIndex)
       .filter(pageIndex => !skippedPages.has(pageIndex));
   }, [template]);
-
-  const showRetryToast = (message, onRetry) => {
-    toast.custom(t => (
-      <div className={`flex items-center gap-3 bg-white border border-red-200 rounded-xl shadow-lg px-4 py-3 transition-opacity ${t.visible ? "opacity-100" : "opacity-0"}`}>
-        <span className="text-sm text-red-600 font-medium">{message}</span>
-        <button
-          onClick={() => { toast.dismiss(t.id); onRetry(); }}
-          className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg transition-colors font-medium"
-        >
-          重試
-        </button>
-        <button
-          onClick={() => toast.dismiss(t.id)}
-          className="text-gray-400 hover:text-gray-600 text-xs"
-        >
-          ✕
-        </button>
-      </div>
-    ), { duration: 8000 });
-  };
 
   const handleDownloadOne = async (studentId) => {
     setRendering(prev => ({ ...prev, [studentId]: true }));
@@ -515,19 +500,69 @@ export default function ProjectReview() {
     }
   };
 
-  const handleDeleteComment = async (commentId) => {
-    try {
-      await apiClient.delete(`/projects/${id}/comments/${commentId}`);
-      await loadComments();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "刪除失敗");
-    }
+  // ── 全班完成 / 退回 ───────────────────────────────────────────────────────
+
+  const handleCompleteProject = () => {
+    setConfirmModal({
+      message: "確定標記「全班完成」？完成後全班照片與文字將鎖定，需主管或管理員退回才能再修改；仍可預覽與下載。",
+      confirmLabel: "全班完成",
+      confirmVariant: "success",
+      onConfirm: async () => {
+        try {
+          await completeProject(id);
+          toast.success("已標記全班完成");
+          await loadProject();
+        } catch {
+          toast.error("標記完成失敗");
+        }
+      },
+    });
+  };
+
+  const handleReopenProject = () => {
+    setConfirmModal({
+      message: "退回後老師即可再修改全班照片與文字。確定退回「全班完成」？",
+      confirmLabel: "退回修改",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        try {
+          await reopenProject(id);
+          toast.success("已退回，恢復可編輯");
+          await loadProject();
+        } catch {
+          toast.error("退回失敗");
+        }
+      },
+    });
+  };
+
+  // 刪除留言不可復原，先經 ConfirmModal 確認
+  const handleDeleteComment = (commentId) => {
+    setConfirmModal({
+      message: "確定刪除這則留言？刪除後無法復原。",
+      confirmLabel: "刪除",
+      confirmVariant: "danger",
+      onConfirm: async () => {
+        try {
+          await apiClient.delete(`/projects/${id}/comments/${commentId}`);
+          await loadComments();
+        } catch (error) {
+          toast.error(error.response?.data?.detail || "刪除失敗");
+        }
+      },
+    });
   };
 
   const startGuide = () => {
+    // 沒有編輯權限時，過濾掉只有編輯者看得到的導覽元素
+    const editOnlyGuideElements = [
+      '[data-guide="review-roster-button"]',
+      '[data-guide="review-download-student"]',
+      '[data-guide="review-download-all"]',
+    ];
     const guideSteps = canEditCurrentProject
       ? PROJECT_REVIEW_GUIDE_STEPS
-      : PROJECT_REVIEW_GUIDE_STEPS.filter(step => step.element !== '[data-guide="review-edit-student"]');
+      : PROJECT_REVIEW_GUIDE_STEPS.filter(step => !editOnlyGuideElements.includes(step.element));
     startProductGuide(guideSteps);
   };
 
@@ -543,14 +578,39 @@ export default function ProjectReview() {
   );
 
   const pageCount = template.pages.length;
-  const doneCount = project.students.filter(s => s.output_filename).length;
-  const pendingCount = project.students.length - doneCount;
+  const isBatchRendering = renderingAll || renderingAllImages;
+  const isAllImagesShareReady = isMobileDevice() && allImagesShareDraft?.files?.length > 0;
+  const canEditCurrentProject = canEditProject(project.owner_id);
+  const isProjectCompleted = Boolean(project.completed_at);
+  // 退回權限：admin 或主管（後端會再驗證管轄範圍）
+  const canReopenProject = isAdmin || currentUser?.role === "supervisor";
+
+  // ── 班級工作台：照片進度與階段判斷 ─────────────────────────────────────────
+  // 階段 1 製作中（有照片格未填）→ 階段 2 照片備齊（可標記完成）→ 階段 3 已完成（交件）
+  const photoProgressByStudentId = new Map(
+    project.students.map(student => [
+      student.id,
+      computeStudentPhotoProgress(student.pages_data, template.pages),
+    ])
+  );
+  const classPhotoFilled = [...photoProgressByStudentId.values()].reduce((sum, progress) => sum + progress.filled, 0);
+  const classPhotoTotal = [...photoProgressByStudentId.values()].reduce((sum, progress) => sum + progress.total, 0);
+  const incompleteStudents = project.students.filter(student => {
+    const progress = photoProgressByStudentId.get(student.id);
+    return progress.total > 0 && progress.filled < progress.total;
+  });
+  // 純文字模板（沒有照片格）沒有「製作照片」階段，直接視為可標記完成
+  const workStage = isProjectCompleted ? 3 : classPhotoTotal === 0 || incompleteStudents.length === 0 ? 2 : 1;
+
+  // 篩選以照片進度為軸（PDF 狀態是輸出產物，不當篩選依據）
   const trimmedStudentSearch = studentSearch.trim().toLowerCase();
   const visibleStudents = project.students.filter(student => {
+    const progress = photoProgressByStudentId.get(student.id);
+    const isPhotoComplete = progress.total === 0 || progress.filled === progress.total;
     const matchesStatus =
       studentStatusFilter === "all" ||
-      (studentStatusFilter === "done" && !!student.output_filename) ||
-      (studentStatusFilter === "pending" && !student.output_filename);
+      (studentStatusFilter === "incomplete" && !isPhotoComplete) ||
+      (studentStatusFilter === "complete" && isPhotoComplete);
     const matchesSearch =
       !trimmedStudentSearch ||
       (student.name ?? "").toLowerCase().includes(trimmedStudentSearch);
@@ -558,146 +618,243 @@ export default function ProjectReview() {
   });
   const reviewStatusFilterOptions = [
     { value: "all", label: "全部", icon: Users, guideId: "review-filter-all" },
-    { value: "pending", label: "待產生", icon: Clock, guideId: "review-filter-pending" },
-    { value: "done", label: "已產生", icon: CheckCircle2, guideId: "review-filter-done" },
+    { value: "incomplete", label: "缺照片", icon: Clock, guideId: "review-filter-pending" },
+    { value: "complete", label: "照片齊", icon: CheckCircle2, guideId: "review-filter-done" },
   ];
   const emptyFilteredStudentMessage = trimmedStudentSearch
     ? `沒有符合「${studentSearch.trim()}」的學生`
     : "目前篩選沒有學生";
-  const isBatchRendering = renderingAll || renderingAllImages;
-  const isAllImagesShareReady = isMobileDevice() && allImagesShareDraft?.files?.length > 0;
-  const canEditCurrentProject = canEditProject(project.owner_id);
 
   return (
     <div className="w-full">
       <PageHeader
         title={project.name}
-        badge={<Badge tone="success">輸出</Badge>}
+        badge={(
+          <>
+            <Badge tone="review">班級總覽</Badge>
+            {isProjectCompleted && (
+              <Badge tone="success" title={`完成於 ${new Date(project.completed_at).toLocaleString("zh-TW")}`}>
+                ✓ 全班完成
+              </Badge>
+            )}
+          </>
+        )}
         meta={(
-          <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
-            <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
-            <span className="hidden sm:inline">相本專案</span>
-          </Button>
+          <>
+            <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
+              <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
+              相本專案
+            </Button>
+          </>
         )}
         actions={(
-        <ResponsiveActionGroup mobileColumns={3}>
-          {/* 完整畫質切換：僅 admin 可見 */}
-          {canDownloadPrint && (
-            <SegmentedControl
-              value={outputMode}
-              onChange={setOutputMode}
-              size="sm"
-              className="col-span-3 sm:w-auto"
-              options={[
-                { value: "print", label: "完整畫質", icon: Printer },
-                { value: "screen", label: "螢幕顯示", icon: Monitor },
-              ]}
-            />
-          )}
-          <Button
-            type="button"
-            onClick={startGuide}
-            variant="secondary"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            <CircleHelp className="w-4 h-4" />
-            <span className="truncate">製作教學</span>
-          </Button>
-          <Button
-            onClick={handleDownloadAll}
-            disabled={isBatchRendering || project.students.length === 0}
-            data-guide="review-download-all"
-            variant="success"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            {renderingAll
-              ? <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {renderAllProgress
-                    ? <span>{renderAllProgress.current}/{renderAllProgress.total}</span>
-                    : <span className="hidden sm:inline">產生中...</span>
-                  }
-                </>
-              : <><Package className="w-4 h-4" /><span>PDF ZIP</span></>
-            }
-          </Button>
-          <Button
-            onClick={handleDownloadAllImages}
-            disabled={isBatchRendering || project.students.length === 0}
-            variant="info"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            {renderingAllImages
-              ? <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {renderAllImagesProgress
-                    ? <span>{renderAllImagesProgress.current}/{renderAllImagesProgress.total}</span>
-                    : <span className="hidden sm:inline">產生中...</span>
-                  }
-                </>
-              : <><ImageDown className="w-4 h-4" /><span>{isAllImagesShareReady ? "開始分享" : "全部圖片"}</span></>
-            }
-          </Button>
-        </ResponsiveActionGroup>
+          <div className="flex gap-2">
+            {/* 名單是工作台上的資料，用 Modal 管理，不再是獨立頁面 */}
+            {canEditCurrentProject && (
+              <Button
+                type="button"
+                onClick={() => setIsRosterOpen(true)}
+                data-guide="review-roster-button"
+                variant="secondary"
+                size="touch"
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">學生名單</span>
+                <span className="sm:hidden">名單</span>
+              </Button>
+            )}
+            <Button type="button" onClick={startGuide} variant="secondary" size="touch">
+              <CircleHelp className="w-4 h-4" />
+              <span className="hidden sm:inline">製作教學</span>
+              <span className="sm:hidden">教學</span>
+            </Button>
+          </div>
         )}
       />
 
-      {/* Progress bar */}
+      {/* 班級工作台橫幅：階段 ｜ 照片進度 ｜ 下一步動作，一條看完 */}
       {project.students.length > 0 && (
-        <Surface className="mb-6" data-guide="review-progress">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0 flex-1">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-medium text-gray-700">輸出進度</span>
-                <Badge tone={pendingCount > 0 ? "warning" : "success"}>
-                  {pendingCount > 0 ? `${pendingCount} 位待產生` : "全部完成"}
-                </Badge>
-                <span className="ml-auto font-medium text-gray-900">{doneCount} / {project.students.length}</span>
-              </div>
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-emerald-500 rounded-full transition-all"
-                  style={{ width: `${project.students.length ? (doneCount / project.students.length) * 100 : 0}%` }}
-                />
-              </div>
+        <Surface className="mb-4" data-guide="review-progress">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+            {/* 三階段指示 */}
+            <div className="flex flex-wrap items-center gap-1 text-[11px] font-medium lg:flex-shrink-0">
+              {[
+                { step: 1, label: "製作" },
+                { step: 2, label: "全班完成" },
+                { step: 3, label: "交件" },
+              ].map(({ step, label }, index) => (
+                <span key={step} className="flex items-center gap-1">
+                  {index > 0 && <ChevronRight className="h-3 w-3 text-gray-300" />}
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 ${
+                      workStage === step
+                        ? "bg-indigo-600 text-white"
+                        : workStage > step
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-gray-100 text-gray-400"
+                    }`}
+                  >
+                    {workStage > step ? "✓" : `${step}．`}{label}
+                  </span>
+                </span>
+              ))}
             </div>
-            <div className="grid w-full grid-cols-3 gap-3 text-sm lg:w-80">
-              <div>
-                <div className="text-lg font-semibold text-gray-900">{project.students.length}</div>
-                <div className="text-xs text-gray-400">學生</div>
-              </div>
-              <div>
-                <div className="text-lg font-semibold text-amber-600">{pendingCount}</div>
-                <div className="text-xs text-gray-400">待產生</div>
-              </div>
-              <div>
-                <div className="text-lg font-semibold text-emerald-600">{doneCount}</div>
-                <div className="text-xs text-gray-400">已產生</div>
-              </div>
-            </div>
-          </div>
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <label className="relative min-w-0" data-guide="review-student-search">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-300" />
-              <input
-                type="search"
-                value={studentSearch}
-                onChange={(event) => setStudentSearch(event.target.value)}
-                placeholder="搜尋學生"
-                className={`${fieldControlClass} pl-9`}
-              />
-            </label>
-            <div data-guide="review-status-filter">
-              <SegmentedControl
-                value={studentStatusFilter}
-                onChange={setStudentStatusFilter}
-                size="sm"
-                options={reviewStatusFilterOptions}
-              />
+            {/* 班級進度（只看照片：PDF 是輸出產物，不是進度依據） */}
+            <div className="min-w-0 flex-1 lg:border-l lg:border-gray-100 lg:pl-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-medium text-gray-600">照片進度</span>
+                {classPhotoTotal === 0 ? (
+                  <span className="text-gray-400">此模板沒有照片格（純文字相本）</span>
+                ) : (
+                  <span className={`font-semibold tabular-nums ${classPhotoFilled === classPhotoTotal ? "text-emerald-600" : "text-gray-700"}`}>
+                    {classPhotoFilled} / {classPhotoTotal} 格
+                  </span>
+                )}
+                {/* 缺照片摘要：點了直接套用篩選（並清掉搜尋字，避免數字對不上），誰缺就看下方學生卡 */}
+                {incompleteStudents.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => { setStudentStatusFilter("incomplete"); setStudentSearch(""); }}
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                  >
+                    <Clock className="h-3 w-3" />
+                    缺照片 {incompleteStudents.length} 位
+                  </button>
+                ) : classPhotoTotal > 0 && (
+                  <span className="inline-flex items-center gap-1 font-medium text-emerald-600">
+                    <CheckCircle2 className="h-3 w-3" />
+                    全班照片齊
+                  </span>
+                )}
+                {comments.length > 0 && (
+                  <a
+                    href="#review-comments"
+                    className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 font-medium text-violet-700 transition-colors hover:bg-violet-100"
+                  >
+                    <MessageCircle className="h-3 w-3" />
+                    {comments.length} 則審閱意見
+                  </a>
+                )}
+              </div>
+              {classPhotoTotal > 0 && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100">
+                  <div
+                    className={`h-full rounded-full transition-all ${classPhotoFilled === classPhotoTotal ? "bg-emerald-500" : "bg-indigo-500"}`}
+                    style={{ width: `${(classPhotoFilled / classPhotoTotal) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 依階段的主要動作 */}
+            <div className="flex flex-col gap-2 lg:w-72 lg:flex-shrink-0 lg:border-l lg:border-gray-100 lg:pl-4">
+              {workStage === 1 && (
+                canEditCurrentProject ? (
+                  <>
+                    <Button
+                      as={Link}
+                      to={`/projects/${id}/edit`}
+                      variant="primary"
+                      fullWidth
+                    >
+                      <Pencil className="h-4 w-4" />
+                      繼續製作（{incompleteStudents.length} 位缺照片）
+                    </Button>
+                    {/* 一張照片都還沒放就不給「直接完成」——那只會是誤觸 */}
+                    {classPhotoFilled > 0 && (
+                      <Button onClick={handleCompleteProject} disabled={isBatchRendering} variant="successSoft" size="sm" fullWidth>
+                        <CheckCircle2 className="h-4 w-4" />
+                        直接標記全班完成
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">製作中：還有 {incompleteStudents.length} 位學生缺照片。</p>
+                )
+              )}
+              {workStage === 2 && (
+                canEditCurrentProject ? (
+                  <>
+                    <Button onClick={handleCompleteProject} disabled={isBatchRendering} variant="success" fullWidth>
+                      <CheckCircle2 className="h-4 w-4" />
+                      全班完成
+                    </Button>
+                    <p className="text-xs leading-relaxed text-gray-400">
+                      照片已備齊。標記完成後內容鎖定，需主管或管理員退回才能修改。
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">照片已備齊，待老師標記全班完成。</p>
+                )
+              )}
+              {workStage === 3 && (
+                <>
+                  <p className="text-sm font-medium text-emerald-700">
+                    ✓ 已標記全班完成，內容鎖定{canEditCurrentProject ? "；請下載交件。" : "。"}
+                  </p>
+                  {canReopenProject && (
+                    <Button onClick={handleReopenProject} variant="neutral" size="sm" fullWidth>
+                      <RotateCcw className="h-4 w-4" />
+                      退回修改
+                    </Button>
+                  )}
+                </>
+              )}
+
+              {/* 交件下載：照片備齊（階段 2）才出現；下載前要先渲染，
+                  渲染只有 owner/admin 有權限，唯讀角色（美編、非轄下主管）點了必 403，直接不顯示 */}
+              {workStage >= 2 && canEditCurrentProject && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleDownloadAll}
+                      disabled={isBatchRendering}
+                      data-guide="review-download-all"
+                      variant={workStage === 3 ? "success" : "neutral"}
+                      size="sm"
+                      className="flex-1"
+                    >
+                      {renderingAll ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {renderAllProgress ? `${renderAllProgress.current}/${renderAllProgress.total}` : "產生中..."}
+                        </>
+                      ) : (
+                        <><Package className="h-4 w-4" />PDF ZIP</>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleDownloadAllImages}
+                      disabled={isBatchRendering}
+                      variant={workStage === 3 ? "info" : "neutral"}
+                      size="sm"
+                      className="flex-1"
+                    >
+                      {renderingAllImages ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {renderAllImagesProgress ? `${renderAllImagesProgress.current}/${renderAllImagesProgress.total}` : "產生中..."}
+                        </>
+                      ) : (
+                        <><ImageDown className="h-4 w-4" />{isAllImagesShareReady ? "開始分享" : "全部圖片"}</>
+                      )}
+                    </Button>
+                  </div>
+                  {/* 畫質只影響下載，跟著交件動作走（僅 admin） */}
+                  {canDownloadPrint && (
+                    <SegmentedControl
+                      value={outputMode}
+                      onChange={setOutputMode}
+                      size="sm"
+                      options={[
+                        { value: "print", label: "列印畫質", icon: Printer },
+                        { value: "screen", label: "螢幕畫質", icon: Monitor },
+                      ]}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </Surface>
@@ -760,10 +917,53 @@ export default function ProjectReview() {
         </div>
       )}
 
+      {/* 學生區標題列：標題＋人數＋搜尋＋篩選；手機版搜尋與篩選各佔滿一列 */}
+      {project.students.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-bold text-gray-800">學生</h2>
+          <Badge tone="neutral">{project.students.length} 位</Badge>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+            <label className="relative w-full sm:w-52" data-guide="review-student-search">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-300" />
+              <input
+                type="search"
+                value={studentSearch}
+                onChange={(event) => setStudentSearch(event.target.value)}
+                placeholder="搜尋學生"
+                className={`${fieldControlClass} w-full pl-9`}
+              />
+            </label>
+            <div className="w-full sm:w-auto" data-guide="review-status-filter">
+              <SegmentedControl
+                value={studentStatusFilter}
+                onChange={setStudentStatusFilter}
+                size="sm"
+                className="w-full"
+                options={reviewStatusFilterOptions}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Students grid */}
       {project.students.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
-          <p className="text-sm">尚無學生，請先在「專案設定」新增</p>
+          <Users className="mx-auto mb-3 h-10 w-10 opacity-30" />
+          <p className="text-sm">尚無學生</p>
+          {canEditCurrentProject ? (
+            <Button
+              type="button"
+              onClick={() => setIsRosterOpen(true)}
+              variant="primary"
+              className="mt-4"
+            >
+              <Users className="h-4 w-4" />
+              新增學生名單
+            </Button>
+          ) : (
+            <p className="mt-1 text-xs">待老師新增學生名單</p>
+          )}
         </div>
       ) : visibleStudents.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
@@ -772,7 +972,8 @@ export default function ProjectReview() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {visibleStudents.map(student => {
-            const isDone = !!student.output_filename;
+            const photoProgress = photoProgressByStudentId.get(student.id);
+            const isStudentPhotoComplete = photoProgress.total === 0 || photoProgress.filled === photoProgress.total;
             const isStudentRendering = rendering[student.id];
             const isStudentImageRendering = renderingImages[student.id];
             const isStudentImageShareReady = isMobileDevice() && imageShareDrafts[student.id]?.files?.length > 0;
@@ -787,11 +988,11 @@ export default function ProjectReview() {
                 style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
                 padding="none"
                 className={`overflow-hidden transition-all hover:shadow-md ${
-                  isDone ? "border-emerald-100" : "border-gray-200"
+                  isStudentPhotoComplete ? "border-emerald-100" : "border-gray-200"
                 }`}
               >
-                {/* Thumbnail strip — 跳過已刪除的頁面 */}
-                <div className="flex gap-1 p-3 bg-gray-50 border-b border-gray-100 overflow-x-auto">
+                {/* Thumbnail strip — 跳過已刪除的頁面；點縮圖即預覽 */}
+                <div data-guide="review-preview-student" className="flex gap-1 p-3 bg-gray-50 border-b border-gray-100 overflow-x-auto">
                   {Array.from({ length: pageCount }, (_, i) => {
                     if (studentSkippedPages.has(i)) return null;
                     return (
@@ -813,73 +1014,91 @@ export default function ProjectReview() {
                   })}
                 </div>
 
-                {/* Student info */}
-                <div className="p-4">
-                  <div className="flex items-center justify-between mb-3 min-w-0">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-gray-900 truncate">{student.name}</div>
-                      <div className={`flex items-center gap-1 text-xs mt-0.5 ${isDone ? "text-emerald-600" : "text-gray-400"}`}>
-                        {isDone
-                          ? <><CheckCircle2 className="w-3 h-3" />已產生輸出</>
-                          : <><Clock className="w-3 h-3" />尚未產生</>
-                        }
+                {/* Student info：主要區可點（老師→編輯；其他角色→預覽），動作收成右側小 icon */}
+                <div className="flex items-center gap-2 p-4">
+                  {canEditCurrentProject ? (
+                    <Link
+                      to={`/projects/${id}/students/${student.id}/edit`}
+                      className="group/main min-w-0 flex-1"
+                    >
+                      <div className="truncate font-semibold text-gray-900 transition-colors group-hover/main:text-indigo-700">
+                        {student.name}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <ResponsiveActionGroup mobileColumns={canEditCurrentProject ? 4 : 3} desktop="grid">
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                        {photoProgress.total > 0 && (
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                            photoProgress.filled === photoProgress.total
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-amber-50 text-amber-700"
+                          }`}>
+                            {photoProgress.filled === photoProgress.total
+                              ? "✓ 照片齊"
+                              : `照片 ${photoProgress.filled}/${photoProgress.total}`}
+                          </span>
+                        )}
+                      </div>
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setPreview({ studentId: student.id, pageIndex: getVisiblePageIndexes(student)[0] ?? 0 })}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="truncate font-semibold text-gray-900">{student.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                        {photoProgress.total > 0 && (
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                            photoProgress.filled === photoProgress.total
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-amber-50 text-amber-700"
+                          }`}>
+                            {photoProgress.filled === photoProgress.total
+                              ? "✓ 照片齊"
+                              : `照片 ${photoProgress.filled}/${photoProgress.total}`}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )}
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
                     {canEditCurrentProject && (
-                      <Button
-                        as={Link}
+                      <Link
                         to={`/projects/${id}/students/${student.id}/edit`}
+                        aria-label="編輯"
+                        title="編輯"
                         data-guide="review-edit-student"
-                        variant="neutral"
-                        size="xs"
-                        className={responsiveActionItemClass}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-indigo-500 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
                       >
-                        <Pencil className="w-3 h-3" />
-                        編輯
-                      </Button>
+                        <Pencil className="h-4 w-4" />
+                      </Link>
                     )}
-                    <Button
-                      onClick={() => setPreview({ studentId: student.id, pageIndex: 0 })}
-                      data-guide="review-preview-student"
-                      variant="neutral"
-                      size="xs"
-                      className={responsiveActionItemClass}
-                    >
-                      <Eye className="w-3 h-3" />
-                      預覽
-                    </Button>
-                    <Button
-                      onClick={() => handleDownloadOne(student.id)}
-                      disabled={isStudentBusy}
-                      data-guide="review-download-student"
-                      variant="successSoft"
-                      size="xs"
-                      className={responsiveActionItemClass}
-                    >
-                      {isStudentRendering
-                        ? <Loader2 className="w-3 h-3 animate-spin" />
-                        : <Download className="w-3 h-3" />
-                      }
-                      {isStudentRendering ? "..." : "PDF"}
-                    </Button>
-                    <Button
-                      onClick={() => handleDownloadOneImages(student.id)}
-                      disabled={isStudentBusy}
-                      variant="infoSoft"
-                      size="xs"
-                      className={responsiveActionItemClass}
-                    >
-                      {isStudentImageRendering
-                        ? <Loader2 className="w-3 h-3 animate-spin" />
-                        : <ImageDown className="w-3 h-3" />
-                      }
-                      {isStudentImageRendering ? "..." : isStudentImageShareReady ? "分享" : "圖片"}
-                    </Button>
-                  </ResponsiveActionGroup>
+                    {/* 下載前要先渲染（owner/admin 限定），唯讀角色點了必 403，直接不顯示 */}
+                    {canEditCurrentProject && (
+                      <>
+                        <IconButton
+                          label={isStudentRendering ? "PDF 產生中" : "下載 PDF"}
+                          onClick={() => handleDownloadOne(student.id)}
+                          disabled={isStudentBusy}
+                          data-guide="review-download-student"
+                          variant="success"
+                        >
+                          {isStudentRendering
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <Download className="h-4 w-4" />}
+                        </IconButton>
+                        <IconButton
+                          label={isStudentImageShareReady ? "開始分享圖片" : "下載圖片"}
+                          onClick={() => handleDownloadOneImages(student.id)}
+                          disabled={isStudentBusy}
+                          variant="info"
+                        >
+                          {isStudentImageRendering
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <ImageDown className="h-4 w-4" />}
+                        </IconButton>
+                      </>
+                    )}
+                  </div>
                 </div>
               </Surface>
             );
@@ -889,7 +1108,7 @@ export default function ProjectReview() {
 
       {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
       {(canComment || currentUser?.role === "teacher") && (
-        <Surface className="mt-8" data-guide="review-comments">
+        <Surface id="review-comments" className="mt-8 scroll-mt-20" data-guide="review-comments">
           <div className="flex items-center gap-2 mb-4">
             <MessageCircle className="w-4 h-4 text-violet-500" />
             <h3 className="font-semibold text-gray-800 text-sm">審閱意見</h3>
@@ -918,7 +1137,8 @@ export default function ProjectReview() {
                             hour: "2-digit", minute: "2-digit",
                           })}
                         </span>
-                        {isAdmin && (
+                        {/* 後端允許 admin 或作者本人刪除，前端一致 */}
+                        {(isAdmin || comment.author_id === currentUser?.id) && (
                           <IconButton
                             label="刪除留言"
                             onClick={() => handleDeleteComment(comment.id)}
@@ -966,6 +1186,27 @@ export default function ProjectReview() {
           )}
         </Surface>
       )}
+
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        message={confirmModal?.message}
+        confirmLabel={confirmModal?.confirmLabel}
+        confirmVariant={confirmModal?.confirmVariant}
+        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onCancel={() => setConfirmModal(null)}
+      />
+
+      <RosterModal
+        isOpen={isRosterOpen}
+        onClose={() => setIsRosterOpen(false)}
+        projectId={id}
+        students={project.students}
+        photoProgressByStudentId={photoProgressByStudentId}
+        // 改名後名字渲染在縮圖裡，重載完要 bust 預覽快取
+        onChanged={async () => { await loadProject(); setTs(Date.now()); }}
+        // 後端對 admin 不鎖內容，前端一致：admin 在鎖定後仍可管理名單
+        isLocked={isProjectCompleted && !isAdmin}
+      />
     </div>
   );
 }

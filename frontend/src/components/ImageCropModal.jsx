@@ -3,7 +3,7 @@
 // 縮放時自動等比例調整 panX/panY，保持裁切中心穩定。
 // 確認後以 9-arg ctx.drawImage 精確裁切至目標尺寸並回呼 onConfirm(file)。
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const FRAME_DISPLAY_W = 397;
 
@@ -12,12 +12,25 @@ export default function ImageCropModal({
   targetWidth  = 794,
   targetHeight = 1123,
   title = "裁切圖片",
-  hint  = "拖曳平移 · 滾輪縮放 · 裁切範圍固定比例",
+  hint  = "拖曳移動 · 滾輪縮放 · 裁切範圍固定比例",
   onConfirm,
   onCancel,
 }) {
-  const frameW = FRAME_DISPLAY_W;
-  const frameH = Math.round(targetHeight * (frameW / targetWidth));
+  // 裁切框自適應視窗：固定 397px 在 390px 手機必定溢出，
+  // 直式格也要限制高度讓「套用裁切」按鈕保持可及
+  const availW = typeof window !== "undefined"
+    ? Math.min(FRAME_DISPLAY_W, window.innerWidth - 56)
+    : FRAME_DISPLAY_W;
+  const availH = typeof window !== "undefined"
+    ? Math.max(200, Math.round(window.innerHeight * 0.55))
+    : 620;
+  const cropAspect = targetHeight / targetWidth;
+  let frameW = availW;
+  let frameH = Math.round(frameW * cropAspect);
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = Math.round(frameH / cropAspect);
+  }
 
   const [scale, setScale]   = useState(1);
   const [panX,  setPanX]    = useState(0);
@@ -34,8 +47,14 @@ export default function ImageCropModal({
   const stateRef = useRef({ scale: 1, panX: 0, panY: 0, imgNat: null });
   useEffect(() => { stateRef.current = { scale, panX, panY, imgNat }; });
 
-  const url = useMemo(() => URL.createObjectURL(file), [file]);
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  // objectURL 用 state＋effect 建立：useMemo＋cleanup 撤銷在 StrictMode 的
+  // mount→cleanup→remount 會撤銷掉同一個 URL 卻不重建，導致圖片破圖
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
 
   // ── 幾何計算 ──────────────────────────────────────────────────────────────
   const fitScale     = imgNat ? Math.max(frameW / imgNat.w, frameH / imgNat.h) : 1;
@@ -153,8 +172,8 @@ export default function ImageCropModal({
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2">
+      <div className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4 max-h-[94dvh] max-w-[calc(100vw-8px)] overflow-y-auto">
         <div>
           <h2 className="font-semibold text-gray-800">{title}</h2>
           {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
@@ -184,7 +203,7 @@ export default function ImageCropModal({
             position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1,
             boxShadow: "inset 0 0 0 2px rgba(99,102,241,0.5)",
           }} />
-          <img
+          {url && <img
             ref={imgRef}
             src={url}
             onLoad={e => setImgNat({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
@@ -197,7 +216,7 @@ export default function ImageCropModal({
             }}
             draggable={false}
             alt=""
-          />
+          />}
         </div>
 
         {/* 縮放滑桿 */}
@@ -225,7 +244,7 @@ export default function ImageCropModal({
             disabled={!imgNat}
             className="px-4 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            確認裁切
+            套用裁切
           </button>
         </div>
       </div>

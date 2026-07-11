@@ -43,6 +43,14 @@ export const deleteProject = (projectId) =>
 export const restoreProject = (projectId) =>
   apiClient.post(`/projects/${projectId}/restore`);
 
+/** 標記全班完成（內容鎖定，需主管或 admin 退回） */
+export const completeProject = (projectId) =>
+  apiClient.post(`/projects/${projectId}/complete`);
+
+/** 退回全班完成標記（限管轄主管或 admin） */
+export const reopenProject = (projectId) =>
+  apiClient.post(`/projects/${projectId}/reopen`);
+
 // ── 學生管理 ──────────────────────────────────────────────────────────────────
 
 /** 批次新增多位學生（自動略過空白與重複名稱） */
@@ -150,13 +158,13 @@ export const updatePhotoMapping = (projectId, studentId, pagesMapping) =>
 export const fetchProjectLabelTexts = (projectId) =>
   apiClient.get(`/projects/${projectId}/label_texts`);
 
-/** 更新專案層級的對應文字設定 */
-export const updateProjectLabelTexts = (projectId, labelTextsPayload) =>
-  apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload);
+/** 更新專案層級的對應文字設定（signal 供自動儲存取消過時請求） */
+export const updateProjectLabelTexts = (projectId, labelTextsPayload, signal) =>
+  apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload, { signal });
 
-/** 批次更新多位學生的對應文字 */
-export const batchUpdateStudentTexts = (projectId, studentsPayload) =>
-  apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload);
+/** 批次更新多位學生的對應文字（signal 供自動儲存取消過時請求） */
+export const batchUpdateStudentTexts = (projectId, studentsPayload, signal) =>
+  apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload, { signal });
 
 // ── 渲染 ──────────────────────────────────────────────────────────────────────
 

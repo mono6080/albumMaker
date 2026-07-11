@@ -177,7 +177,7 @@ def test_render_failure_edges_for_templates_without_pages():
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)
         assert render_all.json()["rendered"] == []
-        assert render_all.json()["errors"] == [{"student": "No Page Student", "error": "渲染失敗"}]
+        assert render_all.json()["errors"] == [{"student": "No Page Student", "error": "產生失敗"}]
 
 
 def test_project_mutation_role_edges(monkeypatch, tmp_path):

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   fetchAllProjects,
@@ -12,24 +12,27 @@ import {
 } from "../api/projectApi";
 import { fetchAvailableTemplates, fetchTemplateDepartments } from "../api/templateApi";
 import {
+  Archive,
   ArchiveRestore,
   CalendarClock,
   Check,
+  ChevronRight,
   CircleHelp,
   Eye,
   FolderOpen,
+  MessageSquare,
   Pencil,
   Plus,
   RotateCcw,
   Search,
   SlidersHorizontal,
-  Trash2,
   Users,
   X,
 } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
+import FormModal from "../components/FormModal";
 import ResponsiveActionGroup, {
   mobileVisibleHoverActionClass,
   mobileVisibleNamedHoverActionClass,
@@ -86,16 +89,16 @@ const PROJECT_LIST_GUIDE_STEPS = [
     align: "start",
   },
   {
-    element: '[data-guide="project-settings-link"]',
-    title: "專案設定",
-    description: "先進入專案設定登記學生名單、套用全班共用照片，並填整班共用文字。",
+    element: '[data-guide="project-edit-link"]',
+    title: "編輯相本",
+    description: "進入相本編輯器：先在全班範圍放共用照片與文字，再切到個別學生微調。",
     side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="project-review-link"]',
-    title: "個人編輯與輸出",
-    description: "學生登記完成後，進入個人編輯逐位補照片、調整文字、審閱並輸出 PDF 或圖片。",
+    title: "班級總覽",
+    description: "看全班進度、管理學生名單、標記全班完成並下載 PDF 或圖片。",
     side: "bottom",
     align: "end",
   },
@@ -225,6 +228,19 @@ const ProjectCard = memo(function ProjectCard({
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-0.5">
               <Users className="w-3 h-3" />
               {project.student_count} 位學生 · {new Date(project.created_at).toLocaleDateString("zh-TW")}
+              {project.comment_count > 0 && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <Link
+                    to={`/projects/${project.id}/review`}
+                    className="inline-flex items-center gap-0.5 font-medium text-violet-600 hover:text-violet-700"
+                    title={`${project.comment_count} 則審閱意見，點擊查看`}
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                    {project.comment_count} 則審閱意見
+                  </Link>
+                </>
+              )}
               {showOwner && project.owner_name && (
                 <>
                   <span className="text-gray-300">·</span>
@@ -240,38 +256,44 @@ const ProjectCard = memo(function ProjectCard({
                   </Badge>
                 </>
               )}
+              {project.completed_at && (
+                <Badge tone="success" title={`完成於 ${new Date(project.completed_at).toLocaleString("zh-TW")}`}>
+                  ✓ 全班完成
+                </Badge>
+              )}
             </div>
           </div>
           {canEdit && (
             <IconButton
               label="封存專案"
               onClick={() => onDelete(project.id)}
-              variant="danger"
+              variant="neutral"
               className={mobileVisibleHoverActionClass}
             >
-              <Trash2 className="w-4 h-4" />
+              <Archive className="w-4 h-4" />
             </IconButton>
           )}
         </div>
       </div>
+      {/* 兩個入口：編輯（做內容）＋總覽（進度、名單與輸出） */}
       <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEdit ? "grid-cols-2" : "grid-cols-1"}`}>
         {canEdit && (
           <Link
-            to={`/projects/${project.id}/batch`}
-            data-guide="project-settings-link"
+            to={`/projects/${project.id}/edit`}
+            data-guide="project-edit-link"
             className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" />
-            專案設定
+            編輯相本
           </Link>
         )}
         <Link
           to={`/projects/${project.id}/review`}
           data-guide="project-review-link"
-          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-emerald-600 font-medium hover:bg-emerald-50 transition-colors"
+          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-violet-600 font-medium hover:bg-violet-50 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
-          {canEdit ? "個人編輯" : "審閱"}
+          班級總覽
         </Link>
       </div>
     </Surface>
@@ -330,11 +352,13 @@ const ArchivedProjectRow = memo(function ArchivedProjectRow({
 export default function ProjectList() {
   const { canCreateProject, canEditProject } = usePermissions();
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
   const showOwner = currentUser?.role !== "teacher";
   const canUseProjectFilters = currentUser?.role === "admin";
   const [projects, setProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
+  const [listLoadError, setListLoadError] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
   const [form, setForm] = useState({
@@ -438,20 +462,34 @@ export default function ProjectList() {
   }, []);
 
   const startGuide = useCallback(() => {
-    if (canCreateProject && !showForm) {
-      setShowForm(true);
-      window.requestAnimationFrame(() => startProductGuide(PROJECT_LIST_GUIDE_STEPS));
-      return;
-    }
+    // 建立表單已改為 Modal：導覽不預開（會遮住其他步驟），表單步驟在 Modal 開啟時才會出現
     startProductGuide(PROJECT_LIST_GUIDE_STEPS);
-  }, [canCreateProject, showForm]);
+  }, []);
+
+  // 專案清單載入失敗必須顯示錯誤，不能讓網路錯誤偽裝成「尚無專案」空狀態
+  const loadProjectLists = useCallback(async () => {
+    setListLoadError(null);
+    try {
+      const [projectsResponse, archivedResponse] = await Promise.all([
+        fetchAllProjects(),
+        fetchArchivedProjects(),
+      ]);
+      setProjects(projectsResponse.data);
+      setArchivedProjects(archivedResponse.data);
+    } catch {
+      setListLoadError("載入專案清單失敗，請檢查網路後重試");
+    }
+  }, []);
 
   useEffect(() => {
-    fetchAllProjects().then(r => setProjects(r.data));
-    fetchArchivedProjects().then(r => setArchivedProjects(r.data));
-    fetchAvailableTemplates().then(r => setTemplates(r.data));
-    fetchTemplateDepartments().then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS));
-  }, []);
+    loadProjectLists();
+    fetchAvailableTemplates()
+      .then(r => setTemplates(r.data))
+      .catch(() => toast.error("載入模板清單失敗"));
+    fetchTemplateDepartments()
+      .then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS))
+      .catch(() => setDepartments(FALLBACK_DEPARTMENTS));
+  }, [loadProjectLists]);
 
   const departmentTemplates = useMemo(
     () => templates.filter(template => template.department === form.department),
@@ -494,7 +532,7 @@ export default function ProjectList() {
     ? `${selectedTemplate.name}${form.customName.trim() ? " " + form.customName.trim() : ""}`
     : form.customName.trim();
 
-  // ── 建立（樂觀更新：先顯示後 fetch 完整清單）
+  // ── 建立（成功後直接帶去名單頁開始下一步）
   const handleCreate = async () => {
     if (!form.template_id) return toast.error("請選擇模板");
     if (!composedName.trim()) return toast.error("請填寫名稱");
@@ -507,16 +545,14 @@ export default function ProjectList() {
           const copyResult = await copyStudentsFromProject(created.data.id, Number(form.copy_source_id));
           toast.success(`專案已建立，已複製 ${copyResult.data.created.length} 位學生`);
         } catch {
-          toast.error("專案已建立，但複製學生名單失敗，請至名單頁手動新增");
+          toast.error("專案已建立，但複製學生名單失敗，請手動新增");
         }
       } else {
-        toast.success("專案已建立");
+        toast.success("專案已建立，先加入學生名單吧");
       }
       setForm(current => ({ ...current, customName: "", template_id: "", copy_source_id: "" }));
       setShowForm(false);
-      // 建立後 fetch 完整清單以取得 id / student_count / owner_name
-      const r = await fetchAllProjects();
-      setProjects(r.data);
+      navigate(`/projects/${created.data.id}/review`);
     } catch {
       toast.error("建立失敗");
     } finally {
@@ -670,6 +706,8 @@ export default function ProjectList() {
             <CircleHelp className="w-4 h-4" />
             <span className="whitespace-nowrap">製作教學</span>
           </Button>
+          {/* 零專案且無封存時是噪音，先藏 */}
+          {(projects.length > 0 || archivedProjects.length > 0) && (
           <Button
             type="button"
             onClick={() => setShowArchive(v => !v)}
@@ -686,6 +724,7 @@ export default function ProjectList() {
               </Badge>
             )}
           </Button>
+          )}
         {canCreateProject && (
           <Button
             onClick={() => setShowForm(v => !v)}
@@ -744,11 +783,10 @@ export default function ProjectList() {
         </Surface>
       )}
 
-      {/* Create form */}
-      {showForm && (
-        <Surface className="mb-8 border-indigo-100" padding="lg" data-guide="project-create-form">
-          <h2 className="font-semibold text-gray-800 mb-4">新建相本專案</h2>
-          <div className="grid grid-cols-1 gap-4 mb-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* Create form（Modal；關閉不清空輸入，誤觸不失資料） */}
+      <FormModal isOpen={showForm} title="新建相本專案" onClose={() => setShowForm(false)}>
+        <div data-guide="project-create-form">
+          <div className="grid grid-cols-1 gap-4 mb-4 md:grid-cols-2">
             <FormField label="部門">
               <select
                 className={fieldControlClass}
@@ -765,7 +803,7 @@ export default function ProjectList() {
                 ))}
               </select>
             </FormField>
-            <FormField label="期別">
+            <FormField label="期別" hint="這本相本屬於哪一期（由園所行政建立）">
               <select
                 className={fieldControlClass}
                 value={form.period_id}
@@ -797,7 +835,7 @@ export default function ProjectList() {
                 ))}
               </select>
             </FormField>
-            <FormField label="自訂名稱 (分校) (班級)">
+            <FormField label="自訂名稱" hint="接在模板名稱後，例：分校或班級">
               <input
                 className={fieldControlClass}
                 placeholder="例：東區校 10階A"
@@ -827,17 +865,19 @@ export default function ProjectList() {
               專案全名：<span className="font-medium text-gray-800">{composedName}</span>
             </div>
           )}
-          <div className="flex flex-wrap gap-3">
-            <Button onClick={handleCreate} disabled={creating} variant="primary">
-              {creating ? "建立中..." : "建立"}
-            </Button>
+          <div className="flex flex-wrap justify-end gap-3">
             <Button onClick={() => setShowForm(false)} variant="ghost">
               取消
             </Button>
+            <Button onClick={handleCreate} disabled={creating} variant="primary">
+              {creating ? "建立中..." : "建立專案"}
+            </Button>
           </div>
-        </Surface>
-      )}
+        </div>
+      </FormModal>
 
+      {/* 零專案時搜尋列是噪音，藏起來讓空狀態引導成為焦點 */}
+      {projects.length > 0 && (
       <Surface
         variant="toolbar"
         padding="sm"
@@ -903,12 +943,44 @@ export default function ProjectList() {
           </div>
         )}
       </Surface>
+      )}
 
-      {projects.length === 0 ? (
-        <div className="text-center py-20 text-gray-400">
+      {listLoadError ? (
+        <div className="text-center py-20 text-gray-500">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">尚無專案，請點右上角建立</p>
+          <p className="mb-4 text-sm">{listLoadError}</p>
+          <Button variant="secondary" size="sm" onClick={loadProjectLists}>重新載入</Button>
         </div>
+      ) : projects.length === 0 ? (
+        /* 零專案的首次引導：說清楚整條路，而不是一行灰字 */
+        <Surface className="mx-auto mt-4 max-w-2xl text-center" padding="lg">
+          <div className="mb-3 text-4xl">🎨</div>
+          <h2 className="mb-1 text-lg font-bold text-gray-900">開始製作第一本班級相本</h2>
+          <p className="mb-6 text-sm text-gray-500">跟著三個步驟，就能做出每位孩子的個人化相本</p>
+          <div className="mb-6 grid gap-3 text-left sm:grid-cols-3">
+            {[
+              { step: 1, title: "建立專案", description: "選擇行政準備好的模板" },
+              { step: 2, title: "加入學生名單", description: "貼上全班名字，一行一位" },
+              { step: 3, title: "放照片、看預覽", description: "全班或逐位學生上傳照片" },
+            ].map(({ step, title, description }) => (
+              <div key={step} className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+                <div className="mb-1 flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
+                  {step}
+                </div>
+                <div className="text-sm font-semibold text-gray-800">{title}</div>
+                <div className="mt-0.5 text-xs text-gray-500">{description}</div>
+              </div>
+            ))}
+          </div>
+          {canCreateProject ? (
+            <Button variant="primary" size="lg" onClick={() => setShowForm(true)}>
+              <Plus className="h-4 w-4" />
+              建立第一個專案
+            </Button>
+          ) : (
+            <p className="text-sm text-gray-400">目前帳號沒有建立專案的權限，請聯絡管理員</p>
+          )}
+        </Surface>
       ) : filteredProjects.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
           <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />

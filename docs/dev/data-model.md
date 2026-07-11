@@ -28,6 +28,7 @@ TemplatePage (id, template_id FK, page_number, background_filename, layout_json 
 Project (id, name, template_id FK, department, template_period_id FK,
          owner_id FK→User, created_at, updated_at,
          deleted_at, archive_expires_at,      ← 軟刪除：封存 30 天後到期
+         completed_at,                        ← 全班完成：非 NULL 內容鎖定（主管/admin 可退回）
          label_texts_json TEXT)
   ├─ students → Student[]（cascade delete-orphan，order_by order_index）
   └─ comments → ProjectComment[]（cascade delete-orphan）

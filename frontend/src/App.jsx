@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
 
@@ -10,7 +10,7 @@ import Login from "./pages/Login";
 import TemplateList from "./pages/TemplateList";
 import TemplateEditor from "./pages/TemplateEditor";
 import ProjectList from "./pages/ProjectList";
-import ProjectBatch from "./pages/ProjectBatch";
+import ClassEdit from "./pages/ClassEdit";
 import ProjectReview from "./pages/ProjectReview";
 import StudentEdit from "./pages/StudentEdit";
 import UserManagement from "./pages/UserManagement";
@@ -122,6 +122,19 @@ function Nav() {
   );
 }
 
+// 舊書籤 /projects/:id/batch 轉址到新的全班編輯器
+function BatchRouteRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/projects/${id}/edit`} replace />;
+}
+
+// 學生編輯必須隨 studentId remount：否則快速連續切換時，
+// 上一位學生的文字/照片狀態會以新學生的 id 存檔（資料覆寫）
+function StudentEditRoute() {
+  const { studentId } = useParams();
+  return <StudentEdit key={studentId} />;
+}
+
 function AppContent() {
   const loc = useLocation();
   const mainClassName = loc.pathname === "/login"
@@ -164,11 +177,13 @@ function AppContent() {
               <ProjectList />
             </PrivateRoute>
           } />
-          <Route path="/projects/:id/batch" element={
+          <Route path="/projects/:id/edit" element={
             <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
-              <ProjectBatch />
+              <ClassEdit />
             </PrivateRoute>
           } />
+          {/* 舊「名單與素材」路由：兩頁制後轉址到全班編輯器 */}
+          <Route path="/projects/:id/batch" element={<BatchRouteRedirect />} />
           <Route path="/projects/:id/review" element={
             <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
               <ProjectReview />
@@ -176,7 +191,7 @@ function AppContent() {
           } />
           <Route path="/projects/:projectId/students/:studentId/edit" element={
             <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
-              <StudentEdit />
+              <StudentEditRoute />
             </PrivateRoute>
           } />
 
@@ -207,6 +222,9 @@ function AppContent() {
               <TeacherOverview />
             </PrivateRoute>
           } />
+
+          {/* 打錯或失效的網址一律回首頁，不留空白頁 */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </AuthProvider>

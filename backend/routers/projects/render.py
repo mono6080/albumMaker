@@ -227,7 +227,7 @@ def render_student(
     student = get_student_or_404(student_id, project_id, db)
     logger.info("開始渲染 project_id=%s student_id=%s student=%s", project_id, student_id, student.name)
     t0 = time.monotonic()
-    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
+    with album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試"):
         result = render_and_save_student_album(project, student, project_id, db)
     logger.info("渲染完成 project_id=%s student_id=%s 耗時=%.2fs pages=%s",
                 project_id, student_id, time.monotonic() - t0, result.get("pages"))
@@ -252,7 +252,7 @@ def render_all_students(
     # 迴圈外預先讀取模板佈局，避免每個學生重複查詢 N×1
     shared_page_layouts = get_template_page_layouts(project)
 
-    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
+    with album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試"):
         for student in project.students:
             t0 = time.monotonic()
             try:
@@ -261,7 +261,7 @@ def render_all_students(
                 logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
             except Exception as render_error:
                 db.rollback()
-                render_errors.append({"student": student.name, "error": "渲染失敗"})
+                render_errors.append({"student": student.name, "error": "產生失敗"})
                 logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
     logger.info("批次渲染完成 project_id=%s 成功=%s 失敗=%s 總耗時=%.2fs",

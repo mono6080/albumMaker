@@ -16,7 +16,7 @@ const pdfPath = resolve(docsDir, "teacher-album-guide-step-by-step.pdf");
 const targetMetaPath = resolve(assetDir, "guide-targets.json");
 const baseUrl = "http://127.0.0.1:5173";
 const apiUrl = "http://127.0.0.1:8765/api";
-const adminPassword = "admin";
+const adminPassword = process.env.GUIDE_ADMIN_PASSWORD ?? "admin";
 const teacherPassword = "teacher-guide-123";
 const A4_WIDTH = 794;
 const A4_HEIGHT = 1123;
@@ -193,13 +193,32 @@ async function login(context, username, password) {
   );
 }
 
-async function createTemplate(context, browser) {
-  await login(context, "admin", adminPassword);
+// 模板一定隸屬期別，而且老師建專案只能用「使用中」期別的模板；
+// 沒有現成 active 期別就補建一個（新建的才在收尾時封存，避免動到現場資料）
+async function ensureActivePeriod(context) {
+  const listResponse = await requireOk(
+    await context.request.get(`${apiUrl}/templates/periods?status=active`),
+    "list active template periods",
+  );
+  const periods = await listResponse.json();
+  if (periods.length > 0) return { period: periods[0], created: false };
+  const createResponse = await requireOk(
+    await context.request.post(`${apiUrl}/templates/periods`, {
+      form: { name: `教學示範期別 ${Date.now()}`, department: "infant", status: "active" },
+    }),
+    "create guide template period",
+  );
+  return { period: await createResponse.json(), created: true };
+}
+
+async function createTemplate(context, browser, periodId) {
   const background1 = await createGuideImage(browser, "teacher-source-bg-1.png", "我的校園探索", 0);
   const background2 = await createGuideImage(browser, "teacher-source-bg-2.png", "今天的分享", 1);
   const templateName = `2026-05 中班 校園探索`;
   const templateResponse = await requireOk(
-    await context.request.post(`${apiUrl}/templates/`, { form: { name: templateName } }),
+    await context.request.post(`${apiUrl}/templates/`, {
+      form: { name: templateName, period_id: periodId },
+    }),
     "create teacher guide template",
   );
   const template = await templateResponse.json();
@@ -281,9 +300,11 @@ async function createTemplate(context, browser) {
   return { id: template.id, name: templateName };
 }
 
+// 與 createTemplate 的版面同步：每頁的照片格 id 清單（改版面時記得一起改）
+const TEMPLATE_PHOTO_SLOTS = { 0: [1, 2, 3], 1: [1, 2, 3, 4] };
+
 async function createTeacher(context) {
   const suffix = Date.now();
-  await login(context, "admin", adminPassword);
   const supervisorResponse = await requireOk(
     await context.request.post(`${apiUrl}/users/`, {
       data: {
@@ -361,55 +382,76 @@ async function uploadStudentPhotos(context, browser, projectId, studentId) {
   }
 }
 
-const STUDENT_TEXT_TARGET = {
-  x: 96,
-  y: 770,
-  width: 600,
-  height: 96,
-};
+// 用「全班同一張」端點把所有照片格補齊，讓班級總覽進到階段 2（可標記全班完成、出現交件下載）
+async function fillAllSharedPhotos(context, browser, projectId) {
+  const groupPhoto = await createPhotoImage(browser, "teacher-photo-group.png", "全班合照", "#fde68a");
+  const buffer = await readFile(groupPhoto);
+  for (const [pageIndex, slotIds] of Object.entries(TEMPLATE_PHOTO_SLOTS)) {
+    for (const slotId of slotIds) {
+      await requireOk(
+        await context.request.post(`${apiUrl}/projects/${projectId}/photos/shared/pages/${pageIndex}/slots/${slotId}`, {
+          multipart: {
+            file: {
+              name: `guide-shared-${pageIndex}-${slotId}.png`,
+              mimeType: "image/png",
+              buffer,
+            },
+          },
+        }),
+        `upload shared photo p${pageIndex} slot ${slotId}`,
+      );
+    }
+  }
+}
 
 const GUIDE_MARKERS = {
   projectList: [
-    { n: 1, selector: '[data-guide="project-create-button"]', text: "新建專案。每個班級每個月建立一個相本專案。" },
-    { n: 2, selector: '[data-guide="project-create-form"]', text: "選擇模板與輸入班級補充名稱，系統會組成專案全名。" },
-    { n: 3, selector: '[data-guide="project-card"]', text: "專案卡片。檢查學生數與建立日期。" },
-    { n: 4, selector: '[data-guide="project-settings-link"]', text: "專案設定。先登記學生與填整班共用文字。" },
-    { n: 5, selector: '[data-guide="project-review-link"]', text: "個人編輯。逐位補照片、預覽與輸出。" },
+    { n: 1, selector: '[data-guide="project-create-button"]', text: "「新建專案」。每個班級每一期建立一個相本專案。" },
+    { n: 2, selector: '[data-guide="project-card"]', text: "專案卡片。可以看到學生數、建立日期與完成狀態。" },
+    { n: 3, selector: '[data-guide="project-edit-link"]', text: "「編輯相本」。放照片、填文字都從這裡進去。" },
+    { n: 4, selector: '[data-guide="project-review-link"]', text: "「班級總覽」。看進度、管名單、標記完成與下載交件。" },
   ],
-  batchStudents: [
-    { n: 1, selector: '[data-guide="batch-student-input"]', text: "學生名單輸入框。可一行一位，也可用逗號或頓號分隔。" },
-    { n: 2, selector: '[data-guide="batch-add-students"]', text: "新增學生。系統會略過空白與重複姓名。" },
-    { n: 3, selector: '[data-guide="batch-student-list"]', text: "已登記學生。確認人數、修改姓名或刪除。" },
-    { n: 4, selector: '[data-guide="batch-text-tab"]', text: "文字頁籤。填整班共用文案。" },
-    { n: 5, selector: '[data-guide="batch-review-link"]', text: "進入個人編輯與輸出總覽。" },
+  projectCreate: [
+    { n: 1, selector: '[data-guide="project-create-form"]', text: "選部門與期別、挑設計組做好的模板，補上分校或班級名稱；也可以從上一期專案複製學生名單。" },
   ],
-  batchTexts: [
-    { n: 1, selector: '[data-guide="batch-page-nav"]', text: "切換頁面。逐頁檢查需要填的文字。" },
-    { n: 2, selector: '[data-guide="batch-text-fields"]', text: "整班共用文字。清空時會恢復模板文字。" },
-    { n: 3, selector: '[data-guide="batch-text-insert-name"]', text: "插入 {name}。在游標位置快速加入姓名變數。" },
-    { n: 4, selector: '[data-guide="batch-preview-panel"]', text: "樣版預覽。確認文字套入模板後的位置和內容。" },
-    { n: 5, selector: '[data-guide="batch-review-link"]', text: "共用文字完成後，進入個人編輯。" },
+  reviewWorkbench: [
+    { n: 1, selector: '[data-guide="review-progress"]', text: "工作台橫幅。左邊看階段（1 製作 → 2 全班完成 → 3 交件）、中間看照片進度、右邊是這個階段的下一步按鈕。" },
+    { n: 2, selector: '[data-guide="review-roster-button"]', text: "「學生名單」。批次新增、改名或刪除學生。" },
+    { n: 3, selector: 'a:has-text("繼續製作")', text: "階段 1 的下一步：「繼續製作」，會帶你進編輯相本。" },
+    { n: 4, selector: '[data-guide="review-student-card"]', text: "學生卡片。照片進度一目了然，點名字或鉛筆進個別編輯。" },
+    { n: 5, selector: '[data-guide="review-preview-student"]', text: "點頁面縮圖直接放大預覽，不用進編輯頁。" },
   ],
-  review: [
-    { n: 1, selector: '[data-guide="review-progress"]', text: "輸出進度。確認已產生 PDF 的學生數。" },
-    { n: 2, selector: '[data-guide="review-student-card"]', text: "學生卡片。可看縮圖與完成狀態。" },
-    { n: 3, selector: '[data-guide="review-edit-student"]', text: "編輯。進入單一學生頁面補照片與文字。" },
-    { n: 4, selector: '[data-guide="review-preview-student"]', text: "預覽。快速打開此學生頁面預覽。" },
-    { n: 5, selector: '[data-guide="review-download-all"]', text: "下載全部 ZIP。所有學生確認後批次輸出。" },
+  rosterModal: [
+    { n: 1, selector: '[data-guide="roster-add-input"]', text: "把學生姓名貼進來：一行一位，或用逗號、頓號分隔。" },
+    { n: 2, selector: '[data-guide="roster-add-button"]', text: "「新增」。重複的名字會自動略過。" },
+    { n: 3, selector: '[data-guide="roster-modal"]', text: "已登記學生清單。可以行內改名、刪除，也看得到每位的照片進度。" },
+  ],
+  classEdit: [
+    { n: 1, selector: '[data-guide="class-scope-banner"]', text: "紫色提醒：現在改的是「全班共用」內容，會套用到所有學生。" },
+    { n: 2, selector: '[data-guide="scope-switcher"]', text: "編輯範圍切換。「全班／個別」兩顆按鈕，同一個編輯器不用換頁。" },
+    { n: 3, selector: '[data-guide="class-page-nav"]', text: "頁碼導航。預覽、照片、文字三個面板會一起換頁。" },
+    { n: 4, selector: '[data-guide="class-photo-panel"]', text: "全班照片。點一個照片格開始放照片；右上「依檔名整批匯入」給已命名好的整批檔案。" },
+    { n: 5, selector: '[data-guide="class-text-panel"]', text: "全班文字。{name} 會自動代入每位學生的姓名。" },
+    { n: 6, selector: '[data-guide="class-preview-panel"]', text: "樣版預覽。確認文字套上模板後的位置與內容。" },
+  ],
+  classPhotoModal: [
+    { n: 1, selector: '[data-guide="class-photo-strategies"]', text: "先選分配方式：「每人不同張」一次上傳多張、自動分給每位學生；「全班同一張」把團體照套用到全班同一格。" },
+    { n: 2, selector: '[data-guide="class-slot-photo-modal"]', text: "選好方式後，第二步就在下方選照片上傳。" },
   ],
   studentEdit: [
-    { n: 1, selector: '[data-guide="student-preview-panel"]', text: "預覽與頁面。切頁、刪除此頁或還原此頁。" },
-    { n: 2, selector: '[data-guide="student-photo-manager"]', text: "照片管理。逐格上傳、檢查與調整照片。" },
-    { n: 3, selector: '[data-guide="student-multi-upload"]', text: "多選上傳。一次選多張照片依順序放入空格。" },
-    { n: 4, selector: '[data-guide="student-text-panel"]', text: "個別文字。清空時會恢復專案共用文字或模板文字。" },
-    { n: 5, selector: '[data-guide="student-text-insert-name"]', text: "插入 {name}。在個別文字中快速加入姓名變數。" },
-    { n: 6, selector: '[data-guide="student-download-button"]', text: "產出並下載。完成此學生的 PDF。" },
+    { n: 1, selector: '[data-guide="scope-switcher"]', text: "用「上一位／下一位」或下拉切換學生；按「全班」可回到全班共用內容。" },
+    { n: 2, selector: '[data-guide="student-page-nav"]', text: "頁碼導航。一頁做完換下一頁。" },
+    { n: 3, selector: '[data-guide="student-preview-panel"]', text: "頁面預覽。頁尾可「刪除此頁」，刪錯了也能還原。" },
+    { n: 4, selector: '[data-guide="student-photo-manager"]', text: "照片管理。點空格上傳；已有照片可調整裁切、更換、刪除或拖曳交換。" },
+    { n: 5, selector: '[data-guide="student-photo-scope"]', text: "「本頁／整本」檢視切換。切到整本可一次看所有頁的照片格。" },
+    { n: 6, selector: '[data-guide="student-multi-upload"]', text: "多選上傳。一次選多張照片，自動填入剩餘空格。" },
+    { n: 7, selector: '[data-guide="student-text-panel"]', text: "個別文字。只想改這位學生時在這裡覆寫；按恢復預設可回到全班文字。" },
   ],
-  studentPreview: [
-    { n: 1, selector: '[data-guide="student-page-nav"]', text: "頁面切換。檢查第 1 頁、第 2 頁等不同頁面。" },
-    { n: 2, selector: '[data-guide="student-page-skip"]', text: "刪除此頁。此學生不需要某頁時可跳過。" },
-    { n: 3, selector: '[data-guide="student-page-preview"]', text: "單頁預覽。確認照片與文字是否正確套入。" },
-    { n: 4, relativeTo: '[data-guide="student-page-preview"]', templateRect: STUDENT_TEXT_TARGET, text: "文字套用結果。{name} 會顯示為學生姓名。" },
+  reviewComplete: [
+    { n: 1, selector: '[data-guide="review-progress"]', text: "照片備齊後，階段自動跳到「2 全班完成」。" },
+    { n: 2, selector: 'button:has-text("全班完成")', text: "「全班完成」。標記後內容鎖定，需要主管或管理員退回才能再修改。" },
+    { n: 3, selector: '[data-guide="review-download-all"]', text: "交件下載。批次下載全班「PDF ZIP」，旁邊是「全部圖片」。" },
+    { n: 4, selector: '[data-guide="review-download-student"]', text: "也可以只下載單一學生的 PDF 或圖片。" },
   ],
 };
 
@@ -422,11 +464,13 @@ async function screenshotsFromDisk() {
   }
   const imagePaths = {
     projectList: "01-project-list.png",
-    batchStudents: "02-batch-students.png",
-    batchTexts: "03-batch-texts.png",
-    review: "04-review.png",
-    studentEdit: "05-student-edit.png",
-    studentPreview: "06-student-preview.png",
+    projectCreate: "02-project-create.png",
+    reviewWorkbench: "03-review-workbench.png",
+    rosterModal: "04-roster-modal.png",
+    classEdit: "05-class-edit.png",
+    classPhotoModal: "06-class-photo-modal.png",
+    studentEdit: "07-student-edit.png",
+    reviewComplete: "08-review-complete.png",
   };
   return Object.fromEntries(
     Object.entries(imagePaths).map(([key, fileName]) => [
@@ -485,17 +529,17 @@ async function buildPdf(screenshots) {
   <section class="cover">
     <div class="eyebrow">ALBUM MAKER · TEACHER GUIDE</div>
     <h1>老師製作相冊使用教學</h1>
-    <p class="subtitle">給帶班老師使用。這份 PDF 以實際系統截圖說明如何建立相本專案、登記學生、填整班文字、逐位上傳照片、預覽並輸出 PDF。</p>
-    <p class="meta">產出檔案：<strong>${docsRelative(pdfPath)}</strong><br>網頁內也可在相本專案、專案設定、個人編輯與輸出頁點「製作教學」查看互動導覽。</p>
+    <p class="subtitle">給帶班老師使用。這份 PDF 以實際系統截圖說明整個流程：建立相本專案、在班級總覽管理學生名單、先編輯全班共用的照片與文字、再逐位微調，最後標記全班完成並下載交件。</p>
+    <p class="meta">產出檔案：<strong>${docsRelative(pdfPath)}</strong><br>網頁內也可在相本專案、班級總覽與編輯相本頁點「製作教學」查看互動導覽。</p>
     <div class="toc">
       <h3>快速目錄</h3>
       <ol>
         <li>建立相本專案</li>
+        <li>班級總覽：老師的工作台</li>
         <li>登記學生名單</li>
-        <li>填整班共用文字</li>
-        <li>檢查學生卡片與輸出狀態</li>
-        <li>逐位上傳照片與覆寫文字</li>
-        <li>預覽、跳過頁面與下載 PDF</li>
+        <li>編輯全班共用內容（照片與文字）</li>
+        <li>個別學生微調</li>
+        <li>全班完成與交件下載</li>
         <li>交付前檢查表</li>
       </ol>
     </div>
@@ -503,105 +547,114 @@ async function buildPdf(screenshots) {
 
   <section>
     <h2>1. 建立相本專案</h2>
-    <p class="step-intro">登入後進入「相本專案」。每個班級每個月份通常建立一個專案，專案會套用設計組完成的模板。</p>
+    <p class="step-intro">登入後進入「相本專案」。每個班級每一期建立一個專案，專案會套用設計組完成的模板。專案卡片下方有兩個入口：「編輯相本」做內容、「班級總覽」看進度與交件。</p>
     <ol class="actions">
-      <li>點「新建專案」。</li>
-      <li>選擇模板，確認模板頁數與照片數符合本月需求。</li>
-      <li>輸入班級或月份補充名稱，確認專案全名。</li>
-      <li>建立後先進入「專案設定」。</li>
+      <li>點右上「新建專案」。</li>
+      <li>選部門與期別，再選這一期要用的模板（會顯示頁數與照片格數）。</li>
+      <li>補上分校或班級名稱，確認專案全名後點「建立專案」。</li>
+      <li>上一期已經建過名單的話，可直接選「複製學生名單」帶入全班。</li>
     </ol>
-    ${stepFigure(screenshots.projectList, "步驟 1：相本專案列表與建立入口。")}
+    ${stepFigure(screenshots.projectList, "步驟 1：相本專案列表與專案卡片的兩個入口。")}
+    ${stepFigure(screenshots.projectCreate, "步驟 1-2：新建專案視窗。")}
   </section>
 
   <section class="page-break">
-    <h2>2. 登記學生名單</h2>
-    <p class="step-intro">先把本次要製作相冊的學生加入專案。學生順序會影響後續卡片排列與批次輸出檢查。</p>
+    <h2>2. 班級總覽：老師的工作台</h2>
+    <p class="step-intro">「班級總覽」是整本相冊的指揮台。最上方的橫幅一條看完：目前階段（1 製作 → 2 全班完成 → 3 交件）、全班照片進度，以及依階段建議的下一步按鈕。</p>
     <ol class="actions">
-      <li>在「新增學生名單」貼上學生姓名。</li>
-      <li>可以一行一位，也可以用逗號、頓號分隔。</li>
+      <li>階段 1 製作中：按「繼續製作」進編輯相本補照片。</li>
+      <li>點「缺照片 N 位」會直接篩選出還缺照片的學生。</li>
+      <li>點學生卡片的名字或鉛筆，可進入該學生的個別編輯。</li>
+      <li>點卡片上的頁面縮圖可直接放大預覽。</li>
+    </ol>
+    ${stepFigure(screenshots.reviewWorkbench, "步驟 2：班級總覽工作台（製作階段）。")}
+  </section>
+
+  <section class="page-break">
+    <h2>3. 登記學生名單</h2>
+    <p class="step-intro">名單在班級總覽右上的「學生名單」按鈕裡管理，不用換頁。先把本次要製作相冊的學生加齊，再開始放照片。</p>
+    <ol class="actions">
+      <li>在班級總覽點右上「學生名單」。</li>
+      <li>在批次新增框貼上姓名：一行一位，或用逗號、頓號分隔。</li>
       <li>點「新增」，系統會自動略過重複名稱。</li>
-      <li>在已登記學生清單確認人數與姓名。</li>
+      <li>在下方清單確認人數；需要時可行內改名或刪除。</li>
     </ol>
-    ${stepFigure(screenshots.batchStudents, "步驟 2：專案設定中的學生名單。")}
+    ${stepFigure(screenshots.rosterModal, "步驟 3：學生名單視窗。")}
   </section>
 
   <section class="page-break">
-    <h2>3. 填整班共用文字</h2>
-    <p class="step-intro">如果模板有文字欄位，老師可以先填整班共用文字。需要學生姓名的位置使用 <span class="kbd">{name}</span>，輸出時會自動替換成每位學生姓名。</p>
+    <h2>4. 編輯全班共用內容（照片與文字）</h2>
+    <p class="step-intro">從專案卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：樣版預覽｜全班照片｜全班文字。</p>
     <ol class="actions">
-      <li>切到「文字」頁籤。</li>
-      <li>用頁面切換查看每一頁的文字欄位。</li>
-      <li>需要學生姓名時，點「插入 {name}」快速放入姓名變數。</li>
-      <li>欄位清空時會自動恢復模板文字。</li>
-      <li>填好共用文字後，右側預覽會用模板畫面確認文字位置。</li>
-      <li>個別學生有不同內容時，可之後到學生個人編輯頁覆寫。</li>
+      <li>留意紫色提醒橫幅：現在改的是全班共用內容。</li>
+      <li>用頁碼導航切頁，三個面板會一起換頁。</li>
+      <li>點一個照片格，會開「放照片」視窗選分配方式：<strong>每人不同張</strong>（一次上傳多張、自動分給每位學生）或<strong>全班同一張</strong>（團體照套用到全班同一格）。</li>
+      <li>行政已經照「姓名＋頁格」命名好的整批檔案，用照片面板右上的「依檔名整批匯入」。</li>
+      <li>在全班文字填共用文案；需要學生姓名的位置用 <span class="kbd">{name}</span>，輸出時自動替換。</li>
+      <li>清空欄位會輸出空白；按「恢復預設」可回到模板文字。</li>
     </ol>
-    ${stepFigure(screenshots.batchTexts, "步驟 3：整班共用文字與樣版預覽。")}
+    ${stepFigure(screenshots.classEdit, "步驟 4：編輯相本（全班範圍）三欄工作台。")}
+    ${stepFigure(screenshots.classPhotoModal, "步驟 4-3：點照片格後的「放照片」視窗。")}
   </section>
 
   <section class="page-break">
-    <h2>4. 檢查學生卡片與輸出狀態</h2>
-    <p class="step-intro">從「個人編輯」進入輸出總覽。這裡可以看到所有學生、頁面縮圖、PDF 產生狀態與批次下載入口。</p>
+    <h2>5. 個別學生微調</h2>
+    <p class="step-intro">全班共用的部分做完後，用編輯範圍切換按「個別」，逐位補上每位學生自己的照片、覆寫個別文字。用「上一位／下一位」一位一位輪著做，不用回列表。</p>
     <ol class="actions">
-      <li>看上方進度確認已產生幾位學生。</li>
-      <li>點學生卡片中的「編輯」進入個別編輯。</li>
-      <li>點「預覽」快速檢查畫面。</li>
-      <li>全部完成後點「下載全部 ZIP」。</li>
+      <li>在編輯相本按「個別」，或從班級總覽點某位學生進來。</li>
+      <li>用頁碼導航切頁；照片管理點空格上傳，已有照片可調整裁切、更換、刪除或拖曳交換。</li>
+      <li>照片管理右上可切「本頁／整本」：整本檢視能一次上傳整本照片、跨頁調換。</li>
+      <li>「多選上傳」一次選多張，自動填入剩餘空格。</li>
+      <li>只想改這位學生的文字時，在個別文字覆寫；按恢復預設可回到全班文字。</li>
+      <li>這位學生不需要某一頁時，在預覽區頁尾點「刪除此頁」，之後也能還原。</li>
+      <li>做完按「完成，回班級總覽」。下載都在班級總覽，個別編輯頁沒有下載按鈕。</li>
     </ol>
-    ${stepFigure(screenshots.review, "步驟 4：學生卡片、預覽與下載入口。")}
+    ${stepFigure(screenshots.studentEdit, "步驟 5：個別學生編輯頁。")}
   </section>
 
   <section class="page-break">
-    <h2>5. 逐位上傳照片與覆寫文字</h2>
-    <p class="step-intro">個別編輯頁是老師主要製作區。左側看預覽，右側管理照片與個別文字。</p>
+    <h2>6. 全班完成與交件下載</h2>
+    <p class="step-intro">全班照片備齊後，回到班級總覽，橫幅會自動跳到階段 2。先逐位點縮圖預覽確認，再標記全班完成、下載交件。</p>
     <ol class="actions">
-      <li>用預覽區切換頁面，確認目前正在編哪一頁。</li>
-      <li>在照片管理中點空格上傳照片，或用「多選上傳」一次放入多張照片。</li>
-      <li>已有照片時可調整位移縮放、更換、刪除或拖曳換順序。</li>
-      <li>需要只改這位學生文字時，在個別文字欄位覆寫。</li>
-      <li>需要學生姓名時，點「插入 {name}」快速放入姓名變數。</li>
-      <li>個別文字清空時會恢復專案共用文字或模板文字。</li>
+      <li>確認照片進度顯示「全班照片齊」。</li>
+      <li>逐位點學生卡片縮圖，確認照片與 <span class="kbd">{name}</span> 文字都正確。</li>
+      <li>按「全班完成」。標記後內容鎖定，之後需要主管或管理員退回才能修改。</li>
+      <li>用「PDF ZIP」批次下載全班 PDF；「全部圖片」下載每頁圖片（手機會開啟系統分享）。</li>
+      <li>也可以在學生卡片上只下載單一學生的 PDF 或圖片。</li>
+      <li>主管或設計組留了審閱意見時，會顯示在頁面下方的「審閱意見」。</li>
     </ol>
-    ${stepFigure(screenshots.studentEdit, "步驟 5：學生個別編輯頁。")}
-  </section>
-
-  <section class="page-break">
-    <h2>6. 預覽、跳過頁面與下載 PDF</h2>
-    <p class="step-intro">每位學生完成後，最後要看預覽確認照片、文字與頁面數是否正確，再輸出 PDF。</p>
-    <ol class="actions">
-      <li>切換每一頁預覽，檢查照片有沒有放反或裁切錯誤。</li>
-      <li>若這位學生不需要某一頁，可點「刪除此頁」。</li>
-      <li>確認 <span class="kbd">{name}</span> 已正確替換成學生姓名。</li>
-      <li>按「產出並下載」產生該學生 PDF。</li>
-    </ol>
-    ${stepFigure(screenshots.studentPreview, "步驟 6：預覽與頁面跳過控制。")}
+    ${stepFigure(screenshots.reviewComplete, "步驟 6：照片備齊後的班級總覽（可標記完成與交件下載）。")}
   </section>
 
   <section class="page-break">
     <h2>7. 交付前檢查表</h2>
     <div class="grid">
       <ul>
-        <li>□ 專案使用正確模板。</li>
+        <li>□ 專案使用正確期別與模板。</li>
         <li>□ 學生名單完整且沒有重複。</li>
-        <li>□ 整班共用文字已填好。</li>
-        <li>□ 每位學生照片格都已補齊。</li>
+        <li>□ 全班共用照片與文字已填好。</li>
+        <li>□ 每位學生照片格都已補齊（橫幅顯示全班照片齊）。</li>
         <li>□ 個別文字沒有漏填或超出畫面。</li>
       </ul>
       <ul>
-        <li>□ 每位學生所有頁面都已預覽。</li>
+        <li>□ 每位學生的每一頁都已預覽。</li>
         <li>□ 不需要的頁面已刪除。</li>
-        <li>□ PDF 已逐位產生。</li>
-        <li>□ 下載全部 ZIP 後可正常開啟。</li>
+        <li>□ 已按「全班完成」標記。</li>
+        <li>□ PDF ZIP 下載後可正常開啟。</li>
         <li>□ 審閱意見已確認。</li>
       </ul>
     </div>
     <h2>常見問題</h2>
     <h3>照片放進去後裁切不對</h3>
-    <p>在照片格上點調整，重新設定位移與縮放，再回到預覽確認。</p>
+    <p>到該學生的個別編輯頁，在照片格上點調整，重新設定位置與縮放，再回預覽確認。</p>
+    <h3>怕改到全班／怕只改到一個人</h3>
+    <p>看編輯範圍切換列：紫色「全班」＝改的內容套用到所有學生；「個別」＝只改目前這位。全班畫面上方也有紫色提醒橫幅。</p>
     <h3>某位學生少一頁</h3>
-    <p>到該學生個別編輯頁檢查是否誤按「刪除此頁」，需要時可按還原。</p>
+    <p>到該學生個別編輯頁檢查是否按過「刪除此頁」，需要時在預覽區按「還原此頁」。</p>
     <h3>文字沒有帶入姓名</h3>
-    <p>整班共用文字或模板文字要使用 <span class="kbd">{name}</span>，不要直接打固定姓名。</p>
+    <p>全班文字或模板文字要使用 <span class="kbd">{name}</span>，不要直接打固定姓名。</p>
+    <h3>標記全班完成後想再修改</h3>
+    <p>內容已鎖定，請主管或管理員在班級總覽按「退回修改」。</p>
     <p class="small">本文件由本機系統截圖產生，截圖素材位於 docs/assets/teacher-guide/。</p>
   </section>
 </body>
@@ -643,11 +696,15 @@ async function main() {
   let projectId;
   let teacherUser;
   let supervisorUser;
+  let createdPeriodId;
   let screenshots;
   try {
     browser = await chromium.launch();
     adminContext = await browser.newContext({ baseURL: baseUrl, viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
-    const template = await createTemplate(adminContext, browser);
+    await login(adminContext, "admin", adminPassword);
+    const { period, created: periodCreated } = await ensureActivePeriod(adminContext);
+    if (periodCreated) createdPeriodId = period.id;
+    const template = await createTemplate(adminContext, browser, period.id);
     templateId = template.id;
     const users = await createTeacher(adminContext);
     teacherUser = users.teacher;
@@ -661,31 +718,68 @@ async function main() {
     await uploadStudentPhotos(teacherContext, browser, projectId, firstStudent.id);
 
     const page = await teacherContext.newPage();
+
+    // 1. 專案列表：卡片與兩個入口
     await page.goto("/projects");
-    await page.getByText(project.name).waitFor();
-    await page.getByRole("button", { name: "新建專案" }).click();
+    await page.getByText(project.name).first().waitFor();
     const projectList = await screenshot(page, "01-project-list.png", GUIDE_MARKERS.projectList);
 
-    await page.goto(`/projects/${projectId}/batch`);
-    await page.getByText("新增學生名單").waitFor();
-    const batchStudents = await screenshot(page, "02-batch-students.png", GUIDE_MARKERS.batchStudents);
-    await page.getByRole("button", { name: "文字" }).click();
-    await page.getByText("樣版預覽").waitFor();
-    const batchTexts = await screenshot(page, "03-batch-texts.png", GUIDE_MARKERS.batchTexts);
+    // 1-2. 新建專案 Modal
+    await page.getByRole("button", { name: "新建專案" }).click();
+    await page.getByText("新建相本專案").waitFor();
+    const projectCreate = await screenshot(page, "02-project-create.png", GUIDE_MARKERS.projectCreate);
+    await page.keyboard.press("Escape");
 
+    // 2. 班級總覽工作台（階段 1 製作中：一位學生已有部分照片）
     await page.goto(`/projects/${projectId}/review`);
-    await page.getByText(firstStudent.name).waitFor();
-    const review = await screenshot(page, "04-review.png", GUIDE_MARKERS.review);
+    await page.getByText(firstStudent.name).first().waitFor();
+    await page.getByText("照片進度").waitFor();
+    const reviewWorkbench = await screenshot(page, "03-review-workbench.png", GUIDE_MARKERS.reviewWorkbench);
 
+    // 3. 學生名單 Modal
+    await page.locator('[data-guide="review-roster-button"]').click();
+    await page.getByText("批次新增").waitFor();
+    const rosterModal = await screenshot(page, "04-roster-modal.png", GUIDE_MARKERS.rosterModal);
+    await page.keyboard.press("Escape");
+
+    // 4. 編輯相本（全班範圍）：橫幅、切換列、三欄工作台
+    await page.goto(`/projects/${projectId}/edit`);
+    await page.getByText("全班照片").first().waitFor();
+    await page.getByText("樣版預覽").waitFor();
+    await waitForPreviewImage(page, '[data-guide="class-preview-panel"] img');
+    const classEdit = await screenshot(page, "05-class-edit.png", GUIDE_MARKERS.classEdit);
+
+    // 4-3. 點照片格 → 放照片 Modal（選「每人不同張」讓兩個步驟都入鏡）
+    await page.locator('[data-guide="class-shared-photo-slots"] button').first().click();
+    await page.getByText("選擇分配方式").waitFor();
+    await page.locator('[data-guide="class-photo-strategies"] button').first().click();
+    await page.getByText("選擇照片並開始分配").waitFor();
+    const classPhotoModal = await screenshot(page, "06-class-photo-modal.png", GUIDE_MARKERS.classPhotoModal);
+    await page.keyboard.press("Escape");
+
+    // 5. 個別學生編輯頁
     await page.goto(`/projects/${projectId}/students/${firstStudent.id}/edit`);
     await page.getByText("照片管理").waitFor();
-    await page.getByRole("heading", { name: "第 1 頁文字" }).first().waitFor();
     await waitForPreviewImage(page);
-    const studentEdit = await screenshot(page, "05-student-edit.png", GUIDE_MARKERS.studentEdit);
-    await waitForPreviewImage(page);
-    const studentPreview = await screenshot(page, "06-student-preview.png", GUIDE_MARKERS.studentPreview);
+    const studentEdit = await screenshot(page, "07-student-edit.png", GUIDE_MARKERS.studentEdit);
 
-    screenshots = { projectList, batchStudents, batchTexts, review, studentEdit, studentPreview };
+    // 6. 補齊全班照片 → 班級總覽進入階段 2（全班完成＋交件下載）
+    await fillAllSharedPhotos(teacherContext, browser, projectId);
+    await page.goto(`/projects/${projectId}/review`);
+    await page.getByRole("button", { name: "全班完成" }).waitFor();
+    await page.getByText("全班照片齊").waitFor();
+    const reviewComplete = await screenshot(page, "08-review-complete.png", GUIDE_MARKERS.reviewComplete);
+
+    screenshots = {
+      projectList,
+      projectCreate,
+      reviewWorkbench,
+      rosterModal,
+      classEdit,
+      classPhotoModal,
+      studentEdit,
+      reviewComplete,
+    };
     await writeFile(targetMetaPath, JSON.stringify(screenshotTargetMeta(screenshots), null, 2), "utf8");
   } finally {
     if (teacherContext && projectId) {
@@ -693,6 +787,12 @@ async function main() {
     }
     if (adminContext && templateId) {
       await adminContext.request.delete(`${apiUrl}/templates/${templateId}`).catch(() => {});
+    }
+    if (adminContext && createdPeriodId) {
+      // 期別沒有刪除端點：本次新建的改為封存，避免留在「使用中」清單干擾現場
+      await adminContext.request
+        .patch(`${apiUrl}/templates/periods/${createdPeriodId}`, { form: { status: "archived" } })
+        .catch(() => {});
     }
     if (adminContext && teacherUser?.id) {
       await adminContext.request.delete(`${apiUrl}/users/${teacherUser.id}`).catch(() => {});

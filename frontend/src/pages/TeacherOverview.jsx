@@ -1,6 +1,6 @@
 // 老師進度頁（supervisor 看管轄老師；admin 看全部）
-// 以老師為軸心：每位老師做了哪些期別的專案（模板）、班上有哪些學生、渲染進度。
-// 資料沿用學期匯出的 preview API（權限範圍由後端處理），前端翻轉成老師視角。
+// 以老師為軸心：每位老師（含尚未建專案者）做了哪些期別的專案、
+// 各專案的照片格填滿率與空白文字格數；渲染進度由學期匯出頁負責。
 
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -10,16 +10,35 @@ import {
   fetchTemplateDepartments,
   fetchTemplatePeriods,
 } from "../api/templateApi";
-import { buildTeacherOverviewExcelUrl, fetchSemesterExportPreview } from "../api/rosterApi";
+import { buildTeacherOverviewExcelUrl, fetchTeacherProgress } from "../api/rosterApi";
 import { apiClient } from "../api/authApi";
 import { downloadApiBlob } from "../utils/browserFiles";
 import { Badge, Button, PageHeader, SegmentedControl, Surface } from "../components/ui";
+
+/** 照片完成度橫條：滿格轉綠，未滿維持 indigo */
+function PhotoProgressBar({ filled, total }) {
+  if (!total) return null;
+  const percent = Math.round((filled / total) * 100);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-100">
+        <div
+          className={`h-full rounded-full ${percent === 100 ? "bg-emerald-500" : "bg-indigo-500"}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <span className={`flex-shrink-0 text-xs tabular-nums ${percent === 100 ? "text-emerald-600" : "text-gray-500"}`}>
+        照片 {filled}/{total}
+      </span>
+    </div>
+  );
+}
 
 export default function TeacherOverview() {
   const [departments, setDepartments] = useState([]);
   const [activeDepartment, setActiveDepartment] = useState(null);
   const [allPeriods, setAllPeriods] = useState([]);
-  const [preview, setPreview] = useState(null);
+  const [overview, setOverview] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -48,67 +67,43 @@ export default function TeacherOverview() {
       .filter(period => period.department === activeDepartment)
       .map(period => period.id);
     if (departmentPeriodIds.length === 0) {
-      setPreview(null);
+      setOverview(null);
       return;
     }
-    const loadPreview = async () => {
+    const loadOverview = async () => {
       setIsLoading(true);
       try {
-        const response = await fetchSemesterExportPreview(departmentPeriodIds);
-        setPreview(response.data);
+        const response = await fetchTeacherProgress(departmentPeriodIds);
+        setOverview(response.data);
       } catch {
         toast.error("載入老師進度失敗");
       }
       setIsLoading(false);
     };
-    loadPreview();
+    loadOverview();
   }, [activeDepartment, allPeriods]);
 
-  // ── 翻轉成老師視角：老師 → 專案（含期別）→ 學生 ─────────────────────────────
-
+  // 依期別先後與專案名排序每位老師的專案（後端只保證老師排序）
   const teacherGroups = useMemo(() => {
-    if (!preview) return [];
-    const periodOrderById = new Map(preview.periods.map((period, index) => [period.id, index]));
-    const periodNameById = new Map(preview.periods.map(period => [period.id, period.name]));
-
-    const allEntries = [
-      ...preview.children.flatMap(group => group.entries),
-      ...preview.unlinked,
-    ];
-    const teachersById = new Map();
-    for (const entry of allEntries) {
-      const teacherKey = entry.owner_id ?? `name:${entry.owner_name ?? "未知"}`;
-      const teacher = teachersById.get(teacherKey) ?? {
-        teacherName: entry.owner_name ?? "（未指定老師）",
-        projectsById: new Map(),
-      };
-      const project = teacher.projectsById.get(entry.project_id) ?? {
-        projectId: entry.project_id,
-        projectName: entry.project_name,
-        periodId: entry.period_id,
-        periodName: periodNameById.get(entry.period_id) ?? "?",
-        students: [],
-      };
-      project.students.push({
-        studentId: entry.student_id,
-        studentName: entry.student_name,
-      });
-      teacher.projectsById.set(entry.project_id, project);
-      teachersById.set(teacherKey, teacher);
-    }
-
-    return [...teachersById.values()]
-      .map(teacher => {
-        const projects = [...teacher.projectsById.values()].sort(
+    if (!overview) return [];
+    const periodOrderById = new Map(overview.periods.map((period, index) => [period.id, index]));
+    const periodNameById = new Map(overview.periods.map(period => [period.id, period.name]));
+    return overview.teachers.map(teacher => {
+      const projects = [...teacher.projects]
+        .map(project => ({
+          ...project,
+          periodName: periodNameById.get(project.period_id) ?? "?",
+        }))
+        .sort(
           (a, b) =>
-            (periodOrderById.get(a.periodId) ?? 99) - (periodOrderById.get(b.periodId) ?? 99) ||
-            a.projectName.localeCompare(b.projectName, "zh-TW"),
+            (periodOrderById.get(a.period_id) ?? 99) - (periodOrderById.get(b.period_id) ?? 99) ||
+            a.project_name.localeCompare(b.project_name, "zh-TW"),
         );
-        const studentTotal = projects.reduce((count, project) => count + project.students.length, 0);
-        return { ...teacher, projects, studentTotal };
-      })
-      .sort((a, b) => a.teacherName.localeCompare(b.teacherName, "zh-TW"));
-  }, [preview]);
+      const studentTotal = projects.reduce((count, project) => count + project.student_count, 0);
+      const completedProjectCount = projects.filter(project => project.completed_at).length;
+      return { ...teacher, projects, studentTotal, completedProjectCount };
+    });
+  }, [overview]);
 
   const handleExportExcel = async () => {
     const departmentPeriodIds = allPeriods
@@ -119,7 +114,7 @@ export default function TeacherOverview() {
     try {
       await downloadApiBlob(apiClient, buildTeacherOverviewExcelUrl(departmentPeriodIds), "老師進度.xlsx");
     } catch {
-      toast.error("匯出 Excel 失敗");
+      toast.error("下載 Excel 失敗");
     }
     setIsExporting(false);
   };
@@ -129,11 +124,11 @@ export default function TeacherOverview() {
     if (!query) return teacherGroups;
     return teacherGroups
       .map(teacher => {
-        if (teacher.teacherName.includes(query)) return teacher;
+        if (teacher.display_name.includes(query)) return teacher;
         const matchedProjects = teacher.projects.filter(project =>
-          project.projectName.includes(query) ||
+          project.project_name.includes(query) ||
           project.periodName.includes(query) ||
-          project.students.some(student => student.studentName.includes(query)),
+          project.students.some(student => student.student_name.includes(query)),
         );
         if (matchedProjects.length === 0) return null;
         return { ...teacher, projects: matchedProjects };
@@ -147,7 +142,7 @@ export default function TeacherOverview() {
         icon={Users}
         iconTone="info"
         title="老師進度"
-        subtitle="各老師做了哪些期別的相本專案、班上學生與渲染進度"
+        subtitle="各老師的期別專案、照片格填滿進度與空白文字提醒（PDF 產出狀態見學期匯出頁）"
       />
 
       <Surface padding="sm" className="mb-4">
@@ -174,65 +169,108 @@ export default function TeacherOverview() {
           {isLoading && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
           <Button
             variant="secondary"
-            size="sm"
+            size="md"
             className="sm:ml-auto sm:flex-shrink-0"
             onClick={handleExportExcel}
-            disabled={isExporting || !preview || teacherGroups.length === 0}
+            disabled={isExporting || !overview || teacherGroups.length === 0}
           >
             {isExporting
               ? <Loader2 className="h-4 w-4 animate-spin" />
               : <FileSpreadsheet className="h-4 w-4" />}
-            匯出 Excel
+            下載 Excel
           </Button>
         </div>
       </Surface>
 
-      {preview && filteredTeachers.length === 0 && !isLoading && (
+      {overview && filteredTeachers.length === 0 && !isLoading && (
         <Surface className="text-center text-sm text-gray-400">
-          {teacherGroups.length === 0 ? "此部門尚無老師的專案" : "沒有符合搜尋條件的老師"}
+          {teacherGroups.length === 0 ? "此部門尚無老師" : "沒有符合搜尋條件的老師"}
         </Surface>
       )}
 
       <div className="flex flex-col gap-4">
         {filteredTeachers.map(teacher => (
-          <Surface key={teacher.teacherName} padding="md">
+          <Surface key={teacher.user_id ?? `name:${teacher.display_name}`} padding="md">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-bold text-gray-900">{teacher.teacherName}</h2>
-              <Badge tone="neutral">{teacher.projects.length} 個專案</Badge>
-              <Badge tone="neutral">{teacher.studentTotal} 位學生</Badge>
+              <h2 className="text-base font-bold text-gray-900">{teacher.display_name}</h2>
+              {teacher.projects.length === 0 ? (
+                <Badge tone="warning">尚未開始</Badge>
+              ) : (
+                <>
+                  <Badge tone="neutral">{teacher.projects.length} 個專案</Badge>
+                  <Badge tone="neutral">{teacher.studentTotal} 位學生</Badge>
+                  <Badge tone={teacher.completedProjectCount === teacher.projects.length ? "success" : "neutral"}>
+                    完成 {teacher.completedProjectCount}/{teacher.projects.length}
+                  </Badge>
+                </>
+              )}
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {teacher.projects.map(project => (
-                <div key={project.projectId} className="rounded-lg border border-gray-100 bg-gray-50/60 p-3">
-                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                    <Badge tone="primary">{project.periodName}</Badge>
-                    <a
-                      href={`/projects/${project.projectId}/review`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-sm font-medium text-gray-800 underline-offset-2 hover:text-indigo-600 hover:underline"
-                      title="開啟專案審閱頁"
-                    >
-                      {project.projectName}
-                      <ExternalLink className="h-3 w-3 text-gray-400" />
-                    </a>
-                    <span className="ml-auto text-xs text-gray-400">
-                      {project.students.length} 位學生
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {project.students.map(student => (
-                      <span
-                        key={student.studentId}
-                        className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700"
+            {teacher.projects.length === 0 ? (
+              <p className="text-sm text-gray-400">此部門的期別範圍內還沒有建立任何專案</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {teacher.projects.map(project => (
+                  <div key={project.project_id} className="rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                      <Badge tone="primary">{project.periodName}</Badge>
+                      {project.completed_at && (
+                        <Badge tone="success" title={`完成於 ${new Date(project.completed_at).toLocaleString("zh-TW")}`}>
+                          ✓ 已完成
+                        </Badge>
+                      )}
+                      <a
+                        href={`/projects/${project.project_id}/review`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-sm font-medium text-gray-800 underline-offset-2 hover:text-indigo-600 hover:underline"
+                        title="開啟班級總覽"
                       >
-                        {student.studentName}
+                        {project.project_name}
+                        <ExternalLink className="h-3 w-3 text-gray-400" />
+                      </a>
+                      {project.blank_text_count > 0 && (
+                        <span
+                          className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700"
+                          title="依「學生覆寫 > 專案覆寫 > 模板預設」合併後會輸出空白的文字格數（含刻意設為空白）"
+                        >
+                          空白文字 {project.blank_text_count} 格
+                        </span>
+                      )}
+                      <span className="ml-auto text-xs text-gray-400">
+                        {project.student_count} 位學生
                       </span>
-                    ))}
+                    </div>
+                    <div className="mb-2">
+                      <PhotoProgressBar filled={project.photo_filled} total={project.photo_total} />
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {project.students.map(student => {
+                        const isComplete = student.photo_total === 0 || student.photo_filled === student.photo_total;
+                        return (
+                          <span
+                            key={student.student_id}
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+                              isComplete ? "bg-gray-100 text-gray-700" : "bg-amber-50 text-amber-700"
+                            }`}
+                            title={isComplete ? "照片已填滿" : `照片 ${student.photo_filled}/${student.photo_total}`}
+                          >
+                            {student.student_name}
+                            {!isComplete && (
+                              <span className="tabular-nums text-[10px]">
+                                {student.photo_filled}/{student.photo_total}
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                      {project.students.length === 0 && (
+                        <span className="text-xs text-gray-400">尚未加入學生</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </Surface>
         ))}
       </div>

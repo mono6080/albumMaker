@@ -15,8 +15,8 @@ from database import User, get_db
 from ._helpers import (
     LabelTextsPayload,
     _parse_json_field,
+    assert_project_content_writable,
     assert_project_readable,
-    assert_project_writable,
 )
 from .schemas import BatchTextsPayload
 
@@ -44,7 +44,7 @@ def update_project_label_texts(
 ):
     """更新專案層級的對應文字設定。格式：{page_index: {label_id: text}}"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     project.label_texts_json = json.dumps(payload)
     project.updated_at = datetime.utcnow()
     db.commit()
@@ -62,7 +62,7 @@ def update_student_label_texts(
 ):
     """更新學生指定頁面的個人對應文字。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
@@ -91,7 +91,7 @@ def batch_update_texts(
 ):
     """批次更新多位學生的對應文字。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     students_payload = payload.students
     now = datetime.utcnow()
 

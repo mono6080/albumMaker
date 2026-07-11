@@ -1,8 +1,6 @@
 # 名冊與學期彙整匯出路由（admin 專用）
 # 提供跨專案的孩子名冊配對（連結/合併）與學期匯出（預覽分組、ZIP 下載）
 
-import io
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,16 +10,16 @@ from auth import require_role
 from crud.roster_crud import get_any_student_or_404, get_roster_child_or_404
 from crud.user_crud import get_subordinate_user_ids
 from database import User, get_db
+from services.export_jobs import get_render_job_state, start_render_missing_job
 from services.project_service import build_content_disposition_header
-from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.roster_service import (
     build_semester_export_preview,
-    build_semester_export_zip,
     build_teacher_overview_workbook,
+    build_teacher_progress_overview,
     delete_roster_child_if_orphaned,
     link_student_to_new_child,
     merge_roster_children,
-    render_missing_semester_albums,
+    open_semester_export_zip_stream,
 )
 
 router = APIRouter(prefix="/api/roster", tags=["roster"])
@@ -53,6 +51,19 @@ def get_semester_export_preview(
     if current_user.role == "supervisor":
         owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
     return build_semester_export_preview(db, period_ids, owner_user_ids)
+
+
+@router.get("/teacher-progress")
+def get_teacher_progress(
+    period_ids: list[int] = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "supervisor")),
+):
+    """老師進度總覽：含尚未建專案的老師與照片/文字完成度。supervisor 限管轄老師。"""
+    owner_user_ids = None
+    if current_user.role == "supervisor":
+        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    return build_teacher_progress_overview(db, period_ids, owner_user_ids)
 
 
 @router.get("/teacher-overview/export")
@@ -116,12 +127,22 @@ def merge_roster_child_into(
 @router.post("/semester-export/render-missing")
 def render_missing_albums(
     payload: RenderMissingPayload,
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
-    """批次補渲染範圍內缺列印 PDF 的學生相冊。"""
-    with album_render_limiter.acquire("相冊正在產生中，請稍後再試"):
-        return render_missing_semester_albums(db, payload.period_ids, payload.roster_child_ids)
+    """啟動補渲染背景 job（回 job_id 供輪詢）；已有 job 在跑時回 503。"""
+    return start_render_missing_job(payload.period_ids, payload.roster_child_ids)
+
+
+@router.get("/semester-export/render-missing/{job_id}")
+def get_render_missing_progress(
+    job_id: str,
+    current_user: User = Depends(require_role("admin")),
+):
+    """查詢補渲染 job 進度（status / done / total / rendered / errors）。"""
+    job_state = get_render_job_state(job_id)
+    if job_state is None:
+        raise HTTPException(status_code=404, detail="找不到補渲染工作")
+    return job_state
 
 
 @router.get("/semester-export/download")
@@ -132,12 +153,11 @@ def download_semester_export_zip(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
-    """下載學期匯出 ZIP：班級/孩子/序號_期別-專案.pdf，附缺漏說明。"""
-    with zip_build_limiter.acquire("學期匯出 ZIP 正在產生中，請稍後再試"):
-        zip_bytes = build_semester_export_zip(db, period_ids, mode, roster_child_ids)
+    """下載學期匯出 ZIP（邊壓邊送）：孩子/期別_孩子.pdf，附缺漏說明。"""
+    zip_stream = open_semester_export_zip_stream(db, period_ids, mode, roster_child_ids)
     content_disposition = build_content_disposition_header("學期彙整匯出.zip")
     return StreamingResponse(
-        io.BytesIO(zip_bytes),
+        zip_stream,
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )

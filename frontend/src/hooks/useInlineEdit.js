@@ -1,6 +1,6 @@
 // 通用行內編輯 hook
 // 管理「雙擊進入編輯、Enter 儲存、Escape 取消」的 id + value 狀態，
-// 供 TemplateList、ProjectList、ProjectBatch 等頁面共用
+// 供 TemplateList、ProjectList、RosterModal 等共用
 
 import { useState, useCallback } from "react";
 

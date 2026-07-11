@@ -325,13 +325,178 @@ def test_teacher_overview_excel_export():
         workbook = load_workbook(BytesIO(export.content))
         assert workbook.sheetnames == ["摘要", "明細"]
         summary_rows = list(workbook["摘要"].iter_rows(values_only=True))
-        assert summary_rows[0] == ("老師", "專案數", "學生數")
-        assert any(row[2] == 2 for row in summary_rows[1:])  # admin 的兩位學生
+        assert summary_rows[0] == ("老師", "專案數", "已完成專案", "學生數", "照片已填/總格數", "空白文字格")
+        assert any(row[3] == 2 for row in summary_rows[1:])  # admin 的兩位學生
 
         detail_rows = list(workbook["明細"].iter_rows(values_only=True))
-        assert detail_rows[0] == ("老師", "期別", "專案（班級）", "學生")
+        assert detail_rows[0] == ("老師", "期別", "專案（班級）", "學生", "照片已填", "照片總格", "空白文字格")
         student_names = {row[3] for row in detail_rows[1:]}
         assert {"王小明", "李小華"} <= student_names
+
+
+def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        supervisor, supervisor_password = create_user(client, "supervisor")
+        managed_teacher, teacher_password = create_user(client, "teacher", supervisor_ids=[supervisor["id"]])
+        idle_teacher, _ = create_user(client, "teacher", supervisor_ids=[supervisor["id"]])
+        period = create_active_period(client)
+        admin_project = create_period_template_project(client, period["id"])
+        add_students(client, admin_project, ["管理員的學生"])
+        templates = client.get("/api/templates/")
+        template_id = templates.json()[0]["id"]
+
+        # 管轄老師的專案：兩位學生、只有一格照片被填
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        teacher_project_response = client.post(
+            "/api/projects/",
+            data={"name": unique_name("teacher_proj"), "template_id": str(template_id)},
+        )
+        assert_status(teacher_project_response, 201)
+        teacher_project = teacher_project_response.json()["id"]
+        students = add_students(client, teacher_project, ["王小明", "李小華"])
+        photo = client.post(
+            f"/api/projects/{teacher_project}/students/{students['王小明']}/pages/0/photos/1",
+            files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo, 200)
+
+        # 主管視角：只看到管轄老師（含還沒開工的），看不到 admin 的專案
+        client.cookies.clear()
+        login(client, supervisor["username"], supervisor_password)
+        progress = client.get("/api/roster/teacher-progress", params={"period_ids": [period["id"]]})
+        assert_status(progress, 200)
+        teachers = {teacher["user_id"]: teacher for teacher in progress.json()["teachers"]}
+        assert idle_teacher["id"] in teachers
+        assert teachers[idle_teacher["id"]]["projects"] == []
+        student_names = {
+            student["student_name"]
+            for teacher in teachers.values()
+            for project in teacher["projects"]
+            for student in project["students"]
+        }
+        assert "管理員的學生" not in student_names
+
+        managed_projects = teachers[managed_teacher["id"]]["projects"]
+        assert len(managed_projects) == 1
+        project_progress = managed_projects[0]
+        # smoke_layout 每頁 1 照片格：2 位學生共 2 格、已填 1 格；預設文字非空 → 無空白格
+        assert project_progress["photo_total"] == 2
+        assert project_progress["photo_filled"] == 1
+        assert project_progress["blank_text_count"] == 0
+        progress_by_student = {
+            student["student_name"]: student for student in project_progress["students"]
+        }
+        assert progress_by_student["王小明"]["photo_filled"] == 1
+        assert progress_by_student["李小華"]["photo_filled"] == 0
+
+        # 老師本人無權查看
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        forbidden = client.get("/api/roster/teacher-progress", params={"period_ids": [period["id"]]})
+        assert_status(forbidden, 403)
+
+
+def start_and_wait_render_job(client: TestClient, period_ids: list[int], timeout_seconds: float = 60) -> dict:
+    """啟動補渲染 job 並輪詢到結束，回傳最終 job 狀態。"""
+    import time
+
+    start = client.post("/api/roster/semester-export/render-missing", json={"period_ids": period_ids})
+    assert_status(start, 200)
+    job_id = start.json()["job_id"]
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        progress = client.get(f"/api/roster/semester-export/render-missing/{job_id}")
+        assert_status(progress, 200)
+        state = progress.json()
+        if state["status"] != "running":
+            return state
+        time.sleep(0.2)
+    raise AssertionError("補渲染 job 逾時未完成")
+
+
+def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        supervisor, supervisor_password = create_user(client, "supervisor")
+        managed_teacher, teacher_password = create_user(client, "teacher", supervisor_ids=[supervisor["id"]])
+        period = create_active_period(client)
+        create_period_template_project(client, period["id"])  # 只為建立模板
+        templates = client.get("/api/templates/")
+        template_id = templates.json()[0]["id"]
+
+        # 老師建專案、加學生、標記全班完成
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        project_response = client.post(
+            "/api/projects/",
+            data={"name": unique_name("teacher_proj"), "template_id": str(template_id)},
+        )
+        assert_status(project_response, 201)
+        project_id = project_response.json()["id"]
+
+        # 空專案不可標記完成（一鎖名單就什麼都動不了）
+        empty_complete = client.post(f"/api/projects/{project_id}/complete")
+        assert_status(empty_complete, 400)
+
+        students = add_students(client, project_id, ["王小明"])
+        complete = client.post(f"/api/projects/{project_id}/complete")
+        assert_status(complete, 200)
+        assert complete.json()["completed_at"] is not None
+
+        # 完成後：內容修改一律 403
+        add_more = client.post(f"/api/projects/{project_id}/students/batch", json=["李小華"])
+        assert_status(add_more, 403)
+        rename = client.put(
+            f"/api/projects/{project_id}/students/{students['王小明']}",
+            data={"name": "王大明"},
+        )
+        assert_status(rename, 403)
+        photo = client.post(
+            f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/photos/1",
+            files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo, 403)
+        texts = client.put(f"/api/projects/{project_id}/label_texts", json={"0": {"1": "改字"}})
+        assert_status(texts, 403)
+        skip = client.patch(
+            f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/skip",
+            json={"skip": True},
+        )
+        assert_status(skip, 403)
+
+        # 渲染與下載不算內容修改，仍可執行
+        render = client.post(f"/api/projects/{project_id}/students/{students['王小明']}/render")
+        assert_status(render, 200)
+
+        # 老師自己不能退回
+        teacher_reopen = client.post(f"/api/projects/{project_id}/reopen")
+        assert_status(teacher_reopen, 403)
+
+        # 管轄主管視角：老師進度看得到 completed_at；退回後恢復可編輯
+        client.cookies.clear()
+        login(client, supervisor["username"], supervisor_password)
+        progress = client.get("/api/roster/teacher-progress", params={"period_ids": [period["id"]]})
+        assert_status(progress, 200)
+        teacher_projects = {
+            project["project_id"]: project
+            for teacher in progress.json()["teachers"]
+            for project in teacher["projects"]
+        }
+        assert teacher_projects[project_id]["completed_at"] is not None
+
+        reopen = client.post(f"/api/projects/{project_id}/reopen")
+        assert_status(reopen, 200)
+
+        client.cookies.clear()
+        login(client, managed_teacher["username"], teacher_password)
+        add_after_reopen = client.post(f"/api/projects/{project_id}/students/batch", json=["李小華"])
+        assert_status(add_after_reopen, 200)
 
 
 def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
@@ -356,11 +521,10 @@ def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
             for entry in group["entries"]
         )
 
-        render_missing = client.post(
-            "/api/roster/semester-export/render-missing", json={"period_ids": [period["id"]]}
-        )
-        assert_status(render_missing, 200)
-        result = render_missing.json()
+        result = start_and_wait_render_job(client, [period["id"]])
+        assert result["status"] == "done"
+        assert result["total"] == 2
+        assert result["done"] == 2
         assert result["rendered"] == 2
         assert result["errors"] == []
 
@@ -372,11 +536,13 @@ def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
         )
 
         # 再跑一次：已全數渲染，rendered=0（冪等）
-        rerun = client.post(
-            "/api/roster/semester-export/render-missing", json={"period_ids": [period["id"]]}
-        )
-        assert_status(rerun, 200)
-        assert rerun.json()["rendered"] == 0
+        rerun = start_and_wait_render_job(client, [period["id"]])
+        assert rerun["status"] == "done"
+        assert rerun["rendered"] == 0
+
+        # 不存在的 job 回 404
+        missing_job = client.get("/api/roster/semester-export/render-missing/nonexistent")
+        assert_status(missing_job, 404)
 
 
 def test_semester_export_zip_structure(monkeypatch, tmp_path):
@@ -431,7 +597,7 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         # 未渲染的李小華不進 ZIP，但列在匯出說明；班級對照含兩位孩子
         assert not any(name.startswith("李小華/") for name in entry_names)
         assert "【班級對照】" in manifest
-        assert "李小華" in manifest and "尚未渲染" in manifest
+        assert "李小華" in manifest and "尚未產生 PDF" in manifest
         # 缺頁備註：王小明期1 老師刪除了第 1 頁
         assert "缺頁備註" in manifest
         assert "老師刪除了第 1 頁" in manifest

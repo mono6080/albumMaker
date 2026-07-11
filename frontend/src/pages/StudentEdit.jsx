@@ -6,15 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
-import { fetchProject, renderStudent, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
+import { fetchProject, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplate } from "../api/templateApi";
-import {
-  buildDownloadImageUrl,
-  buildDownloadImagesZipUrl,
-  buildDownloadPdfUrl,
-  buildStudentPagePreviewUrl,
-} from "../api/urls";
-import { renderClient } from "../api/authApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { usePermissions } from "../hooks/usePermissions";
 import {
@@ -22,20 +15,17 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
-  Download,
   Eye,
-  ImageDown,
-  Loader2,
-  Monitor,
-  Printer,
   Type,
 } from "lucide-react";
+import AlbumPageNav from "../components/AlbumPageNav";
 import PhotoManager from "../components/PhotoManager";
 import PanelSwitcher from "../components/PanelSwitcher";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
+import ScopeSwitcher from "../components/ScopeSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
-import { Badge, Button, PageHeader, SegmentedControl, fieldControlClass } from "../components/ui";
+import { Badge, Button, PageHeader } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import {
   getLabelEntryAlign,
@@ -46,42 +36,47 @@ import {
   withoutLabelEntryText,
 } from "../utils/labelTextEntries";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
-import {
-  createFileFromBlob,
-  downloadApiBlob,
-  fetchApiBlob,
-  getFilenameFromDisposition,
-  getShareFailureMessage,
-  isMobileDevice,
-  shareFiles,
-} from "../utils/browserFiles";
 
 const STUDENT_EDIT_GUIDE_STEPS = [
   {
+    element: '[data-guide="student-page-nav"]',
+    title: "切換頁面",
+    description: "整頁一起換：預覽、照片格與文字都會跟著切到同一頁，一頁做完換下一頁。",
+    side: "bottom",
+    align: "center",
+  },
+  {
     element: '[data-guide="student-preview-panel"]',
-    title: "預覽與頁面",
-    description: "左側會顯示目前學生的頁面預覽，可切頁、重新整理預覽，也可刪除此頁或還原。",
+    title: "頁面預覽",
+    description: "顯示目前頁面的合成預覽，可重新整理；頁尾可刪除此頁或還原。",
     side: "right",
     align: "center",
   },
   {
-    element: '[data-guide="student-switcher"]',
-    title: "切換學生",
-    description: "不用回到上一頁，可直接用上一位、下一位或下拉選單切換學生；切換前會先儲存目前文字。",
+    element: '[data-guide="scope-switcher"]',
+    title: "切換編輯範圍",
+    description: "用上一位、下一位或下拉切換學生；按「全班」可改全班一起套用的照片與文字。切換前會先儲存目前文字。",
     side: "bottom",
     align: "center",
   },
   {
     element: '[data-guide="student-photo-manager"]',
     title: "照片管理",
-    description: "在每個照片格上傳照片。已有照片時可調整裁切位置與縮放、更換、刪除或交換格子。",
+    description: "這裡是目前頁面的照片格。點空格上傳；已有照片時可調整裁切位置與縮放、更換、刪除或交換格子。",
     side: "left",
     align: "start",
   },
   {
+    element: '[data-guide="student-photo-scope"]',
+    title: "本頁／整本",
+    description: "切到「整本」會顯示所有頁的照片格：可以一次上傳全書照片、跨頁拖曳調換；點某格時預覽也會跳到那一頁。",
+    side: "left",
+    align: "center",
+  },
+  {
     element: '[data-guide="student-multi-upload"]',
     title: "多選上傳",
-    description: "可以一次選多張照片，系統只會填入剩餘空格；過大的照片會先壓縮再上傳。",
+    description: "可以一次選多張照片，填入目前檢視（本頁或整本）的剩餘空格；過大的照片會先壓縮再上傳。",
     side: "left",
     align: "center",
   },
@@ -99,20 +94,6 @@ const STUDENT_EDIT_GUIDE_STEPS = [
     side: "top",
     align: "end",
   },
-  {
-    element: '[data-guide="student-output-mode"]',
-    title: "輸出畫質",
-    description: "管理員可選完整畫質或壓縮版；下載 PDF、圖片 ZIP 和手機分享圖片都會套用這個設定。",
-    side: "bottom",
-    align: "end",
-  },
-  {
-    element: '[data-guide="student-download-button"]',
-    title: "產出並下載",
-    description: "照片和文字確認後，按這裡產生 PDF；圖片按鈕在電腦下載 ZIP，手機會先準備圖片再開啟分享。",
-    side: "bottom",
-    align: "end",
-  },
 ];
 
 // ── 主頁面元件 ────────────────────────────────────────────────────────────────
@@ -120,7 +101,6 @@ const STUDENT_EDIT_GUIDE_STEPS = [
 export default function StudentEdit() {
   const { projectId, studentId } = useParams();
   const navigate = useNavigate();
-  const { canDownloadPrint } = usePermissions();
 
   const [project, setProject] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -129,11 +109,7 @@ export default function StudentEdit() {
   const [loadError, setLoadError] = useState(null);
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
-  const [isRendering, setIsRendering] = useState(false);
-  const [isImageRendering, setIsImageRendering] = useState(false);
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
-  const [imageShareDraft, setImageShareDraft] = useState(null);
-  const [outputMode, setOutputMode] = useState("print");
   const [previewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
@@ -144,12 +120,13 @@ export default function StudentEdit() {
 
   const { scheduleSave, flushSave, saveStatus } = useAutoSave(
     labelTexts,
-    async (currentLabelTexts) => {
+    async (currentLabelTexts, signal) => {
       const payload = {};
       Object.entries(currentLabelTexts).forEach(([pageIndex, labels]) => {
         payload[pageIndex] = labels;
       });
-      await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } });
+      // 帶 abort signal：新的儲存會取消還在路上的舊請求，避免舊值後到蓋掉新值
+      await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } }, signal);
       // 更新所有有文字資料的頁面時間戳
       const now = Date.now();
       setPageTimestamps(prev => ({
@@ -203,6 +180,17 @@ export default function StudentEdit() {
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
+  // 路由守衛只擋角色、擋不了擁有權：非 owner 直接輸入網址會看到可編輯 UI
+  // 但每次寫入都被後端 403，直接轉去唯讀的班級總覽
+  const { canEditProject } = usePermissions();
+  useEffect(() => {
+    if (!project) return;
+    if (!canEditProject(project.owner_id)) {
+      toast.error("你沒有此專案的編輯權限，已切到班級總覽");
+      navigate(`/projects/${projectId}/review`, { replace: true });
+    }
+  }, [project, canEditProject, navigate, projectId]);
+
   // ── 對應文字操作 ──────────────────────────────────────────────────────────
 
   const getLabelEntry = (pageIndex, labelId) =>
@@ -232,21 +220,18 @@ export default function StudentEdit() {
   };
 
   const setLabelText = (pageIndex, labelId, textValue, fallbackAlign = "center") => {
-    setImageShareDraft(null);
     updateLabelEntry(pageIndex, labelId, currentEntry =>
       withLabelEntryText(currentEntry, textValue, fallbackAlign)
     );
   };
 
   const setLabelAlign = (pageIndex, labelId, textAlign, fallbackAlign = "center") => {
-    setImageShareDraft(null);
     updateLabelEntry(pageIndex, labelId, currentEntry =>
       withLabelEntryAlign(currentEntry, textAlign, fallbackAlign)
     );
   };
 
   const restoreDefaultLabelText = (pageIndex, labelId, fallbackAlign = "center") => {
-    setImageShareDraft(null);
     updateLabelEntry(pageIndex, labelId, currentEntry =>
       withoutLabelEntryText(currentEntry, fallbackAlign)
     );
@@ -269,7 +254,6 @@ export default function StudentEdit() {
   const handlePageSkip = async (pageIndex, skip) => {
     try {
       await setStudentPageSkip(projectId, studentId, pageIndex, skip);
-      setImageShareDraft(null);
       setSkippedPages(prev => {
         const next = new Set(prev);
         if (skip) next.add(pageIndex); else next.delete(pageIndex);
@@ -290,138 +274,23 @@ export default function StudentEdit() {
     }
   };
 
-  // ── 渲染（含前置強制儲存） ────────────────────────────────────────────────
-
-  const handleRenderPdf = async () => {
-    // 先強制同步儲存，確保渲染使用最新文字
-    await flushSave();
-
-    setIsRendering(true);
-    try {
-      setImageShareDraft(null);
-      await renderStudent(projectId, studentId);
-      await loadStudentData();
-      refreshAllPreviews();
-      // 渲染完成後自動下載
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await downloadApiBlob(renderClient, buildDownloadPdfUrl(projectId, studentId, effectiveMode), `${student.name}.pdf`);
-      toast.success("PDF 已下載");
-    } catch {
-      toast.error("產生失敗");
-    }
-    setIsRendering(false);
-  };
-
-  const getVisiblePageIndexes = useCallback(() => (
-    Array.from(
-      { length: template?.pages.length ?? 0 },
-      (_, pageIndex) => pageIndex,
-    ).filter(pageIndex => !skippedPages.has(pageIndex))
-  ), [skippedPages, template]);
-
-  const buildShareImageFilesFromPreview = async (visiblePageIndexes, requestTs) => {
-    const files = [];
-    for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
-      const { blob } = await fetchApiBlob(
-        renderClient,
-        `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${requestTs}`,
-      );
-      const file = createFileFromBlob(blob, `${student.name}_page${visibleIndex + 1}.jpg`, "image/jpeg");
-      if (file) files.push(file);
-    }
-    return files;
-  };
-
-  const buildShareImageFilesFromRenderedOutput = async (visiblePageIndexes, effectiveMode) => {
-    const files = [];
-    for (const visibleIndex of visiblePageIndexes.keys()) {
-      const { blob, disposition } = await fetchApiBlob(
-        renderClient,
-        buildDownloadImageUrl(projectId, studentId, visibleIndex + 1, effectiveMode),
-      );
-      const filename = getFilenameFromDisposition(disposition, `${student.name}_page${visibleIndex + 1}.jpg`);
-      const file = createFileFromBlob(
-        blob,
-        filename,
-        "image/jpeg",
-      );
-      if (file) files.push(file);
-    }
-    return files;
-  };
-
-  const handleRenderImages = async () => {
-    if (isMobileDevice() && imageShareDraft?.files?.length) {
-      setIsImageRendering(true);
-      try {
-        const shareResult = await shareFiles(imageShareDraft.files, imageShareDraft.title);
-        if (shareResult === "shared") {
-          setImageShareDraft(null);
-          toast.success("已開啟分享");
-        } else if (shareResult !== "cancelled") {
-          toast.error(getShareFailureMessage(shareResult));
-        }
-      } catch {
-        toast.error("分享圖片失敗");
-      } finally {
-        setIsImageRendering(false);
-      }
-      return;
-    }
-
-    await flushSave();
-
-    setIsImageRendering(true);
-    try {
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      if (isMobileDevice()) {
-        const visiblePageIndexes = getVisiblePageIndexes();
-
-        if (!visiblePageIndexes.length) {
-          toast.error("沒有可分享的頁面");
-          return;
-        }
-
-        const files = canDownloadPrint
-          ? await (async () => {
-              await renderStudent(projectId, studentId);
-              await loadStudentData();
-              refreshAllPreviews();
-              return buildShareImageFilesFromRenderedOutput(visiblePageIndexes, effectiveMode);
-            })()
-          : await buildShareImageFilesFromPreview(visiblePageIndexes, Date.now());
-
-        setImageShareDraft({ files, title: `${student.name} 相冊圖片` });
-        toast.success("圖片已準備好，請再按一次開始分享");
-        return;
-      }
-
-      await renderStudent(projectId, studentId);
-      await loadStudentData();
-      refreshAllPreviews();
-      await downloadApiBlob(renderClient, buildDownloadImagesZipUrl(projectId, studentId, effectiveMode), `${student.name}_images.zip`);
-      toast.success("圖片 ZIP 已下載");
-    } catch {
-      toast.error(isMobileDevice() ? "分享圖片失敗" : "產生圖片失敗");
-    } finally {
-      setIsImageRendering(false);
-    }
-  };
-
   const startGuide = () => {
     startProductGuide(STUDENT_EDIT_GUIDE_STEPS);
   };
 
-  const handleStudentSwitch = async (nextStudentId) => {
-    if (!nextStudentId || String(nextStudentId) === String(studentId) || isSwitchingStudent) return;
+  // target 為 null 時切到全班共用 scope（ClassEdit）
+  const handleScopeSwitch = async (target) => {
+    if (isSwitchingStudent) return;
+    if (target != null && String(target) === String(studentId)) return;
 
     setIsSwitchingStudent(true);
     try {
       await flushSave();
-      setImageShareDraft(null);
-      navigate(`/projects/${projectId}/students/${nextStudentId}/edit`);
+      navigate(target == null
+        ? `/projects/${projectId}/edit`
+        : `/projects/${projectId}/students/${target}/edit`);
     } catch {
-      toast.error("切換學生前儲存失敗");
+      toast.error("切換前儲存失敗");
     } finally {
       setIsSwitchingStudent(false);
     }
@@ -453,15 +322,9 @@ export default function StudentEdit() {
   // ── 共用面板內容 ──────────────────────────────────────────────────────────
 
   const isCurrentPageSkipped = skippedPages.has(activePage);
-  const isOutputBusy = isRendering || isImageRendering;
-  const isImageShareReady = isMobileDevice() && imageShareDraft?.files?.length > 0;
+  // 專案已標記全班完成：內容鎖定（照片/文字/頁面），預覽照常
+  const isProjectCompleted = Boolean(project.completed_at);
   const students = project.students || [];
-  const currentStudentIndex = students.findIndex(item => item.id === Number(studentId));
-  const previousStudent = currentStudentIndex > 0 ? students[currentStudentIndex - 1] : null;
-  const nextStudent = currentStudentIndex >= 0 && currentStudentIndex < students.length - 1
-    ? students[currentStudentIndex + 1]
-    : null;
-  const canSwitchStudent = !isOutputBusy && !isSwitchingStudent && students.length > 1;
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
 
@@ -469,12 +332,15 @@ export default function StudentEdit() {
     <div className="w-full">
       <PageHeader
         title={student.name}
-        badge={<Badge tone="review">個別編輯</Badge>}
+        badge={<Badge tone="review">編輯學生</Badge>}
         meta={(
           <>
-            <Button as={Link} to="/projects" variant="ghost" size="xs" className="hidden text-gray-400 sm:inline-flex">
-              相本專案
-            </Button>
+            {/* hidden 與 Button 自帶的 inline-flex 會互相打架，改用外層 wrapper 控制顯示 */}
+            <span className="hidden sm:inline-flex">
+              <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
+                相本專案
+              </Button>
+            </span>
             <ChevronRight className="hidden h-3.5 w-3.5 flex-shrink-0 text-gray-300 sm:block" />
             <Button
               as={Link}
@@ -489,24 +355,8 @@ export default function StudentEdit() {
           </>
         )}
         actions={(
-        <ResponsiveActionGroup mobileColumns={3}>
-          {canDownloadPrint && (
-            <div data-guide="student-output-mode" className="col-span-3 sm:w-auto">
-              <SegmentedControl
-                value={outputMode}
-                onChange={(value) => {
-                  setOutputMode(value);
-                  setImageShareDraft(null);
-                }}
-                size="sm"
-                className="w-full"
-                options={[
-                  { value: "print", label: "完整畫質", icon: Printer },
-                  { value: "screen", label: "壓縮版", icon: Monitor },
-                ]}
-              />
-            </div>
-          )}
+        // 下載集中在班級總覽（學生卡與交件下載），編輯頁只留教學
+        <ResponsiveActionGroup mobileColumns={1}>
           <Button
             type="button"
             onClick={startGuide}
@@ -518,85 +368,26 @@ export default function StudentEdit() {
             <span className="hidden sm:inline">製作教學</span>
             <span className="sm:hidden">教學</span>
           </Button>
-          <Button
-            onClick={handleRenderPdf}
-            disabled={isOutputBusy}
-            data-guide="student-download-button"
-            variant="success"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            {isRendering
-              ? <Loader2 className="w-4 h-4 animate-spin" />
-              : <Download className="w-4 h-4" />}
-            <span className="hidden sm:inline">{isRendering ? "產生中..." : "下載 PDF"}</span>
-            <span className="sm:hidden">{isRendering ? "..." : "PDF"}</span>
-          </Button>
-          <Button
-            onClick={handleRenderImages}
-            disabled={isOutputBusy}
-            variant="info"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            {isImageRendering
-              ? <Loader2 className="w-4 h-4 animate-spin" />
-              : <ImageDown className="w-4 h-4" />}
-            <span className="hidden sm:inline">{isImageRendering ? "準備中..." : isImageShareReady ? "開始分享" : "下載圖片"}</span>
-            <span className="sm:hidden">{isImageRendering ? "..." : isImageShareReady ? "分享" : "圖片"}</span>
-          </Button>
         </ResponsiveActionGroup>
         )}
       />
 
-      <div
-        data-guide="student-switcher"
-        className="mb-4 rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
-      >
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-500">
-          <span className="font-medium">切換學生</span>
-          <span>
-            {currentStudentIndex >= 0 ? currentStudentIndex + 1 : "-"} / {students.length}
-          </span>
+      {isProjectCompleted && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <span className="font-medium">此專案已標記全班完成，內容已鎖定</span>
+          <span className="text-emerald-600">仍可預覽，下載請到班級總覽；需主管或管理員退回才能修改</span>
         </div>
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-          <Button
-            type="button"
-            onClick={() => handleStudentSwitch(previousStudent?.id)}
-            disabled={!canSwitchStudent || !previousStudent}
-            variant="neutral"
-            size="touch"
-            className="px-3"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">上一位</span>
-          </Button>
-          <select
-            aria-label="切換學生"
-            value={studentId}
-            onChange={event => handleStudentSwitch(event.target.value)}
-            disabled={!canSwitchStudent}
-            className={`${fieldControlClass} min-h-12 bg-white`}
-          >
-            {students.map((studentRecord, index) => (
-              <option key={studentRecord.id} value={studentRecord.id}>
-                {index + 1}. {studentRecord.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            type="button"
-            onClick={() => handleStudentSwitch(nextStudent?.id)}
-            disabled={!canSwitchStudent || !nextStudent}
-            variant="neutral"
-            size="touch"
-            className="px-3"
-          >
-            <span className="hidden sm:inline">下一位</span>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      )}
+
+      {/* 編輯範圍切換：全班共用 pill ＋ 學生切換；存檔狀態常駐於此 */}
+      <ScopeSwitcher
+        students={students}
+        currentStudentId={studentId}
+        onSwitch={handleScopeSwitch}
+        isBusy={isSwitchingStudent}
+        saveStatus={saveStatus}
+        backTo={`/projects/${projectId}/review`}
+      />
 
       {/* 行動裝置分頁切換 */}
       <PanelSwitcher
@@ -609,6 +400,17 @@ export default function StudentEdit() {
         ]}
       />
 
+      {/* 全域頁碼導航：預覽、照片、文字三個面板同步跟著同一頁；
+          行動版跟著分頁列一起 sticky，往下捲仍看得到目前頁碼 */}
+      {pageCount > 1 && (
+        <div
+          className="mb-4 max-lg:sticky max-lg:top-14 max-lg:z-10 max-lg:-mx-4 max-lg:bg-[#f8fafc]/95 max-lg:px-4 max-lg:pb-2 max-lg:backdrop-blur-sm"
+          data-guide="student-page-nav"
+        >
+          <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
+        </div>
+      )}
+
       {/* 桌面版：預覽 / 照片 / 文字工作台；行動版：單頁面板切換 */}
       <div className="lg:grid lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] lg:gap-6 lg:items-start xl:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)_minmax(320px,0.9fr)]">
         {/* 預覽面板 */}
@@ -618,8 +420,6 @@ export default function StudentEdit() {
         >
           <StudentPreviewPanel
             activePage={activePage}
-            pageCount={pageCount}
-            onPageChange={setActivePage}
             projectId={projectId}
             studentId={studentId}
             pageTimestamps={pageTimestamps}
@@ -627,6 +427,7 @@ export default function StudentEdit() {
             isCurrentPageSkipped={isCurrentPageSkipped}
             onPageSkip={handlePageSkip}
             onRefresh={refreshPreview}
+            isLocked={isProjectCompleted}
           />
         </div>
 
@@ -638,8 +439,10 @@ export default function StudentEdit() {
             pages={templatePages}
             student={student}
             skippedPages={skippedPages}
-            onPhotoSaved={() => { setImageShareDraft(null); refreshAllPreviews(); }}
-            onSaved={() => { setImageShareDraft(null); loadStudentData(); refreshAllPreviews(); }}
+            disabled={isProjectCompleted}
+            activePage={activePage}
+            onPageFocus={setActivePage}
+            onPhotoSaved={() => { refreshAllPreviews(); }}
           />
         </div>
 
@@ -650,8 +453,6 @@ export default function StudentEdit() {
         >
           <StudentTextPanel
             activePage={activePage}
-            pageCount={pageCount}
-            onPageChange={setActivePage}
             activePageLayout={activePageLayout}
             projectLabelTexts={projectLabelTexts}
             student={student}
@@ -663,6 +464,7 @@ export default function StudentEdit() {
             onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
             saveStatus={saveStatus}
+            isLocked={isProjectCompleted}
           />
         </div>
 
@@ -670,8 +472,6 @@ export default function StudentEdit() {
         <div className={`lg:hidden ${mobileTab === "text" ? "block" : "hidden"} w-full`} data-guide="student-text-panel-mobile">
           <StudentTextPanel
             activePage={activePage}
-            pageCount={pageCount}
-            onPageChange={setActivePage}
             activePageLayout={activePageLayout}
             projectLabelTexts={projectLabelTexts}
             student={student}
@@ -683,6 +483,7 @@ export default function StudentEdit() {
             onRestoreDefault={restoreDefaultLabelText}
             onScheduleSave={() => { if (student) scheduleSave(); }}
             saveStatus={saveStatus}
+            isLocked={isProjectCompleted}
           />
         </div>
       </div>

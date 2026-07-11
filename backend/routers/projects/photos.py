@@ -24,7 +24,7 @@ from services.file_service import (
 from services.request_limiter import require_photo_upload_slot
 from services.storage import get_storage
 
-from ._helpers import _parse_json_field, assert_project_writable
+from ._helpers import _parse_json_field, assert_project_content_writable
 from .schemas import (
     BatchPhotoUploadResult,
     PhotoMappingPayload,
@@ -187,7 +187,7 @@ async def upload_photo(
     processed_upload = await read_and_process_photo_upload(file)
 
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
     storage = get_storage()
@@ -218,7 +218,7 @@ async def upload_shared_project_photo(
     processed_upload = await read_and_process_photo_upload(file)
 
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     _assert_project_photo_slot_exists(project, page_index, slot_id)
 
     storage = get_storage()
@@ -266,7 +266,7 @@ async def batch_upload_photos(
     - 單筆失敗不中斷整批，最後一起 commit
     """
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     _assert_project_photo_slot_exists(project, page_index, slot_id)
 
     try:
@@ -430,7 +430,7 @@ def update_photo_mapping(
     - null：清除此格位並刪除對應檔案
     """
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
 

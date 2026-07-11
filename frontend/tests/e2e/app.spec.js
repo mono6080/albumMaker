@@ -217,6 +217,8 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await loginViaUi(page);
   await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
 
+  // 建立表單已改為 Modal，先開啟
+  await page.getByRole("button", { name: "建立模板" }).click();
   await page.locator('[data-guide="template-name-input"]').fill(templateName);
   await page.locator('[data-guide="template-create-button"]').click();
   await expect(page.getByText(templateName)).toBeVisible();
@@ -302,9 +304,13 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.getByRole("button", { name: "新建專案" }).click();
   await page.getByLabel("選擇模板").selectOption(String(templateId));
   await page.getByPlaceholder("例：東區校 10階A").fill(projectSuffix);
-  await page.getByRole("button", { name: "建立" }).click();
+  await page.getByRole("button", { name: "建立專案" }).click();
+
+  // 建立成功後直接導向班級總覽（工作台），空狀態指向名單 CTA
+  await expect(page.getByRole("button", { name: "新增學生名單" })).toBeVisible();
 
   const projectName = `${templateName} ${projectSuffix}`;
+  await page.goto("/projects");
   await expect(page.getByText(projectName)).toBeVisible();
 
   const projectSearch = page.getByLabel("搜尋專案");
@@ -323,21 +329,35 @@ test("admin can create a project and batch students from the browser", async ({ 
   await expect(page.locator(".driver-popover")).toContainText("每個班級每個月建立");
   await closeProductGuide(page);
 
-  await page.locator(".group").filter({ hasText: projectName }).first().getByRole("link", { name: "專案設定" }).click();
+  // 尚無學生的專案卡顯示單一「下一步：加入學生名單」入口（進班級總覽）
+  await page.locator(".group").filter({ hasText: projectName }).first().locator('[data-guide="project-review-link"]').click();
   await expect(page.getByText(projectName)).toBeVisible();
-  await expect(page.getByText("新增學生名單")).toBeVisible();
+
+  // 名單改為工作台上的 Modal 管理
+  await page.getByRole("button", { name: "新增學生名單" }).click();
+  const rosterDialog = page.getByRole("dialog", { name: "學生名單" });
+  await expect(rosterDialog).toBeVisible();
+  await rosterDialog.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
+  await rosterDialog.getByRole("button", { name: "新增" }).click();
+  await expect(rosterDialog.getByText("已登記學生（2 位）")).toBeVisible();
+  await expect(rosterDialog.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("Bob", { exact: true })).toBeVisible();
+  await rosterDialog.getByRole("button", { name: "關閉" }).click();
+  await expect(rosterDialog).toHaveCount(0);
+
+  // 從工作台「繼續製作」直接進入相本編輯器（全班 scope）
+  await page.getByRole("link", { name: /繼續製作/ }).click();
+  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
+  await expect(page.getByText("樣版預覽")).toBeVisible();
 
   await page.getByRole("button", { name: "製作教學" }).click();
-  await expect(page.locator(".driver-popover")).toContainText("新增學生名單");
-  await expect(page.locator(".driver-popover")).toContainText("一行一位");
+  await expect(page.locator(".driver-popover")).toContainText("套用到所有學生");
   await closeProductGuide(page);
 
-  await page.getByRole("button", { name: "文字", exact: true }).click();
-  await expect(page.getByText("樣版預覽")).toBeVisible();
-  const projectTextArea = page.locator('[data-guide="batch-text-fields"] textarea').first();
+  const projectTextArea = page.locator('[data-guide="class-text-panel"] textarea').first();
   await expect(projectTextArea).toHaveValue("Default label");
   await projectTextArea.fill("班級：");
-  await page.locator('[data-guide="batch-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
+  await page.locator('[data-guide="class-text-panel"]').getByRole("button", { name: "插入 {name}" }).click();
   await expect(projectTextArea).toHaveValue("班級：{name}");
   await projectTextArea.fill("");
   await expect(projectTextArea).toHaveValue("");
@@ -346,13 +366,6 @@ test("admin can create a project and batch students from the browser", async ({ 
     response => response.url().includes("/label_texts") && response.request().method() === "PUT" && response.ok(),
     () => projectTextArea.fill("共用 {name}"),
   );
-
-  await page.getByRole("button", { name: "登記", exact: true }).click();
-  await page.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
-  await page.getByRole("button", { name: "新增" }).click();
-  await expect(page.getByText("已登記學生（2 位）")).toBeVisible();
-  await expect(page.getByText("Alice", { exact: true })).toBeVisible();
-  await expect(page.getByText("Bob", { exact: true })).toBeVisible();
 
   const projectsResponse = await page.request.get("/api/projects/");
   const projects = await projectsResponse.json();
@@ -364,18 +377,19 @@ test("admin can create a project and batch students from the browser", async ({ 
   expect(alice).toBeTruthy();
   expect(bob).toBeTruthy();
 
-  await page.locator('[data-guide="batch-review-link"]').click();
+  await page.getByRole("link", { name: "完成，回班級總覽" }).click();
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "製作教學" }).click();
-  await expect(page.locator(".driver-popover")).toContainText("輸出進度");
-  await expect(page.locator(".driver-popover")).toContainText("已產生 PDF");
+  await expect(page.locator(".driver-popover")).toContainText("班級進度");
+  await expect(page.locator(".driver-popover")).toContainText("缺照片");
   await closeProductGuide(page);
 
   await page.locator('[data-guide="review-student-card"]').filter({ hasText: "Alice" }).getByRole("link", { name: "編輯" }).click();
   await expect(page.getByText("照片管理")).toBeVisible();
   await page.getByRole("button", { name: "製作教學" }).click();
-  await expect(page.locator(".driver-popover")).toContainText("預覽與頁面");
-  await expect(page.locator(".driver-popover")).toContainText("左側會顯示");
+  // 單頁模板沒有頁碼導航，導覽從「頁面預覽」開始
+  await expect(page.locator(".driver-popover")).toContainText("頁面預覽");
+  await expect(page.locator(".driver-popover")).toContainText("合成預覽");
   await closeProductGuide(page);
 
   const studentTextArea = page.locator('[data-guide="student-text-fields"] textarea').first();
@@ -398,6 +412,15 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.getByLabel("切換學生").selectOption(String(alice.id));
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${alice.id}/edit`));
   await expect(page.getByRole("heading", { name: "Alice", level: 1 })).toBeVisible();
+
+  // 「全班」按鈕切回全班共用 scope（同一編輯器換資料層）
+  await page.getByRole("button", { name: "全班", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
+  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
+
+  // 「個別」按鈕切到第一位學生
+  await page.getByRole("button", { name: "個別", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${alice.id}/edit`));
 });
 
 
@@ -411,24 +434,28 @@ test("project shared photo upload applies one slot to every student", async ({ p
   const project = await createProject(page, projectName, templateId);
   await addStudents(page, project.id, ["Group Alice", "Group Bob"]);
 
+  // 舊 /batch 路由轉址到相本編輯器的全班 scope
   await page.goto(`/projects/${project.id}/batch`);
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
   await expect(page.getByText(projectName)).toBeVisible();
-  await page.getByRole("button", { name: "照片", exact: true }).click();
-  await expect(page.getByText("所有人同一張")).toBeVisible();
-
+  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
+  // 點格開 Modal，在 Modal 內選分配方式並上傳
   await page
-    .locator('[data-guide="batch-shared-photo-slots"]')
-    .getByRole("button", { name: /P1·2/ })
+    .locator('[data-guide="class-shared-photo-slots"]')
+    .getByRole("button", { name: /格2/ })
     .click();
+  await expect(page.locator('[data-guide="class-slot-photo-modal"]')).toBeVisible();
+  await page.getByRole("button", { name: /全班同一張/ }).click();
+  await expect(page.getByText("選擇照片並套用到全班")).toBeVisible();
 
   await page
-    .locator('[data-guide="batch-shared-photo-upload"] input[type="file"]')
+    .locator('[data-guide="class-slot-photo-modal"] input[type="file"]')
     .setInputFiles({ name: "group.png", mimeType: "image/png", buffer: bluePng });
 
   const uploadResponse = page.waitForResponse(
     response => response.url().includes("/photos/shared/pages/0/slots/2") && response.ok(),
   );
-  await page.getByRole("button", { name: "套用到全班" }).click();
+  await page.getByRole("button", { name: "套用到全班", exact: true }).click();
   await uploadResponse;
   await expect(page.getByText("已套用到 2 位學生")).toBeVisible();
 
@@ -454,6 +481,46 @@ test("project shared photo upload applies one slot to every student", async ({ p
       /\/photos\/2\/thumbnail\?v=.*group\.png/,
     );
   }
+});
+
+
+test("class completion locks content while scope switching stays usable", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  const templateName = `E2E 完成鎖定模板 ${Date.now()}`;
+  const projectName = `E2E 完成鎖定專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Lock Alice", "Lock Bob"]);
+  const detail = await fetchProjectDetail(page, project.id);
+  const slotId = layout.photo_slots[0].id;
+  for (const student of detail.students) {
+    await uploadStudentPhoto(page, project.id, student.id, slotId, "lock.png", redPng);
+  }
+
+  // 照片備齊（階段 2）→ 標記全班完成
+  await page.goto(`/projects/${project.id}/review`);
+  await page.getByRole("button", { name: "全班完成" }).click();
+  await page.getByRole("dialog", { name: "全班完成" }).getByRole("button", { name: "全班完成" }).click();
+  await expect(page.getByText("✓ 全班完成")).toBeVisible();
+
+  // 鎖定後編輯器內的 scope 切換必須仍可用（flushSave 無變更時不得打 API 被 403 卡住）
+  await page.goto(`/projects/${project.id}/edit`);
+  await expect(page.getByText("此專案已標記全班完成，內容已鎖定")).toBeVisible();
+  await page.getByRole("button", { name: "個別", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${detail.students[0].id}/edit`));
+  await expect(page.getByText("此專案已標記全班完成，內容已鎖定")).toBeVisible();
+  await page.getByRole("button", { name: "下一位" }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${detail.students[1].id}/edit`));
+  await page.getByRole("button", { name: "全班", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
+
+  // 退回（admin）→ 恢復階段 2
+  await page.getByRole("link", { name: "完成，回班級總覽" }).click();
+  await page.getByRole("button", { name: "退回修改" }).click();
+  await page.getByRole("dialog", { name: "退回修改" }).getByRole("button", { name: "退回修改" }).click();
+  await expect(page.getByRole("button", { name: "全班完成" })).toBeVisible();
 });
 
 

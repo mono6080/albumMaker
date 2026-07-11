@@ -78,3 +78,26 @@ def assert_project_writable(project: Project, current_user: User):
     if current_user.role in ("teacher", "supervisor") and project.owner_id == current_user.id:
         return
     raise HTTPException(status_code=403, detail="無此專案的編輯權限")
+
+
+def assert_project_content_writable(project: Project, current_user: User):
+    """確認可修改專案「內容」（名單、照片、文字、頁面跳過）。
+
+    在 assert_project_writable 之上多擋一層：專案標記完成後內容鎖定，
+    非 admin 一律 403（渲染與下載不算內容修改，仍走 assert_project_writable）。
+    """
+    assert_project_writable(project, current_user)
+    if project.completed_at is not None and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="專案已標記完成，內容已鎖定；需主管或管理員退回才能修改")
+
+
+def assert_project_completion_revertible(project: Project, current_user: User, db: Session):
+    """確認可退回「已完成」標記：admin 或管轄該老師的 supervisor（含主管自己的專案）。"""
+    if current_user.role == "admin":
+        return
+    if current_user.role == "supervisor":
+        if project.owner_id == current_user.id:
+            return
+        if project.owner_id in get_subordinate_user_ids(current_user.id, db):
+            return
+    raise HTTPException(status_code=403, detail="只有主管或管理員能退回已完成的專案")

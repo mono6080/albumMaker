@@ -18,10 +18,14 @@ class ProjectSummary(BaseModel):
     template_period_name: Optional[str] = None
     created_at: Optional[datetime] = None
     student_count: int
+    # 審閱留言數：老師端在專案卡上看到主管留言的入口（閉環提示）
+    comment_count: int = 0
     owner_id: Optional[int] = None
     owner_name: Optional[str] = None
     deleted_at: Optional[datetime] = None
     archive_expires_at: Optional[datetime] = None
+    # 全班完成時間：非 NULL 代表內容鎖定
+    completed_at: Optional[datetime] = None
 
 
 class StudentInProject(BaseModel):
@@ -46,6 +50,8 @@ class ProjectDetail(BaseModel):
     owner_id: Optional[int] = None
     deleted_at: Optional[datetime] = None
     archive_expires_at: Optional[datetime] = None
+    # 全班完成時間：非 NULL 代表內容鎖定
+    completed_at: Optional[datetime] = None
     label_texts: Any
     students: list[StudentInProject]
 

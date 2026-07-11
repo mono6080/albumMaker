@@ -13,6 +13,7 @@ import {
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
 import { Badge, Button, Surface } from "./ui";
+import ConfirmModal from "./ConfirmModal";
 import { batchUploadPhotos } from "../api/projectApi";
 import {
   assignFile, clearAssignment, emptyMatch, matchByName, matchByNamePageSlot,
@@ -192,7 +193,18 @@ export default function BatchPhotoWizard({
   const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadOutcome, setUploadOutcome] = useState(null);
   const [failedChunks, setFailedChunks] = useState([]); // 重試後仍失敗的 chunk，供「補傳」使用
+  const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const fileInputRef = useRef(null);
+
+  // 已選檔案且尚未完成上傳時，誤觸背板/X 會丟掉選擇與手動配對——先確認再關
+  const requestClose = () => {
+    if (isUploading) return;
+    if (files.length > 0 && !uploadOutcome) {
+      setIsCloseConfirmOpen(true);
+      return;
+    }
+    onClose();
+  };
 
   const pages = useMemo(() => template?.pages || [], [template]);
   const isFilenameScope = scope === "filename";
@@ -353,7 +365,8 @@ export default function BatchPhotoWizard({
       } else {
         toast.error(`完成 ${okCount} 張，失敗 ${failCount} 張，可按「補傳失敗照片」重試`);
       }
-      onUploaded?.(merged);
+      // 全部失敗＝什麼都沒改：不觸發 onUploaded（呼叫端據此判斷是否重載/視為已完成）
+      if (okCount > 0) onUploaded?.(merged);
     } catch (error) {
       handleApiError(error, "批次上傳失敗");
     } finally {
@@ -600,7 +613,7 @@ export default function BatchPhotoWizard({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-      onClick={isUploading ? undefined : onClose}
+      onClick={isUploading ? undefined : requestClose}
     >
       <Surface
         variant="dialog"
@@ -639,7 +652,7 @@ export default function BatchPhotoWizard({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             disabled={isUploading}
             className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40"
             aria-label="關閉"
@@ -698,6 +711,18 @@ export default function BatchPhotoWizard({
           )}
         </div>
       </Surface>
+
+      {/* stopPropagation：確認框的點擊不能冒泡到精靈背板，否則取消後又觸發 requestClose */}
+      <div onClick={(e) => e.stopPropagation()}>
+        <ConfirmModal
+          isOpen={isCloseConfirmOpen}
+          message="尚未上傳，關閉後已選的照片與配對會消失。確定關閉？"
+          confirmLabel="關閉並放棄"
+          confirmVariant="danger"
+          onConfirm={() => { setIsCloseConfirmOpen(false); onClose(); }}
+          onCancel={() => setIsCloseConfirmOpen(false)}
+        />
+      </div>
     </div>
   );
 }

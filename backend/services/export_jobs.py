@@ -1,0 +1,99 @@
+# 學期匯出的補渲染背景工作
+# 單 uvicorn 程序：job 以執行緒執行、狀態存記憶體；重啟即消失，
+# 補渲染本身冪等（已渲染的會跳過），重新發起即可。
+
+import logging
+import threading
+import time
+import uuid
+
+from database import SessionLocal
+from services.request_limiter import album_render_limiter
+from services.roster_service import render_missing_semester_albums
+
+logger = logging.getLogger(__name__)
+
+# job_id → 狀態 dict；完成的 job 保留一小時供前端補查
+_render_jobs: dict[str, dict] = {}
+_render_jobs_lock = threading.Lock()
+_FINISHED_JOB_RETENTION_SECONDS = 3600
+
+
+def _prune_finished_render_jobs() -> None:
+    now = time.monotonic()
+    with _render_jobs_lock:
+        expired_job_ids = [
+            job_id
+            for job_id, job in _render_jobs.items()
+            if job["status"] != "running"
+            and now - job.get("finished_at_monotonic", now) > _FINISHED_JOB_RETENTION_SECONDS
+        ]
+        for job_id in expired_job_ids:
+            del _render_jobs[job_id]
+
+
+def _render_job_public_state(job: dict) -> dict:
+    """回傳可回給前端的欄位（過濾內部計時欄位）。"""
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "total": job["total"],
+        "done": job["done"],
+        "rendered": job["rendered"],
+        "errors": job["errors"],
+    }
+
+
+def start_render_missing_job(
+    period_ids: list[int], roster_child_ids: list[int] | None
+) -> dict:
+    """啟動補渲染背景 job：先佔渲染併發槽（滿載此處即 503），再開執行緒跑。
+
+    回傳初始 job 狀態（total 要等第一遍掃描完成才有值，先為 None）。
+    """
+    _prune_finished_render_jobs()
+    limiter_context = album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試")
+    limiter_context.__enter__()
+
+    job = {
+        "job_id": uuid.uuid4().hex,
+        "status": "running",   # running | done | failed
+        "total": None,
+        "done": 0,
+        "rendered": 0,
+        "errors": [],
+    }
+    with _render_jobs_lock:
+        _render_jobs[job["job_id"]] = job
+
+    def update_progress(done_count: int, total_count: int) -> None:
+        job["done"] = done_count
+        job["total"] = total_count
+
+    def run_render_job() -> None:
+        db = SessionLocal()
+        try:
+            result = render_missing_semester_albums(
+                db, period_ids, roster_child_ids, progress_callback=update_progress
+            )
+            job["rendered"] = result["rendered"]
+            job["errors"] = result["errors"]
+            job["status"] = "done"
+        except Exception as job_error:
+            # 錯誤細節只進 log，不外洩給 API 呼叫者
+            logger.error("補渲染 job 失敗 job_id=%s: %s", job["job_id"], job_error)
+            job["status"] = "failed"
+        finally:
+            job["finished_at_monotonic"] = time.monotonic()
+            db.close()
+            limiter_context.__exit__(None, None, None)
+
+    threading.Thread(target=run_render_job, name=f"render-job-{job['job_id'][:8]}", daemon=True).start()
+    return _render_job_public_state(job)
+
+
+def get_render_job_state(job_id: str) -> dict | None:
+    """查詢補渲染 job 進度；不存在（或已過保留期）回 None。"""
+    with _render_jobs_lock:
+        job = _render_jobs.get(job_id)
+    return _render_job_public_state(job) if job else None

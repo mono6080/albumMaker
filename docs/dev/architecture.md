@@ -61,7 +61,8 @@ backend/
     project_service.py   PDF 輸出、ZIP 打包、label_texts 合併、安全檔名
     file_service.py      Storage key 計算、上傳驗證與壓縮（支援 HEIF、超大圖自動壓縮）
     label_texts.py       label_texts 資料結構工具（欄位↔entry 轉換、對齊正規化、合併）
-    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 打包
+    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 streaming ZIP
+    export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
     storage.py           StorageAdapter 抽象（見 storage.md）
     request_limiter.py   BusyLimiter：照片上傳並發槽位限制
@@ -90,14 +91,14 @@ utils/       純函式工具（photoUtils / bubbleGeometry / renderLayoutModel /
 |------|------|------|
 | Login | `/login` | 登入 |
 | ProjectList | `/`、`/projects` | 專案清單、建立、封存/還原 |
-| ProjectBatch | `/projects/:id/batch` | 學生名單管理 + 全班對應文字 |
-| StudentEdit | `/projects/:projectId/students/:studentId/edit` | 單一學生照片 + 個別文字 + 產出 |
-| ProjectReview | `/projects/:id/review` | 輸出審閱 + 下載 + 留言 |
+| ClassEdit | `/projects/:id/edit` | 相本編輯器（全班 scope）：全班共用照片（選格→選分配方式→上傳；依檔名整批匯入為獨立入口）+ 全班對應文字；舊 `/projects/:id/batch` 轉址至此 |
+| StudentEdit | `/projects/:projectId/students/:studentId/edit` | 相本編輯器（學生 scope）：單一學生照片 + 個別文字；與 ClassEdit 以 ScopeSwitcher 的全班/個別按鈕互切；下載集中在班級總覽 |
+| ProjectReview | `/projects/:id/review` | 「班級總覽」工作台：學生名單 Modal、照片進度與階段引導（製作→全班完成→交件）、單人與全班下載、審閱留言 |
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
 | SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin；supervisor 唯讀） |
-| TeacherOverview | `/admin/teacher-overview` | 老師進度：各老師的期別專案、學生與渲染進度（admin 全部；supervisor 管轄老師） |
+| TeacherOverview | `/admin/teacher-overview` | 老師進度：各老師（含尚未建專案者）的期別專案、照片格填滿進度、空白文字提醒與全班完成狀態（admin 全部；supervisor 管轄老師；PDF 產出狀態歸學期匯出頁） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
 | Offline | — | PWA 離線頁 |
 

@@ -1,7 +1,7 @@
 // 名冊與學期彙整匯出 API 模組（admin 專用）
 // 封裝孩子名冊配對（連結/合併）與學期匯出（預覽、ZIP 下載）呼叫
 
-import { apiClient, renderClient } from "./authApi";
+import { apiClient } from "./authApi";
 
 // FastAPI 的 list query 參數格式為重複 key（period_ids=1&period_ids=2）
 const buildPeriodIdsQuery = (periodIds) =>
@@ -23,13 +23,20 @@ export const linkStudentToNewRosterChild = (studentId) =>
 export const mergeRosterChildren = (sourceChildId, targetChildId) =>
   apiClient.post(`/roster/children/${sourceChildId}/merge/${targetChildId}`);
 
-/** 批次補渲染缺列印 PDF 的相冊；rosterChildIds 不給代表全部。渲染耗時，timeout 放寬到 10 分鐘 */
+/** 啟動補渲染背景 job（立即回傳 job_id）；rosterChildIds 不給代表全部 */
 export const renderMissingSemesterAlbums = (periodIds, rosterChildIds = null) =>
-  renderClient.post(
-    "/roster/semester-export/render-missing",
-    { period_ids: periodIds, roster_child_ids: rosterChildIds },
-    { timeout: 600000 },
-  );
+  apiClient.post("/roster/semester-export/render-missing", {
+    period_ids: periodIds,
+    roster_child_ids: rosterChildIds,
+  });
+
+/** 查詢補渲染 job 進度（status / done / total / rendered / errors） */
+export const fetchRenderMissingProgress = (jobId) =>
+  apiClient.get(`/roster/semester-export/render-missing/${jobId}`);
+
+/** 老師進度總覽（含尚未建專案的老師與照片/文字完成度；supervisor 限管轄老師） */
+export const fetchTeacherProgress = (periodIds) =>
+  apiClient.get(`/roster/teacher-progress?${buildPeriodIdsQuery(periodIds)}`);
 
 /** 老師進度 Excel 下載 URL（摘要 + 明細；supervisor 只含管轄老師） */
 export const buildTeacherOverviewExcelUrl = (periodIds) =>

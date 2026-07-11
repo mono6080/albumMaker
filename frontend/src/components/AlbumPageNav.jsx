@@ -28,15 +28,21 @@ export default function AlbumPageNav({ page, total, onChange }) {
           <ChevronRight className="w-4 h-4" />
         </Button>
       </div>
-      <div className="flex justify-center gap-1.5">
+      <div className="flex justify-center">
+        {/* 視覺仍是小圓點，但外層 padding 把觸控目標撐到 ~28px */}
         {Array.from({ length: total }, (_, i) => (
           <button
             key={i}
             onClick={() => onChange(i)}
-            className={`rounded-full transition-all ${
-              page === i ? "w-5 h-2 bg-indigo-500" : "w-2 h-2 bg-gray-300 hover:bg-gray-400"
-            }`}
-          />
+            aria-label={`第 ${i + 1} 頁`}
+            className="group/dot flex items-center justify-center p-2.5 -m-0.5"
+          >
+            <span
+              className={`block rounded-full transition-all ${
+                page === i ? "w-5 h-2 bg-indigo-500" : "w-2 h-2 bg-gray-300 group-hover/dot:bg-gray-400"
+              }`}
+            />
+          </button>
         ))}
       </div>
     </div>

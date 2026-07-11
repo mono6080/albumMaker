@@ -43,6 +43,10 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
   const abortControllerRef = useRef(null);
   const saveRunIdRef = useRef(0);
   const activeSaveCountRef = useRef(0);
+  // dirty 旗標：只有 scheduleSave 之後才有「未儲存變更」；
+  // flushSave 在沒有變更時直接略過，避免無謂的全量回寫
+  // （已鎖定的專案會被後端 403，導致切換頁面/學生被誤擋）
+  const hasUnsavedRef = useRef(false);
 
   const beginSave = useCallback(() => {
     activeSaveCountRef.current += 1;
@@ -58,6 +62,7 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
   const scheduleSave = useCallback(() => {
     saveRunIdRef.current += 1;
     const runId = saveRunIdRef.current;
+    hasUnsavedRef.current = true;
     clearTimeout(timerRef.current);
     setSaveStatus("pending");
     timerRef.current = setTimeout(async () => {
@@ -70,6 +75,7 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
       try {
         await saveCallbackRef.current(latestDataRef.current, signal);
         if (!signal.aborted && runId === saveRunIdRef.current) {
+          hasUnsavedRef.current = false;
           setSaveStatus("saved");
         }
       } catch {
@@ -85,14 +91,16 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
   /** 取消尚未執行的排程儲存 */
   const cancelSave = useCallback(() => {
     saveRunIdRef.current += 1;
+    hasUnsavedRef.current = false;
     clearTimeout(timerRef.current);
     timerRef.current = null;
     abortControllerRef.current?.abort();
     setSaveStatus("idle");
   }, []);
 
-  /** 立即執行儲存並等待完成（用於提交前的強制同步） */
+  /** 立即執行儲存並等待完成（用於提交前的強制同步）；沒有未儲存變更時直接略過 */
   const flushSave = useCallback(async () => {
+    if (!hasUnsavedRef.current) return;
     saveRunIdRef.current += 1;
     const runId = saveRunIdRef.current;
     clearTimeout(timerRef.current);
@@ -105,6 +113,7 @@ export function useAutoSave(currentData, saveCallback, delayMs = 500) {
     try {
       await saveCallbackRef.current(latestDataRef.current, signal);
       if (!signal.aborted && runId === saveRunIdRef.current) {
+        hasUnsavedRef.current = false;
         setSaveStatus("saved");
       }
     } catch (error) {

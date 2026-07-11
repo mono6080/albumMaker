@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Form
 from fastapi import HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
@@ -18,6 +18,8 @@ from template_periods import department_label
 
 from ._helpers import (
     _parse_json_field,
+    assert_project_completion_revertible,
+    assert_project_content_writable,
     assert_project_readable,
     assert_project_writable,
 )
@@ -127,6 +129,7 @@ def get_project(
         "owner_id": project.owner_id,
         "deleted_at": project.deleted_at,
         "archive_expires_at": project.archive_expires_at,
+        "completed_at": project.completed_at,
         "label_texts": _parse_json_field(project.label_texts_json or "{}", "label_texts_json"),
         "students": [
             {
@@ -199,11 +202,48 @@ def restore_project(
     return {"ok": True}
 
 
+@router.post("/{project_id}/complete")
+def complete_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """標記全班完成：內容鎖定（名單/照片/文字），需主管或 admin 退回才能再修改。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user)
+    # 空專案沒有「完成」可言，擋下誤觸（一鎖名單就什麼都動不了）
+    if not project.students:
+        raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
+    if project.completed_at is None:
+        project.completed_at = datetime.utcnow()
+        db.commit()
+    return {"ok": True, "completed_at": project.completed_at}
+
+
+@router.post("/{project_id}/reopen")
+def reopen_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """退回「全班完成」標記，恢復可編輯（限管轄該老師的主管或 admin）。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_completion_revertible(project, current_user, db)
+    project.completed_at = None
+    db.commit()
+    return {"ok": True}
+
+
 def _visible_projects_query(db: Session, current_user: User):
     """依角色回傳可見專案查詢，呼叫端再決定 active/archive 篩選。"""
     from crud.user_crud import get_subordinate_user_ids
 
-    query = db.query(Project).options(joinedload(Project.owner), joinedload(Project.students))
+    # comments 用 selectinload：與 students 同為集合，兩個 joinedload 會產生笛卡兒積
+    query = db.query(Project).options(
+        joinedload(Project.owner),
+        joinedload(Project.students),
+        selectinload(Project.comments),
+    )
 
     if current_user.role in ("admin", "art_team"):
         return query
@@ -228,10 +268,12 @@ def _serialize_project_summary(project: Project) -> dict:
         "template_period_name": project.template_period.name if project.template_period else None,
         "created_at": project.created_at,
         "student_count": len(project.students),
+        "comment_count": len(project.comments),
         "owner_id": project.owner_id,
         "owner_name": project.owner.display_name if project.owner else None,
         "deleted_at": project.deleted_at,
         "archive_expires_at": project.archive_expires_at,
+        "completed_at": project.completed_at,
     }
 
 
@@ -246,7 +288,7 @@ def batch_add_students(
 ):
     """批次新增多位學生，自動跳過空白名稱與重複名稱。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
 
     existing_names = {student.name for student in project.students}
     created_names = []
@@ -294,7 +336,7 @@ def copy_students_from_project(
     直接沿用來源學生的 roster_child_id，跨期身分 100% 延續、不經同名解析。
     """
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     source_project = get_project_or_404(payload.source_project_id, db)
     assert_project_readable(source_project, current_user, db)
 
@@ -335,7 +377,7 @@ def update_student(
 ):
     """更新學生基本資料（目前支援修改姓名）。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     if name:
         previous_child_id = student.roster_child_id
@@ -358,7 +400,7 @@ def delete_student(
 ):
     """刪除指定學生及其所有資料與照片檔案。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
     previous_child_id = student.roster_child_id
     db.delete(student)
@@ -382,7 +424,7 @@ def set_page_skip(
 ):
     """設定或取消學生某頁的跳過旗標（渲染時略過此頁）。"""
     project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
+    assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")

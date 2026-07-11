@@ -100,6 +100,8 @@
 | POST | `/` | 建立（自動設 owner） |
 | GET / PATCH / DELETE | `/{id}` | 詳情（含學生）/ 改名 / 軟刪封存 |
 | POST | `/{id}/restore` | 復原封存 |
+| POST | `/{id}/complete` | 標記全班完成（owner/admin）：內容端點（名單/照片/文字/頁面跳過）對非 admin 回 403，渲染與下載不擋 |
+| POST | `/{id}/reopen` | 退回全班完成（admin 或管轄該 owner 的 supervisor） |
 | POST | `/{id}/students/batch` | 批次加學生 |
 | POST | `/{id}/students/copy` | 從既有專案複製學生名單（沿用名冊連結，同名跳過） |
 | PUT / DELETE | `/{id}/students/{sid}` | 改名 / 刪除 |
@@ -129,9 +131,11 @@
 | GET | `/semester-export?period_ids=…` | 匯出預覽：依名冊孩子分組的各期狀態 + 待確認清單（supervisor 只回管轄老師的專案） |
 | PUT | `/students/{sid}/link` | 配對到既有名冊項（`roster_child_id`）或建新項（`create_new`） |
 | POST | `/children/{cid}/merge/{target_cid}` | 名冊項合併（改名/誤拆修正） |
-| POST | `/semester-export/render-missing` | 批次補渲染缺列印 PDF 的相冊（body：`period_ids`、選填 `roster_child_ids`） |
-| GET | `/teacher-overview/export?period_ids=…` | 老師進度 Excel（摘要+明細；admin 全部、supervisor 限管轄老師） |
-| GET | `/semester-export/download?period_ids=…&mode=…&roster_child_ids=…` | ZIP：`孩子/期別_孩子.pdf`；`roster_child_ids` 選填（不給＝全部）；`匯出說明.txt` 含分類規則、班級對照（最新期別）、缺頁備註與缺漏清單 |
+| POST | `/semester-export/render-missing` | 啟動補渲染背景 job（body：`period_ids`、選填 `roster_child_ids`），回 `job_id`；已有 job 在跑回 503 |
+| GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
+| GET | `/teacher-progress?period_ids=…` | 老師進度總覽：含尚未建專案的老師、每專案/每生照片格填滿數與空白輸出文字格數（admin 全部、supervisor 限管轄老師） |
+| GET | `/teacher-overview/export?period_ids=…` | 老師進度 Excel（摘要+明細，含照片/空白文字欄；admin 全部、supervisor 限管轄老師） |
+| GET | `/semester-export/download?period_ids=…&mode=…&roster_child_ids=…` | ZIP（邊壓邊送 streaming，峰值記憶體＝單一 PDF）：`孩子/期別_孩子.pdf`；`roster_child_ids` 選填（不給＝全部）；`匯出說明.txt` 含分類規則、班級對照（最新期別）、缺頁備註與缺漏清單 |
 
 其他：`GET /api/health` 健康檢查。
 

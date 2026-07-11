@@ -1,10 +1,11 @@
 import { AlignCenter, AlignLeft, AlignRight } from "lucide-react";
 import { SegmentedControl } from "./ui";
 
+// 標籤用單字避免窄欄被截成「置...」；icon 已足以辨識方向
 const TEXT_ALIGN_OPTIONS = [
-  { value: "left", label: "置左", icon: AlignLeft },
-  { value: "center", label: "置中", icon: AlignCenter },
-  { value: "right", label: "置右", icon: AlignRight },
+  { value: "left", label: "左", icon: AlignLeft },
+  { value: "center", label: "中", icon: AlignCenter },
+  { value: "right", label: "右", icon: AlignRight },
 ];
 
 export default function TextAlignControl({

@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
+import FormModal from "../components/FormModal";
 import {
   mobileVisibleHoverActionClass,
   mobileVisibleNamedHoverActionClass,
@@ -135,11 +136,7 @@ export default function TemplateList() {
     });
   }, [templates, selectedDepartment, selectedPeriodId]);
 
-  useEffect(() => {
-    if (visibleTemplates.length === 0) {
-      setShowTemplateCreate(true);
-    }
-  }, [visibleTemplates.length]);
+  // （建立表單已改為 Modal：不再於期別無模板時自動展開，避免一進頁就跳彈窗）
 
   const periodOptions = useMemo(
     () => periods.filter(period => period.department === selectedDepartment),
@@ -347,105 +344,108 @@ export default function TemplateList() {
         </div>
       </Surface>
 
-      <Surface className="mb-6 border-indigo-100" padding={showTemplateCreate ? "lg" : "md"} data-guide="template-create-card">
-        <div className={`${showTemplateCreate ? "mb-4" : ""} flex items-center justify-between gap-3`}>
+      <Surface className="mb-6 border-indigo-100" padding="md" data-guide="template-create-card">
+        <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <BookOpen className="h-4 w-4 flex-shrink-0 text-indigo-500" />
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-gray-800">建立新模板</h2>
-              {!showTemplateCreate && (
-                <p className="mt-0.5 truncate text-xs text-gray-400">
-                  目前期別：{selectedPeriod?.department_label ?? "未選擇"} / {selectedPeriod?.name ?? "未選擇"}
-                </p>
-              )}
+              <p className="mt-0.5 truncate text-xs text-gray-400">
+                目前期別：{selectedPeriod?.department_label ?? "未選擇"} / {selectedPeriod?.name ?? "未選擇"}
+              </p>
             </div>
           </div>
           <Button
             type="button"
-            onClick={() => setShowTemplateCreate(value => !value)}
-            variant={showTemplateCreate ? "ghost" : "primary"}
+            onClick={() => setShowTemplateCreate(true)}
+            variant="primary"
             size="sm"
           >
-            {showTemplateCreate ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            {showTemplateCreate ? "收合" : "建立模板"}
+            <Plus className="h-4 w-4" />
+            建立模板
           </Button>
         </div>
-
-        {showTemplateCreate && (
-          <>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_180px_220px_160px] lg:items-end">
-              <FormField label="模板名稱">
-                <input
-                  id="template-name"
-                  data-guide="template-name-input"
-                  className={fieldControlClass}
-                  placeholder="2026-06 12階 感官世界"
-                  value={templateForm.name}
-                  onChange={event => setTemplateForm(form => ({ ...form, name: event.target.value }))}
-                  onKeyDown={event => event.key === "Enter" && handleCreateTemplate()}
-                />
-              </FormField>
-              <FormField label="目標期別">
-                <select
-                  className={fieldControlClass}
-                  value={templateForm.periodId || selectedPeriodId}
-                  onChange={event => setTemplateForm(form => ({ ...form, periodId: event.target.value }))}
-                >
-                  <option value="">請選擇...</option>
-                  {periodOptions.map(period => (
-                    <option key={period.id} value={period.id}>
-                      {period.name}（{period.status_label}）
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="建立方式">
-                <select
-                  className={fieldControlClass}
-                  value={templateForm.mode}
-                  onChange={event => setTemplateForm(form => ({ ...form, mode: event.target.value }))}
-                >
-                  <option value="blank">從零開始</option>
-                  <option value="copy">複製過往模板</option>
-                </select>
-              </FormField>
-              <Button
-                onClick={handleCreateTemplate}
-                disabled={creatingTemplate || !templateForm.name.trim()}
-                data-guide="template-create-button"
-                variant="primary"
-                fullWidth
-              >
-                <Plus className="h-4 w-4" />
-                {creatingTemplate ? "建立中" : "建立"}
-              </Button>
-            </div>
-            {templateForm.mode === "copy" && (
-              <div className="mt-4">
-                <FormField label="來源模板">
-                  <select
-                    className={fieldControlClass}
-                    value={templateForm.sourceTemplateId}
-                    onChange={event => setTemplateForm(form => ({ ...form, sourceTemplateId: event.target.value }))}
-                  >
-                    <option value="">請選擇要複製的模板...</option>
-                    {templates.map(template => (
-                      <option key={template.id} value={template.id}>
-                        {template.department_label || "未分類"} / {template.period_name || "未分類"} / {template.name}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-              </div>
-            )}
-          </>
-        )}
       </Surface>
+
+      {/* 建立模板 Modal（關閉不清空輸入） */}
+      <FormModal isOpen={showTemplateCreate} title="建立新模板" onClose={() => setShowTemplateCreate(false)}>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <FormField label="模板名稱" className="md:col-span-2">
+            <input
+              id="template-name"
+              data-guide="template-name-input"
+              className={fieldControlClass}
+              placeholder="2026-06 12階 感官世界"
+              value={templateForm.name}
+              onChange={event => setTemplateForm(form => ({ ...form, name: event.target.value }))}
+              onKeyDown={event => event.key === "Enter" && handleCreateTemplate()}
+            />
+          </FormField>
+          <FormField label="目標期別">
+            <select
+              className={fieldControlClass}
+              value={templateForm.periodId || selectedPeriodId}
+              onChange={event => setTemplateForm(form => ({ ...form, periodId: event.target.value }))}
+            >
+              <option value="">請選擇...</option>
+              {periodOptions.map(period => (
+                <option key={period.id} value={period.id}>
+                  {period.name}（{period.status_label}）
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="建立方式">
+            <select
+              className={fieldControlClass}
+              value={templateForm.mode}
+              onChange={event => setTemplateForm(form => ({ ...form, mode: event.target.value }))}
+            >
+              <option value="blank">從零開始</option>
+              <option value="copy">複製過往模板</option>
+            </select>
+          </FormField>
+          {templateForm.mode === "copy" && (
+            <FormField label="來源模板" className="md:col-span-2">
+              <select
+                className={fieldControlClass}
+                value={templateForm.sourceTemplateId}
+                onChange={event => setTemplateForm(form => ({ ...form, sourceTemplateId: event.target.value }))}
+              >
+                <option value="">請選擇要複製的模板...</option>
+                {templates.map(template => (
+                  <option key={template.id} value={template.id}>
+                    {template.department_label || "未分類"} / {template.period_name || "未分類"} / {template.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          )}
+        </div>
+        <div className="mt-4 flex flex-wrap justify-end gap-3">
+          <Button onClick={() => setShowTemplateCreate(false)} variant="ghost">
+            取消
+          </Button>
+          <Button
+            onClick={handleCreateTemplate}
+            disabled={creatingTemplate || !templateForm.name.trim()}
+            data-guide="template-create-button"
+            variant="primary"
+          >
+            <Plus className="h-4 w-4" />
+            {creatingTemplate ? "建立中" : "建立模板"}
+          </Button>
+        </div>
+      </FormModal>
 
       {visibleTemplates.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
           <LayoutTemplate className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">此期別尚未建立模板</p>
+          <p className="mb-4 text-sm">此期別尚未建立模板</p>
+          <Button variant="primary" size="sm" onClick={() => setShowTemplateCreate(true)}>
+            <Plus className="h-4 w-4" />
+            建立第一個模板
+          </Button>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

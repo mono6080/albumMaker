@@ -1,5 +1,5 @@
 // 版型預覽縮圖：顯示模板頁面背景與所有照片格位置，目標格用靛藍高亮
-// 供 ProjectBatch 共用照片分頁與 BatchPhotoWizard 內使用
+// 供 ClassEdit 共用照片面板與 BatchPhotoWizard 內使用
 
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 

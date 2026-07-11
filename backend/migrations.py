@@ -38,6 +38,18 @@ def run_migrations():
         _add_template_page_layout_migration_backups_table(connection)
         _migrate_photo_slots_to_content_box(connection)
         _add_roster_children_and_backfill(connection)
+        _add_project_completed_at_column(connection)
+
+
+def _add_project_completed_at_column(connection):
+    """新增專案「全班完成」時間戳：非 NULL 代表內容鎖定（見 _helpers.assert_project_content_writable）。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "completed_at" not in existing_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN completed_at DATETIME"))
+        connection.commit()
 
 
 def _add_bubble_texts_json_column(connection):

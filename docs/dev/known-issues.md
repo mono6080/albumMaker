@@ -2,7 +2,7 @@
 
 > Owns：所有「已知但尚未處理」的程式碼落差（drift）與未定案設計問題。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-04。
+> 最後盤點：2026-07-12（兩頁制重構後多代理深審，59 項發現已修 confirmed 全數）。
 
 ---
 
@@ -35,9 +35,9 @@
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）
 - **刪除 user 的專案過繼無 audit log**：`delete_user` 把專案過繼給執行的
   admin，未留紀錄；日後加 audit log 表時要涵蓋
-- **學期匯出 ZIP 在記憶體組裝**：`build_semester_export_zip` 用 BytesIO，
-  5 位孩子實測 232MB；若全園全期一次匯出（數百本列印 PDF）可能達數 GB，
-  會撐爆容器記憶體。屆時需改 streaming zip（zipstream 或 spooled temp file）
+- **補渲染 job 狀態存記憶體**：`services/export_jobs.py` 的 job registry
+  是程序內 dict，後端重啟即消失（補渲染冪等、重新發起即可）；
+  若未來走多 worker 需改外部儲存
 
 ## 測試缺口（未來高 leverage gate）
 
@@ -46,3 +46,6 @@
 2. **API negative contracts 持續擴充**：malformed payload 與更多
    endpoint-specific 403/404 邊界
 3. **前端元件測試（vitest / RTL）**：目前完全沒有
+4. **兩頁制新流程的 e2e 未全覆蓋**：「每人不同張」精靈（含關閉未上傳退回
+   放照片 Modal）、共用照片裁切、依檔名整批匯入、PhotoManager 本頁/整本
+   切換與跨頁上傳、全班完成鎖定→退回——e2e 只測到「全班同一張」直傳主線

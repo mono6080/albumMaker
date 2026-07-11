@@ -69,3 +69,7 @@ Thumbs.db
 .ruff_cache/
 .mypy_cache/
 tmp-pytest-codex/
+
+# 根目錄測試產物
+test-results/
+pytest_tmp_run/

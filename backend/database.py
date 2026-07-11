@@ -106,6 +106,8 @@ class Project(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
     archive_expires_at = Column(DateTime, nullable=True)
+    # 全班完成時間：非 NULL 代表老師已確認完成，內容鎖定（主管/admin 可退回）
+    completed_at = Column(DateTime, nullable=True)
     label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
     template_period = relationship("TemplatePeriod", back_populates="projects")

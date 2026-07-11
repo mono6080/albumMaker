@@ -1256,7 +1256,7 @@ export default function TemplateEditor() {
         <ImageCropModal
           file={bgCropFile}
           title="裁切背景圖"
-          hint="拖曳平移 · 滾輪縮放 · 裁切範圍固定為 A4 比例"
+          hint="拖曳移動 · 滾輪縮放 · 裁切範圍固定為 A4 比例"
           onConfirm={handleBgCropConfirm}
           onCancel={() => setBgCropFile(null)}
         />

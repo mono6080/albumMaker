@@ -23,8 +23,8 @@ export default defineConfig({
       // 離線 fallback 頁（由 workbox 在 navigate 失敗時回退）
       filename: 'sw.js',
       manifest: {
-        name: '幼兒園相本製作',
-        short_name: '相本製作',
+        name: '幼兒園相本系統',
+        short_name: '相本系統',
         description: '幫助幼兒園老師製作個人化相本 PDF',
         theme_color: '#4f46e5',
         background_color: '#ffffff',
