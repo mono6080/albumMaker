@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 
-from tests.test_api_smoke import (
+from tests.helpers import (
     assert_status,
     create_user,
     jpeg_bytes,

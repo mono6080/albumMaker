@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { completeProject, fetchProject as getProject, renderStudent, reopenProject } from "../api/projectApi";
@@ -23,8 +23,8 @@ import {
   fieldControlClass,
 } from "../components/ui";
 import {
-  ChevronRight, CircleHelp, Download, ImageDown, Loader2, Pencil, Package,
-  CheckCircle2, Clock, Printer, Monitor, MessageCircle, Send, Trash2, ImageOff,
+  ChevronRight, CircleHelp, ImageDown, Loader2, Pencil, Package,
+  CheckCircle2, Clock, Printer, Monitor, MessageCircle,
   RotateCcw, Search, Users,
 } from "lucide-react";
 import { startProductGuide } from "../utils/productGuide";
@@ -33,6 +33,8 @@ import { computeStudentPhotoProgress } from "../utils/photoProgress";
 import ConfirmModal from "../components/ConfirmModal";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import RosterModal from "../components/RosterModal";
+import StudentReviewCard from "../components/StudentReviewCard";
+import ReviewCommentsPanel from "../components/ReviewCommentsPanel";
 import {
   createFileFromBlob,
   downloadApiBlob,
@@ -95,165 +97,6 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   },
 ];
 
-const REVIEW_PREVIEW_CONCURRENCY = 3;
-const REVIEW_PREVIEW_MAX_RETRIES = 4;
-let activeReviewPreviewLoads = 0;
-const queuedReviewPreviewLoads = [];
-
-function pumpReviewPreviewQueue() {
-  while (activeReviewPreviewLoads < REVIEW_PREVIEW_CONCURRENCY && queuedReviewPreviewLoads.length > 0) {
-    const task = queuedReviewPreviewLoads.shift();
-    if (!task || task.cancelled) continue;
-
-    task.started = true;
-    activeReviewPreviewLoads += 1;
-    task.start(() => {
-      if (task.released) return;
-      task.released = true;
-      activeReviewPreviewLoads = Math.max(0, activeReviewPreviewLoads - 1);
-      pumpReviewPreviewQueue();
-    });
-  }
-}
-
-function enqueueReviewPreviewLoad(start) {
-  const task = {
-    cancelled: false,
-    released: false,
-    started: false,
-    start,
-  };
-  queuedReviewPreviewLoads.push(task);
-  pumpReviewPreviewQueue();
-
-  return () => {
-    if (task.released || task.cancelled) return;
-    task.cancelled = true;
-
-    if (!task.started) {
-      const taskIndex = queuedReviewPreviewLoads.indexOf(task);
-      if (taskIndex >= 0) queuedReviewPreviewLoads.splice(taskIndex, 1);
-      return;
-    }
-
-    task.released = true;
-    activeReviewPreviewLoads = Math.max(0, activeReviewPreviewLoads - 1);
-    pumpReviewPreviewQueue();
-  };
-}
-
-function withPreviewRetryParam(src, retryIndex) {
-  if (retryIndex <= 0) return src;
-  const separator = src.includes("?") ? "&" : "?";
-  return `${src}${separator}retry=${retryIndex}`;
-}
-
-function ReviewPreviewImage({ src, alt, className }) {
-  const containerRef = useRef(null);
-  const releaseLoadSlotRef = useRef(null);
-  const retryTimerRef = useRef(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const [loadSrc, setLoadSrc] = useState("");
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [retryIndex, setRetryIndex] = useState(0);
-  const [hasLoadError, setHasLoadError] = useState(false);
-
-  useEffect(() => {
-    window.clearTimeout(retryTimerRef.current);
-    retryTimerRef.current = null;
-    setLoadSrc("");
-    setIsLoaded(false);
-    setRetryIndex(0);
-    setHasLoadError(false);
-    releaseLoadSlotRef.current?.();
-    releaseLoadSlotRef.current = null;
-  }, [src]);
-
-  useEffect(() => () => {
-    window.clearTimeout(retryTimerRef.current);
-    releaseLoadSlotRef.current?.();
-    releaseLoadSlotRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) return undefined;
-    if (!("IntersectionObserver" in window)) {
-      setIsVisible(true);
-      return undefined;
-    }
-
-    const observer = new IntersectionObserver(
-      entries => {
-        if (!entries.some(entry => entry.isIntersecting)) return;
-        setIsVisible(true);
-        observer.disconnect();
-      },
-      { rootMargin: "360px 0px" },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!isVisible || isLoaded || hasLoadError) return undefined;
-    return enqueueReviewPreviewLoad(release => {
-      releaseLoadSlotRef.current = release;
-      setLoadSrc(withPreviewRetryParam(src, retryIndex));
-    });
-  }, [hasLoadError, isLoaded, isVisible, retryIndex, src]);
-
-  const handleLoaded = () => {
-    setIsLoaded(true);
-    setHasLoadError(false);
-    releaseLoadSlotRef.current?.();
-    releaseLoadSlotRef.current = null;
-  };
-
-  const handleLoadFailed = () => {
-    setLoadSrc("");
-    setIsLoaded(false);
-    releaseLoadSlotRef.current?.();
-    releaseLoadSlotRef.current = null;
-
-    if (retryIndex >= REVIEW_PREVIEW_MAX_RETRIES) {
-      setHasLoadError(true);
-      return;
-    }
-
-    const retryDelay = Math.min(1000 * (2 ** retryIndex), 5000);
-    window.clearTimeout(retryTimerRef.current);
-    retryTimerRef.current = window.setTimeout(() => {
-      retryTimerRef.current = null;
-      setRetryIndex(current => current + 1);
-    }, retryDelay);
-  };
-
-  return (
-    <div ref={containerRef} className="relative h-24 w-full bg-gray-100">
-      {loadSrc && (
-        <img
-          src={loadSrc}
-          alt={alt}
-          className={`${className} ${isLoaded ? "opacity-100" : "opacity-0"}`}
-          onLoad={handleLoaded}
-          onError={handleLoadFailed}
-        />
-      )}
-      {!isLoaded && !hasLoadError && (
-        <div className="absolute inset-0 flex items-center justify-center text-gray-300">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-        </div>
-      )}
-      {hasLoadError && (
-        <div className="absolute inset-0 flex items-center justify-center text-gray-300">
-          <ImageOff className="h-4 w-4" aria-hidden="true" />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function ProjectReview() {
   const { id } = useParams();
   const { canDownloadPrint, canComment, canEditProject, isAdmin } = usePermissions();
@@ -275,6 +118,8 @@ export default function ProjectReview() {
   const [ts, setTs] = useState(() => Date.now());
   // 非 admin 固定使用 screen 模式
   const [outputMode, setOutputMode] = useState("print");
+  // 下載時實際生效的輸出模式：無列印權限者一律 screen
+  const effectiveMode = canDownloadPrint ? outputMode : "screen";
   const [studentStatusFilter, setStudentStatusFilter] = useState("all");
   const [studentSearch, setStudentSearch] = useState("");
   const [confirmModal, setConfirmModal] = useState(null);
@@ -327,7 +172,6 @@ export default function ProjectReview() {
     try {
       await renderStudent(id, studentId);
       await loadProject();
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
         renderClient,
         downloadPdf(id, studentId, effectiveMode),
@@ -399,7 +243,6 @@ export default function ProjectReview() {
 
       await renderStudent(id, studentId);
       await loadProject();
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
         renderClient,
         downloadImagesZip(id, studentId, effectiveMode),
@@ -443,7 +286,6 @@ export default function ProjectReview() {
         showRetryToast(`${stillFailed.map(s => s.name).join("、")} 產生失敗`, handleDownloadAll);
         return;
       }
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       // ZIP 動輒數百 MB：走瀏覽器原生下載，不經 axios blob（避免 timeout 與整包塞記憶體）
       triggerNativeDownload(downloadAllZip(id, effectiveMode));
       toast.success("已開始下載，請留意瀏覽器的下載列");
@@ -496,7 +338,6 @@ export default function ProjectReview() {
         showRetryToast(`${stillFailed.map(s => s.name).join("、")} 產生失敗`, handleDownloadAllImages);
         return;
       }
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
       // 圖片 ZIP 比 PDF ZIP 更大：一樣走瀏覽器原生下載
       triggerNativeDownload(downloadAllImagesZip(id, effectiveMode));
       toast.success("已開始下載，請留意瀏覽器的下載列");
@@ -1018,220 +859,40 @@ export default function ProjectReview() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {visibleStudents.map(student => {
-            const photoProgress = photoProgressByStudentId.get(student.id);
-            const isStudentPhotoComplete = photoProgress.total === 0 || photoProgress.filled === photoProgress.total;
-            const isStudentRendering = rendering[student.id];
-            const isStudentImageRendering = renderingImages[student.id];
-            const isStudentImageShareReady = isMobileDevice() && imageShareDrafts[student.id]?.files?.length > 0;
-            const isStudentBusy = isStudentRendering || isStudentImageRendering;
-            const studentSkippedPages = new Set(
-              (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
-            );
-            return (
-              <Surface
-                key={student.id}
-                data-guide="review-student-card"
-                style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
-                padding="none"
-                className={`overflow-hidden transition-all hover:shadow-md ${
-                  isStudentPhotoComplete ? "border-emerald-100" : "border-gray-200"
-                }`}
-              >
-                {/* Thumbnail strip — 跳過已刪除的頁面；點縮圖即預覽 */}
-                <div data-guide="review-preview-student" className="flex gap-1 p-3 bg-gray-50 border-b border-gray-100 overflow-x-auto">
-                  {Array.from({ length: pageCount }, (_, i) => {
-                    if (studentSkippedPages.has(i)) return null;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => setPreview({ studentId: student.id, pageIndex: i })}
-                        className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
-                      >
-                        <ReviewPreviewImage
-                          src={`${previewUrl(id, student.id, i, 0.4)}&t=${ts}`}
-                          alt={`p${i + 1}`}
-                          className="w-full h-24 object-cover"
-                        />
-                        <div className="text-center text-xs text-gray-400 py-0.5 group-hover:text-indigo-500">
-                          第 {i + 1} 頁
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Student info：主要區可點（老師→編輯；其他角色→預覽），動作收成右側小 icon */}
-                <div className="flex items-center gap-2 p-4">
-                  {canEditCurrentProject ? (
-                    <Link
-                      to={`/projects/${id}/students/${student.id}/edit`}
-                      className="group/main min-w-0 flex-1"
-                    >
-                      <div className="truncate font-semibold text-gray-900 transition-colors group-hover/main:text-indigo-700">
-                        {student.name}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-                        {photoProgress.total > 0 && (
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                            photoProgress.filled === photoProgress.total
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-amber-50 text-amber-700"
-                          }`}>
-                            {photoProgress.filled === photoProgress.total
-                              ? "✓ 照片齊"
-                              : `照片 ${photoProgress.filled}/${photoProgress.total}`}
-                          </span>
-                        )}
-                      </div>
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setPreview({ studentId: student.id, pageIndex: getVisiblePageIndexes(student)[0] ?? 0 })}
-                      className="min-w-0 flex-1 text-left"
-                    >
-                      <div className="truncate font-semibold text-gray-900">{student.name}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-                        {photoProgress.total > 0 && (
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                            photoProgress.filled === photoProgress.total
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-amber-50 text-amber-700"
-                          }`}>
-                            {photoProgress.filled === photoProgress.total
-                              ? "✓ 照片齊"
-                              : `照片 ${photoProgress.filled}/${photoProgress.total}`}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  )}
-                  <div className="flex flex-shrink-0 items-center gap-0.5">
-                    {canEditCurrentProject && (
-                      <Link
-                        to={`/projects/${id}/students/${student.id}/edit`}
-                        aria-label="編輯"
-                        title="編輯"
-                        data-guide="review-edit-student"
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-indigo-500 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Link>
-                    )}
-                    {/* 下載前要先渲染（owner/admin 限定），唯讀角色點了必 403，直接不顯示 */}
-                    {canEditCurrentProject && (
-                      <>
-                        <IconButton
-                          label={isStudentRendering ? "PDF 產生中" : "下載 PDF"}
-                          onClick={() => handleDownloadOne(student.id)}
-                          disabled={isStudentBusy}
-                          data-guide="review-download-student"
-                          variant="success"
-                        >
-                          {isStudentRendering
-                            ? <Loader2 className="h-4 w-4 animate-spin" />
-                            : <Download className="h-4 w-4" />}
-                        </IconButton>
-                        <IconButton
-                          label={isStudentImageShareReady ? "開始分享圖片" : "下載圖片"}
-                          onClick={() => handleDownloadOneImages(student.id)}
-                          disabled={isStudentBusy}
-                          variant="info"
-                        >
-                          {isStudentImageRendering
-                            ? <Loader2 className="h-4 w-4 animate-spin" />
-                            : <ImageDown className="h-4 w-4" />}
-                        </IconButton>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </Surface>
-            );
-          })}
+          {visibleStudents.map(student => (
+            <StudentReviewCard
+              key={student.id}
+              student={student}
+              projectId={id}
+              pageCount={pageCount}
+              ts={ts}
+              canEditCurrentProject={canEditCurrentProject}
+              photoProgress={photoProgressByStudentId.get(student.id)}
+              isRendering={rendering[student.id]}
+              isImageRendering={renderingImages[student.id]}
+              isImageShareReady={isMobileDevice() && imageShareDrafts[student.id]?.files?.length > 0}
+              getVisiblePageIndexes={getVisiblePageIndexes}
+              onPreview={(studentId, pageIndex) => setPreview({ studentId, pageIndex })}
+              onDownloadPdf={handleDownloadOne}
+              onDownloadImages={handleDownloadOneImages}
+            />
+          ))}
         </div>
       )}
 
       {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
       {(canComment || currentUser?.role === "teacher") && (
-        <Surface id="review-comments" className="mt-8 scroll-mt-20" data-guide="review-comments">
-          <div className="flex items-center gap-2 mb-4">
-            <MessageCircle className="w-4 h-4 text-violet-500" />
-            <h3 className="font-semibold text-gray-800 text-sm">審閱意見</h3>
-            {comments.length > 0 && (
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{comments.length}</span>
-            )}
-          </div>
-
-          {/* 留言清單 */}
-          {comments.length === 0 ? (
-            <p className="text-sm text-gray-300 text-center py-4">尚無意見</p>
-          ) : (
-            <div className="space-y-3 mb-4">
-              {comments.map((comment) => (
-                <div key={comment.id} className="flex gap-3">
-                  <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center text-xs font-bold text-violet-600 flex-shrink-0">
-                    {comment.author_name?.[0] ?? "?"}
-                  </div>
-                  <div className="flex-1 bg-gray-50 rounded-xl px-3 py-2">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-gray-700">{comment.author_name}</span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs text-gray-300">
-                          {new Date(comment.created_at).toLocaleString("zh-TW", {
-                            month: "numeric", day: "numeric",
-                            hour: "2-digit", minute: "2-digit",
-                          })}
-                        </span>
-                        {/* 後端允許 admin 或作者本人刪除，前端一致 */}
-                        {(isAdmin || comment.author_id === currentUser?.id) && (
-                          <IconButton
-                            label="刪除留言"
-                            onClick={() => handleDeleteComment(comment.id)}
-                            variant="danger"
-                            size="xs"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </IconButton>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* 新增留言（老師唯讀，不顯示輸入區） */}
-          {canComment && (
-            <>
-              <div className="flex gap-2 min-w-0">
-                <textarea
-                  rows={2}
-                  value={newCommentText}
-                  onChange={(e) => setNewCommentText(e.target.value)}
-                  placeholder="輸入審閱意見..."
-                  className={`${fieldControlClass} flex-1 resize-none`}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
-                  }}
-                />
-                <Button
-                  onClick={handleSubmitComment}
-                  disabled={isSubmittingComment || !newCommentText.trim()}
-                  variant="primary"
-                  className="self-end"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">送出</span>
-                </Button>
-              </div>
-              <p className="text-xs text-gray-300 mt-1.5">Ctrl+Enter 快速送出</p>
-            </>
-          )}
-        </Surface>
+        <ReviewCommentsPanel
+          comments={comments}
+          canComment={canComment}
+          isAdmin={isAdmin}
+          currentUser={currentUser}
+          newCommentText={newCommentText}
+          isSubmittingComment={isSubmittingComment}
+          onChangeNewComment={setNewCommentText}
+          onSubmitComment={handleSubmitComment}
+          onDeleteComment={handleDeleteComment}
+        />
       )}
 
       <ConfirmModal

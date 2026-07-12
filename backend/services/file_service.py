@@ -5,7 +5,7 @@
 import io
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -68,6 +68,39 @@ def get_photo_key(
     """
     filename = f"p{page_index}_slot{slot_id}_{original_filename}"
     return f"projects/proj{project_id}/photos/student{student_id}/{filename}"
+
+
+PHOTO_THUMBNAIL_SIZE = 360
+PHOTO_THUMBNAIL_QUALITY = 78
+
+
+def build_photo_thumbnail_jpeg(storage, photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> bytes:
+    """從原圖生成長邊上限 size 的 JPEG 縮圖（照片管理列表用）。"""
+    image = storage.open_image(photo_key)
+    try:
+        image.load()
+        thumbnail = image.copy()
+    finally:
+        image.close()
+
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    thumbnail.thumbnail((size, size), resample=resample)
+
+    buffer = io.BytesIO()
+    _flatten_to_rgb(thumbnail).save(buffer, format="JPEG", quality=PHOTO_THUMBNAIL_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+def get_photo_thumbnail_key(photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> str:
+    """照片縮圖的 storage key：{照片目錄}/thumbnails/{size}/{檔名}.jpg"""
+    photo_path = PurePosixPath(photo_key)
+    return f"{photo_path.parent.as_posix()}/thumbnails/{size}/{photo_path.name}.jpg"
+
+
+def delete_photo_thumbnails(storage, photo_key: str) -> None:
+    """刪除照片的所有縮圖（換照片/刪照片時避免殘留舊縮圖）。"""
+    photo_path = PurePosixPath(photo_key)
+    storage.delete_prefix(f"{photo_path.parent.as_posix()}/thumbnails")
 
 
 def get_background_key(template_id: int, page_id: int, original_filename: str) -> str:

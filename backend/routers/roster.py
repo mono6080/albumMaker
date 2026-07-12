@@ -8,18 +8,20 @@ from sqlalchemy.orm import Session
 
 from auth import require_role
 from crud.roster_crud import get_any_student_or_404, get_roster_child_or_404
-from crud.user_crud import get_subordinate_user_ids
+from crud.user_crud import get_visible_owner_ids
 from database import User, get_db
 from services.export_jobs import get_render_job_state, start_render_missing_job
 from services.project_service import build_content_disposition_header
 from services.roster_service import (
     build_semester_export_preview,
-    build_teacher_overview_workbook,
-    build_teacher_progress_overview,
     delete_roster_child_if_orphaned,
     link_student_to_new_child,
     merge_roster_children,
     open_semester_export_zip_stream,
+)
+from services.teacher_overview_service import (
+    build_teacher_overview_workbook,
+    build_teacher_progress_overview,
 )
 
 router = APIRouter(prefix="/api/roster", tags=["roster"])
@@ -47,9 +49,7 @@ def get_semester_export_preview(
 
     主管唯讀：只看得到自己管轄老師（含自己）的專案，匯出與名冊操作仍限 admin。
     """
-    owner_user_ids = None
-    if current_user.role == "supervisor":
-        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    owner_user_ids = get_visible_owner_ids(current_user, db)
     return build_semester_export_preview(db, period_ids, owner_user_ids)
 
 
@@ -60,9 +60,7 @@ def get_teacher_progress(
     current_user: User = Depends(require_role("admin", "supervisor")),
 ):
     """老師進度總覽：含尚未建專案的老師與照片/文字完成度。supervisor 限管轄老師。"""
-    owner_user_ids = None
-    if current_user.role == "supervisor":
-        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    owner_user_ids = get_visible_owner_ids(current_user, db)
     return build_teacher_progress_overview(db, period_ids, owner_user_ids)
 
 
@@ -73,9 +71,7 @@ def export_teacher_overview_excel(
     current_user: User = Depends(require_role("admin", "supervisor")),
 ):
     """下載老師進度 Excel（摘要 + 明細）。supervisor 只含管轄老師的資料。"""
-    owner_user_ids = None
-    if current_user.role == "supervisor":
-        owner_user_ids = get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    owner_user_ids = get_visible_owner_ids(current_user, db)
     workbook_bytes = build_teacher_overview_workbook(db, period_ids, owner_user_ids)
     return Response(
         content=workbook_bytes,

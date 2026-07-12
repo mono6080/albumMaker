@@ -44,8 +44,10 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 
 ## TemplateEditor（前端編輯器）
 
-- react-konva Canvas 2D 畫布，A4 直式；display / real 兩套座標
-  （`toDisplayCoord` / `toRealCoord`，模型集中在 `utils/renderLayoutModel.js`）
+- react-konva Canvas 2D 畫布，A4 直式；display / real 兩套座標換算與
+  z-index 工具在 `utils/renderLayoutModel.js`（其 `buildRenderLayoutModel`
+  等 model 函式僅供 render-parity 腳本消費，編輯器實際的 Konva 節點渲染在
+  `components/canvas/pageElementNodes.jsx`）
 - 四種元素對應 `layout_json` 的四個陣列（格式見
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)）：
   photo → `photo_slots`、text → `text_labels`、bubble → `text_bubbles`（自訂
@@ -55,7 +57,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   等比連動。底層 `photo_slots` 資料結構不變（仍存任意 width/height，
   舊模板的非標準比例照常渲染，縮放時鎖各自現有比例）
 - 草稿與歷史：`draftLayouts`（per-page dirty layout ref）+ `layoutHistories`
-  （per-page undo/redo，上限 100）
+  （per-page undo/redo，上限 100），抽在 `hooks/useLayoutHistory.js`
 - 儲存流程：只挑 dirty page 逐頁呼叫 `updatePageLayout`；開跨頁預覽前強制先儲存
 - `BubbleSVG` 是 ProjectReview 用的純 SVG 顯示元件，幾何計算與後端 PIL 一致
 

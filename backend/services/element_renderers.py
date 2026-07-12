@@ -11,6 +11,7 @@ from services.draw_helpers import (
     _line_width_with_spacing, draw_line_with_spacing,
 )
 from services.label_texts import get_label_entry_align, get_label_entry_text
+from services.photo_frame_geometry import get_photo_frame_insets
 
 
 def _clamp_int(value, default: int, min_value: int, max_value: int) -> int:
@@ -70,8 +71,13 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     slot_id = str(slot["id"])
     photo_val = photos.get(slot_id)
     sx, sy, sw, sh = slot["x"], slot["y"], slot["width"], slot["height"]
-    border = slot.get("border", True)
-    border_w = slot.get("border_width", 8)
+    # 邊框與內容框一律由 photo_frame_geometry 推導（拍立得底邊比例的唯一真相來源，
+    # 前端 photoFrameGeometry.js 為跨語言鏡像）
+    insets = get_photo_frame_insets(slot)
+    border = insets["has_border"]
+    border_w = int(round(insets["border_width"]))
+    content_w = max(1, sw - int(round(insets["left"] + insets["right"])))
+    content_h = max(1, sh - int(round(insets["top"] + insets["bottom"])))
     slot_radius = slot.get("border_radius", 0)
     rotation = slot.get("rotation", 0)
     _sh_raw = slot.get("shadow_enabled")
@@ -87,8 +93,7 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         if border:
             frame = Image.new("RGBA", (sw, sh), (255, 255, 255, 255))
             fd = ImageDraw.Draw(frame)
-            inner_w = max(1, sw - border_w * 2)
-            inner_h = max(1, sh - border_w * 4)
+            inner_w, inner_h = content_w, content_h
             ix1, iy1 = border_w, border_w
             ix2, iy2 = ix1 + inner_w - 1, iy1 + inner_h - 1
             inner_r = max(0, slot_radius - border_w)
@@ -139,13 +144,8 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     if not photo_path:
         return
 
-    # 先算出照片實際要填的內容框，讓載入器能「先粗縮、再轉色」
-    if border:
-        content_w = max(1, sw - border_w * 2)
-        content_h = max(1, sh - border_w * 4)
-    else:
-        content_w, content_h = sw, sh
-
+    # content_w/content_h（照片實際要填的內容框）已於函式開頭由 insets 推得，
+    # 讓載入器能「先粗縮、再轉色」
     try:
         img = load_key_for_box(photo_path, content_w, content_h, user_scale)
         if img is None:
@@ -209,9 +209,7 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         return Image.merge("RGBA", (red.point(lut), green.point(lut), blue.point(lut), alpha))
 
     if border:
-        inner_w = max(1, sw - border_w * 2)
-        inner_h = max(1, sh - border_w * 4)
-        photo = _cover_crop(img, inner_w, inner_h, user_scale, offset_x, offset_y)
+        photo = _cover_crop(img, content_w, content_h, user_scale, offset_x, offset_y)
         photo = _apply_photo_adjustments(photo, user_brightness, user_contrast)
         inner_r = max(0, slot_radius - border_w)
         if inner_r > 0:

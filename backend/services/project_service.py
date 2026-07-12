@@ -23,9 +23,8 @@ from services.render_service import (
     save_album_pdf,
     save_album_images,
 )
-from services.request_limiter import zip_build_limiter
 from services.storage import get_storage
-from services.zip_stream import StreamingZipBuffer
+from services.zip_stream import open_zip_stream
 
 
 # ── 檔名與目錄工具 ─────────────────────────────────────────────────────────────
@@ -45,6 +44,14 @@ def build_combined_stem(project_name: str, student_name: str) -> str:
     safe_project = make_safe_filename(project_name)
     safe_student = make_safe_filename(student_name)
     return f"{safe_project}-{safe_student}"
+
+
+def student_pdf_key_for_mode(base_key: str, output_mode: str) -> str:
+    """由列印版 PDF key（students.output_filename）推導指定畫質的 key。
+
+    screen 版＝同 stem 加 _screen 後綴；對 `.pdf` 副檔名的硬假設見 known-issues.md。
+    """
+    return base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
 
 
 # ── HTTP 下載標頭工具 ──────────────────────────────────────────────────────────
@@ -296,8 +303,7 @@ def _student_pdf_zip_entry(project: Project, student: Student, output_mode: str)
     """單一學生 PDF 的（ZIP 內檔名, storage key）；未渲染回 None。"""
     if not student.output_filename:
         return None
-    base_key = student.output_filename
-    pdf_key = base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
+    pdf_key = student_pdf_key_for_mode(student.output_filename, output_mode)
     combined_stem = build_combined_stem(project.name, student.name)
     suffix = "_screen" if output_mode == "screen" else ""
     return (f"{combined_stem}{suffix}.pdf", pdf_key)
@@ -363,28 +369,6 @@ def build_zip_of_student_images(
     return output_buffer.read()
 
 
-def _open_zip_stream(write_entries):
-    """通用串流 ZIP：先佔 zip 併發槽（滿載回 503），回傳逐段 chunk 產生器。
-
-    write_entries(zip_archive) 為產生器，每 yield 一次代表寫入了一個檔案。
-    邊壓邊送：峰值記憶體從整包 ZIP 降為單一檔案，下載立即開始。
-    """
-    limiter_context = zip_build_limiter.acquire("ZIP 正在產生中，請稍後再試")
-    limiter_context.__enter__()
-
-    def stream_zip_chunks():
-        try:
-            zip_buffer = StreamingZipBuffer()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zip_archive:
-                for _ in write_entries(zip_archive):
-                    yield from zip_buffer.drain()
-            yield from zip_buffer.drain()
-        finally:
-            limiter_context.__exit__(None, None, None)
-
-    return stream_zip_chunks()
-
-
 def open_all_student_pdfs_zip_stream(project: Project, output_mode: str):
     """所有已渲染學生 PDF 的串流 ZIP 產生器。"""
     storage = get_storage()
@@ -403,7 +387,7 @@ def open_all_student_pdfs_zip_stream(project: Project, output_mode: str):
             zip_archive.writestr(arcname, pdf_bytes)
             yield
 
-    return _open_zip_stream(write_entries)
+    return open_zip_stream(write_entries, "ZIP 正在產生中，請稍後再試")
 
 
 def open_all_student_images_zip_stream(project: Project, output_mode: str):
@@ -427,4 +411,4 @@ def open_all_student_images_zip_stream(project: Project, output_mode: str):
             zip_archive.writestr(archive_path, image_bytes)
             yield
 
-    return _open_zip_stream(write_entries)
+    return open_zip_stream(write_entries, "ZIP 正在產生中，請稍後再試")

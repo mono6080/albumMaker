@@ -9,6 +9,7 @@ import toast from "react-hot-toast";
 import { fetchProject, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplateCached } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
+import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   Camera,
@@ -26,14 +27,6 @@ import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
 import { Badge, Button, PageHeader } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
-import {
-  getLabelEntryAlign,
-  getLabelEntryTextOverride,
-  hasLabelEntryTextOverride,
-  withLabelEntryAlign,
-  withLabelEntryText,
-  withoutLabelEntryText,
-} from "../utils/labelTextEntries";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 
 
@@ -49,7 +42,12 @@ export default function StudentEdit() {
   const [projectLabelTexts, setProjectLabelTexts] = useState({});
   const [loadError, setLoadError] = useState(null);
   const [activePage, setActivePage] = useState(0);
-  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
+  // 對應文字（label_texts）state 與讀寫操作，抽至共用 Hook 與 ClassEdit 同步維護
+  const {
+    labelTexts, setLabelTexts,
+    getLabelText, getLabelAlign, hasLabelTextOverride,
+    setLabelText, setLabelAlign, restoreDefaultLabelText,
+  } = useLabelTextsEditor();
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
   const [previewTimestampSeed, setPreviewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
@@ -122,7 +120,8 @@ export default function StudentEdit() {
     } catch {
       setLoadError("找不到專案或學生");
     }
-  }, [projectId, studentId]);
+    // setLabelTexts 來自 useLabelTextsEditor（底層是 useState setter，恆穩定），列入只為滿足 lint
+  }, [projectId, studentId, setLabelTexts]);
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
@@ -136,52 +135,6 @@ export default function StudentEdit() {
       navigate(`/projects/${projectId}/review`, { replace: true });
     }
   }, [project, canEditProject, navigate, projectId]);
-
-  // ── 對應文字操作 ──────────────────────────────────────────────────────────
-
-  const getLabelEntry = (pageIndex, labelId) =>
-    labelTexts[pageIndex]?.[String(labelId)];
-
-  const getLabelText = (pageIndex, labelId) =>
-    getLabelEntryTextOverride(getLabelEntry(pageIndex, labelId)) ?? "";
-
-  const getLabelAlign = (pageIndex, labelId, fallbackAlign = "center") =>
-    getLabelEntryAlign(getLabelEntry(pageIndex, labelId), fallbackAlign);
-
-  const hasLabelTextOverride = (pageIndex, labelId) =>
-    hasLabelEntryTextOverride(getLabelEntry(pageIndex, labelId));
-
-  const updateLabelEntry = (pageIndex, labelId, getNextEntry) => {
-    const labelIdKey = String(labelId);
-    setLabelTexts(prevTexts => {
-      const currentPageTexts = { ...(prevTexts[pageIndex] || {}) };
-      const nextEntry = getNextEntry(currentPageTexts[labelIdKey]);
-      if (nextEntry === undefined) {
-        delete currentPageTexts[labelIdKey];
-      } else {
-        currentPageTexts[labelIdKey] = nextEntry;
-      }
-      return { ...prevTexts, [pageIndex]: currentPageTexts };
-    });
-  };
-
-  const setLabelText = (pageIndex, labelId, textValue, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withLabelEntryText(currentEntry, textValue, fallbackAlign)
-    );
-  };
-
-  const setLabelAlign = (pageIndex, labelId, textAlign, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withLabelEntryAlign(currentEntry, textAlign, fallbackAlign)
-    );
-  };
-
-  const restoreDefaultLabelText = (pageIndex, labelId, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withoutLabelEntryText(currentEntry, fallbackAlign)
-    );
-  };
 
   const refreshPreview = (pageIdx = activePage) =>
     setPageTimestamps(prev => ({ ...prev, [pageIdx]: Date.now() }));

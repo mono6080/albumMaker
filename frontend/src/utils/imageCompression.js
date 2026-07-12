@@ -2,6 +2,8 @@
 // 相本輸出（A4@300dpi）長邊只需要 ~3500px，2560px 已綽綽有餘。
 // 校園 WiFi 上行慢，先壓再傳可省 ~80% 傳輸時間，後端壓縮負擔也跟著消失。
 
+import { runWithConcurrency } from "./concurrency";
+
 const COMPRESS_THRESHOLD_BYTES = 1.5 * 1024 * 1024;
 const MAX_LONG_EDGE = 2560;
 const JPEG_QUALITY = 0.85;
@@ -45,15 +47,6 @@ export function maybeCompressImageFile(file) {
 }
 
 /** 批次壓縮（並行 3），供批次分配精靈在選檔時先處理 */
-export async function compressImageFiles(files) {
-  const results = new Array(files.length);
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < files.length) {
-      const index = cursor++;
-      results[index] = await maybeCompressImageFile(files[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker));
-  return results;
+export function compressImageFiles(files) {
+  return runWithConcurrency(files, 3, maybeCompressImageFile);
 }

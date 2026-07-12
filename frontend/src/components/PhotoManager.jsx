@@ -1,14 +1,17 @@
-import { Fragment, useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useRef, useEffect, useMemo } from "react";
 import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
-import { X, RefreshCw, Images, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Upload } from "lucide-react";
+import { X, RefreshCw, Images, ZoomIn, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import ConfirmModal from "./ConfirmModal";
 import { Button, SegmentedControl } from "./ui";
 import PhotoSlotCard from "./PhotoSlotCard";
-import { buildItems, photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
+import PhotoEditModal, { usePhotoEditModal } from "./PhotoEditModal";
+import { buildItems } from "../utils/photoUtils";
 import { maybeCompressImageFile } from "../utils/imageCompression";
+import { runWithConcurrency } from "../utils/concurrency";
+import { isRetryableUploadError, retryDelayMs } from "../utils/uploadRetry";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
@@ -57,8 +60,6 @@ function uploadStatusLabel(status) {
   return "上傳中";
 }
 
-// ── 照片編輯 Modal ────────────────────────────────────────────────────────────
-
 function getUploadFailureMessage(error, count = 1) {
   const detail = error?.response?.data?.detail;
   if (error?.response?.status === 413) {
@@ -67,202 +68,6 @@ function getUploadFailureMessage(error, count = 1) {
   if (detail) return count > 1 ? `${count} 張照片上傳失敗：${detail}` : detail;
   return count > 1 ? `${count} 張照片上傳失敗` : "照片上傳失敗";
 }
-
-function PhotoEditModal({
-  editModal, items, displayUrl,
-  editModalRef, cropElRef, editDragRef,
-  onCropMouseDown, onCropTouchStart, onCropTouchMove, onEditImgLoad,
-  onApply, onAdjustZoom, setEditModal,
-}) {
-  // Non-passive wheel handler — 必須用 addEventListener 才能 preventDefault
-  useEffect(() => {
-    const el = cropElRef.current;
-    if (!el) return;
-    const handler = (e) => {
-      e.preventDefault();
-      const m = editModalRef.current;
-      if (!m?.imgAspect) return;
-      const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
-      const ratio = newScale / m.scale;
-      const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
-      setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
-    };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
-  }); // run every render so cropElRef stays current
-
-  const handleSliderChange = (e) => {
-    const m = editModalRef.current;
-    const newScale = parseFloat(e.target.value);
-    if (!m?.imgAspect) { setEditModal(prev => prev ? { ...prev, scale: newScale } : prev); return; }
-    const ratio = newScale / m.scale;
-    const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
-    setEditModal(prev => prev ? { ...prev, scale: newScale, panX: panX, panY: panY } : prev);
-  };
-
-  const it = items[editModal.idx];
-  const url = displayUrl(it);
-  const { cropW, cropH, scale, panX, panY, imgAspect, brightness, contrast } = editModal;
-  const dims = imgAspect ? photoDims(cropW, cropH, imgAspect, scale) : null;
-  const photoLeft = dims ? (cropW - dims.w) / 2 + panX : 0;
-  const photoTop  = dims ? (cropH - dims.h) / 2 + panY : 0;
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/75 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm"
-      onMouseUp={() => { editDragRef.current.dragging = false; }}
-      onTouchEnd={() => { editDragRef.current.dragging = false; }}
-    >
-      <div
-        data-guide="photo-edit-modal"
-        className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
-        style={{ maxHeight: "95dvh" }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Modal header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
-          <div>
-            <div className="font-semibold text-gray-900 text-sm">編輯照片 — 第{it.pi + 1}頁 格{it.slotIndex + 1}</div>
-            <div className="text-xs text-gray-400 mt-0.5">拖曳移動 · 滾輪縮放</div>
-          </div>
-          <button
-            onClick={() => setEditModal(null)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Crop area */}
-        <div
-          data-guide="photo-edit-crop"
-          ref={cropElRef}
-          onMouseDown={onCropMouseDown}
-          onTouchStart={onCropTouchStart}
-          onTouchMove={onCropTouchMove}
-          style={{
-            width: cropW, height: cropH, flexShrink: 0,
-            alignSelf: "center",
-            overflow: "hidden", position: "relative",
-            background: "#1a1a1a",
-            cursor: imgAspect ? "grab" : "default",
-            touchAction: "none",
-          }}
-        >
-          {url && (
-            <img
-              src={url} alt="" draggable={false}
-              onLoad={onEditImgLoad}
-              style={{
-                position: "absolute",
-                width: dims?.w ?? "100%", height: dims?.h ?? "100%",
-                maxWidth: "none", maxHeight: "none",
-                left: photoLeft, top: photoTop,
-                userSelect: "none", pointerEvents: "none",
-                opacity: imgAspect ? 1 : 0,
-                transition: "opacity 0.15s",
-                // 與後端 PIL 渲染同公式的即時預覽（見 buildPhotoFilterCss）
-                filter: buildPhotoFilterCss(brightness, contrast) ?? "none",
-              }}
-            />
-          )}
-          {!imgAspect && (
-            <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
-              載入中...
-            </div>
-          )}
-        </div>
-
-        {/* Zoom control */}
-        <div className="px-5 py-3 bg-gray-50 border-t border-gray-100">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onAdjustZoom(-0.1)}
-              className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
-            >
-              <ZoomOut className="w-3.5 h-3.5 text-gray-600" />
-            </button>
-            <input
-              type="range" min="1.0" max="3.0" step="0.02"
-              value={scale}
-              onChange={handleSliderChange}
-              className="flex-1 accent-violet-500"
-            />
-            <button
-              onClick={() => onAdjustZoom(0.1)}
-              className="w-7 h-7 bg-white border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
-            >
-              <ZoomIn className="w-3.5 h-3.5 text-gray-600" />
-            </button>
-            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
-              {scale.toFixed(2)}×
-            </span>
-          </div>
-
-          {/* 亮度 / 對比 */}
-          <div className="mt-2.5 flex items-center gap-3">
-            <span className="w-8 text-xs text-gray-500">亮度</span>
-            <input
-              type="range" min="0.5" max="1.5" step="0.01"
-              value={brightness}
-              onChange={e => {
-                const value = parseFloat(e.target.value);
-                setEditModal(prev => prev ? { ...prev, brightness: value } : prev);
-              }}
-              className="flex-1 accent-amber-500"
-            />
-            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
-              {brightness >= 1 ? "+" : ""}{Math.round((brightness - 1) * 100)}%
-            </span>
-          </div>
-          <div className="mt-1.5 flex items-center gap-3">
-            <span className="w-8 text-xs text-gray-500">對比</span>
-            <input
-              type="range" min="0.5" max="1.5" step="0.01"
-              value={contrast}
-              onChange={e => {
-                const value = parseFloat(e.target.value);
-                setEditModal(prev => prev ? { ...prev, contrast: value } : prev);
-              }}
-              className="flex-1 accent-sky-500"
-            />
-            <span className="text-xs text-gray-500 w-10 text-right tabular-nums">
-              {contrast >= 1 ? "+" : ""}{Math.round((contrast - 1) * 100)}%
-            </span>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
-          <button
-            onClick={() => setEditModal(prev => prev ? { ...prev, scale: 1.0, panX: 0, panY: 0, brightness: 1, contrast: 1 } : prev)}
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            重置
-          </button>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setEditModal(null)}
-              className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={onApply}
-              disabled={!imgAspect}
-              className="px-4 py-2 text-sm bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-40 transition-colors"
-            >
-              套用
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 // activePage：與預覽/文字面板同步的當前頁（null＝顯示全部頁，相容舊用法）；
 // 檢視範圍可切「本頁／整本」：顯示、多選上傳與空格計算跟著檢視走，
@@ -288,8 +93,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
   // aspectMap[rk] = naturalW/naturalH — set on img onLoad or for cached images
   const [aspectMap, setAspectMap] = useState({});
   const thumbImgRefs = useRef({});
-  // editModal: null | { idx, scale, panX, panY, imgAspect, cropW, cropH }
-  const [editModal, setEditModal] = useState(null);
   const [activeDragIndex, setActiveDragIndex] = useState(null); // dnd-kit 拖曳中的格子
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
   // uploadStatus: null = 閒置；otherwise { phase, percent }
@@ -305,12 +108,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
 
   const multiRef = useRef(null);
   const replaceRefs = useRef({});
-  const editDragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });
-  const editModalRef = useRef(null);
-  const cropElRef = useRef(null);
 
-  // Keep ref in sync for wheel handler
-  useEffect(() => { editModalRef.current = editModal; }, [editModal]);
+  // 照片編輯 Modal：state 與所有互動 handler 都在 usePhotoEditModal（見 PhotoEditModal.jsx）。
+  // displayUrl / updateTransform 宣告在本元件後段，包一層 arrow 延遲取值（handler 觸發時才呼叫）
+  const photoEdit = usePhotoEditModal({
+    items,
+    displayUrl: (it) => displayUrl(it),
+    onApplyTransform: (idx, t) => updateTransform(idx, t),
+  });
+  const { openEditModal, closeEditModal } = photoEdit;
 
   // Refs for auto-save (avoid stale closures)
   const itemsRef = useRef(items);
@@ -337,7 +143,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         if (pendingIndices.length) {
           const progressByIndex = new Map(pendingIndices.map(i => [i, 0]));
           let completedUploads = 0;
-          let nextPendingCursor = 0;
 
           const updateAggregateStatus = (phaseOverride) => {
             const totalProgress = [...progressByIndex.values()].reduce((sum, pct) => sum + pct, 0);
@@ -356,45 +161,39 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
           updateAggregateStatus("uploading");
 
           // 暫時性失敗（503 排隊滿、網路斷）自動重試——不重試的話照片會從格子消失，
-          // 老師得手動重選重傳；4xx（檔案本身的問題）不重試
+          // 老師得手動重選重傳；判斷與等待時間共用 utils/uploadRetry.js
           const uploadWithRetry = async (i, fileToSend, onProgress) => {
             const maxAttempts = 3;
             for (let attempt = 1; ; attempt++) {
               try {
                 return await uploadPhoto(projectId, studentId, cur[i].pi, cur[i].slotId, fileToSend, onProgress);
               } catch (error) {
-                const status = error?.response?.status;
-                const retriable = !status || status === 503 || status >= 500;
-                if (!retriable || attempt >= maxAttempts) throw error;
-                await new Promise(resolve => setTimeout(resolve, 1200 * attempt));
+                if (!isRetryableUploadError(error) || attempt >= maxAttempts) throw error;
+                await new Promise(resolve => setTimeout(resolve, retryDelayMs(error)));
               }
             }
           };
 
-          const uploadNext = async () => {
-            while (nextPendingCursor < pendingIndices.length) {
-              const i = pendingIndices[nextPendingCursor++];
-              try {
-                // 上傳前壓縮：手機原圖 4-12MB → ~0.5-1MB，傳輸省 ~80%
-                const fileToSend = await maybeCompressImageFile(cur[i].pendingFile);
-                const res = await uploadWithRetry(i, fileToSend, pct => {
-                  progressByIndex.set(i, pct);
-                  updateAggregateStatus();
-                });
-                progressByIndex.set(i, 100);
-                uploadedPaths[i] = res.data.path;
-              } catch (error) {
-                progressByIndex.set(i, 100);
-                uploadFailures[i] = error;
-              } finally {
-                completedUploads += 1;
-                updateAggregateStatus(completedUploads === pendingIndices.length ? "saving" : undefined);
-              }
+          const uploadOne = async (i) => {
+            try {
+              // 上傳前壓縮：手機原圖 4-12MB → ~0.5-1MB，傳輸省 ~80%
+              const fileToSend = await maybeCompressImageFile(cur[i].pendingFile);
+              const res = await uploadWithRetry(i, fileToSend, pct => {
+                progressByIndex.set(i, pct);
+                updateAggregateStatus();
+              });
+              progressByIndex.set(i, 100);
+              uploadedPaths[i] = res.data.path;
+            } catch (error) {
+              progressByIndex.set(i, 100);
+              uploadFailures[i] = error;
+            } finally {
+              completedUploads += 1;
+              updateAggregateStatus(completedUploads === pendingIndices.length ? "saving" : undefined);
             }
           };
 
-          const workerCount = Math.min(PHOTO_UPLOAD_PARALLEL_LIMIT, pendingIndices.length);
-          await Promise.all(Array.from({ length: workerCount }, uploadNext));
+          await runWithConcurrency(pendingIndices, PHOTO_UPLOAD_PARALLEL_LIMIT, uploadOne);
         }
         // Save mapping for moved / transform-changed items (skip pending — just uploaded)
         const pagesMap = {};
@@ -481,39 +280,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
     }, 300);
   }, [items, studentId, projectId]);
 
-  // 縮放調整（ZoomIn/Out 按鈕共用，delta 為正放大、負縮小）
-  const adjustZoom = useCallback((delta) => {
-    const m = editModalRef.current;
-    if (!m?.imgAspect) return;
-    const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
-    const ratio = newScale / m.scale;
-    const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
-    setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
-  }, []);
-
-  // Global mouse move/up for drag
-  const isEditModalOpen = editModal !== null;
-  useEffect(() => {
-    if (!isEditModalOpen) return;
-    const onMove = (e) => {
-      if (!editDragRef.current.dragging) return;
-      const m = editModalRef.current;
-      if (!m?.imgAspect) return;
-      const dx = e.clientX - editDragRef.current.startX;
-      const dy = e.clientY - editDragRef.current.startY;
-      const { panX, panY } = clampPan(
-        editDragRef.current.startPanX + dx,
-        editDragRef.current.startPanY + dy,
-        m.cropW, m.cropH, m.imgAspect, m.scale
-      );
-      setEditModal(prev => prev ? { ...prev, panX, panY } : prev);
-    };
-    const onUp = () => { editDragRef.current.dragging = false; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [isEditModalOpen]);
-
   // Re-init when student changes
   useEffect(() => {
     setItems(prev => {
@@ -521,9 +287,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
       return buildItems(allSlots, student);
     });
     setAspectMap({});
-    setEditModal(null);
+    closeEditModal();
     setSelectedIdx(null);
-  }, [student, allSlots]);
+  }, [student, allSlots, closeEditModal]);
 
   // Handle cached images: onLoad won't fire if img is already complete
   useEffect(() => {
@@ -619,7 +385,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         serverPath: null, origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
-    setEditModal(null);
+    closeEditModal();
   };
 
   const handleDelete = (idx) => {
@@ -631,7 +397,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
-    setEditModal(null);
+    closeEditModal();
   };
 
   const handleSwap = (i, j) => {
@@ -668,86 +434,6 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
   const updateTransform = (idx, t) =>
     setItems(prev => { const n = [...prev]; n[idx] = { ...n[idx], transform: { ...n[idx].transform, ...t } }; return n; });
 
-
-  // ── Edit modal ────────────────────────────────────────────────────────────
-  const openEditModal = (idx) => {
-    const it = items[idx];
-    if (!displayUrl(it)) return;
-    // Responsive crop area: cap to viewport
-    const vw = Math.min(window.innerWidth - 32, 460);
-    const CROP_MAX_W = vw, CROP_MAX_H = Math.round(window.innerHeight * 0.55);
-    const cropBox = getPhotoCropBox(it);
-    const effectiveW = cropBox.width;
-    const effectiveH = cropBox.height;
-    const rawAspect = effectiveH / effectiveW;
-    const cropW = rawAspect > CROP_MAX_H / CROP_MAX_W
-      ? Math.round(CROP_MAX_H / rawAspect) : CROP_MAX_W;
-    const cropH = Math.round(cropW * rawAspect);
-    setEditModal({
-      idx, scale: it.transform.scale, panX: 0, panY: 0, imgAspect: null, cropW, cropH,
-      brightness: it.transform.brightness,
-      contrast: it.transform.contrast,
-    });
-  };
-
-  const onEditImgLoad = (e) => {
-    const imgAspect = e.target.naturalWidth / e.target.naturalHeight;
-    const m = editModalRef.current;
-    if (!m) return;
-    const it = items[m.idx];
-    const { w, h } = photoDims(m.cropW, m.cropH, imgAspect, m.scale);
-    const sx = (w - m.cropW) / 2, sy = (h - m.cropH) / 2;
-    setEditModal(prev => prev ? {
-      ...prev, imgAspect,
-      panX: -it.transform.offsetX * sx,
-      panY: -it.transform.offsetY * sy,
-    } : prev);
-  };
-
-  const onCropMouseDown = (e) => {
-    e.preventDefault();
-    const m = editModalRef.current;
-    if (!m) return;
-    editDragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY,
-      startPanX: m.panX, startPanY: m.panY };
-  };
-
-  const onCropTouchStart = (e) => {
-    const touch = e.touches[0];
-    const m = editModalRef.current;
-    if (!m) return;
-    editDragRef.current = { dragging: true, startX: touch.clientX, startY: touch.clientY,
-      startPanX: m.panX, startPanY: m.panY };
-  };
-
-  const onCropTouchMove = (e) => {
-    e.preventDefault();
-    const touch = e.touches[0];
-    const d = editDragRef.current;
-    const m = editModalRef.current;
-    if (!d?.dragging || !m?.imgAspect) return;
-    const dx = touch.clientX - d.startX;
-    const dy = touch.clientY - d.startY;
-    const { panX, panY } = clampPan(d.startPanX + dx, d.startPanY + dy, m.cropW, m.cropH, m.imgAspect, m.scale);
-    setEditModal(prev => prev ? { ...prev, panX, panY } : prev);
-  };
-
-  const applyEditModal = () => {
-    const m = editModalRef.current;
-    if (!m?.imgAspect) return;
-    const { idx, scale, panX, panY, imgAspect, cropW, cropH, brightness, contrast } = m;
-    const { w, h } = photoDims(cropW, cropH, imgAspect, scale);
-    const sx = (w - cropW) / 2, sy = (h - cropH) / 2;
-    updateTransform(idx, {
-      scale,
-      offsetX: Math.max(-1, Math.min(1, sx > 0 ? -panX / sx : 0)),
-      offsetY: Math.max(-1, Math.min(1, sy > 0 ? -panY / sy : 0)),
-      brightness,
-      contrast,
-    });
-    setEditModal(null);
-  };
-
   // ── Render ────────────────────────────────────────────────────────────────
   const visibleItems = items.filter(isOnActivePage);
   // 計數排除已刪除頁：已刪除頁的格子照樣渲染（標示已刪除），但不算進度
@@ -779,22 +465,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
       onDrop={e => e.preventDefault()}
     >
       {/* Edit Modal */}
-      {editModal && (
-        <PhotoEditModal
-          editModal={editModal}
-          items={items}
-          displayUrl={displayUrl}
-          editModalRef={editModalRef}
-          cropElRef={cropElRef}
-          editDragRef={editDragRef}
-          onCropMouseDown={onCropMouseDown}
-          onCropTouchStart={onCropTouchStart}
-          onCropTouchMove={onCropTouchMove}
-          onEditImgLoad={onEditImgLoad}
-          onApply={applyEditModal}
-          onAdjustZoom={adjustZoom}
-          setEditModal={setEditModal}
-        />
+      {photoEdit.editModal && (
+        <PhotoEditModal edit={photoEdit} items={items} displayUrl={displayUrl} />
       )}
 
       {/* 刪除照片確認：刪了要重傳，成本不低 */}

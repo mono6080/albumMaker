@@ -8,6 +8,7 @@ import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
 import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 import { TEXT_LABEL_ROLES, getTextLabelRole } from "../utils/textLabelRoles";
+import { snapPhotoSlotStandardRatio } from "../utils/photoFrameGeometry.js";
 
 // 滑桿 + 數字輸入的組合控制項
 function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
@@ -210,15 +211,10 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
                   // 照片格鎖定長寬比例：改寬度或高度時，另一邊等比連動
                   const isSizeField = field.key === "width" || field.key === "height";
                   if (isPhotoSlot && isSizeField && nextValue > 0 && elementData.width > 0 && elementData.height > 0) {
-                    const isPortraitSlot = elementData.width * 4 === elementData.height * 3;
-                    const isLandscapeSlot = elementData.width * 3 === elementData.height * 4;
-                    if (isPortraitSlot || isLandscapeSlot) {
-                      // 標準比例格 snap 到整數倍尺寸，維持數學上精確的 3:4 / 4:3
-                      const [widthMultiple, heightMultiple] = isPortraitSlot ? [3, 4] : [4, 3];
-                      const ratioUnit = Math.max(15, Math.round(
-                        field.key === "width" ? nextValue / widthMultiple : nextValue / heightMultiple
-                      ));
-                      onPropertyChange({ width: ratioUnit * widthMultiple, height: ratioUnit * heightMultiple });
+                    // 標準比例格 snap 到整數倍尺寸，維持數學上精確的 3:4 / 4:3
+                    const snapped = snapPhotoSlotStandardRatio(elementData.width, elementData.height, field.key, nextValue);
+                    if (snapped) {
+                      onPropertyChange(snapped);
                       return;
                     }
                     const aspectRatio = elementData.width / elementData.height;

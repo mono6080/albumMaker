@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { buildStudentPagePreviewUrl } from "../api/urls";
+import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
 // src 可覆寫圖片來源（全班編輯器用專案層級預覽，其餘沿用學生頁預覽）
 export default function PagePreview({ projectId, studentId, pageIndex, timestamp, src = null }) {
@@ -30,7 +31,7 @@ export default function PagePreview({ projectId, studentId, pageIndex, timestamp
   return (
     <div
       className="relative w-full rounded-xl overflow-hidden border border-gray-200 shadow-sm"
-      style={{ aspectRatio: "794 / 1123" }}
+      style={{ aspectRatio: `${CANVAS_REAL_WIDTH} / ${CANVAS_REAL_HEIGHT}` }}
     >
       {!isLoaded && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-50">

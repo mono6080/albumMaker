@@ -4,13 +4,14 @@
 // 確認後以 9-arg ctx.drawImage 精確裁切至目標尺寸並回呼 onConfirm(file)。
 
 import { useState, useRef, useEffect } from "react";
+import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
 const FRAME_DISPLAY_W = 397;
 
 export default function ImageCropModal({
   file,
-  targetWidth  = 794,
-  targetHeight = 1123,
+  targetWidth  = CANVAS_REAL_WIDTH,
+  targetHeight = CANVAS_REAL_HEIGHT,
   title = "裁切圖片",
   hint  = "拖曳移動 · 滾輪縮放 · 裁切範圍固定比例",
   onConfirm,

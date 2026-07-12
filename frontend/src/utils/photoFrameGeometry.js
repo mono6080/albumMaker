@@ -1,6 +1,8 @@
 const DEFAULT_PHOTO_BORDER_WIDTH = 8;
 export const PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode";
 export const PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1";
+// 照片格內容最小寬度：TemplateEditor 縮放下限與標準比例 snap 下限共用
+export const PHOTO_CONTENT_MIN_WIDTH = 60;
 
 function toFiniteNumber(value, fallback = 0) {
   const number = Number(value);
@@ -82,6 +84,23 @@ export function buildPhotoFrameRectFromContent(slot = {}, contentRect = {}) {
     width: Math.round(contentWidth + insets.left + insets.right),
     height: Math.round(contentHeight + insets.top + insets.bottom),
   };
+}
+
+// 標準比例（直式 3:4 / 橫式 4:3）照片格的等比 snap：回傳整數精確的 { width, height }。
+// width / height 是改動前的格子尺寸（標準格永遠是整數精確比例，用來判斷方向）；
+// changedKey（"width" | "height"）指出使用者實際改動的邊，從 nextValue 推出整數 ratioUnit。
+// 下限統一為 PHOTO_CONTENT_MIN_WIDTH（寬 60）；非標準比例格回傳 null 由呼叫端自行處理。
+export function snapPhotoSlotStandardRatio(width, height, changedKey, nextValue) {
+  const isPortraitSlot = width * 4 === height * 3;
+  const isLandscapeSlot = width * 3 === height * 4;
+  if (!isPortraitSlot && !isLandscapeSlot) return null;
+
+  const [widthMultiple, heightMultiple] = isPortraitSlot ? [3, 4] : [4, 3];
+  const ratioUnit = Math.max(
+    PHOTO_CONTENT_MIN_WIDTH / widthMultiple,
+    Math.round(nextValue / (changedKey === "width" ? widthMultiple : heightMultiple)),
+  );
+  return { width: ratioUnit * widthMultiple, height: ratioUnit * heightMultiple };
 }
 
 export function buildPhotoSlotFromContentRect(slot = {}, contentRect = {}, options = {}) {

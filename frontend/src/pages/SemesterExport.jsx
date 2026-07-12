@@ -21,6 +21,7 @@ import {
 } from "../api/rosterApi";
 import { usePermissions } from "../hooks/usePermissions";
 import { showRetryToast } from "../utils/retryToast";
+import { triggerNativeDownload } from "../utils/browserFiles";
 import ConfirmModal from "../components/ConfirmModal";
 import { Badge, Button, PageHeader, SegmentedControl, Surface, fieldControlClass } from "../components/ui";
 
@@ -320,14 +321,7 @@ export default function SemesterExport() {
       "print",
       isAllSelected ? null : [...selectedChildIds],
     );
-    // ZIP 動輒數百 MB：走瀏覽器原生下載（cookie 認證照常帶），
-    // 不經 axios blob — 避免 timeout 與整包塞進記憶體
-    const anchor = document.createElement("a");
-    anchor.href = downloadUrl;
-    anchor.style.display = "none";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    triggerNativeDownload(downloadUrl);
     toast.success("已開始產生並下載，請留意瀏覽器的下載列");
   };
 

@@ -10,6 +10,7 @@ import { fetchProject, updateProjectLabelTexts, uploadSharedProjectPhoto } from 
 import { fetchTemplateCached } from "../api/templateApi";
 import { buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
+import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   Camera,
@@ -42,14 +43,6 @@ import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFram
 import { getPhotoCropBox } from "../utils/photoUtils";
 import { handleApiError } from "../utils/apiError";
 import { startProductGuide } from "../utils/productGuide";
-import {
-  getLabelEntryAlign,
-  getLabelEntryTextOverride,
-  hasLabelEntryTextOverride,
-  withLabelEntryAlign,
-  withLabelEntryText,
-  withoutLabelEntryText,
-} from "../utils/labelTextEntries";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 
 function uploadStatusLabel(status) {
@@ -68,7 +61,12 @@ export default function ClassEdit() {
   const [loadError, setLoadError] = useState(null);
   const [activePage, setActivePage] = useState(0);
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
-  const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
+  // 共用文字（label_texts）state 與讀寫操作，抽至共用 Hook 與 StudentEdit 同步維護
+  const {
+    labelTexts, setLabelTexts,
+    getLabelText, getLabelAlign, hasLabelTextOverride,
+    setLabelText, setLabelAlign, restoreDefaultLabelText,
+  } = useLabelTextsEditor();
   const [previewTimestamp, setPreviewTimestamp] = useState(() => Date.now());
 
   // 共用照片狀態
@@ -153,7 +151,8 @@ export default function ClassEdit() {
     } catch {
       setLoadError("找不到專案，請確認連結是否正確");
     }
-  }, [projectId]);
+    // setLabelTexts 來自 useLabelTextsEditor（底層是 useState setter，恆穩定），列入只為滿足 lint
+  }, [projectId, setLabelTexts]);
 
   useEffect(() => { loadProjectData(); }, [loadProjectData]);
 
@@ -224,52 +223,6 @@ export default function ClassEdit() {
       setIsSharedPhotoUploading(false);
       setSharedPhotoUploadStatus(null);
     }
-  };
-
-  // ── 共用文字操作 ──────────────────────────────────────────────────────────
-
-  const getLabelEntry = (pageIndex, labelId) =>
-    labelTexts[pageIndex]?.[String(labelId)];
-
-  const getLabelText = (pageIndex, labelId) =>
-    getLabelEntryTextOverride(getLabelEntry(pageIndex, labelId)) ?? "";
-
-  const getLabelAlign = (pageIndex, labelId, fallbackAlign = "center") =>
-    getLabelEntryAlign(getLabelEntry(pageIndex, labelId), fallbackAlign);
-
-  const hasLabelTextOverride = (pageIndex, labelId) =>
-    hasLabelEntryTextOverride(getLabelEntry(pageIndex, labelId));
-
-  const updateLabelEntry = (pageIndex, labelId, getNextEntry) => {
-    const labelIdKey = String(labelId);
-    setLabelTexts(prevTexts => {
-      const currentPageTexts = { ...(prevTexts[pageIndex] || {}) };
-      const nextEntry = getNextEntry(currentPageTexts[labelIdKey]);
-      if (nextEntry === undefined) {
-        delete currentPageTexts[labelIdKey];
-      } else {
-        currentPageTexts[labelIdKey] = nextEntry;
-      }
-      return { ...prevTexts, [pageIndex]: currentPageTexts };
-    });
-  };
-
-  const setLabelText = (pageIndex, labelId, textValue, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withLabelEntryText(currentEntry, textValue, fallbackAlign)
-    );
-  };
-
-  const setLabelAlign = (pageIndex, labelId, textAlign, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withLabelEntryAlign(currentEntry, textAlign, fallbackAlign)
-    );
-  };
-
-  const restoreDefaultLabelText = (pageIndex, labelId, fallbackAlign = "center") => {
-    updateLabelEntry(pageIndex, labelId, currentEntry =>
-      withoutLabelEntryText(currentEntry, fallbackAlign)
-    );
   };
 
   // ── 切換範圍（全班 → 學生） ──────────────────────────────────────────────

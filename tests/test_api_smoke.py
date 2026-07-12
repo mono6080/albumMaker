@@ -2,211 +2,38 @@
 # These tests exercise the real app wiring, auth cookie flow, and core route
 # contracts against the tmp SQLite database configured in conftest.py.
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+import threading
 from datetime import datetime, timedelta
 from io import BytesIO
-from uuid import uuid4
 from zipfile import ZipFile
 
-from fastapi.testclient import TestClient
-from openpyxl import Workbook
 from PIL import Image
-from starlette.responses import Response
 
-from auth import hash_password
-from database import Project, SessionLocal, User
+from database import Project, SessionLocal
 from main import (
     FRONTEND_APP_CACHE_CONTROL,
     FRONTEND_ASSET_CACHE_CONTROL,
-    app,
     apply_frontend_cache_headers,
-    limiter as app_limiter,
 )
-from routers.auth import limiter as auth_limiter
 from services.render_service import PRINT_OUTPUT_SIZE
+from starlette.responses import Response
 
-
-ADMIN_PASSWORD = "admin-password-123"
-USER_PASSWORD = "user-password-123"
-
-
-@contextmanager
-def started_client() -> Iterator[TestClient]:
-    reset_rate_limits()
-    with TestClient(app) as client:
-        reset_admin_password()
-        client.cookies.clear()
-        yield client
-
-
-def reset_rate_limits() -> None:
-    for limiter in (app_limiter, auth_limiter):
-        storage = getattr(limiter, "_storage", None)
-        if storage is not None:
-            storage.reset()
-
-
-def reset_admin_password() -> None:
-    db = SessionLocal()
-    try:
-        admin = db.query(User).filter(User.username == "admin").one()
-        admin.hashed_password = hash_password(ADMIN_PASSWORD)
-        db.commit()
-    finally:
-        db.close()
-
-
-def unique_name(prefix: str) -> str:
-    return f"{prefix}_{uuid4().hex[:8]}"
-
-
-def assert_status(response, status_code: int) -> None:
-    assert response.status_code == status_code, response.text
-
-
-def use_tmp_uploads(monkeypatch, tmp_path) -> None:
-    from services import render_service
-
-    monkeypatch.setattr(render_service, "UPLOADS_DIR", tmp_path / "uploads")
-
-
-def jpeg_bytes(color: tuple[int, int, int] = (240, 72, 72)) -> bytes:
-    image = Image.new("RGB", (96, 72), color)
-    buffer = BytesIO()
-    image.save(buffer, format="JPEG")
-    return buffer.getvalue()
-
-
-def png_bytes(size: tuple[int, int], color: tuple[int, int, int, int] = (240, 72, 72, 255)) -> bytes:
-    image = Image.new("RGBA", size, color)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-def count_non_whiteish_pixels(image: Image.Image, box: tuple[int, int, int, int], threshold: int = 245) -> int:
-    sample = image.crop(box).convert("RGB")
-    return sum(
-        any(channel < threshold for channel in pixel)
-        for pixel in sample.getdata()
-    )
-
-
-def scale_box_for_image(box: tuple[int, int, int, int], image: Image.Image) -> tuple[int, int, int, int]:
-    scale_x = image.width / 794
-    scale_y = image.height / 1123
-    return (
-        round(box[0] * scale_x),
-        round(box[1] * scale_y),
-        round(box[2] * scale_x),
-        round(box[3] * scale_y),
-    )
-
-
-def workbook_bytes(rows: list[list[object]]) -> bytes:
-    workbook = Workbook()
-    sheet = workbook.active
-    for row in rows:
-        sheet.append(row)
-    buffer = BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
-
-
-def login(client: TestClient, username: str = "admin", password: str = ADMIN_PASSWORD) -> dict:
-    response = client.post(
-        "/api/auth/login",
-        data={"username": username, "password": password},
-    )
-    assert_status(response, 200)
-    return response.json()
-
-
-def create_user(
-    client: TestClient,
-    role: str,
-    supervisor_id: int | None = None,
-    supervisor_ids: list[int] | None = None,
-) -> tuple[dict, str]:
-    username = unique_name(role)
-    payload: dict[str, object] = {
-        "username": username,
-        "display_name": f"{role} user",
-        "password": USER_PASSWORD,
-        "role": role,
-    }
-    if supervisor_ids is not None:
-        payload["supervisor_ids"] = supervisor_ids
-    if supervisor_id is not None:
-        payload["supervisor_id"] = supervisor_id
-
-    response = client.post("/api/users/", json=payload)
-    assert_status(response, 201)
-    return response.json(), USER_PASSWORD
-
-
-def smoke_layout() -> dict:
-    return {
-        "canvas_width": 794,
-        "canvas_height": 1123,
-        "photo_slots": [
-            {
-                "id": 1,
-                "x": 48,
-                "y": 96,
-                "width": 240,
-                "height": 180,
-                "border": True,
-                "border_width": 8,
-            }
-        ],
-        "text_bubbles": [],
-        "text_labels": [
-            {
-                "id": 1,
-                "x": 96,
-                "y": 340,
-                "width": 360,
-                "height": 96,
-                "text": "{name} smoke label",
-                "font_size": 24,
-                "font_color": "#333333",
-            }
-        ],
-        "stickers": [],
-        "footer": None,
-        "logo": None,
-    }
-
-
-def create_template_with_page(client: TestClient, name: str | None = None) -> tuple[int, int]:
-    template_response = client.post("/api/templates/", data={"name": name or unique_name("template")})
-    assert_status(template_response, 200)
-    template_id = template_response.json()["id"]
-
-    page_response = client.post(f"/api/templates/{template_id}/pages")
-    assert_status(page_response, 200)
-    page_id = page_response.json()["id"]
-
-    layout_response = client.put(
-        f"/api/templates/{template_id}/pages/{page_id}/layout",
-        json=smoke_layout(),
-    )
-    assert_status(layout_response, 200)
-    assert layout_response.json() == {"ok": True}
-
-    return template_id, page_id
-
-
-def create_project(client: TestClient, template_id: int, name: str | None = None) -> int:
-    response = client.post(
-        "/api/projects/",
-        data={"name": name or unique_name("project"), "template_id": str(template_id)},
-    )
-    assert_status(response, 201)
-    return response.json()["id"]
-
+from tests.helpers import (
+    assert_status,
+    count_non_whiteish_pixels,
+    create_project,
+    create_template_with_page,
+    create_user,
+    jpeg_bytes,
+    login,
+    png_bytes,
+    scale_box_for_image,
+    smoke_layout,
+    started_client,
+    unique_name,
+    use_tmp_uploads,
+    workbook_bytes,
+)
 
 def test_health_and_auth_cookie_roundtrip():
     with started_client() as client:
@@ -1221,3 +1048,51 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
         assert_status(upload_2, 200)
         after_reupload = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
         assert after_reupload.headers["x-preview-cache"] == "MISS"
+
+
+def test_concurrent_photo_and_text_writes_do_not_clobber(monkeypatch, tmp_path):
+    """pages_data 的併發寫入走學生寫鎖：照片上傳與文字自動儲存打同一學生不互相蓋寫。"""
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("race_project"))
+        assert_status(client.post(f"/api/projects/{project_id}/students/batch", json=["Race Student"]), 200)
+        student_id = client.get(f"/api/projects/{project_id}").json()["students"][0]["id"]
+
+        request_errors = []
+
+        def upload_photo():
+            try:
+                response = client.post(
+                    f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+                    files={"file": ("race.jpg", jpeg_bytes(), "image/jpeg")},
+                )
+                assert response.status_code == 200, response.text
+            except Exception as error:  # noqa: BLE001 — 執行緒內的失敗要帶回主執行緒
+                request_errors.append(error)
+
+        def save_texts(round_index: int):
+            try:
+                response = client.put(
+                    f"/api/projects/{project_id}/students/{student_id}/pages/0/texts",
+                    json={"1": f"race-text-{round_index}"},
+                )
+                assert response.status_code == 200, response.text
+            except Exception as error:  # noqa: BLE001
+                request_errors.append(error)
+
+        # 多輪「照片上傳 × 文字儲存」同時打同一學生；沒有寫鎖時文字端會整包蓋掉照片格
+        for round_index in range(4):
+            photo_thread = threading.Thread(target=upload_photo)
+            text_thread = threading.Thread(target=save_texts, args=(round_index,))
+            photo_thread.start()
+            text_thread.start()
+            photo_thread.join()
+            text_thread.join()
+
+        assert request_errors == []
+        page_data = client.get(f"/api/projects/{project_id}").json()["students"][0]["pages_data"][0]
+        assert page_data["photos"]["1"]["path"].endswith("race.jpg")
+        assert page_data["label_texts"]["1"] == "race-text-3"

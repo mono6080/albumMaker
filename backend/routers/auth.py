@@ -10,7 +10,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from auth import create_access_token, get_current_user, verify_password
-from crud.user_crud import get_user_by_username
+from crud.user_crud import get_user_by_username, serialize_user_identity
 from database import User, get_db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -56,7 +56,7 @@ def login(
         path="/",
     )
     return {
-        **_serialize_current_user(target_user),
+        **serialize_user_identity(target_user),
         "user_id": target_user.id,
     }
 
@@ -71,19 +71,4 @@ def logout(response: Response):
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     """回傳當前登入使用者的基本資訊。"""
-    return _serialize_current_user(current_user)
-
-
-def _serialize_current_user(user: User) -> dict:
-    supervisor_ids = [supervisor.id for supervisor in user.supervisors]
-    if not supervisor_ids and user.supervisor_id:
-        supervisor_ids = [user.supervisor_id]
-    return {
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "role": user.role,
-        "supervisor_id": user.supervisor_id,
-        "supervisor_ids": supervisor_ids,
-        "ui_font_scale": float(user.ui_font_scale or 1.0),
-    }
+    return serialize_user_identity(current_user)

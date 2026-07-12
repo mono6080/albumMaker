@@ -39,3 +39,30 @@ def get_subordinate_user_ids(supervisor_id: int, db: Session) -> list[int]:
         .all()
     }
     return sorted(assigned_user_ids | legacy_user_ids)
+
+
+def get_visible_owner_ids(current_user: User, db: Session) -> list[int] | None:
+    """目前使用者可見的專案 owner 集合；None 代表不過濾（admin/art_team）。"""
+    if current_user.role in ("admin", "art_team"):
+        return None
+    if current_user.role == "supervisor":
+        return get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+    if current_user.role == "teacher":
+        return [current_user.id]
+    return []
+
+
+def serialize_user_identity(user: User) -> dict:
+    """使用者基本資訊序列化（登入/me 與個人設定回應共用）。"""
+    supervisor_ids = [supervisor.id for supervisor in user.supervisors]
+    if not supervisor_ids and user.supervisor_id:
+        supervisor_ids = [user.supervisor_id]
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "supervisor_id": user.supervisor_id,
+        "supervisor_ids": supervisor_ids,
+        "ui_font_scale": float(user.ui_font_scale or 1.0),
+    }

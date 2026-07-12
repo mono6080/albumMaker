@@ -106,6 +106,8 @@ PREVIEW_RENDER_SCALE = 0.7
 PRINT_OUTPUT_SIZE = (2480, 3508)
 PRINT_OUTPUT_DPI = (300, 300)
 PRINT_IMAGE_QUALITY = 95
+SCREEN_IMAGE_QUALITY = 72
+SCREEN_OUTPUT_DPI = (96, 96)
 
 
 def _scale_number(value, scale: float):
@@ -300,7 +302,7 @@ def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
         buf = io.BytesIO()
         if mode == "screen":
             # 低畫質：原始 794×1123，JPEG 壓縮，96 DPI → PDF 頁面為 A4 大小
-            img.convert("RGB").save(buf, format="JPEG", quality=72, dpi=(96, 96))
+            img.convert("RGB").save(buf, format="JPEG", quality=SCREEN_IMAGE_QUALITY, dpi=SCREEN_OUTPUT_DPI)
         else:
             # 列印畫質：使用原生 A4@300dpi 圖像，舊呼叫者傳小圖時才 fallback resize
             a4_img = _print_ready_image(img)
@@ -320,7 +322,7 @@ def save_album_images(images: list[Image.Image], student_name: str, mode: str = 
         buf = io.BytesIO()
         if mode == "screen":
             output_image = img.convert("RGB")
-            output_image.save(buf, format="JPEG", quality=72, dpi=(96, 96))
+            output_image.save(buf, format="JPEG", quality=SCREEN_IMAGE_QUALITY, dpi=SCREEN_OUTPUT_DPI)
             suffix = "_screen"
         else:
             output_image = _print_ready_image(img)

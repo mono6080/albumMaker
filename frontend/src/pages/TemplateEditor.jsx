@@ -1,25 +1,13 @@
 // 模板編輯器頁面（Konva Canvas 版）
 // 以 Konva.js (Canvas 2D) 取代 CSS div 渲染，提高與 PIL 後端輸出的視覺一致性
+// 分工：per-page 草稿/歷史在 hooks/useLayoutHistory、Konva 節點渲染在
+// components/canvas/pageElementNodes、雙頁預覽與圖層清單為獨立 component
 
-import { Fragment, useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Group, Transformer } from "react-konva";
-import {
-  BookOpen,
-  Camera,
-  ChevronLeft,
-  ChevronRight,
-  CircleHelp,
-  Image as ImageIcon,
-  Layers,
-  MessageSquare,
-  Redo2,
-  Square,
-  Type as TypeIcon,
-  Undo2,
-  X,
-} from "lucide-react";
+import { Stage, Layer, Rect, Image as KonvaImage, Text as KonvaText, Transformer } from "react-konva";
+import { BookOpen, Camera, CircleHelp, Redo2, Undo2 } from "lucide-react";
 
 import {
   fetchTemplate,
@@ -29,68 +17,42 @@ import {
   deleteTemplatePage,
   uploadSticker,
 } from "../api/templateApi";
-import { getFontCss, isFontBold } from "../constants/fonts";
 import ImageCropModal from "../components/ImageCropModal";
-import BubbleKonvaShape from "../components/canvas/BubbleKonvaShape";
 import StickerNode from "../components/canvas/StickerNode";
+import {
+  applyPhotoEditorUpdates,
+  clampPhotoContentRect,
+  makeGroupProps,
+  makePhotoControlProps,
+  renderBubbleNode,
+  renderFooterNode,
+  renderPhotoSlotNode,
+  renderTextLabelNode,
+} from "../components/canvas/pageElementNodes";
+import LayerListPanel from "../components/LayerListPanel";
 import PropertyPanel from "../components/PropertyPanel";
 import ConfirmModal from "../components/ConfirmModal";
+import SpreadPreviewModal from "../components/SpreadPreviewModal";
 import { Button } from "../components/ui";
+import useLayoutHistory, { cloneLayout } from "../hooks/useLayoutHistory";
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
-  CANVAS_REAL_HEIGHT,
-  CANVAS_REAL_WIDTH,
+  ELEMENT_ARRAY_KEY,
   applyElementsToLayout,
   getAllElementsSorted,
   getInitialStickerSize,
   getNextZIndex,
-  getFooterModel,
   toDisplayCoord,
   toRealCoord,
 } from "../utils/renderLayoutModel";
 import {
   buildPhotoSlotFromContentRect,
   getPhotoContentRect,
-  getPhotoFrameInsets,
-  getPhotoFrameRect,
   getPhotoSlotDimensionMode,
 } from "../utils/photoFrameGeometry.js";
-import { TEXT_LABEL_ROLES, isFillableTextLabel } from "../utils/textLabelRoles";
-import { buildTemplateSpreadPreviewUrl } from "../api/urls";
+import { TEXT_LABEL_ROLES } from "../utils/textLabelRoles";
 import { startProductGuide } from "../utils/productGuide";
-
-function clampValue(value, minValue, maxValue) {
-  return Math.max(minValue, Math.min(maxValue, value));
-}
-
-const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
-const MAX_LAYOUT_HISTORY = 100;
-const PHOTO_CONTENT_MIN_WIDTH = 60;
-const PHOTO_CONTENT_MIN_HEIGHT = 40;
-
-const ELEMENT_TYPE_META = {
-  photo: {
-    label: "照片格",
-    Icon: ImageIcon,
-    className: "bg-amber-50 text-amber-600",
-  },
-  text: {
-    label: "純文字",
-    Icon: TypeIcon,
-    className: "bg-indigo-50 text-indigo-600",
-  },
-  bubble: {
-    label: "氣泡框",
-    Icon: MessageSquare,
-    className: "bg-rose-50 text-rose-600",
-  },
-  sticker: {
-    label: "貼圖",
-    Icon: Square,
-    className: "bg-emerald-50 text-emerald-600",
-  },
-};
 
 const EDITOR_GUIDE_STEPS = [
   {
@@ -162,21 +124,6 @@ function generateElementId() {
   return Math.floor(Math.random() * 90000) + 10000;
 }
 
-function cloneLayout(layout) {
-  return JSON.parse(JSON.stringify(layout));
-}
-
-function layoutsEqual(leftLayout, rightLayout) {
-  return JSON.stringify(leftLayout) === JSON.stringify(rightLayout);
-}
-
-function getPageHistory(historyStore, pageId) {
-  if (!historyStore[pageId]) {
-    historyStore[pageId] = { undo: [], redo: [] };
-  }
-  return historyStore[pageId];
-}
-
 function isKeyboardInputTarget(target) {
   const tagName = target?.tagName;
   return target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
@@ -190,20 +137,6 @@ function countTemplatePhotoSlots(template, draftLayouts) {
   }, 0);
 }
 
-function clampPhotoContentRect(contentRect) {
-  const width = Math.max(PHOTO_CONTENT_MIN_WIDTH, Math.round(Number(contentRect.width) || PHOTO_CONTENT_MIN_WIDTH));
-  const height = Math.max(PHOTO_CONTENT_MIN_HEIGHT, Math.round(Number(contentRect.height) || PHOTO_CONTENT_MIN_HEIGHT));
-  const maxX = Math.max(0, CANVAS_REAL_WIDTH - width);
-  const maxY = Math.max(0, CANVAS_REAL_HEIGHT - height);
-
-  return {
-    x: clampValue(Math.round(Number(contentRect.x) || 0), 0, maxX),
-    y: clampValue(Math.round(Number(contentRect.y) || 0), 0, maxY),
-    width,
-    height,
-  };
-}
-
 function getPhotoEditorElementData(slot, dimensionMode) {
   if (!slot) return null;
   const contentRect = getPhotoContentRect(slot, { dimensionMode });
@@ -214,25 +147,6 @@ function getPhotoEditorElementData(slot, dimensionMode) {
     width: contentRect.width,
     height: contentRect.height,
   };
-}
-
-function applyPhotoEditorUpdates(slot, updates, dimensionMode) {
-  const currentContent = getPhotoContentRect(slot, { dimensionMode });
-  const nextStyleSlot = { ...slot, ...updates };
-  const nextContent = clampPhotoContentRect({
-    x: updates.x ?? currentContent.x,
-    y: updates.y ?? currentContent.y,
-    width: updates.width ?? currentContent.width,
-    height: updates.height ?? currentContent.height,
-  });
-
-  return buildPhotoSlotFromContentRect(nextStyleSlot, nextContent, { dimensionMode });
-}
-
-function truncatePreviewText(value, fallback = "未設定文字") {
-  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
-  if (!normalized) return fallback;
-  return normalized.length > 24 ? `${normalized.slice(0, 24)}...` : normalized;
 }
 
 export default function TemplateEditor() {
@@ -250,29 +164,28 @@ export default function TemplateEditor() {
   const [bgCropFile, setBgCropFile] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
-  const [spreadStartIndex, setSpreadStartIndex] = useState(0);
-  const [spreadPreviewTimestamp, setSpreadPreviewTimestamp] = useState(() => Date.now());
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
 
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
   const stickerFileInputRef = useRef(null);
-  const draftLayouts = useRef({});
-  const layoutHistories = useRef({});
-  const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
 
-  const refreshHistoryAvailability = useCallback((pageId) => {
-    if (!pageId) {
-      setHistoryAvailability({ canUndo: false, canRedo: false });
-      return;
-    }
-    const history = getPageHistory(layoutHistories.current, pageId);
-    setHistoryAvailability({
-      canUndo: history.undo.length > 0,
-      canRedo: history.redo.length > 0,
-    });
-  }, []);
+  const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
+
+  // ── 分頁草稿與復原/重做歷史（useLayoutHistory）─────────────────────────────
+  const clearSelection = useCallback(() => setSelectedElement(null), []);
+  const {
+    draftLayouts,
+    canUndo,
+    canRedo,
+    beginPageSession,
+    dropPageHistory,
+    commitPageLayout,
+    undoLayout,
+    redoLayout,
+    saveDirtyLayouts,
+  } = useLayoutHistory({ currentPage, pageLayout, setPageLayout, onLayoutRestored: clearSelection });
 
   // ── 背景圖載入 ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -304,15 +217,13 @@ export default function TemplateEditor() {
 
   // 套用單一頁面的 layout 與背景圖，供 loadTemplate 和頁碼切換共用
   const applyPageDisplay = useCallback((page) => {
-    getPageHistory(layoutHistories.current, page.id);
-    setPageLayout(cloneLayout(draftLayouts.current[page.id] ?? page.layout));
-    refreshHistoryAvailability(page.id);
+    setPageLayout(beginPageSession(page));
     setBackgroundUrl(
       page.background_filename
         ? `/api/templates/${templateId}/pages/${page.id}/background?t=${Date.now()}`
         : null
     );
-  }, [refreshHistoryAvailability, templateId]);
+  }, [beginPageSession, templateId]);
 
   const loadTemplate = useCallback(() => {
     fetchTemplate(templateId).then(response => {
@@ -334,64 +245,13 @@ export default function TemplateEditor() {
     setSelectedElement(null);
   }, [currentPageIndex, template, applyPageDisplay]);
 
-  const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
-
   useEffect(() => {
     if (!template) {
       setTotalPhotoCount(0);
       return;
     }
     setTotalPhotoCount(countTemplatePhotoSlots(template, draftLayouts.current));
-  }, [pageLayout, template]);
-
-  const commitPageLayout = useCallback((layoutUpdater) => {
-    if (!currentPage || !pageLayout) return;
-    const pageId = currentPage.id;
-    const baseLayout = draftLayouts.current[pageId] ?? pageLayout;
-    const nextLayout = typeof layoutUpdater === "function" ? layoutUpdater(baseLayout) : layoutUpdater;
-    if (!nextLayout || layoutsEqual(baseLayout, nextLayout)) return;
-
-    const history = getPageHistory(layoutHistories.current, pageId);
-    history.undo.push(cloneLayout(baseLayout));
-    if (history.undo.length > MAX_LAYOUT_HISTORY) history.undo.shift();
-    history.redo = [];
-
-    const nextSnapshot = cloneLayout(nextLayout);
-    draftLayouts.current[pageId] = nextSnapshot;
-    setPageLayout(nextSnapshot);
-    refreshHistoryAvailability(pageId);
-  }, [currentPage, pageLayout, refreshHistoryAvailability]);
-
-  const undoLayout = useCallback(() => {
-    if (!currentPage || !pageLayout) return;
-    const history = getPageHistory(layoutHistories.current, currentPage.id);
-    if (history.undo.length === 0) return;
-
-    const previousLayout = history.undo.pop();
-    history.redo.push(cloneLayout(pageLayout));
-    const previousSnapshot = cloneLayout(previousLayout);
-    draftLayouts.current[currentPage.id] = previousSnapshot;
-    setPageLayout(previousSnapshot);
-    setSelectedElement(null);
-    refreshHistoryAvailability(currentPage.id);
-  }, [currentPage, pageLayout, refreshHistoryAvailability]);
-
-  const redoLayout = useCallback(() => {
-    if (!currentPage || !pageLayout) return;
-    const history = getPageHistory(layoutHistories.current, currentPage.id);
-    if (history.redo.length === 0) return;
-
-    const nextLayout = history.redo.pop();
-    history.undo.push(cloneLayout(pageLayout));
-    const nextSnapshot = cloneLayout(nextLayout);
-    draftLayouts.current[currentPage.id] = nextSnapshot;
-    setPageLayout(nextSnapshot);
-    setSelectedElement(null);
-    refreshHistoryAvailability(currentPage.id);
-  }, [currentPage, pageLayout, refreshHistoryAvailability]);
-
-  const canUndo = historyAvailability.canUndo;
-  const canRedo = historyAvailability.canRedo;
+  }, [pageLayout, template, draftLayouts]);
 
   const startEditorGuide = useCallback(() => {
     startProductGuide(EDITOR_GUIDE_STEPS);
@@ -403,32 +263,23 @@ export default function TemplateEditor() {
     if (!template) return false;
     setIsSaving(true);
     try {
-      const dirtyPageIds = Object.keys(draftLayouts.current).map(Number);
-      if (dirtyPageIds.length === 0) {
-        if (showToast) toast.success("已儲存");
-        setIsSaving(false);
-        return true;
+      const savedLayouts = await saveDirtyLayouts(
+        template.pages,
+        (pageId, layout) => updatePageLayout(templateId, pageId, layout),
+      );
+      if (savedLayouts) {
+        setTemplate(currentTemplate => currentTemplate
+          ? {
+              ...currentTemplate,
+              pages: currentTemplate.pages.map(page => (
+                savedLayouts[page.id]
+                  ? { ...page, layout: cloneLayout(savedLayouts[page.id]) }
+                  : page
+              )),
+            }
+          : currentTemplate
+        );
       }
-      const savedLayouts = Object.fromEntries(
-        dirtyPageIds.map(pageId => [pageId, cloneLayout(draftLayouts.current[pageId])])
-      );
-      await Promise.all(
-        template.pages
-          .filter(page => dirtyPageIds.includes(page.id))
-          .map(page => updatePageLayout(templateId, page.id, savedLayouts[page.id]))
-      );
-      setTemplate(currentTemplate => currentTemplate
-        ? {
-            ...currentTemplate,
-            pages: currentTemplate.pages.map(page => (
-              savedLayouts[page.id]
-                ? { ...page, layout: cloneLayout(savedLayouts[page.id]) }
-                : page
-            )),
-          }
-        : currentTemplate
-      );
-      dirtyPageIds.forEach(pageId => { delete draftLayouts.current[pageId]; });
       if (showToast) toast.success("已儲存");
       setIsSaving(false);
       return true;
@@ -443,8 +294,6 @@ export default function TemplateEditor() {
     if (!template?.pages.length) return;
     const saved = await handleSaveLayout({ showToast: false });
     if (!saved) return;
-    setSpreadStartIndex(Math.floor(currentPageIndex / 2) * 2);
-    setSpreadPreviewTimestamp(Date.now());
     setSpreadPreviewOpen(true);
   };
 
@@ -460,8 +309,7 @@ export default function TemplateEditor() {
     setConfirmModal({
       message: "確定刪除此頁？",
       onConfirm: async () => {
-        delete draftLayouts.current[currentPage.id];
-        delete layoutHistories.current[currentPage.id];
+        dropPageHistory(currentPage.id);
         await deleteTemplatePage(templateId, currentPage.id);
         setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
         await loadTemplate();
@@ -702,143 +550,6 @@ export default function TemplateEditor() {
     }
   };
 
-  // ── 元素 Group 共用 Konva 屬性 ────────────────────────────────────────────
-
-  const makeGroupProps = (type, data) => {
-    const displayX = toDisplayCoord(data.x);
-    const displayY = toDisplayCoord(data.y);
-    const displayW = toDisplayCoord(data.width);
-    const displayH = toDisplayCoord(data.height);
-    const isSelectMode = activeTool === "select";
-
-    return {
-      id: `${type}-${data.id}`,
-      x: displayX + displayW / 2,
-      y: displayY + displayH / 2,
-      offsetX: displayW / 2,
-      offsetY: displayH / 2,
-      width: displayW,
-      height: displayH,
-      rotation: data.rotation ?? 0,
-      scaleX: 1,
-      scaleY: 1,
-      draggable: isSelectMode,
-      listening: isSelectMode,
-      onDragEnd: (e) => {
-        const node = e.target;
-        updateElement(type, data.id, {
-          x: clampValue(toRealCoord(node.x() - node.offsetX()), 0, 794 - data.width),
-          y: clampValue(toRealCoord(node.y() - node.offsetY()), 0, 1123 - data.height),
-        });
-      },
-      onTransformEnd: (e) => {
-        const node = e.target;
-        const newDisplayW = Math.max(toDisplayCoord(60), node.width() * Math.abs(node.scaleX()));
-        const newDisplayH = Math.max(toDisplayCoord(40), node.height() * Math.abs(node.scaleY()));
-        // 正規化 scale 並更新 offset，保持中心旋轉軸正確
-        node.scaleX(1); node.scaleY(1);
-        node.offsetX(newDisplayW / 2); node.offsetY(newDisplayH / 2);
-        node.width(newDisplayW); node.height(newDisplayH);
-        updateElement(type, data.id, {
-          x: toRealCoord(node.x() - node.offsetX()),
-          y: toRealCoord(node.y() - node.offsetY()),
-          width: Math.max(60, toRealCoord(newDisplayW)),
-          height: Math.max(40, toRealCoord(newDisplayH)),
-          rotation: node.rotation(),
-        });
-      },
-      onClick: (e) => {
-        e.cancelBubble = true;
-        setSelectedElement({ type, id: data.id });
-      },
-    };
-  };
-
-  const makePhotoControlProps = (data) => {
-    const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
-    const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
-    const insets = getPhotoFrameInsets(data);
-    const displayContentW = toDisplayCoord(contentRect.width);
-    const displayContentH = toDisplayCoord(contentRect.height);
-    const isSelectMode = activeTool === "select";
-
-    return {
-      id: `photo-${data.id}`,
-      x: toDisplayCoord(frameRect.x + frameRect.width / 2),
-      y: toDisplayCoord(frameRect.y + frameRect.height / 2),
-      offsetX: toDisplayCoord(frameRect.width / 2 - insets.left),
-      offsetY: toDisplayCoord(frameRect.height / 2 - insets.top),
-      width: displayContentW,
-      height: displayContentH,
-      rotation: data.rotation ?? 0,
-      scaleX: 1,
-      scaleY: 1,
-      draggable: isSelectMode,
-      listening: isSelectMode,
-      onDragEnd: (e) => {
-        const node = e.target;
-        const nextSlot = applyPhotoEditorUpdates(data, {
-          x: toRealCoord(node.x() - node.offsetX()),
-          y: toRealCoord(node.y() - node.offsetY()),
-        }, photoSlotDimensionMode);
-        updateElement("photo", data.id, {
-          x: nextSlot.x,
-          y: nextSlot.y,
-          width: nextSlot.width,
-          height: nextSlot.height,
-        });
-      },
-      onTransformEnd: (e) => {
-        const node = e.target;
-        const scaleX = node.scaleX();
-        const scaleY = node.scaleY();
-        // 觸及最小尺寸時等比放大兩邊，維持照片格長寬比例不變
-        let newDisplayW = node.width() * Math.abs(scaleX);
-        let newDisplayH = node.height() * Math.abs(scaleY);
-        const minRatioScale = Math.max(
-          toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH) / newDisplayW,
-          toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT) / newDisplayH,
-          1,
-        );
-        newDisplayW *= minRatioScale;
-        newDisplayH *= minRatioScale;
-        // 標準比例照片格縮放後 snap 回整數精確的 3:4 / 4:3，避免捨入誤差累積
-        let nextRealW = toRealCoord(newDisplayW);
-        let nextRealH = toRealCoord(newDisplayH);
-        if (data.width * 4 === data.height * 3) {
-          const ratioUnit = Math.max(20, Math.round(nextRealW / 3));
-          nextRealW = ratioUnit * 3;
-          nextRealH = ratioUnit * 4;
-        } else if (data.width * 3 === data.height * 4) {
-          const ratioUnit = Math.max(15, Math.round(nextRealW / 4));
-          nextRealW = ratioUnit * 4;
-          nextRealH = ratioUnit * 3;
-        }
-        const nextSlot = applyPhotoEditorUpdates(data, {
-          x: toRealCoord(node.x() - node.offsetX() * scaleX),
-          y: toRealCoord(node.y() - node.offsetY() * scaleY),
-          width: nextRealW,
-          height: nextRealH,
-          rotation: node.rotation(),
-        }, photoSlotDimensionMode);
-
-        node.scaleX(1); node.scaleY(1);
-        node.width(newDisplayW); node.height(newDisplayH);
-        updateElement("photo", data.id, {
-          x: nextSlot.x,
-          y: nextSlot.y,
-          width: nextSlot.width,
-          height: nextSlot.height,
-          rotation: nextSlot.rotation,
-        });
-      },
-      onClick: (e) => {
-        e.cancelBubble = true;
-        setSelectedElement({ type: "photo", id: data.id });
-      },
-    };
-  };
-
   // ── 渲染 ──────────────────────────────────────────────────────────────────
 
   if (!template) return <div className="text-gray-400">載入中...</div>;
@@ -863,249 +574,15 @@ export default function TemplateEditor() {
     ? getPhotoEditorElementData(selectedItem, photoSlotDimensionMode)
     : selectedItem;
   const sortedPageElements = getAllElementsSorted(pageLayout);
-  const layerPanelItems = [...sortedPageElements].reverse();
-  const pageElementCounts = {
-    photo: pageLayout?.photo_slots?.length ?? 0,
-    text: pageLayout?.text_labels?.length ?? 0,
-    bubble: pageLayout?.text_bubbles?.length ?? 0,
-    sticker: pageLayout?.stickers?.length ?? 0,
+
+  // 傳給 Konva 節點渲染函式的頁面 state（見 components/canvas/pageElementNodes）
+  const canvasNodeContext = {
+    isSelectMode: activeTool === "select",
+    photoSlotDimensionMode,
+    currentPageIndex,
+    updateElement,
+    setSelectedElement,
   };
-
-  const getElementOrdinal = (type, elementId) => {
-    const arrayKey = ELEMENT_ARRAY_KEY[type];
-    const source = pageLayout?.[arrayKey] || [];
-    const index = source.findIndex(element => element.id === elementId);
-    return index >= 0 ? index + 1 : null;
-  };
-
-  const getLayerTitle = ({ type, data }) => {
-    const ordinal = getElementOrdinal(type, data.id);
-    if (type === "photo") return ordinal ? `照片格 P${currentPageIndex + 1}·${ordinal}` : `照片格 ${data.id}`;
-    if (type === "text") return truncatePreviewText(data.text, ordinal ? `純文字 ${ordinal}` : "純文字");
-    if (type === "bubble") return truncatePreviewText(data.text, ordinal ? `氣泡框 ${ordinal}` : "氣泡框");
-    if (type === "sticker") return data.filename || (ordinal ? `貼圖 ${ordinal}` : "貼圖");
-    return `元素 ${data.id}`;
-  };
-
-  const getLayerDescription = ({ type, data }) => {
-    if (type === "photo") {
-      const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
-      return `${Math.round(contentRect.width)} x ${Math.round(contentRect.height)} px`;
-    }
-    if (type === "text") {
-      return isFillableTextLabel(data) ? "老師可填文字" : "固定文字";
-    }
-    if (type === "bubble") {
-      return data.shape ? `形狀：${data.shape}` : "文字氣泡";
-    }
-    if (type === "sticker") {
-      return `${Math.round(data.width ?? 0)} x ${Math.round(data.height ?? 0)} px`;
-    }
-    return "";
-  };
-
-  // ── Stage 元素渲染函式（閉包存取 toDisplayCoord / currentPageIndex 等） ─────
-
-  const getTextShadowProps = (data) => {
-    const shadowEnabled = !!(data.text_shadow_enabled ?? false);
-    if (!shadowEnabled) return {};
-
-    return {
-      shadowEnabled: true,
-      shadowColor: data.text_shadow_color ?? "#000000",
-      shadowOpacity: (data.text_shadow_opacity ?? 120) / 255,
-      shadowOffsetX: toDisplayCoord(data.text_shadow_offset_x ?? 3),
-      shadowOffsetY: toDisplayCoord(data.text_shadow_offset_y ?? 3),
-      shadowBlur: toDisplayCoord(data.text_shadow_blur ?? 4) * 1.74,
-    };
-  };
-
-  const renderPhotoSlotNode = (data, elemIndex, isSelected, controlProps) => {
-    const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
-    const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
-    const insets = getPhotoFrameInsets(data);
-    const displayW = toDisplayCoord(frameRect.width);
-    const displayH = toDisplayCoord(frameRect.height);
-    const contentDisplayW = toDisplayCoord(contentRect.width);
-    const contentDisplayH = toDisplayCoord(contentRect.height);
-    const contentDisplayX = toDisplayCoord(contentRect.x - frameRect.x);
-    const contentDisplayY = toDisplayCoord(contentRect.y - frameRect.y);
-    const hasBorder = data.border !== false;
-    const borderDisplayW = toDisplayCoord(insets.borderWidth);
-    const slotRadius = toDisplayCoord(data.border_radius ?? 0);
-    const shadowEnabled = data.shadow_enabled ?? hasBorder;
-    const shadowX = shadowEnabled ? toDisplayCoord(data.shadow_offset_x ?? 5) : 0;
-    const shadowY = shadowEnabled ? toDisplayCoord(data.shadow_offset_y ?? 8) : 0;
-    // HTML Canvas2D shadowBlur 的 sigma = shadowBlur/2，PIL GaussianBlur(radius) 的實測 sigma ≈ radius*0.87
-    // 量測換算：需要 Canvas2D shadowBlur = toDisplayCoord(pil_blur) * 1.74 使兩者視覺一致
-    const shadowBlur = shadowEnabled ? toDisplayCoord(data.shadow_blur ?? 14) * 1.74 : 0;
-    const shadowOpacity = shadowEnabled ? (data.shadow_opacity ?? 120) / 255 : 0;
-    return (
-      <Fragment key={`photo-${data.id}`}>
-        <Group
-          key={`photo-visual-${data.id}`}
-          x={toDisplayCoord(frameRect.x + frameRect.width / 2)}
-          y={toDisplayCoord(frameRect.y + frameRect.height / 2)}
-          offsetX={displayW / 2}
-          offsetY={displayH / 2}
-          rotation={data.rotation ?? 0}
-          listening={false}
-        >
-          <Rect
-            width={displayW} height={displayH}
-            fill={hasBorder ? "#ffffff" : "#EEEEEE"}
-            cornerRadius={slotRadius}
-            stroke={hasBorder ? "#e2e8f0" : "#CCCCCC"}
-            strokeWidth={1}
-            shadowColor="black"
-            shadowOpacity={shadowOpacity}
-            shadowOffsetX={shadowX}
-            shadowOffsetY={shadowY}
-            shadowBlur={shadowBlur}
-            listening={false}
-          />
-          {hasBorder && (
-            <Rect
-              x={contentDisplayX}
-              y={contentDisplayY}
-              width={contentDisplayW}
-              height={contentDisplayH}
-              fill="#EEEEEE"
-              cornerRadius={Math.max(0, slotRadius - borderDisplayW)}
-              listening={false}
-            />
-          )}
-          <KonvaText
-            x={contentDisplayX} y={contentDisplayY}
-            width={contentDisplayW} height={contentDisplayH}
-            text={`P${currentPageIndex + 1}·${elemIndex + 1}`}
-            fontSize={10}
-            fill="#AAAAAA"
-            align="center"
-            verticalAlign="middle"
-            listening={false}
-          />
-        </Group>
-        <Group key={`photo-control-${data.id}`} {...controlProps}>
-          <Rect
-            width={contentDisplayW}
-            height={contentDisplayH}
-            fill={isSelected ? "rgba(79,70,229,0.03)" : "rgba(255,255,255,0.01)"}
-          />
-        </Group>
-      </Fragment>
-    );
-  };
-
-  const renderBubbleNode = (data, isSelected, groupProps) => {
-    const displayW = toDisplayCoord(data.width);
-    const displayH = toDisplayCoord(data.height);
-    const displayBorderRadius = data.border_radius != null
-      ? toDisplayCoord(data.border_radius)
-      : Math.round(Math.min(displayW, displayH) / 5);
-    const displayBorderWidth = (data.border_width ?? 0) > 0
-      ? toDisplayCoord(data.border_width)
-      : 0;
-    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20));
-    return (
-      <Group key={`bubble-${data.id}`} {...groupProps}>
-        <BubbleKonvaShape
-          width={displayW} height={displayH}
-          shape={data.shape ?? "ellipse"}
-          fill={data.fill ?? "#FDED6E"}
-          borderColor={data.border_color}
-          borderWidth={displayBorderWidth}
-          borderRadius={displayBorderRadius}
-        />
-        <KonvaText
-          x={4} y={4}
-          width={displayW - 8} height={displayH - 8}
-          text={(data.text ?? "").substring(0, 30)}
-          fontSize={fontSize}
-          fill={data.font_color ?? "#333333"}
-          fontFamily={getFontCss(data.font_family)}
-          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-          align="center"
-          verticalAlign="middle"
-          wrap="word"
-          {...getTextShadowProps(data)}
-          listening={false}
-        />
-        {isSelected && (
-          <Rect
-            width={displayW} height={displayH}
-            fill="transparent"
-            stroke="#4F46E5" strokeWidth={2}
-            listening={false}
-          />
-        )}
-        {/* 透明點擊感應區 */}
-        <Rect width={displayW} height={displayH} fill="transparent" />
-      </Group>
-    );
-  };
-
-  const renderTextLabelNode = (data, isSelected, groupProps) => {
-    const displayW = toDisplayCoord(data.width);
-    const displayH = toDisplayCoord(data.height);
-    const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
-    const isFillable = isFillableTextLabel(data);
-    return (
-      <Group key={`text-${data.id}`} {...groupProps}>
-        <Rect
-          width={displayW} height={displayH}
-          fill="transparent"
-          stroke={isSelected ? "#4F46E5" : isFillable ? "#AAAAAA" : "#6B7280"}
-          strokeWidth={isSelected ? 2 : 1}
-          dash={isSelected ? [] : isFillable ? [4, 3] : []}
-          listening={false}
-        />
-        <KonvaText
-          x={4} y={0}
-          width={displayW - 8} height={displayH}
-          text={(data.text ?? "").substring(0, 60)}
-          fontSize={fontSize}
-          fill={data.font_color ?? "#333333"}
-          fontFamily={getFontCss(data.font_family)}
-          fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-          align={data.text_align ?? "center"}
-          verticalAlign="middle"
-          wrap="word"
-          lineHeight={data.line_height ?? 1.4}
-          letterSpacing={toDisplayCoord(data.letter_spacing ?? 0)}
-          {...getTextShadowProps(data)}
-          listening={false}
-        />
-        {/* 透明點擊感應區 */}
-        <Rect width={displayW} height={displayH} fill="transparent" />
-      </Group>
-    );
-  };
-
-  const renderFooterNode = (footer) => {
-    if (!footer?.text) return null;
-    const footerModel = getFooterModel(footer);
-    return (
-      <KonvaText
-        key="footer"
-        x={footerModel.box.x}
-        y={footerModel.box.y}
-        width={footerModel.box.width}
-        height={footerModel.box.height}
-        text={footerModel.text}
-        fontSize={footerModel.fontSize}
-        fill={footerModel.fontColor}
-        fontFamily={getFontCss(footer.font_family)}
-        fontStyle={isFontBold(footer.font_family) ? "bold" : "normal"}
-        verticalAlign="middle"
-        listening={false}
-      />
-    );
-  };
-
-  const lastSpreadStartIndex = Math.max(0, Math.floor((template.pages.length - 1) / 2) * 2);
-  const spreadEndIndex = Math.min(spreadStartIndex + 1, template.pages.length - 1);
-  const spreadPreviewUrl = `${buildTemplateSpreadPreviewUrl(templateId, spreadStartIndex)}?t=${spreadPreviewTimestamp}`;
 
   return (
     <div className="flex flex-col">
@@ -1116,70 +593,12 @@ export default function TemplateEditor() {
         onCancel={() => setConfirmModal(null)}
       />
       {spreadPreviewOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="雙頁預覽"
-            className="w-[min(96vw,1200px)] max-h-[92vh] bg-white rounded-lg shadow-xl flex flex-col overflow-hidden"
-          >
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
-              <BookOpen className="w-5 h-5 text-indigo-600" />
-              <h2 className="font-semibold">雙頁預覽</h2>
-              <span className="text-sm text-gray-500" data-guide="spread-page-range">
-                第 {spreadStartIndex + 1}{spreadEndIndex > spreadStartIndex ? `-${spreadEndIndex + 1}` : ""} 頁
-              </span>
-              <button
-                type="button"
-                onClick={() => setSpreadPreviewOpen(false)}
-                aria-label="關閉雙頁預覽"
-                data-guide="spread-close"
-                className="ml-auto w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="bg-gray-100 p-3 overflow-auto">
-              <img
-                key={spreadPreviewUrl}
-                src={spreadPreviewUrl}
-                alt="雙頁合併預覽"
-                data-guide="spread-preview-image"
-                className="block mx-auto max-w-full max-h-[76vh] bg-white border border-gray-300"
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-gray-200">
-              <button
-                type="button"
-                onClick={() => {
-                  setSpreadStartIndex(index => Math.max(0, index - 2));
-                  setSpreadPreviewTimestamp(Date.now());
-                }}
-                disabled={spreadStartIndex <= 0}
-                data-guide="spread-prev"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                上一組
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSpreadStartIndex(index => Math.min(lastSpreadStartIndex, index + 2));
-                  setSpreadPreviewTimestamp(Date.now());
-                }}
-                disabled={spreadStartIndex >= lastSpreadStartIndex}
-                data-guide="spread-next"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-              >
-                下一組
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
+        <SpreadPreviewModal
+          templateId={templateId}
+          pageCount={template.pages.length}
+          initialPageIndex={currentPageIndex}
+          onClose={() => setSpreadPreviewOpen(false)}
+        />
       )}
       {/* 頂部標題列 */}
       <div className="flex items-center gap-3 mb-3 flex-shrink-0" data-guide="editor-header">
@@ -1399,11 +818,10 @@ export default function TemplateEditor() {
                 )}
 
                 {/* 所有元素依 z_index 統一排序渲染 */}
-                {/* eslint-disable-next-line react-hooks/refs */}
                 {sortedPageElements.map(({ type, data, index: elemIndex }) => {
                   const isSelected = selectedElement?.type === type && selectedElement?.id === data.id;
-                  if (type === "photo") return renderPhotoSlotNode(data, elemIndex, isSelected, makePhotoControlProps(data));
-                  const groupProps = makeGroupProps(type, data);
+                  if (type === "photo") return renderPhotoSlotNode(data, elemIndex, isSelected, makePhotoControlProps(data, canvasNodeContext), canvasNodeContext);
+                  const groupProps = makeGroupProps(type, data, canvasNodeContext);
                   if (type === "bubble")  return renderBubbleNode(data, isSelected, groupProps);
                   if (type === "text")    return renderTextLabelNode(data, isSelected, groupProps);
                   if (type === "sticker") return (
@@ -1473,85 +891,17 @@ export default function TemplateEditor() {
               onLayerChange={handleLayerChange}
             />
           ) : (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Layers className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-                    <div className="min-w-0">
-                      <h2 className="text-sm font-semibold text-gray-800">目前頁面</h2>
-                      <p className="mt-0.5 text-xs text-gray-400">
-                        第 {currentPageIndex + 1} 頁 · {sortedPageElements.length} 個元素
-                      </p>
-                    </div>
-                  </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${backgroundUrl ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                    {backgroundUrl ? "已有背景" : "待上傳背景"}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    ["photo", pageElementCounts.photo],
-                    ["text", pageElementCounts.text],
-                    ["bubble", pageElementCounts.bubble],
-                    ["sticker", pageElementCounts.sticker],
-                  ].map(([type, count]) => {
-                    const meta = ELEMENT_TYPE_META[type];
-                    const Icon = meta.Icon;
-                    return (
-                      <div key={type} className="rounded-lg bg-gray-50 px-3 py-2">
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                          <Icon className="h-3.5 w-3.5" />
-                          {meta.label}
-                        </div>
-                        <div className="mt-1 text-lg font-semibold text-gray-900">{count}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-gray-800">圖層清單</h3>
-                  <span className="text-xs text-gray-400">上方為最上層</span>
-                </div>
-
-                {layerPanelItems.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-gray-200 py-8 text-center text-sm text-gray-400">
-                    尚未放置元素
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {layerPanelItems.map(({ type, data }) => {
-                      const meta = ELEMENT_TYPE_META[type] ?? ELEMENT_TYPE_META.text;
-                      const Icon = meta.Icon;
-                      return (
-                        <button
-                          key={`${type}-${data.id}`}
-                          type="button"
-                          onClick={() => setSelectedElement({ type, id: data.id })}
-                          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 text-left transition-colors hover:border-indigo-200 hover:bg-indigo-50/40"
-                        >
-                          <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
-                            <Icon className="h-4 w-4" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-gray-800">{getLayerTitle({ type, data })}</span>
-                            <span className="block truncate text-xs text-gray-400">{getLayerDescription({ type, data })}</span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
+            <LayerListPanel
+              pageLayout={pageLayout}
+              sortedPageElements={sortedPageElements}
+              currentPageIndex={currentPageIndex}
+              photoSlotDimensionMode={photoSlotDimensionMode}
+              backgroundUrl={backgroundUrl}
+              onSelectElement={(type, id) => setSelectedElement({ type, id })}
+            />
           )}
         </div>
       </div>
     </div>
   );
 }
-

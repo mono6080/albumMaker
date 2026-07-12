@@ -59,6 +59,173 @@ class StorageAdapter(ABC):
         """複製物件（共用照片全班展開用）。子類可覆寫為零傳輸的原生複製。"""
         self.put(dst_key, self.get_bytes(src_key))
 
+    def get_cached_bytes(self, key: str) -> bytes | None:
+        """只查快取層、不打遠端；缺檔回 None。
+
+        本地後端磁碟即快取，get_bytes 就等價；R2 覆寫為只查記憶體/本機快取層。
+        """
+        try:
+            return self.get_bytes(key)
+        except FileNotFoundError:
+            return None
+
+    def put_cache_only(self, key: str, data: bytes) -> None:
+        """只寫快取層（衍生物如預覽圖，可隨時重算）；本地後端沒有分層，等同 put。"""
+        self.put(key, data)
+
+
+class _ReadCache:
+    """R2 讀取快取的三層組合：記憶體 LRU → 本機磁碟快取 → 唯讀鏡像。
+
+    對外四個動作：load / store / delete / delete_prefix——adapter 的每個
+    S3 操作只需呼叫一次，不再逐層手動同步（漏寫任一層即快取不一致）。
+    key 一律使用已含命名空間前綴的 clean key。
+    """
+
+    def __init__(
+        self,
+        *,
+        memory_max_bytes: int,
+        local_cache_dir: Path | None,
+        local_cache_max_bytes: int,
+        local_mirror_dir: Path | None,
+        prefix_matches,
+    ):
+        self._memory: OrderedDict[str, bytes] = OrderedDict()
+        self._memory_bytes = 0
+        self._memory_max_bytes = memory_max_bytes
+        self._local_cache_dir = local_cache_dir
+        self._local_cache_max_bytes = local_cache_max_bytes
+        self._local_mirror_dir = local_mirror_dir
+        self._prefix_matches = prefix_matches
+
+    # ── 對外動作 ──────────────────────────────────────────────────────────
+
+    def load(self, clean_key: str) -> bytes | None:
+        """記憶體 → 本機快取/鏡像 逐層查；磁碟命中會回填記憶體。"""
+        cached = self._memory_get(clean_key)
+        if cached is not None:
+            return cached
+        local_data = self._read_local(clean_key)
+        if local_data is not None:
+            self._memory_put(clean_key, local_data)
+            return local_data
+        return None
+
+    def store(self, clean_key: str, data: bytes) -> None:
+        self._memory_put(clean_key, data)
+        self._write_local(clean_key, data)
+
+    def delete(self, clean_key: str) -> None:
+        self._memory_delete(clean_key)
+        self._delete_local(clean_key)
+
+    def delete_prefix(self, prefix: str) -> None:
+        for key in list(self._memory.keys()):
+            if self._prefix_matches(prefix, key):
+                self._memory_delete(key)
+        self._delete_local_prefix(prefix)
+
+    # ── 記憶體 LRU 層 ─────────────────────────────────────────────────────
+
+    def _memory_get(self, key: str) -> bytes | None:
+        data = self._memory.get(key)
+        if data is None:
+            return None
+        self._memory.move_to_end(key)
+        return data
+
+    def _memory_put(self, key: str, data: bytes) -> None:
+        if self._memory_max_bytes <= 0 or len(data) > self._memory_max_bytes:
+            self._memory_delete(key)
+            return
+        old = self._memory.pop(key, None)
+        if old is not None:
+            self._memory_bytes -= len(old)
+        self._memory[key] = data
+        self._memory_bytes += len(data)
+        while self._memory_bytes > self._memory_max_bytes and self._memory:
+            _, removed = self._memory.popitem(last=False)
+            self._memory_bytes -= len(removed)
+
+    def _memory_delete(self, key: str) -> None:
+        old = self._memory.pop(key, None)
+        if old is not None:
+            self._memory_bytes -= len(old)
+
+    # ── 本機磁碟快取層（＋唯讀鏡像） ──────────────────────────────────────
+
+    def _local_path(self, base_dir: Path | None, key: str) -> Path | None:
+        if base_dir is None:
+            return None
+        resolved = (base_dir / key).resolve()
+        try:
+            resolved.relative_to(base_dir)
+        except ValueError:
+            raise ValueError(f"path traversal detected: {key!r}")
+        return resolved
+
+    def _read_local(self, key: str) -> bytes | None:
+        for base_dir in (self._local_cache_dir, self._local_mirror_dir):
+            path = self._local_path(base_dir, key)
+            if path and path.is_file():
+                return path.read_bytes()
+        return None
+
+    def _write_local(self, key: str, data: bytes) -> None:
+        path = self._local_path(self._local_cache_dir, key)
+        if not path or self._local_cache_max_bytes <= 0:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._prune_local()
+
+    def _delete_local(self, key: str) -> None:
+        path = self._local_path(self._local_cache_dir, key)
+        if path:
+            path.unlink(missing_ok=True)
+
+    def _delete_local_prefix(self, prefix: str) -> None:
+        base_dir = self._local_cache_dir
+        if not base_dir:
+            return
+        prefix_path = self._local_path(base_dir, prefix)
+        if prefix_path and prefix_path.exists():
+            if prefix_path.is_dir():
+                shutil.rmtree(prefix_path)
+            else:
+                prefix_path.unlink(missing_ok=True)
+
+    def _prune_local(self) -> None:
+        base_dir = self._local_cache_dir
+        max_bytes = self._local_cache_max_bytes
+        if not base_dir or max_bytes <= 0 or not base_dir.exists():
+            return
+
+        files = []
+        total_bytes = 0
+        for path in base_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            total_bytes += stat.st_size
+            files.append((stat.st_mtime, stat.st_size, path))
+
+        if total_bytes <= max_bytes:
+            return
+
+        for _, size, path in sorted(files):
+            try:
+                path.unlink()
+                total_bytes -= size
+            except OSError:
+                continue
+            if total_bytes <= max_bytes:
+                break
+
 
 class LocalStorageAdapter(StorageAdapter):
     """本地磁碟實作，key 為相對於 base_dir 的路徑字串。"""
@@ -156,12 +323,13 @@ class R2StorageAdapter(StorageAdapter):
         self._public_base_url = public_base_url.rstrip("/") if public_base_url else None
         self._serve_mode = serve_mode
         self._key_prefix = self._normalize_key_prefix(key_prefix)
-        self._cache: OrderedDict[str, bytes] = OrderedDict()
-        self._cache_bytes = 0
-        self._cache_max_bytes = int(os.getenv("R2_READ_CACHE_MAX_BYTES", str(150 * 1024 * 1024)))
-        self._local_cache_max_bytes = int(os.getenv("R2_LOCAL_CACHE_MAX_BYTES", str(1024 * 1024 * 1024)))
-        self._local_cache_dir = Path(local_cache_dir).resolve() if local_cache_dir else None
-        self._local_mirror_dir = Path(local_mirror_dir).resolve() if local_mirror_dir else None
+        self._read_cache = _ReadCache(
+            memory_max_bytes=int(os.getenv("R2_READ_CACHE_MAX_BYTES", str(150 * 1024 * 1024))),
+            local_cache_dir=Path(local_cache_dir).resolve() if local_cache_dir else None,
+            local_cache_max_bytes=int(os.getenv("R2_LOCAL_CACHE_MAX_BYTES", str(1024 * 1024 * 1024))),
+            local_mirror_dir=Path(local_mirror_dir).resolve() if local_mirror_dir else None,
+            prefix_matches=self._prefix_matches,
+        )
         if self._serve_mode not in {"proxy", "redirect"}:
             raise ValueError("R2 serve_mode must be 'proxy' or 'redirect'")
         if self._serve_mode == "redirect" and not self._public_base_url:
@@ -203,125 +371,11 @@ class R2StorageAdapter(StorageAdapter):
             raise ValueError(f"path traversal detected in R2 key prefix: {key_prefix!r}")
         return normalized
 
-    def _cache_get(self, key: str) -> bytes | None:
-        data = self._cache.get(key)
-        if data is None:
-            return None
-        self._cache.move_to_end(key)
-        return data
-
-    def _cache_put(self, key: str, data: bytes) -> None:
-        if self._cache_max_bytes <= 0 or len(data) > self._cache_max_bytes:
-            self._cache_delete(key)
-            return
-        old = self._cache.pop(key, None)
-        if old is not None:
-            self._cache_bytes -= len(old)
-        self._cache[key] = data
-        self._cache_bytes += len(data)
-        while self._cache_bytes > self._cache_max_bytes and self._cache:
-            _, removed = self._cache.popitem(last=False)
-            self._cache_bytes -= len(removed)
-
-    def _cache_delete(self, key: str) -> None:
-        old = self._cache.pop(key, None)
-        if old is not None:
-            self._cache_bytes -= len(old)
-
-    def _cache_delete_prefix(self, prefix: str) -> None:
-        for key in list(self._cache.keys()):
-            if self._prefix_matches(prefix, key):
-                self._cache_delete(key)
-
-    def _local_path(self, base_dir: Path | None, key: str) -> Path | None:
-        if base_dir is None:
-            return None
-        resolved = (base_dir / key).resolve()
-        try:
-            resolved.relative_to(base_dir)
-        except ValueError:
-            raise ValueError(f"path traversal detected: {key!r}")
-        return resolved
-
-    def _read_local_cache(self, key: str) -> bytes | None:
-        for base_dir in (self._local_cache_dir, self._local_mirror_dir):
-            path = self._local_path(base_dir, key)
-            if path and path.is_file():
-                return path.read_bytes()
-        return None
-
     def get_cached_bytes(self, key: str) -> bytes | None:
-        clean_key = self._key(key)
-        return self._get_cached_clean_bytes(clean_key)
-
-    def _get_cached_clean_bytes(self, clean_key: str) -> bytes | None:
-        cached = self._cache_get(clean_key)
-        if cached is not None:
-            return cached
-        local_data = self._read_local_cache(clean_key)
-        if local_data is not None:
-            self._cache_put(clean_key, local_data)
-            return local_data
-        return None
+        return self._read_cache.load(self._key(key))
 
     def put_cache_only(self, key: str, data: bytes) -> None:
-        clean_key = self._key(key)
-        self._cache_put(clean_key, data)
-        self._write_local_cache(clean_key, data)
-
-    def _write_local_cache(self, key: str, data: bytes) -> None:
-        path = self._local_path(self._local_cache_dir, key)
-        if not path or self._local_cache_max_bytes <= 0:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-        self._prune_local_cache()
-
-    def _delete_local_cache(self, key: str) -> None:
-        path = self._local_path(self._local_cache_dir, key)
-        if path:
-            path.unlink(missing_ok=True)
-
-    def _delete_local_cache_prefix(self, prefix: str) -> None:
-        base_dir = self._local_cache_dir
-        if not base_dir:
-            return
-        prefix_path = self._local_path(base_dir, prefix)
-        if prefix_path and prefix_path.exists():
-            if prefix_path.is_dir():
-                shutil.rmtree(prefix_path)
-            else:
-                prefix_path.unlink(missing_ok=True)
-
-    def _prune_local_cache(self) -> None:
-        base_dir = self._local_cache_dir
-        max_bytes = self._local_cache_max_bytes
-        if not base_dir or max_bytes <= 0 or not base_dir.exists():
-            return
-
-        files = []
-        total_bytes = 0
-        for path in base_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            total_bytes += stat.st_size
-            files.append((stat.st_mtime, stat.st_size, path))
-
-        if total_bytes <= max_bytes:
-            return
-
-        for _, size, path in sorted(files):
-            try:
-                path.unlink()
-                total_bytes -= size
-            except OSError:
-                continue
-            if total_bytes <= max_bytes:
-                break
+        self._read_cache.store(self._key(key), data)
 
     def _key(self, key: str) -> str:
         if not isinstance(key, str) or not key:
@@ -361,8 +415,7 @@ class R2StorageAdapter(StorageAdapter):
             Body=data,
             ContentType=mimetypes.guess_type(clean_key)[0] or "application/octet-stream",
         )
-        self._cache_put(clean_key, data)
-        self._write_local_cache(clean_key, data)
+        self._read_cache.store(clean_key, data)
 
     def open_image(self, key: str) -> Image.Image:
         img = Image.open(io.BytesIO(self.get_bytes(key)))
@@ -379,13 +432,11 @@ class R2StorageAdapter(StorageAdapter):
     def delete(self, key: str) -> None:
         clean_key = self._key(key)
         self._s3.delete_object(Bucket=self._bucket, Key=clean_key)
-        self._cache_delete(clean_key)
-        self._delete_local_cache(clean_key)
+        self._read_cache.delete(clean_key)
 
     def delete_prefix(self, key_prefix: str) -> None:
         prefix = self._key(key_prefix)
-        self._cache_delete_prefix(prefix)
-        self._delete_local_cache_prefix(prefix)
+        self._read_cache.delete_prefix(prefix)
         paginator = self._s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
             objects = [
@@ -412,13 +463,11 @@ class R2StorageAdapter(StorageAdapter):
             CopySource={"Bucket": self._bucket, "Key": src},
             Key=dst,
         )
-        cached = self._cache_get(src)
+        cached = self._read_cache.load(src)
         if cached is not None:
-            self._cache_put(dst, cached)
-            self._write_local_cache(dst, cached)
+            self._read_cache.store(dst, cached)
         self._s3.delete_object(Bucket=self._bucket, Key=src)
-        self._cache_delete(src)
-        self._delete_local_cache(src)
+        self._read_cache.delete(src)
 
     def copy(self, src_key: str, dst_key: str) -> None:
         # server-side copy：零資料傳輸，共用照片全班展開從 N 次上傳變 N 次輕量呼叫
@@ -429,10 +478,9 @@ class R2StorageAdapter(StorageAdapter):
             CopySource={"Bucket": self._bucket, "Key": src},
             Key=dst,
         )
-        cached = self._cache_get(src)
+        cached = self._read_cache.load(src)
         if cached is not None:
-            self._cache_put(dst, cached)
-            self._write_local_cache(dst, cached)
+            self._read_cache.store(dst, cached)
 
     def exists(self, key: str) -> bool:
         try:
@@ -459,7 +507,7 @@ class R2StorageAdapter(StorageAdapter):
 
     def get_bytes(self, key: str) -> bytes:
         clean_key = self._key(key)
-        cached = self._get_cached_clean_bytes(clean_key)
+        cached = self._read_cache.load(clean_key)
         if cached is not None:
             return cached
         try:
@@ -472,8 +520,7 @@ class R2StorageAdapter(StorageAdapter):
         body = response["Body"]
         try:
             data = body.read()
-            self._cache_put(clean_key, data)
-            self._write_local_cache(clean_key, data)
+            self._read_cache.store(clean_key, data)
             return data
         finally:
             close = getattr(body, "close", None)

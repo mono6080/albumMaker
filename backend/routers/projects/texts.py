@@ -12,6 +12,8 @@ from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
 
+from services.student_pages import ensure_page_entry, mutate_student_pages
+
 from ._helpers import (
     LabelTextsPayload,
     _parse_json_field,
@@ -65,20 +67,14 @@ def update_student_label_texts(
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-    while len(pages_data) <= page_index:
-        pages_data.append({
-            "page_index": len(pages_data),
-            "photos": {},
-            "label_texts": {},
-        })
+    # 進學生寫鎖：文字自動儲存與照片上傳併發打同一學生時不互相蓋寫 pages_data
+    def _mutate(pages_data) -> None:
+        ensure_page_entry(pages_data, page_index)["label_texts"] = texts
+        now = datetime.utcnow()
+        student.updated_at = now
+        project.updated_at = now
 
-    pages_data[page_index]["label_texts"] = texts
-    now = datetime.utcnow()
-    student.pages_data_json = json.dumps(pages_data)
-    student.updated_at = now
-    project.updated_at = now
-    db.commit()
+    mutate_student_pages(db, student, _mutate)
     return {"ok": True}
 
 
@@ -95,25 +91,22 @@ def batch_update_texts(
     students_payload = payload.students
     now = datetime.utcnow()
 
+    # 逐學生進寫鎖並 commit（交易粒度從整批一次變逐學生一次，
+    # 換取與照片上傳併發時不互相蓋寫 pages_data）
     for student in project.students:
         student_id_str = str(student.id)
         if student_id_str not in students_payload:
             continue
 
-        pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-        for page_index_str, label_texts in students_payload[student_id_str].items():
-            page_index = int(page_index_str)
-            while len(pages_data) <= page_index:
-                pages_data.append({
-                    "page_index": len(pages_data),
-                    "photos": {},
-                    "label_texts": {},
-                })
-            pages_data[page_index]["label_texts"] = label_texts
+        def _mutate(pages_data, student=student, payload_pages=students_payload[student_id_str]) -> None:
+            for page_index_str, label_texts in payload_pages.items():
+                ensure_page_entry(pages_data, int(page_index_str))["label_texts"] = label_texts
+            student.updated_at = now
+            project.updated_at = now
 
-        student.pages_data_json = json.dumps(pages_data)
-        student.updated_at = now
+        mutate_student_pages(db, student, _mutate)
 
+    # 沒有任何學生命中 payload 時仍維持舊行為：更新專案時間戳
     project.updated_at = now
     db.commit()
     return {"ok": True}

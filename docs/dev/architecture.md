@@ -42,8 +42,14 @@ backend/
   routers/
     auth.py            /api/auth/*（login / logout / me）
     users.py           /api/users/*（admin only，含 .xlsx 批次匯入）
-    roster.py          /api/roster/*（admin only：名冊配對、學期彙整匯出）
-    templates.py       /api/templates/*（模板、期別、頁面、背景、貼圖、預覽）
+    roster.py          /api/roster/*（admin only：名冊配對、學期彙整匯出、老師進度）
+    templates/         /api/templates/*，拆分子模組：
+      __init__.py        路由組合（periods 先掛載，避免被 /{template_id} 吃掉）
+      _helpers.py        序列化與驗證 helper
+      periods.py         部門清單、期別 CRUD
+      crud.py            模板 CRUD、頁面 CRUD
+      assets.py          背景圖、貼圖上傳/讀取
+      render.py          單頁與跨頁預覽
     projects/          /api/projects/*，拆分子模組：
       __init__.py        路由組合
       _helpers.py        assert_project_readable / writable、共用 payload 型別
@@ -58,14 +64,21 @@ backend/
                          save_album_images；持有 UPLOADS_DIR（storage.py 從這裡 import，不能移走）
     element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label / text_bubble
     draw_helpers.py      PIL 低階工具：字型、合成、形狀、文字換行、陰影
-    project_service.py   PDF 輸出、ZIP 打包、label_texts 合併、安全檔名
-    file_service.py      Storage key 計算、上傳驗證與壓縮（支援 HEIF、超大圖自動壓縮）
+    project_service.py   相冊輸出（dirty-skip）、ZIP 串流、label_texts 合併、安全檔名
+    student_pages.py     pages_data_json 的併發安全寫入入口（學生寫鎖、空頁 schema、
+                         照片寫入與 mapping 協議）
+    preview_cache.py     預覽圖內容定址快取（cache-aside、limiter 內二次查）
+    file_service.py      Storage key 計算、上傳驗證與壓縮、照片縮圖（支援 HEIF）
     label_texts.py       label_texts 資料結構工具（欄位↔entry 轉換、對齊正規化、合併）
-    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 streaming ZIP
+    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 規劃
+    teacher_overview_service.py  老師進度總覽與 Excel 匯出
+    template_service.py  模板複製（頁面、背景、貼圖資產）
+    user_service.py      使用者建立/更新驗證、Excel 批次匯入
     export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
-    storage.py           StorageAdapter 抽象（見 storage.md）
-    request_limiter.py   BusyLimiter：照片上傳並發槽位限制
+    zip_stream.py        串流 ZIP 骨架（佔 limiter → 逐 entry drain → 釋放）
+    storage.py           StorageAdapter 抽象＋R2 讀取快取（見 storage.md）
+    request_limiter.py   BusyLimiter：渲染/打包/上傳並發槽位限制
 ```
 
 ## 前端分層

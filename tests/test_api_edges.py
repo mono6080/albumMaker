@@ -6,7 +6,7 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from tests.test_api_smoke import (
+from tests.helpers import (
     assert_status,
     create_user,
     create_project,

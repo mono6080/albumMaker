@@ -16,6 +16,9 @@ export const STICKER_DEFAULT_MAX_SIDE = 150;
 
 const Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
 
+// 元素類型 → layout_json 陣列 key 的對照（編輯器與圖層清單共用）
+export const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
+
 export function toDisplayCoord(realValue) {
   return realValue * CANVAS_SCALE;
 }
@@ -72,10 +75,9 @@ export function getNextZIndex(layout) {
 }
 
 export function applyElementsToLayout(layout, sortedElements) {
-  const keyMap = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
   const newLayout = { ...layout };
   for (const { type, data } of sortedElements) {
-    const key = keyMap[type];
+    const key = ELEMENT_ARRAY_KEY[type];
     newLayout[key] = (newLayout[key] || []).map(element => element.id === data.id ? data : element);
   }
   return newLayout;

@@ -1,7 +1,6 @@
 # 專案與學生 CRUD 路由
 # 處理專案建立/讀取/修改/刪除，以及學生的批次新增、改名、刪除與頁面跳過
 
-import json
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -14,6 +13,7 @@ from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Student, Template, User, get_db
 from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
 from services.storage import get_storage
+from services.student_pages import ensure_page_entry, mutate_student_pages
 from template_periods import department_label
 
 from ._helpers import (
@@ -238,7 +238,7 @@ def reopen_project(
 
 def _visible_projects_query(db: Session, current_user: User):
     """依角色回傳可見專案查詢，呼叫端再決定 active/archive 篩選。"""
-    from crud.user_crud import get_subordinate_user_ids
+    from crud.user_crud import get_visible_owner_ids
 
     # comments 用 selectinload：與 students 同為集合，兩個 joinedload 會產生笛卡兒積
     query = db.query(Project).options(
@@ -247,16 +247,10 @@ def _visible_projects_query(db: Session, current_user: User):
         selectinload(Project.comments),
     )
 
-    if current_user.role in ("admin", "art_team"):
+    visible_owner_ids = get_visible_owner_ids(current_user, db)
+    if visible_owner_ids is None:
         return query
-    if current_user.role == "supervisor":
-        subordinate_ids = get_subordinate_user_ids(current_user.id, db)
-        visible_owner_ids = set(subordinate_ids)
-        visible_owner_ids.add(current_user.id)
-        return query.filter(Project.owner_id.in_(visible_owner_ids))
-    if current_user.role == "teacher":
-        return query.filter(Project.owner_id == current_user.id)
-    return query.filter(Project.id.is_(None))
+    return query.filter(Project.owner_id.in_(visible_owner_ids))
 
 
 def _serialize_project_summary(project: Project) -> dict:
@@ -429,14 +423,9 @@ def set_page_skip(
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
 
-    pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
-    while len(pages_data) <= page_index:
-        pages_data.append({
-            "page_index": len(pages_data),
-            "photos": {},
-            "label_texts": {},
-        })
-    pages_data[page_index]["skip"] = payload.skip
-    student.pages_data_json = json.dumps(pages_data)
-    db.commit()
+    # 進學生寫鎖：與照片上傳/文字儲存併發打同一學生時不互相蓋寫 pages_data
+    def _mutate(pages_data) -> None:
+        ensure_page_entry(pages_data, page_index)["skip"] = payload.skip
+
+    mutate_student_pages(db, student, _mutate)
     return {"ok": True}

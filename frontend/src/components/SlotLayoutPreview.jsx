@@ -2,6 +2,7 @@
 // 供 ClassEdit 共用照片面板與 BatchPhotoWizard 內使用
 
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
+import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
 export default function SlotLayoutPreview({
   page,
@@ -12,8 +13,8 @@ export default function SlotLayoutPreview({
 }) {
   if (!page) return null;
   const layout = page.layout || {};
-  const canvasW = layout.canvas_width || 794;
-  const canvasH = layout.canvas_height || 1123;
+  const canvasW = layout.canvas_width || CANVAS_REAL_WIDTH;
+  const canvasH = layout.canvas_height || CANVAS_REAL_HEIGHT;
   const slots = layout.photo_slots || [];
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
   const scale = height / canvasH;

@@ -2,8 +2,6 @@
 # 處理頁面預覽圖生成、相冊 PDF 渲染（單生 / 全班）、PDF 與 ZIP 下載
 
 import io
-import hashlib
-import json
 import logging
 import time
 
@@ -25,9 +23,15 @@ from services.project_service import (
     open_all_student_images_zip_stream,
     open_all_student_pdfs_zip_stream,
     render_and_save_student_album,
+    student_pdf_key_for_mode,
 )
-from services.request_limiter import album_render_limiter, preview_render_limiter, zip_build_limiter
-from services.render_service import PREVIEW_RENDER_SCALE, render_preview_page
+from services.preview_cache import (
+    get_or_render_preview,
+    preview_scale_key,
+    render_preview_jpeg_bytes,
+)
+from services.request_limiter import album_render_limiter, zip_build_limiter
+from services.render_service import PREVIEW_RENDER_SCALE
 from services.storage import get_storage
 
 from ._helpers import (
@@ -40,93 +44,32 @@ from .schemas import RenderAllResult, RenderStudentResult
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-PREVIEW_JPEG_QUALITY = 80
 # 前端預覽 URL 一律帶版本化的 ?t=（updated_at／編輯時間戳），內容變更即換 URL，
 # 因此回應可以讓瀏覽器快取：來回切頁不再重新下載整面縮圖牆
 PREVIEW_CACHE_HEADERS = {
     "Cache-Control": "private, max-age=604800",
 }
-# v3：payload 移除 project/student updated_at（改為純內容定址＋照片版本欄位），
-# 單一學生的編輯不再作廢全班快取
-PREVIEW_CACHE_VERSION = "project-preview-v3"
 
 
-def _preview_scale_key(scale: float) -> str:
-    return f"{scale:.3f}".replace(".", "_")
+def effective_download_mode(
+    mode: str = Query("print", pattern="^(print|screen)$"),
+    current_user: User = Depends(get_current_user),
+) -> str:
+    """下載畫質權限規則的唯一真相來源：非 admin 一律強制螢幕畫質。"""
+    return mode if current_user.role == "admin" else "screen"
 
 
-def _preview_payload_hash(payload: dict) -> str:
-    payload_json = json.dumps(
-        {"version": PREVIEW_CACHE_VERSION, **payload},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()[:24]
-
-
-def _render_preview_jpeg_bytes(layout: dict, student_name: str, page_data: dict, page_index: int, scale: float) -> bytes:
-    preview_image = render_preview_page(
-        layout,
-        student_name,
-        page_data,
-        page_index=page_index,
-        scale=scale,
-    )
-    image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
-    return image_buffer.getvalue()
-
-
-def _read_cached_preview_bytes(storage, cache_key: str, cached_reader):
-    try:
-        return cached_reader(cache_key) if cached_reader else storage.get_bytes(cache_key)
-    except FileNotFoundError:
-        return None
-    except Exception as cache_error:
-        logger.warning("讀取預覽快取失敗 key=%s error=%s", cache_key, cache_error)
-        return None
-
-
-def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes):
-    storage = get_storage()
-    cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
-    headers = {**PREVIEW_CACHE_HEADERS, "X-Preview-Cache-Key": cache_key}
-    cached_reader = getattr(storage, "get_cached_bytes", None)
-
-    cached_bytes = _read_cached_preview_bytes(storage, cache_key, cached_reader)
-    if cached_bytes is not None:
-        return Response(
-            content=cached_bytes,
-            media_type="image/jpeg",
-            headers={**headers, "X-Preview-Cache": "HIT"},
-        )
-
-    with preview_render_limiter.acquire("預覽產生中，請稍後再試"):
-        # 等待 limiter 期間可能已有其他請求補好同一張預覽。
-        cached_bytes = _read_cached_preview_bytes(storage, cache_key, cached_reader)
-        if cached_bytes is not None:
-            return Response(
-                content=cached_bytes,
-                media_type="image/jpeg",
-                headers={**headers, "X-Preview-Cache": "HIT"},
-            )
-
-        image_bytes = render_bytes()
-        try:
-            cache_writer = getattr(storage, "put_cache_only", None)
-            if cache_writer:
-                cache_writer(cache_key, image_bytes)
-            else:
-                storage.put(cache_key, image_bytes)
-        except Exception as cache_error:
-            logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
-
+def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes) -> Response:
+    """組出預覽回應：快取讀寫與渲染細節在 services/preview_cache.py。"""
+    image_bytes, cache_key, hit = get_or_render_preview(cache_prefix, payload, render_bytes)
     return Response(
         content=image_bytes,
         media_type="image/jpeg",
-        headers={**headers, "X-Preview-Cache": "MISS"},
+        headers={
+            **PREVIEW_CACHE_HEADERS,
+            "X-Preview-Cache-Key": cache_key,
+            "X-Preview-Cache": "HIT" if hit else "MISS",
+        },
     )
 
 
@@ -151,7 +94,7 @@ def preview_project_page(
     page_layout = page_layouts[page_index]
     cache_prefix = (
         f"projects/proj{project_id}/previews/project/"
-        f"page{page_index}/scale{_preview_scale_key(scale)}"
+        f"page{page_index}/scale{preview_scale_key(scale)}"
     )
     return _stored_preview_response(
         cache_prefix,
@@ -164,7 +107,7 @@ def preview_project_page(
             "layout": page_layout,
             "page_data": page_data,
         },
-        lambda: _render_preview_jpeg_bytes(page_layout, "（姓名）", page_data, page_index, scale),
+        lambda: render_preview_jpeg_bytes(page_layout, "（姓名）", page_data, page_index, scale),
     )
 
 
@@ -200,7 +143,7 @@ def preview_student_page(
     page_layout = page_layouts[page_index]
     cache_prefix = (
         f"projects/proj{project_id}/previews/students/student{student_id}/"
-        f"page{page_index}/scale{_preview_scale_key(scale)}"
+        f"page{page_index}/scale{preview_scale_key(scale)}"
     )
     return _stored_preview_response(
         cache_prefix,
@@ -214,7 +157,7 @@ def preview_student_page(
             "layout": page_layout,
             "page_data": current_page_data,
         },
-        lambda: _render_preview_jpeg_bytes(page_layout, student.name, current_page_data, page_index, scale),
+        lambda: render_preview_jpeg_bytes(page_layout, student.name, current_page_data, page_index, scale),
     )
 
 
@@ -282,7 +225,7 @@ def render_all_students(
 def download_student_pdf(
     project_id: int,
     student_id: int,
-    mode: str = Query("print", pattern="^(print|screen)$"),
+    effective_mode: str = Depends(effective_download_mode),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -292,18 +235,12 @@ def download_student_pdf(
     student = get_student_or_404(student_id, project_id, db)
 
     # 非 admin 強制降為螢幕畫質
-    effective_mode = mode if current_user.role == "admin" else "screen"
 
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="尚未產生 PDF，請先渲染")
 
-    # output_filename 為 key，如 "projects/proj1/output/stem.pdf"
-    base_key = student.output_filename
-    pdf_key = (
-        base_key[:-4] + "_screen.pdf"
-        if effective_mode == "screen"
-        else base_key
-    )
+    # output_filename 為列印版 key，如 "projects/proj1/output/stem.pdf"
+    pdf_key = student_pdf_key_for_mode(student.output_filename, effective_mode)
 
     storage = get_storage()
     if not storage.exists(pdf_key):
@@ -325,7 +262,7 @@ def download_student_pdf(
 def download_student_images_as_zip(
     project_id: int,
     student_id: int,
-    mode: str = Query("print", pattern="^(print|screen)$"),
+    effective_mode: str = Depends(effective_download_mode),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -334,7 +271,6 @@ def download_student_images_as_zip(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
-    effective_mode = mode if current_user.role == "admin" else "screen"
 
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
@@ -361,7 +297,7 @@ def download_student_image(
     project_id: int,
     student_id: int,
     page_number: int = Path(..., ge=1),
-    mode: str = Query("print", pattern="^(print|screen)$"),
+    effective_mode: str = Depends(effective_download_mode),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -370,7 +306,6 @@ def download_student_image(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
-    effective_mode = mode if current_user.role == "admin" else "screen"
 
     if not student.output_filename:
         raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
@@ -394,7 +329,7 @@ def download_student_image(
 @router.get("/{project_id}/download/all")
 def download_all_pdfs_as_zip(
     project_id: int,
-    mode: str = Query("print", pattern="^(print|screen)$"),
+    effective_mode: str = Depends(effective_download_mode),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -402,7 +337,6 @@ def download_all_pdfs_as_zip(
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
 
-    effective_mode = mode if current_user.role == "admin" else "screen"
 
     zip_filename = f"{project.name}.zip"
     content_disposition = build_content_disposition_header(zip_filename)
@@ -418,7 +352,7 @@ def download_all_pdfs_as_zip(
 @router.get("/{project_id}/download/all/images")
 def download_all_images_as_zip(
     project_id: int,
-    mode: str = Query("print", pattern="^(print|screen)$"),
+    effective_mode: str = Depends(effective_download_mode),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -426,7 +360,6 @@ def download_all_images_as_zip(
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
 
-    effective_mode = mode if current_user.role == "admin" else "screen"
 
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     zip_filename = f"{project.name}{screen_suffix}_images.zip"
