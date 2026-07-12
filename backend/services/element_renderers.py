@@ -5,7 +5,7 @@ import math
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from services.draw_helpers import (
-    get_font, load_key, load_key_for_box, paste_rotated,
+    get_font, load_key_for_box, paste_rotated,
     apply_rounded_corners, add_drop_shadow,
     draw_speech_bubble, wrap_text,
     _line_width_with_spacing, draw_line_with_spacing,
