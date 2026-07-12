@@ -75,7 +75,12 @@ from services.element_renderers import (
     render_text_bubble,
     render_text_label,
 )
-from services.photo_frame_geometry import build_photo_frame_slot, get_photo_slot_dimension_mode
+from services.photo_frame_geometry import (
+    CANVAS_HEIGHT,
+    CANVAS_WIDTH,
+    build_photo_frame_slot,
+    get_photo_slot_dimension_mode,
+)
 
 BACKEND_DIR = Path(__file__).parent.parent
 UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uploads"))
@@ -143,10 +148,10 @@ def scale_layout(layout: dict, scale_x: float, scale_y: float | None = None, tar
 
     scaled_layout = deepcopy(layout)
     scaled_layout["canvas_width"] = (
-        int(target_size[0]) if target_size else max(1, int(round(layout.get("canvas_width", 794) * scale_x)))
+        int(target_size[0]) if target_size else max(1, int(round(layout.get("canvas_width", CANVAS_WIDTH) * scale_x)))
     )
     scaled_layout["canvas_height"] = (
-        int(target_size[1]) if target_size else max(1, int(round(layout.get("canvas_height", 1123) * scale_y)))
+        int(target_size[1]) if target_size else max(1, int(round(layout.get("canvas_height", CANVAS_HEIGHT) * scale_y)))
     )
 
     for collection_key in ("photo_slots", "text_bubbles", "text_labels", "stickers"):
@@ -170,8 +175,8 @@ def scale_layout_for_preview(layout: dict, scale: float = PREVIEW_RENDER_SCALE) 
 
 def scale_layout_to_size(layout: dict, output_size: tuple[int, int]) -> dict:
     """Scale a layout to a target pixel size for native high-DPI rendering."""
-    source_width = layout.get("canvas_width", 794)
-    source_height = layout.get("canvas_height", 1123)
+    source_width = layout.get("canvas_width", CANVAS_WIDTH)
+    source_height = layout.get("canvas_height", CANVAS_HEIGHT)
     scale_x = output_size[0] / source_width
     scale_y = output_size[1] / source_height
     return scale_layout(layout, scale_x, scale_y, target_size=output_size)
@@ -188,7 +193,7 @@ def render_preview_page(
     return render_page(scale_layout_for_preview(layout, scale), student_name, page_data, page_index=page_index)
 
 
-def render_page(layout: dict, student_name: str, page_data: dict, output_size: tuple = (794, 1123), page_index: int = 0) -> Image.Image:
+def render_page(layout: dict, student_name: str, page_data: dict, output_size: tuple = (CANVAS_WIDTH, CANVAS_HEIGHT), page_index: int = 0) -> Image.Image:
     """Render one album page and return a PIL Image."""
     w, h = layout.get("canvas_width", output_size[0]), layout.get("canvas_height", output_size[1])
     canvas = Image.new("RGB", (w, h), "white")
@@ -267,12 +272,12 @@ def render_album(
         if page_data.get("skip"):
             continue
         output_layout = scale_layout_to_size(page_layout, output_size) if output_size else page_layout
-        img = render_page(output_layout, student_name, page_data, output_size=output_size or (794, 1123), page_index=i)
+        img = render_page(output_layout, student_name, page_data, output_size=output_size or (CANVAS_WIDTH, CANVAS_HEIGHT), page_index=i)
         images.append(img)
     return images
 
 
-SCREEN_OUTPUT_SIZE = (794, 1123)
+SCREEN_OUTPUT_SIZE = (CANVAS_WIDTH, CANVAS_HEIGHT)
 
 
 def derive_screen_images(print_images: list[Image.Image]) -> list[Image.Image]:

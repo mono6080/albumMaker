@@ -1,8 +1,14 @@
-const DEFAULT_PHOTO_BORDER_WIDTH = 8;
+// 照片框幾何（拍立得 insets、content rect、等比 snap）
+// 跨語言鏡像：backend/services/photo_frame_geometry.py（Konva 與 PIL 各需一份實作，
+// 數值走共用 design tokens）；一致性由 tests/test_contract_pins.py 釘住。
+import { DESIGN_TOKENS } from "../constants/designTokens.js";
+
+const DEFAULT_PHOTO_BORDER_WIDTH = DESIGN_TOKENS.photo_frame.default_border_width;
+const BOTTOM_INSET_MULTIPLIER = DESIGN_TOKENS.photo_frame.bottom_inset_multiplier;
 export const PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode";
 export const PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1";
 // 照片格內容最小寬度：TemplateEditor 縮放下限與標準比例 snap 下限共用
-export const PHOTO_CONTENT_MIN_WIDTH = 60;
+export const PHOTO_CONTENT_MIN_WIDTH = DESIGN_TOKENS.photo_frame.content_min_width;
 
 function toFiniteNumber(value, fallback = 0) {
   const number = Number(value);
@@ -28,7 +34,7 @@ export function getPhotoFrameInsets(slot = {}) {
     left: borderWidth,
     top: borderWidth,
     right: borderWidth,
-    bottom: borderWidth * 3,
+    bottom: borderWidth * BOTTOM_INSET_MULTIPLIER,
     borderWidth,
     hasBorder,
   };

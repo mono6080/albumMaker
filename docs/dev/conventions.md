@@ -74,6 +74,18 @@
   不存絕對路徑
 - **認證 Cookie 優先、Bearer 為輔**：前端 axios 只設 `withCredentials`，
   不注入 Bearer header；Bearer 保留給 API 工具（見 [api.md](api.md)）
+- **跨語言共用數值走 design tokens**：畫布尺寸、照片框 insets 係數等
+  前後端都要用的純值，正本在 `backend/services/design_tokens.json`、
+  前端鏡像 `constants/designTokens.js`——不得在程式碼寫字面值；
+  兩檔一致與消費點由 `tests/test_contract_pins.py` 釘住
+- **唯一入口不得繞道**：pages_data 寫入（`mutate_student_pages`）、
+  補頁（`ensure_page_entry`）、screen PDF key（`student_pdf_key_for_mode`）、
+  下載 anchor（`browserFiles`）等唯一入口，由
+  `scripts/check_banned_patterns.py`（CI 必跑）擋住重新出現的複本；
+  新增合法入口時把檔案加進該腳本的 allowed 清單
+- **跨語言鏡像檔要互相指向**：無法共用程式碼的鏡像（如
+  `photo_frame_geometry.py` ↔ `photoFrameGeometry.js`、`FONT_MAP` ↔
+  `fonts.js`）檔頭必須注明對應檔與釘住它的測試
 
 ## Windows 開發環境注意
 

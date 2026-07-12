@@ -25,6 +25,8 @@ CJK_FONTS = [
 ]
 
 # Named font map: key matches layout JSON "font_family" field
+# 跨語言鏡像：前端選單 frontend/src/constants/fonts.js 的每個 value 都必須在此有對應，
+# 一致性由 tests/test_font_parity.py 釘住
 FONT_MAP = {
     # Windows
     "msjh":    "C:/Windows/Fonts/msjh.ttc",

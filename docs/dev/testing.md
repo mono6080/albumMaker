@@ -12,6 +12,7 @@
 python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
+python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
 
 # 前端
 cd frontend
@@ -36,6 +37,9 @@ npm run build                # production bundle（改前端後必跑）
     照片互換、corrupt JSON、角色矩陣負向案例
   - `test_render_regression.py`：固定版型 `tests/fixtures/render_smoke_layout.json`
     的寬鬆像素區域檢查
+  - `test_contract_pins.py` / `test_font_parity.py`：前後端契約釘——
+    design tokens 兩端一致、insets 演算法釘值、字型清單對應
+    （防跨語言鏡像靜默漂移，規則見 [conventions.md](conventions.md#跨模組-invariants)）
   - `conftest.py` 把測試 DB 指到 repo 內 `.tmp/pytest`
     （可用 `ALBUM_MAKER_TEST_TMPDIR` 覆寫），不污染 `backend/album_maker.db`
 - **前端**：lint / unit / render-parity / Playwright E2E；無 vitest / RTL 元件測試

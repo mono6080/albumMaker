@@ -1,0 +1,8 @@
+{
+  "canvas": { "width": 794, "height": 1123 },
+  "photo_frame": {
+    "default_border_width": 8,
+    "bottom_inset_multiplier": 3,
+    "content_min_width": 60
+  }
+}

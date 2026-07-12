@@ -1,6 +1,8 @@
 // 字體定義
 // 提供模板編輯器與屬性面板使用的字體選項清單，
 // 每個字體同時記錄後端 key、顯示名稱、CSS 字體族與是否加粗
+// 跨語言鏡像：value 必須存在於 backend/services/draw_helpers.py 的 FONT_MAP，
+// 一致性由 tests/test_font_parity.py 釘住（漏加後端 PDF 會靜默 fallback 字型）
 
 /**
  * 系統支援的中文字體列表。

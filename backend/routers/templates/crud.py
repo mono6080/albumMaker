@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from crud.template_crud import get_period_or_404, get_template_or_404, get_template_page_or_404
 from database import Template, TemplatePage, TemplatePeriod, User, get_db
-from services.photo_frame_geometry import PHOTO_SLOT_CONTENT_BOX_MODE, PHOTO_SLOT_DIMENSION_MODE_KEY
+from services.photo_frame_geometry import (
+    CANVAS_HEIGHT,
+    CANVAS_WIDTH,
+    PHOTO_SLOT_CONTENT_BOX_MODE,
+    PHOTO_SLOT_DIMENSION_MODE_KEY,
+)
 from services.storage import get_storage
 from services.template_service import copy_template_pages
 from template_periods import department_label, period_status_label
@@ -163,8 +168,8 @@ def add_page(
 
     # 初始化空白頁佈局
     blank_layout = {
-        "canvas_width": 794,
-        "canvas_height": 1123,
+        "canvas_width": CANVAS_WIDTH,
+        "canvas_height": CANVAS_HEIGHT,
         PHOTO_SLOT_DIMENSION_MODE_KEY: PHOTO_SLOT_CONTENT_BOX_MODE,
         "photo_slots": [],
         "text_bubbles": [],

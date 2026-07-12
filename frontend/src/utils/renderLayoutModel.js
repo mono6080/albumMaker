@@ -1,5 +1,6 @@
 import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
 
+import { DESIGN_TOKENS } from "../constants/designTokens.js";
 import {
   getPhotoContentRect,
   getPhotoFrameInsets,
@@ -7,8 +8,9 @@ import {
   getPhotoSlotDimensionMode,
 } from "./photoFrameGeometry.js";
 
-export const CANVAS_REAL_WIDTH = 794;
-export const CANVAS_REAL_HEIGHT = 1123;
+// 畫布尺寸走跨語言共用 design tokens（正本 backend/services/design_tokens.json）
+export const CANVAS_REAL_WIDTH = DESIGN_TOKENS.canvas.width;
+export const CANVAS_REAL_HEIGHT = DESIGN_TOKENS.canvas.height;
 export const CANVAS_DISPLAY_WIDTH = 530;
 export const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH;
 export const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_REAL_HEIGHT * CANVAS_SCALE);

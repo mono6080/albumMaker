@@ -1,7 +1,23 @@
+# 照片框幾何（拍立得 insets、frame rect）
+# 跨語言鏡像：frontend/src/utils/photoFrameGeometry.js（PIL 與 Konva 各需一份實作，
+# 數值走共用 design tokens）；兩邊一致性由 tests/test_contract_pins.py 釘住。
+
+import json
+from pathlib import Path
+
+# 設計 tokens 正本；前端鏡像 constants/designTokens.js，兩檔由釘測試強制一致
+_DESIGN_TOKENS = json.loads(
+    (Path(__file__).parent / "design_tokens.json").read_text(encoding="utf-8")
+)
+
+CANVAS_WIDTH = _DESIGN_TOKENS["canvas"]["width"]
+CANVAS_HEIGHT = _DESIGN_TOKENS["canvas"]["height"]
+
 PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode"
 PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1"
 PHOTO_SLOT_FRAME_BOX_MODE = "frame-box-v1"
-DEFAULT_PHOTO_BORDER_WIDTH = 8
+DEFAULT_PHOTO_BORDER_WIDTH = _DESIGN_TOKENS["photo_frame"]["default_border_width"]
+_BOTTOM_INSET_MULTIPLIER = _DESIGN_TOKENS["photo_frame"]["bottom_inset_multiplier"]
 
 
 def get_photo_slot_dimension_mode(layout_or_slot: dict | None) -> str:
@@ -16,7 +32,7 @@ def get_photo_frame_insets(slot: dict) -> dict:
         "left": border_width,
         "top": border_width,
         "right": border_width,
-        "bottom": border_width * 3,
+        "bottom": border_width * _BOTTOM_INSET_MULTIPLIER,
         "border_width": border_width,
         "has_border": has_border,
     }

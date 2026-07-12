@@ -31,6 +31,9 @@ jobs:
       - name: Ruff
         run: python -m ruff check backend tests
 
+      - name: Banned patterns
+        run: python scripts/check_banned_patterns.py
+
       - name: Mypy
         run: python -m mypy backend tests
 
