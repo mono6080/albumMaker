@@ -5,7 +5,7 @@ import math
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from services.draw_helpers import (
-    get_font, load_key, paste_rotated,
+    get_font, load_key, load_key_for_box, paste_rotated,
     apply_rounded_corners, add_drop_shadow,
     draw_speech_bubble, wrap_text,
     _line_width_with_spacing, draw_line_with_spacing,
@@ -139,8 +139,15 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     if not photo_path:
         return
 
+    # 先算出照片實際要填的內容框，讓載入器能「先粗縮、再轉色」
+    if border:
+        content_w = max(1, sw - border_w * 2)
+        content_h = max(1, sh - border_w * 4)
+    else:
+        content_w, content_h = sw, sh
+
     try:
-        img = load_key(photo_path)
+        img = load_key_for_box(photo_path, content_w, content_h, user_scale)
         if img is None:
             return
         img = img.convert("RGBA")

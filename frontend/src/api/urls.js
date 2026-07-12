@@ -29,9 +29,9 @@ export const buildStickerUrl = (templateId, filename) =>
 export const buildProjectPagePreviewUrl = (projectId, pageIndex) =>
   `${API_BASE}/projects/${projectId}/preview/${pageIndex}`;
 
-/** 學生個人頁面的渲染預覽端點 URL */
-export const buildStudentPagePreviewUrl = (projectId, studentId, pageIndex) =>
-  `${API_BASE}/projects/${projectId}/students/${studentId}/preview/${pageIndex}`;
+/** 學生個人頁面的渲染預覽端點 URL；scale 供縮圖清單抓小尺寸（0.4-1.0） */
+export const buildStudentPagePreviewUrl = (projectId, studentId, pageIndex, scale) =>
+  `${API_BASE}/projects/${projectId}/students/${studentId}/preview/${pageIndex}${scale ? `?scale=${scale}` : ""}`;
 
 /** 學生個人照片的存取 URL */
 export const buildPhotoUrl = (projectId, studentId, pageIndex, slotId, version) =>

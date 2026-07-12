@@ -40,7 +40,8 @@ regression test，見 [known-issues.md](known-issues.md)。
 | 貼圖 | `templates/tmpl{tid}/stickers/{filename}` |
 | PDF（列印） | `projects/proj{pid}/output/{stem}.pdf` |
 | PDF（螢幕） | `projects/proj{pid}/output/{stem}_screen.pdf` |
-| 學生單頁圖 | `projects/proj{pid}/output/{stem}/{stem}_page{n}.jpg` |
+| 學生單頁圖 | `projects/proj{pid}/output/{stem}/images/{print\|screen}/{stem}[_screen]_page{n}.jpg`（讀取時 fallback 舊版 `{stem}/{stem}_page{n}.jpg`） |
+| 渲染指紋 | `projects/proj{pid}/output/{stem}/.render_state`（dirty-skip 用，見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)） |
 
 - key 計算集中在 `services/file_service.py`（`get_photo_key` /
   `get_background_key` / `get_sticker_key`）

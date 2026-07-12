@@ -10,8 +10,6 @@
 
 - **`vite.config.js` runtimeCaching `^/uploads/` 是死規則**：實際照片 serving
   路徑是 `/api/projects/.../photos/...`，不在 `/uploads/` 下
-- **fabric、react-window 在 dependencies 但未被 import**：TemplateEditor 已走
-  react-konva；可移除以縮 bundle，屬非必要清理
 - **`LocalStorageAdapter._path()` 的 shared-prefix 理論邊界**：`base=/uploads`
   與 `resolved=/uploads_evil` 的 startswith 比對問題。實務上 base 是固定目錄
   不會撞 prefix，且已有 regression test 鎖住行為；若未來改路徑命名需注意
@@ -38,6 +36,13 @@
 - **補渲染 job 狀態存記憶體**：`services/export_jobs.py` 的 job registry
   是程序內 dict，後端重啟即消失（補渲染冪等、重新發起即可）；
   若未來走多 worker 需改外部儲存
+- **dirty-skip 對「渲染程式碼變更」不敏感**：內容指紋只涵蓋資料
+  （版面/文字/照片），改渲染邏輯要手動 bump `_RENDER_PIPELINE_VERSION`
+  （規則見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)），忘了 bump
+  舊相冊不會套用視覺修正
+- **同名前綴學生的輸出誤刪**：`render_and_save_student_album` 以
+  `delete_prefix(output/{stem})` 清舊輸出，學生「小明」會掃到「小明二」的
+  `{stem}二.pdf`（stem 為前綴時）。歷史行為、實務上班內同前綴名罕見
 
 ## 測試缺口（未來高 leverage gate）
 

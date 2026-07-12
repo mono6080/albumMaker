@@ -55,6 +55,10 @@ class StorageAdapter(ABC):
     def get_bytes(self, key: str) -> bytes:
         """讀取 key 的完整內容並回傳 bytes。"""
 
+    def copy(self, src_key: str, dst_key: str) -> None:
+        """複製物件（共用照片全班展開用）。子類可覆寫為零傳輸的原生複製。"""
+        self.put(dst_key, self.get_bytes(src_key))
+
 
 class LocalStorageAdapter(StorageAdapter):
     """本地磁碟實作，key 為相對於 base_dir 的路徑字串。"""
@@ -99,6 +103,14 @@ class LocalStorageAdapter(StorageAdapter):
             return
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
+
+    def copy(self, src_key: str, dst_key: str) -> None:
+        src = self._path(src_key)
+        dst = self._path(dst_key)
+        if not src.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
@@ -407,6 +419,20 @@ class R2StorageAdapter(StorageAdapter):
         self._s3.delete_object(Bucket=self._bucket, Key=src)
         self._cache_delete(src)
         self._delete_local_cache(src)
+
+    def copy(self, src_key: str, dst_key: str) -> None:
+        # server-side copy：零資料傳輸，共用照片全班展開從 N 次上傳變 N 次輕量呼叫
+        src = self._key(src_key)
+        dst = self._key(dst_key)
+        self._s3.copy_object(
+            Bucket=self._bucket,
+            CopySource={"Bucket": self._bucket, "Key": src},
+            Key=dst,
+        )
+        cached = self._cache_get(src)
+        if cached is not None:
+            self._cache_put(dst, cached)
+            self._write_local_cache(dst, cached)
 
     def exists(self, key: str) -> bool:
         try:

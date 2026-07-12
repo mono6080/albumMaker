@@ -46,6 +46,23 @@ export const createTemplate = (templateName, periodId, sourceTemplateId) =>
 export const fetchTemplate = (templateId) =>
   apiClient.get(`/templates/${templateId}`);
 
+// 相本編輯器切學生/切頁時模板都不變：短 TTL 快取省掉每次重抓
+// （模板 JSON 含全部版面可達數百 KB）。模板編輯器要看最新內容，仍用 fetchTemplate。
+const templateCache = new Map(); // templateId -> { promise, expiresAt }
+const TEMPLATE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** fetchTemplate 的快取版：同模板 5 分鐘內共用同一次請求 */
+export const fetchTemplateCached = (templateId) => {
+  const cached = templateCache.get(templateId);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  const promise = fetchTemplate(templateId).catch((error) => {
+    templateCache.delete(templateId);
+    throw error;
+  });
+  templateCache.set(templateId, { promise, expiresAt: Date.now() + TEMPLATE_CACHE_TTL_MS });
+  return promise;
+};
+
 /** 修改模板名稱（行內編輯） */
 export const renameTemplate = (templateId, newName, periodId) =>
   apiClient.patch(`/templates/${templateId}`, toFormParams({ name: newName, period_id: periodId }));

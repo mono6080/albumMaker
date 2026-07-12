@@ -5,8 +5,10 @@ import toast from "react-hot-toast";
 import { uploadPhoto, updatePhotoMapping } from "../api";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import ConfirmModal from "./ConfirmModal";
+import { Button, SegmentedControl } from "./ui";
 import PhotoSlotCard from "./PhotoSlotCard";
 import { buildItems, photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
+import { maybeCompressImageFile } from "../utils/imageCompression";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
@@ -353,17 +355,32 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
 
           updateAggregateStatus("uploading");
 
+          // 暫時性失敗（503 排隊滿、網路斷）自動重試——不重試的話照片會從格子消失，
+          // 老師得手動重選重傳；4xx（檔案本身的問題）不重試
+          const uploadWithRetry = async (i, fileToSend, onProgress) => {
+            const maxAttempts = 3;
+            for (let attempt = 1; ; attempt++) {
+              try {
+                return await uploadPhoto(projectId, studentId, cur[i].pi, cur[i].slotId, fileToSend, onProgress);
+              } catch (error) {
+                const status = error?.response?.status;
+                const retriable = !status || status === 503 || status >= 500;
+                if (!retriable || attempt >= maxAttempts) throw error;
+                await new Promise(resolve => setTimeout(resolve, 1200 * attempt));
+              }
+            }
+          };
+
           const uploadNext = async () => {
             while (nextPendingCursor < pendingIndices.length) {
               const i = pendingIndices[nextPendingCursor++];
               try {
-                const res = await uploadPhoto(
-                  projectId, studentId, cur[i].pi, cur[i].slotId, cur[i].pendingFile,
-                  pct => {
-                    progressByIndex.set(i, pct);
-                    updateAggregateStatus();
-                  }
-                );
+                // 上傳前壓縮：手機原圖 4-12MB → ~0.5-1MB，傳輸省 ~80%
+                const fileToSend = await maybeCompressImageFile(cur[i].pendingFile);
+                const res = await uploadWithRetry(i, fileToSend, pct => {
+                  progressByIndex.set(i, pct);
+                  updateAggregateStatus();
+                });
                 progressByIndex.set(i, 100);
                 uploadedPaths[i] = res.data.path;
               } catch (error) {
@@ -805,37 +822,34 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         <div className="ml-auto flex flex-shrink-0 gap-2">
           {/* 檢視範圍切換：整本＝一次上傳全書、跨頁拖曳調換（唯讀時仍可切換瀏覽） */}
           {activePage != null && (
-            <div data-guide="student-photo-scope" className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
-              {[{ value: "page", label: "本頁" }, { value: "book", label: "整本" }].map(option => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setViewScope(option.value)}
-                  aria-pressed={viewScope === option.value}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    viewScope === option.value
-                      ? "bg-white text-gray-900 shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
+            <div data-guide="student-photo-scope" className="flex-shrink-0">
+              <SegmentedControl
+                value={viewScope}
+                onChange={setViewScope}
+                size="sm"
+                options={[
+                  { value: "page", label: "本頁" },
+                  { value: "book", label: "整本" },
+                ]}
+              />
             </div>
           )}
-          <button
+          <Button
+            type="button"
             style={{ visibility: disabled ? "hidden" : "visible" }}
             onClick={() => multiRef.current?.click()}
             disabled={disabled || availableEmptyCount === 0}
             data-guide="student-multi-upload"
             data-empty-count={availableEmptyCount}
             title={availableEmptyCount > 0 ? `剩餘 ${availableEmptyCount} 格可上傳` : "沒有剩餘空格"}
-            className="flex items-center justify-center gap-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:pointer-events-none transition-colors font-medium whitespace-nowrap"
+            variant="secondary"
+            size="sm"
+            className="whitespace-nowrap"
           >
             <Upload className="w-3.5 h-3.5" />
             <span>多選上傳</span>
             <span className="text-xs text-indigo-400">剩 {availableEmptyCount}</span>
-          </button>
+          </Button>
           <input ref={multiRef} type="file" accept="image/*,.heic,.heif,.hif" multiple className="hidden"
             disabled={disabled || availableEmptyCount === 0}
             onChange={e => { if (e.target.files?.length) { handleMultiUpload(e.target.files); e.target.value = ""; } }} />
@@ -861,9 +875,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
       >
       <div
         data-guide="student-photo-grid"
-        className="grid gap-3"
-        // 欄寬跟著最寬的照片卡走：卡片是固定像素尺寸（PIL 對位需要），
-        // 固定欄數在窄螢幕會讓寬格位溢出格子
+        // 手機固定 2 格一層（!important 蓋過 inline 欄寬）；
+        // sm 以上欄寬跟著最寬的照片卡走（卡片是固定像素尺寸，PIL 對位需要）
+        className="grid gap-3 max-sm:grid-cols-2!"
         style={{
           gridTemplateColumns: `repeat(auto-fill, minmax(min(${maxSlotCardWidth + 24}px, 100%), 1fr))`,
         }}
@@ -930,7 +944,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
               ref={dndRef}
               {...dndListeners}
               onClick={handleCellClick}
-              className="group aspect-square relative flex items-center justify-center rounded-xl transition-all"
+              // 方形用 padding-bottom 百分比而非 aspect-ratio：WebKit 在 grid 內
+              // 不會用 aspect-ratio 撐行高，行高不足時上下列會互疊
+              className="group relative w-full rounded-xl pb-[100%] transition-all"
               style={{
                 touchAction: "manipulation",
                 background: isItemDisabled ? "#f8fafc" : isSelected ? "rgba(99,102,241,0.1)" : isDragOver ? "rgba(99,102,241,0.08)" : dirty ? "rgba(251,191,36,0.08)" : "#f3f4f6",
@@ -939,12 +955,14 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
                 opacity: isItemDisabled ? 0.5 : isDragging ? 0.4 : 1,
               }}
             >
-              {/* Pure display */}
-              <PhotoSlotCard
-                it={it} url={thumbUrl} nat={nat} disabled={isItemDisabled}
-                onImgLoad={e => setAspectMap(prev => ({ ...prev, [rk]: e.target.naturalWidth / e.target.naturalHeight }))}
-                imgRefCallback={el => { thumbImgRefs.current[rk] = el; }}
-              />
+              {/* Pure display（絕對定位置中：外層以 padding-bottom 撐方形） */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <PhotoSlotCard
+                  it={it} url={thumbUrl} nat={nat} disabled={isItemDisabled}
+                  onImgLoad={e => setAspectMap(prev => ({ ...prev, [rk]: e.target.naturalWidth / e.target.naturalHeight }))}
+                  imgRefCallback={el => { thumbImgRefs.current[rk] = el; }}
+                />
+              </div>
 
               {/* 已刪除頁面遮罩 */}
               {skippedPages.has(it.pi) && (

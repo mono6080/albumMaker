@@ -427,12 +427,12 @@ const GUIDE_MARKERS = {
     { n: 3, selector: '[data-guide="roster-modal"]', text: "已登記學生清單。可以行內改名、刪除，也看得到每位的照片進度。" },
   ],
   classEdit: [
-    { n: 1, selector: '[data-guide="class-scope-banner"]', text: "紫色提醒：現在改的是「全班共用」內容，會套用到所有學生。" },
+    { n: 1, selector: '[data-guide="scope-switcher"]', text: "編輯範圍：「全班」＝改的內容套用到所有學生；「個別」＝只改單一學生。" },
     { n: 2, selector: '[data-guide="scope-switcher"]', text: "編輯範圍切換。「全班／個別」兩顆按鈕，同一個編輯器不用換頁。" },
     { n: 3, selector: '[data-guide="class-page-nav"]', text: "頁碼導航。預覽、照片、文字三個面板會一起換頁。" },
-    { n: 4, selector: '[data-guide="class-photo-panel"]', text: "全班照片。點一個照片格開始放照片；右上「依檔名整批匯入」給已命名好的整批檔案。" },
+    { n: 4, selector: '[data-guide="class-photo-panel"]', text: "照片管理（全班）。點一個照片格開始放全班照片；右上「依檔名整批匯入」給已命名好的整批檔案。" },
     { n: 5, selector: '[data-guide="class-text-panel"]', text: "全班文字。{name} 會自動代入每位學生的姓名。" },
-    { n: 6, selector: '[data-guide="class-preview-panel"]', text: "樣版預覽。確認文字套上模板後的位置與內容。" },
+    { n: 6, selector: '[data-guide="class-preview-panel"]', text: "頁面預覽。確認文字套上模板後的位置與內容，可按重新整理預覽。" },
   ],
   classPhotoModal: [
     { n: 1, selector: '[data-guide="class-photo-strategies"]', text: "先選分配方式：「每人不同張」一次上傳多張、自動分給每位學生；「全班同一張」把團體照套用到全班同一格。" },
@@ -584,9 +584,8 @@ async function buildPdf(screenshots) {
 
   <section class="page-break">
     <h2>4. 編輯全班共用內容（照片與文字）</h2>
-    <p class="step-intro">從專案卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：樣版預覽｜全班照片｜全班文字。</p>
+    <p class="step-intro">從專案卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：頁面預覽｜照片管理｜頁面文字，和個別編輯同一套版面。</p>
     <ol class="actions">
-      <li>留意紫色提醒橫幅：現在改的是全班共用內容。</li>
       <li>用頁碼導航切頁，三個面板會一起換頁。</li>
       <li>點一個照片格，會開「放照片」視窗選分配方式：<strong>每人不同張</strong>（一次上傳多張、自動分給每位學生）或<strong>全班同一張</strong>（團體照套用到全班同一格）。</li>
       <li>行政已經照「姓名＋頁格」命名好的整批檔案，用照片面板右上的「依檔名整批匯入」。</li>
@@ -607,7 +606,7 @@ async function buildPdf(screenshots) {
       <li>「多選上傳」一次選多張，自動填入剩餘空格。</li>
       <li>只想改這位學生的文字時，在個別文字覆寫；按恢復預設可回到全班文字。</li>
       <li>這位學生不需要某一頁時，在預覽區頁尾點「刪除此頁」，之後也能還原。</li>
-      <li>做完按「完成，回班級總覽」。下載都在班級總覽，個別編輯頁沒有下載按鈕。</li>
+      <li>做完按右上角的「班級總覽」回工作台。下載都在班級總覽，個別編輯頁沒有下載按鈕。</li>
     </ol>
     ${stepFigure(screenshots.studentEdit, "步驟 5：個別學生編輯頁。")}
   </section>
@@ -648,7 +647,7 @@ async function buildPdf(screenshots) {
     <h3>照片放進去後裁切不對</h3>
     <p>到該學生的個別編輯頁，在照片格上點調整，重新設定位置與縮放，再回預覽確認。</p>
     <h3>怕改到全班／怕只改到一個人</h3>
-    <p>看編輯範圍切換列：紫色「全班」＝改的內容套用到所有學生；「個別」＝只改目前這位。全班畫面上方也有紫色提醒橫幅。</p>
+    <p>看編輯範圍切換列：「全班」＝改的內容套用到所有學生；「個別」＝只改目前這位。</p>
     <h3>某位學生少一頁</h3>
     <p>到該學生個別編輯頁檢查是否按過「刪除此頁」，需要時在預覽區按「還原此頁」。</p>
     <h3>文字沒有帶入姓名</h3>
@@ -744,8 +743,8 @@ async function main() {
 
     // 4. 編輯相本（全班範圍）：橫幅、切換列、三欄工作台
     await page.goto(`/projects/${projectId}/edit`);
-    await page.getByText("全班照片").first().waitFor();
-    await page.getByText("樣版預覽").waitFor();
+    await page.locator('[data-guide="class-photo-panel"]').waitFor();
+    await page.locator('[data-guide="class-preview-panel"]').waitFor();
     await waitForPreviewImage(page, '[data-guide="class-preview-panel"] img');
     const classEdit = await screenshot(page, "05-class-edit.png", GUIDE_MARKERS.classEdit);
 

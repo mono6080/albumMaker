@@ -116,13 +116,23 @@ def _flatten_to_rgb(image: Image.Image) -> Image.Image:
     return image.convert("RGB")
 
 
+# 列印輸出（A4@300dpi）長邊為 3508px，再高的解析度輸出用不到；
+# 先縮到這個上限能讓每次 JPEG 編碼快 4-5 倍
+PHOTO_MAX_LONG_EDGE = 3600
+
+
 def _save_jpeg(image: Image.Image, quality: int) -> bytes:
+    # 不用 optimize=True：多一整趟編碼只省幾 % 大小，
+    # HEIC 轉檔的「處理中」秒數對老師比較有感
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+    image.save(buffer, format="JPEG", quality=quality, progressive=True)
     return buffer.getvalue()
 
 
 def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int, is_heif: bool = False) -> bytes:
+    """壓縮策略：長邊先壓到列印上限，再走至多 3 級品質階梯；
+    仍超標才逐步縮小。取代原本的二分搜品質（最多 6 次全解析度編碼 × 10 輪）。
+    單張 iPhone HEIC 的轉檔時間從 5-10 秒降到 1-2 秒。"""
     target_bytes = target_mb * _BYTES_PER_MB
     try:
         if is_heif:
@@ -133,35 +143,28 @@ def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int, is_heif: bool = F
     except (OSError, UnidentifiedImageError) as exc:
         raise HTTPException(status_code=415, detail="無法讀取圖片，請確認檔案格式") from exc
 
+    if max(image.size) > PHOTO_MAX_LONG_EDGE:
+        ratio = PHOTO_MAX_LONG_EDGE / max(image.size)
+        image = image.resize(
+            (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
+            Image.Resampling.LANCZOS,
+        )
+
+    for quality in (88, 80, 70):
+        candidate = _save_jpeg(image, quality)
+        if len(candidate) <= target_bytes:
+            return candidate
+
+    # 極端情況（超長全景等）：逐步縮小再試
     current = image
-    try:
-        for _ in range(10):
-            best = None
-            low, high = 40, 92
-            while low <= high:
-                quality = (low + high) // 2
-                candidate = _save_jpeg(current, quality)
-                if len(candidate) <= target_bytes:
-                    best = candidate
-                    low = quality + 1
-                else:
-                    high = quality - 1
-
-            if best is not None:
-                return best
-
-            next_width = max(1, int(current.width * 0.85))
-            next_height = max(1, int(current.height * 0.85))
-            if next_width == current.width and next_height == current.height:
-                break
-            resized = current.resize((next_width, next_height), Image.Resampling.LANCZOS)
-            if current is not image:
-                current.close()
-            current = resized
-    finally:
-        image.close()
-        if current is not image:
-            current.close()
+    for _ in range(4):
+        current = current.resize(
+            (max(1, int(current.width * 0.75)), max(1, int(current.height * 0.75))),
+            Image.Resampling.LANCZOS,
+        )
+        candidate = _save_jpeg(current, 80)
+        if len(candidate) <= target_bytes:
+            return candidate
 
     raise HTTPException(status_code=413, detail=f"圖片壓縮後仍超過 {target_mb} MB，請先降低解析度")
 

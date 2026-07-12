@@ -130,7 +130,7 @@ async function fetchStudentPreview(page, projectId, studentId, cacheBuster = Dat
   );
   expect(previewResponse.ok()).toBeTruthy();
   expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
-  expect(previewResponse.headers()["cache-control"]).toContain("no-store");
+  expect(previewResponse.headers()["cache-control"]).toContain("max-age");
   const body = await previewResponse.body();
   expect(body[0]).toBe(0xff);
   expect(body[1]).toBe(0xd8);
@@ -347,8 +347,8 @@ test("admin can create a project and batch students from the browser", async ({ 
 
   // 從工作台「繼續製作」直接進入相本編輯器（全班 scope）
   await page.getByRole("link", { name: /繼續製作/ }).click();
-  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
-  await expect(page.getByText("樣版預覽")).toBeVisible();
+  await expect(page.locator('[data-guide="class-photo-panel"]')).toBeVisible();
+  await expect(page.locator('[data-guide="class-preview-panel"]')).toBeVisible();
 
   await page.getByRole("button", { name: "製作教學" }).click();
   await expect(page.locator(".driver-popover")).toContainText("套用到所有學生");
@@ -377,7 +377,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   expect(alice).toBeTruthy();
   expect(bob).toBeTruthy();
 
-  await page.getByRole("link", { name: "完成，回班級總覽" }).click();
+  await page.getByRole("link", { name: "班級總覽", exact: true }).click();
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "製作教學" }).click();
   await expect(page.locator(".driver-popover")).toContainText("班級進度");
@@ -416,7 +416,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   // 「全班」按鈕切回全班共用 scope（同一編輯器換資料層）
   await page.getByRole("button", { name: "全班", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
-  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
+  await expect(page.locator('[data-guide="class-photo-panel"]')).toBeVisible();
 
   // 「個別」按鈕切到第一位學生
   await page.getByRole("button", { name: "個別", exact: true }).click();
@@ -438,7 +438,7 @@ test("project shared photo upload applies one slot to every student", async ({ p
   await page.goto(`/projects/${project.id}/batch`);
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
   await expect(page.getByText(projectName)).toBeVisible();
-  await expect(page.getByText("正在編輯全班共用內容")).toBeVisible();
+  await expect(page.locator('[data-guide="class-photo-panel"]')).toBeVisible();
   // 點格開 Modal，在 Modal 內選分配方式並上傳
   await page
     .locator('[data-guide="class-shared-photo-slots"]')
@@ -517,7 +517,7 @@ test("class completion locks content while scope switching stays usable", async 
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/edit`));
 
   // 退回（admin）→ 恢復階段 2
-  await page.getByRole("link", { name: "完成，回班級總覽" }).click();
+  await page.getByRole("link", { name: "班級總覽", exact: true }).click();
   await page.getByRole("button", { name: "退回修改" }).click();
   await page.getByRole("dialog", { name: "退回修改" }).getByRole("button", { name: "退回修改" }).click();
   await expect(page.getByRole("button", { name: "全班完成" })).toBeVisible();

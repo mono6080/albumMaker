@@ -2,6 +2,7 @@
 # 集中管理與「渲染學生相冊」、「合併對應文字」、「檔名處理」、
 # 「HTTP 下載標頭」相關的業務邏輯，使路由層保持薄且清晰
 
+import hashlib
 import io
 import json
 import re
@@ -15,8 +16,16 @@ from services.label_texts import (
     merge_label_entries,
     normalize_label_entry,
 )
-from services.render_service import PRINT_OUTPUT_SIZE, render_album, save_album_pdf, save_album_images
+from services.render_service import (
+    PRINT_OUTPUT_SIZE,
+    derive_screen_images,
+    render_album,
+    save_album_pdf,
+    save_album_images,
+)
+from services.request_limiter import zip_build_limiter
 from services.storage import get_storage
+from services.zip_stream import StreamingZipBuffer
 
 
 # ── 檔名與目錄工具 ─────────────────────────────────────────────────────────────
@@ -173,6 +182,30 @@ def get_template_page_layouts(project: Project) -> list[dict]:
 
 # ── 渲染與儲存 ─────────────────────────────────────────────────────────────────
 
+# 渲染管線版本：渲染邏輯有視覺影響的修改時 +1，讓 dirty-skip 全部失效重渲
+_RENDER_PIPELINE_VERSION = 1
+
+
+def _album_render_hash(page_layouts: list[dict], student_name: str, student_pages_data: list) -> str:
+    """渲染輸入的內容指紋：版面＋合併後頁面資料＋姓名相同 ⇒ 輸出必相同。
+
+    照片內容變更由 pages_data 內的照片 key 與版本欄位（v）反映；
+    背景圖同檔名重傳由 layout 的 background_version 反映。
+    """
+    payload = json.dumps(
+        {
+            "pipeline": _RENDER_PIPELINE_VERSION,
+            "layouts": page_layouts,
+            "name": student_name,
+            "pages": student_pages_data,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def render_and_save_student_album(
     project: Project,
     student: Student,
@@ -186,11 +219,12 @@ def render_and_save_student_album(
     流程：
       1. 讀取模板佈局（可由外部傳入，批次渲染時共用避免重複查詢）
       2. 將專案對應文字合併入學生頁面資料
-      3. 呼叫渲染引擎產生圖片
-      4. 儲存列印用 PDF、螢幕用 PDF、單頁圖片
-      5. 更新學生的輸出路徑記錄
+      3. 內容指紋與上次相同且輸出還在 ⇒ 直接跳過（全班重渲只重做有改過的學生）
+      4. 呼叫渲染引擎產生列印圖，螢幕圖由列印圖降採樣
+      5. 儲存列印用 PDF、螢幕用 PDF、單頁圖片與指紋標記
+      6. 更新學生的輸出路徑記錄
 
-    回傳：包含 pdf 路徑與頁數的 dict。
+    回傳：包含 pdf 路徑與頁數的 dict（跳過時 skipped=True）。
     """
     if page_layouts is None:
         page_layouts = get_template_page_layouts(project)
@@ -205,20 +239,39 @@ def render_and_save_student_album(
         page_layouts,
     )
 
-    rendered_screen_images = render_album(page_layouts, student.name, student_pages_data)
+    combined_stem = build_combined_stem(project.name, student.name)
+    output_prefix = get_project_output_prefix(project_id)
+    print_key = f"{output_prefix}/{combined_stem}.pdf"
+    screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
+    render_hash_key = f"{output_prefix}/{combined_stem}/.render_state"
+
+    storage = get_storage()
+    render_hash = _album_render_hash(page_layouts, student.name, student_pages_data)
+
+    # dirty-skip：指紋一致且 PDF 還在就不重渲（指紋檔最後寫入，存在即代表輸出完整）
+    try:
+        previous_hash = storage.get_bytes(render_hash_key).decode("utf-8").strip()
+    except FileNotFoundError:
+        previous_hash = None
+    data_map = {p.get("page_index"): p for p in student_pages_data}
+    page_count = sum(
+        1 for i in range(len(page_layouts)) if not data_map.get(i, {}).get("skip")
+    )
+    if previous_hash == render_hash and storage.exists(print_key):
+        if student.output_filename != print_key:
+            student.output_filename = print_key
+            db.commit()
+        return {"pdf": print_key, "pages": page_count, "skipped": True}
+
     rendered_print_images = render_album(
         page_layouts,
         student.name,
         student_pages_data,
         output_size=PRINT_OUTPUT_SIZE,
     )
+    # 螢幕版由列印版降採樣，省下整輪第二次渲染
+    rendered_screen_images = derive_screen_images(rendered_print_images)
 
-    combined_stem = build_combined_stem(project.name, student.name)
-    output_prefix = get_project_output_prefix(project_id)
-    print_key = f"{output_prefix}/{combined_stem}.pdf"
-    screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
-
-    storage = get_storage()
     # 清除該學生舊的輸出（PDF + 頁面圖），避免無限累積
     storage.delete_prefix(f"{output_prefix}/{combined_stem}")
     storage.put(print_key, save_album_pdf(rendered_print_images, mode="print"))
@@ -227,63 +280,68 @@ def render_and_save_student_album(
         storage.put(f"{output_prefix}/{combined_stem}/images/print/{filename}", img_bytes)
     for filename, img_bytes in save_album_images(rendered_screen_images, combined_stem, mode="screen").items():
         storage.put(f"{output_prefix}/{combined_stem}/images/screen/{filename}", img_bytes)
+    storage.put(render_hash_key, render_hash.encode("utf-8"))
 
     student.output_filename = print_key
     db.commit()
 
-    return {"pdf": print_key, "pages": len(rendered_screen_images)}
+    return {"pdf": print_key, "pages": len(rendered_print_images)}
 
 
 # ── ZIP 封裝 ───────────────────────────────────────────────────────────────────
-
-def build_zip_of_all_student_pdfs(project: Project, output_mode: str) -> bytes:
-    """
-    將專案中所有已渲染學生的 PDF 打包成 ZIP，回傳 bytes。
-
-    output_mode：'print'（列印畫質）或 'screen'（螢幕顯示畫質）
-    """
-    storage = get_storage()
-    output_buffer = io.BytesIO()
-    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
-        for student in project.students:
-            if not student.output_filename:
-                continue
-            # output_filename 現為 key，如 "projects/proj1/output/stem.pdf"
-            base_key = student.output_filename
-            pdf_key = (
-                base_key[:-4] + "_screen.pdf"
-                if output_mode == "screen"
-                else base_key
-            )
-            if not storage.exists(pdf_key):
-                continue
-            combined_stem = build_combined_stem(project.name, student.name)
-            suffix = "_screen" if output_mode == "screen" else ""
-            zip_archive.writestr(f"{combined_stem}{suffix}.pdf", storage.get_bytes(pdf_key))
-    output_buffer.seek(0)
-    return output_buffer.read()
+# PDF 與 JPG 內容已是壓縮格式，ZIP 用 STORED（再 DEFLATE 只耗 CPU 幾乎不減量）
 
 
-def get_student_image_entries(project: Project, student: Student, output_mode: str) -> list[tuple[str, bytes]]:
-    """讀取已渲染的學生單頁 JPG，回傳 ZIP 內檔名與 bytes。"""
+def _student_pdf_zip_entry(project: Project, student: Student, output_mode: str) -> tuple[str, str] | None:
+    """單一學生 PDF 的（ZIP 內檔名, storage key）；未渲染回 None。"""
+    if not student.output_filename:
+        return None
+    base_key = student.output_filename
+    pdf_key = base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
+    combined_stem = build_combined_stem(project.name, student.name)
+    suffix = "_screen" if output_mode == "screen" else ""
+    return (f"{combined_stem}{suffix}.pdf", pdf_key)
+
+
+def _plan_student_image_keys(project: Project, student: Student, output_mode: str) -> list[tuple[str, list[str]]]:
+    """規劃單頁 JPG 的（ZIP 內檔名, 候選 storage keys）；只組字串、不做 storage I/O。"""
     if not student.output_filename:
         return []
 
-    storage = get_storage()
     rendered_prefix = student.output_filename[:-4]
     rendered_stem = rendered_prefix.rsplit("/", 1)[-1]
     download_stem = build_combined_stem(project.name, student.name)
     mode_suffix = "_screen" if output_mode == "screen" else ""
 
-    entries = []
+    planned = []
     for page_number in range(1, len(project.template.pages) + 1):
-        image_key = f"{rendered_prefix}/images/{output_mode}/{rendered_stem}{mode_suffix}_page{page_number}.jpg"
-        if not storage.exists(image_key):
+        candidate_keys = [
+            f"{rendered_prefix}/images/{output_mode}/{rendered_stem}{mode_suffix}_page{page_number}.jpg",
             # 舊版渲染只存一套 JPG 在 output/{stem}/{stem}_pageN.jpg。
-            image_key = f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg"
-        if not storage.exists(image_key):
+            f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg",
+        ]
+        planned.append((f"{download_stem}{mode_suffix}_page{page_number}.jpg", candidate_keys))
+    return planned
+
+
+def _read_first_existing(storage, candidate_keys: list[str]) -> bytes | None:
+    """依序 try-get 候選 key（省掉 R2 的逐檔 HEAD），全部不存在回 None。"""
+    for key in candidate_keys:
+        try:
+            return storage.get_bytes(key)
+        except FileNotFoundError:
             continue
-        entries.append((f"{download_stem}{mode_suffix}_page{page_number}.jpg", storage.get_bytes(image_key)))
+    return None
+
+
+def get_student_image_entries(project: Project, student: Student, output_mode: str) -> list[tuple[str, bytes]]:
+    """讀取已渲染的學生單頁 JPG，回傳 ZIP 內檔名與 bytes。"""
+    storage = get_storage()
+    entries = []
+    for arcname, candidate_keys in _plan_student_image_keys(project, student, output_mode):
+        image_bytes = _read_first_existing(storage, candidate_keys)
+        if image_bytes is not None:
+            entries.append((arcname, image_bytes))
     return entries
 
 
@@ -298,20 +356,75 @@ def build_zip_of_student_images(
         image_entries = get_student_image_entries(project, student, output_mode)
 
     output_buffer = io.BytesIO()
-    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
+    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_STORED) as zip_archive:
         for filename, image_bytes in image_entries:
             zip_archive.writestr(filename, image_bytes)
     output_buffer.seek(0)
     return output_buffer.read()
 
 
-def build_zip_of_all_student_images(project: Project, output_mode: str) -> bytes:
-    """將專案中所有已渲染學生的頁面 JPG 打包成 ZIP。"""
-    output_buffer = io.BytesIO()
-    with zipfile.ZipFile(output_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
-        for student in project.students:
-            folder_name = build_combined_stem(project.name, student.name)
-            for filename, image_bytes in get_student_image_entries(project, student, output_mode):
-                zip_archive.writestr(f"{folder_name}/{filename}", image_bytes)
-    output_buffer.seek(0)
-    return output_buffer.read()
+def _open_zip_stream(write_entries):
+    """通用串流 ZIP：先佔 zip 併發槽（滿載回 503），回傳逐段 chunk 產生器。
+
+    write_entries(zip_archive) 為產生器，每 yield 一次代表寫入了一個檔案。
+    邊壓邊送：峰值記憶體從整包 ZIP 降為單一檔案，下載立即開始。
+    """
+    limiter_context = zip_build_limiter.acquire("ZIP 正在產生中，請稍後再試")
+    limiter_context.__enter__()
+
+    def stream_zip_chunks():
+        try:
+            zip_buffer = StreamingZipBuffer()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zip_archive:
+                for _ in write_entries(zip_archive):
+                    yield from zip_buffer.drain()
+            yield from zip_buffer.drain()
+        finally:
+            limiter_context.__exit__(None, None, None)
+
+    return stream_zip_chunks()
+
+
+def open_all_student_pdfs_zip_stream(project: Project, output_mode: str):
+    """所有已渲染學生 PDF 的串流 ZIP 產生器。"""
+    storage = get_storage()
+    pdf_entries = [
+        entry
+        for student in project.students
+        if (entry := _student_pdf_zip_entry(project, student, output_mode))
+    ]
+
+    def write_entries(zip_archive):
+        for arcname, pdf_key in pdf_entries:
+            try:
+                pdf_bytes = storage.get_bytes(pdf_key)
+            except FileNotFoundError:
+                continue
+            zip_archive.writestr(arcname, pdf_bytes)
+            yield
+
+    return _open_zip_stream(write_entries)
+
+
+def open_all_student_images_zip_stream(project: Project, output_mode: str):
+    """所有已渲染學生單頁 JPG 的串流 ZIP 產生器（每位學生一個資料夾）。
+
+    key 規劃全部前置，串流階段只逐檔讀 bytes——避免 StreamingResponse
+    送出期間相依的 DB session 已被回收。
+    """
+    storage = get_storage()
+    planned_entries = [
+        (f"{build_combined_stem(project.name, student.name)}/{arcname}", candidate_keys)
+        for student in project.students
+        for arcname, candidate_keys in _plan_student_image_keys(project, student, output_mode)
+    ]
+
+    def write_entries(zip_archive):
+        for archive_path, candidate_keys in planned_entries:
+            image_bytes = _read_first_existing(storage, candidate_keys)
+            if image_bytes is None:
+                continue
+            zip_archive.writestr(archive_path, image_bytes)
+            yield
+
+    return _open_zip_stream(write_entries)

@@ -8,9 +8,19 @@ SQLALCHEMY_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "sqlite:///./album_maker.db"
 )
 def _set_sqlite_pragmas(dbapi_connection, connection_record):
-    """啟用 SQLite 外鍵約束（預設關閉），確保關聯完整性。"""
+    """SQLite 連線層設定。
+
+    - foreign_keys：啟用外鍵約束（預設關閉）
+    - WAL：寫入不再阻塞讀取——多人同時操作時（A 老師存檔、B 老師瀏覽）
+      不會互相卡住；WAL 檔與主檔同目錄，備份時一併帶走
+    - busy_timeout：罕見的寫寫衝突改為等待重試，而非立刻 database is locked
+    - synchronous=NORMAL：WAL 模式下的建議值，斷電最多丟最後一個 checkpoint
+    """
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
 
 from sqlalchemy import event as _sa_event

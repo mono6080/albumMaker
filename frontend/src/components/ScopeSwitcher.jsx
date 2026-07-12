@@ -1,11 +1,9 @@
 // 相本編輯器的「編輯範圍」切換列
-// 全班／個別 兩顆按鈕切換 scope；個別模式下才出現學生下拉與上一位/下一位。
-// 全班 scope 用紫色（review 色系）標示，防止「以為在改一個人、其實改到全班」的混淆
+// 全班／個別 兩顆按鈕切換 scope；個別模式下才出現學生下拉與上一位/下一位
 
 import { ChevronLeft, ChevronRight, User, Users } from "lucide-react";
-import { Link } from "react-router-dom";
 
-import { AutoSaveStatus, Button, fieldControlClass } from "./ui";
+import { AutoSaveStatus, Button, SegmentedControl, fieldControlClass } from "./ui";
 
 export default function ScopeSwitcher({
   students,
@@ -14,7 +12,6 @@ export default function ScopeSwitcher({
   onSwitch,
   isBusy = false,
   saveStatus,
-  backTo,
 }) {
   const isClassScope = currentStudentId == null;
   const currentIndex = isClassScope
@@ -26,11 +23,11 @@ export default function ScopeSwitcher({
     : null;
 
   return (
+    // 兩個 scope 同款容器：目前範圍由 active pill 與右上計數表達，
+    // 不再用底色標示（violet 的全站語意是「班級總覽」，不做一色兩義）
     <div
       data-guide="scope-switcher"
-      className={`mb-4 rounded-lg border p-3 shadow-sm ${
-        isClassScope ? "border-violet-200 bg-violet-50/70" : "border-gray-200 bg-white"
-      }`}
+      className="mb-4 rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
     >
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
         <span className="font-medium">編輯範圍</span>
@@ -38,46 +35,22 @@ export default function ScopeSwitcher({
         <span className="ml-auto">
           {isClassScope ? `共 ${students.length} 位學生` : `${currentIndex >= 0 ? currentIndex + 1 : "-"} / ${students.length}`}
         </span>
-        {backTo && (
-          <Button as={Link} to={backTo} variant="reviewSoft" size="xs" className="flex-shrink-0">
-            完成，回班級總覽
-          </Button>
-        )}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        {/* 全班／個別 切換 */}
-        <div className="grid flex-shrink-0 grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 sm:w-64">
-          <button
-            type="button"
-            data-guide="scope-class-pill"
-            onClick={() => { if (!isClassScope && !isBusy) onSwitch(null); }}
-            disabled={isBusy}
-            aria-pressed={isClassScope}
-            className={`inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              isClassScope
-                ? "bg-violet-600 text-white"
-                : "text-gray-500 hover:text-violet-700"
-            }`}
-          >
-            <Users className="h-4 w-4" />
-            全班
-          </button>
-          <button
-            type="button"
-            data-guide="scope-student-pill"
-            onClick={() => { if (isClassScope && !isBusy && students.length > 0) onSwitch(students[0].id); }}
-            disabled={isBusy || (isClassScope && students.length === 0)}
-            aria-pressed={!isClassScope}
-            className={`inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              !isClassScope
-                ? "bg-indigo-600 text-white"
-                : "text-gray-500 hover:text-indigo-700"
-            }`}
-          >
-            <User className="h-4 w-4" />
-            個別
-          </button>
-        </div>
+        {/* 全班／個別 切換：與全站相同的 SegmentedControl token */}
+        <SegmentedControl
+          value={isClassScope ? "class" : "student"}
+          onChange={(nextScope) => {
+            if (nextScope === "class" && !isClassScope) onSwitch(null);
+            if (nextScope === "student" && isClassScope && students.length > 0) onSwitch(students[0].id);
+          }}
+          disabled={isBusy}
+          className="flex-shrink-0 sm:w-64"
+          options={[
+            { value: "class", label: "全班", icon: Users, guideId: "scope-class-pill" },
+            { value: "student", label: "個別", icon: User, guideId: "scope-student-pill" },
+          ]}
+        />
         {/* 學生切換：個別模式才出現 */}
         {!isClassScope && (
           <div className="grid flex-1 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">

@@ -21,8 +21,26 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 
 - 輸出畫質分 **print**（列印）與 **screen**（螢幕）兩種模式；
   下載權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
-- PDF 由 img2pdf 產生（`save_album_pdf()` 唯一進入點），避開 PIL 內建 PDF 的色域問題
+- PDF 由 img2pdf 產生（`save_album_pdf()` 唯一進入點），避開 PIL 內建 PDF 的色域問題；
+  print 頁面內嵌 **JPEG quality 95**（照片內容用 PNG 體積大 5-8 倍且壓縮極慢）
 - 渲染 endpoint 有 `time.monotonic()` 計時 log，效能問題先看 log
+
+## 相冊輸出與 dirty-skip
+
+`project_service.py` 的 `render_and_save_student_album()`：
+
+- 只渲染**一次**列印尺寸（2480×3508），螢幕圖由 `derive_screen_images()`
+  LANCZOS 降採樣到 794×1123 — 不再跑第二輪渲染
+- **dirty-skip**：輸出前以 `_album_render_hash()`（版面 + 合併後頁面資料 +
+  學生姓名 + `_RENDER_PIPELINE_VERSION`）比對上次的指紋檔（key 見
+  [storage.md](storage.md#storage-key-格式)）；一致且 PDF 還在就直接跳過，
+  回傳 `skipped=True`。全班重渲只重做真的改過的學生
+- **改渲染邏輯必把 `_RENDER_PIPELINE_VERSION` +1**，否則舊輸出因指紋一致
+  不會被重渲（視覺修正不會生效）
+- 背景圖同檔名重傳靠 layout 的 `background_version`（`upload_background`
+  蓋時間戳）讓指紋失效
+- 渲染併發：單本渲染與全班/補渲染 job 都**逐位**取 `album_render_limiter`
+  槽（`acquire_blocking`），不整批佔住
 
 ## TemplateEditor（前端編輯器）
 

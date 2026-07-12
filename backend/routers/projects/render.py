@@ -18,12 +18,12 @@ from database import User, get_db
 from services.project_service import (
     build_combined_stem,
     build_content_disposition_header,
-    build_zip_of_all_student_images,
-    build_zip_of_all_student_pdfs,
     build_zip_of_student_images,
     get_student_image_entries,
     get_template_page_layouts,
     merge_project_label_texts_into_pages,
+    open_all_student_images_zip_stream,
+    open_all_student_pdfs_zip_stream,
     render_and_save_student_album,
 )
 from services.request_limiter import album_render_limiter, preview_render_limiter, zip_build_limiter
@@ -41,11 +41,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 PREVIEW_JPEG_QUALITY = 80
+# 前端預覽 URL 一律帶版本化的 ?t=（updated_at／編輯時間戳），內容變更即換 URL，
+# 因此回應可以讓瀏覽器快取：來回切頁不再重新下載整面縮圖牆
 PREVIEW_CACHE_HEADERS = {
-    "Cache-Control": "no-store, max-age=0",
-    "Pragma": "no-cache",
+    "Cache-Control": "private, max-age=604800",
 }
-PREVIEW_CACHE_VERSION = "project-preview-v2"
+# v3：payload 移除 project/student updated_at（改為純內容定址＋照片版本欄位），
+# 單一學生的編輯不再作廢全班快取
+PREVIEW_CACHE_VERSION = "project-preview-v3"
 
 
 def _preview_scale_key(scale: float) -> str:
@@ -152,9 +155,10 @@ def preview_project_page(
     )
     return _stored_preview_response(
         cache_prefix,
+        # 純內容定址：layout 與 page_data 全文已在 hash 內，任何實質變更都會換 key；
+        # 不混入 updated_at，避免無關的編輯（例如某位學生的照片）作廢這份快取
         {
             "kind": "project",
-            "project_updated_at": project.updated_at,
             "page_index": page_index,
             "scale": scale,
             "layout": page_layout,
@@ -200,10 +204,10 @@ def preview_student_page(
     )
     return _stored_preview_response(
         cache_prefix,
+        # 純內容定址（不混 updated_at）：改一位學生的字不再作廢全班 60 份快取。
+        # 同名重傳造成「key 相同、bytes 不同」由照片紀錄的 v 欄位負責換 hash
         {
             "kind": "student",
-            "project_updated_at": project.updated_at,
-            "student_updated_at": student.updated_at,
             "student_name": student.name,
             "page_index": page_index,
             "scale": scale,
@@ -252,20 +256,25 @@ def render_all_students(
     # 迴圈外預先讀取模板佈局，避免每個學生重複查詢 N×1
     shared_page_layouts = get_template_page_layouts(project)
 
-    with album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試"):
-        for student in project.students:
-            t0 = time.monotonic()
-            try:
+    skipped_count = 0
+    for student in project.students:
+        t0 = time.monotonic()
+        try:
+            # 逐位取槽（而非整班佔住），其他老師的單本渲染可交錯進行
+            with album_render_limiter.acquire_blocking():
                 result = render_and_save_student_album(project, student, project_id, db, shared_page_layouts)
-                render_results.append({"student": student.name, "pdf": result["pdf"]})
+            render_results.append({"student": student.name, "pdf": result["pdf"]})
+            if result.get("skipped"):
+                skipped_count += 1
+            else:
                 logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
-            except Exception as render_error:
-                db.rollback()
-                render_errors.append({"student": student.name, "error": "產生失敗"})
-                logger.error("  ✗ %s 失敗: %s", student.name, render_error)
+        except Exception as render_error:
+            db.rollback()
+            render_errors.append({"student": student.name, "error": "產生失敗"})
+            logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 
-    logger.info("批次渲染完成 project_id=%s 成功=%s 失敗=%s 總耗時=%.2fs",
-                project_id, len(render_results), len(render_errors), time.monotonic() - t_all)
+    logger.info("批次渲染完成 project_id=%s 成功=%s（內容未變跳過=%s）失敗=%s 總耗時=%.2fs",
+                project_id, len(render_results), skipped_count, len(render_errors), time.monotonic() - t_all)
     return {"rendered": render_results, "errors": render_errors}
 
 
@@ -395,14 +404,12 @@ def download_all_pdfs_as_zip(
 
     effective_mode = mode if current_user.role == "admin" else "screen"
 
-    with zip_build_limiter.acquire("PDF ZIP 正在產生中，請稍後再試"):
-        zip_bytes = build_zip_of_all_student_pdfs(project, effective_mode)
-
     zip_filename = f"{project.name}.zip"
     content_disposition = build_content_disposition_header(zip_filename)
 
+    # 邊壓邊送：下載立即開始、峰值記憶體只有單本 PDF（zip 併發槽在產生器內取放）
     return StreamingResponse(
-        io.BytesIO(zip_bytes),
+        open_all_student_pdfs_zip_stream(project, effective_mode),
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )
@@ -421,15 +428,13 @@ def download_all_images_as_zip(
 
     effective_mode = mode if current_user.role == "admin" else "screen"
 
-    with zip_build_limiter.acquire("圖片 ZIP 正在產生中，請稍後再試"):
-        zip_bytes = build_zip_of_all_student_images(project, effective_mode)
-
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     zip_filename = f"{project.name}{screen_suffix}_images.zip"
     content_disposition = build_content_disposition_header(zip_filename)
 
+    # 邊壓邊送：下載立即開始、峰值記憶體只有單頁 JPG（zip 併發槽在產生器內取放）
     return StreamingResponse(
-        io.BytesIO(zip_bytes),
+        open_all_student_images_zip_stream(project, effective_mode),
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )

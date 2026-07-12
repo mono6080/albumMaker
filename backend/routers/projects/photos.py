@@ -3,6 +3,7 @@
 
 import io
 import json
+import threading
 from datetime import datetime
 from pathlib import PurePosixPath
 from urllib.parse import quote
@@ -12,6 +13,7 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 from PIL import Image
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
@@ -38,6 +40,17 @@ router = APIRouter()
 PHOTO_THUMBNAIL_SIZE = 360
 PHOTO_THUMBNAIL_QUALITY = 78
 PHOTO_THUMBNAIL_HEADERS = {"Cache-Control": "private, max-age=86400"}
+
+# pages_data_json 是 read-modify-write：上傳併發（限流 ≥2、精靈雙路 chunk）下
+# 同一學生的兩個請求會互相蓋寫格位——寫入必須逐學生串行，
+# 且進鎖後先 refresh 拿最新資料、commit 完才放鎖
+_student_write_locks: dict[int, threading.Lock] = {}
+_student_write_locks_guard = threading.Lock()
+
+
+def _student_write_lock(student_id: int) -> threading.Lock:
+    with _student_write_locks_guard:
+        return _student_write_locks.setdefault(student_id, threading.Lock())
 
 
 def _thumbnail_key(photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> str:
@@ -125,11 +138,13 @@ def _apply_photo_to_student(
     processed_upload: ProcessedImageUpload,
     storage,
     now: datetime,
+    source_key: str | None = None,
 ) -> str:
     """寫入單一學生指定照片格：刪舊縮圖→put 新檔→更新 pages_data_json。回傳新 key。
 
     供 upload_photo / upload_shared_project_photo / batch_upload_photos 共用。
-    呼叫端負責呼叫 db.commit()。
+    source_key：共用照片全班展開時，第 2 位起用 storage.copy（R2 為零傳輸的
+    server-side copy）取代重複上傳同一份 bytes。呼叫端負責呼叫 db.commit()。
     """
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
     while len(pages_data) <= page_index:
@@ -148,12 +163,17 @@ def _apply_photo_to_student(
             storage.delete(old_key)
 
     key = get_photo_key(project_id, student.id, page_index, slot_id, processed_upload.filename)
-    storage.put(key, processed_upload.data)
+    if source_key and source_key != key:
+        storage.copy(source_key, key)
+    else:
+        storage.put(key, processed_upload.data)
     pages_data[page_index].setdefault("photos", {})[slot_id_str] = {
         "path": key,
         "scale": 1.0,
         "offset_x": 0.0,
         "offset_y": 0.0,
+        # 上傳版本（毫秒）：同名重傳時 key 不變、bytes 會變，預覽快取靠這個欄位換 hash
+        "v": int(now.timestamp() * 1000),
     }
     student.pages_data_json = json.dumps(pages_data)
     student.updated_at = now
@@ -192,11 +212,19 @@ async def upload_photo(
 
     storage = get_storage()
     now = datetime.utcnow()
-    key = _apply_photo_to_student(
-        student, project_id, page_index, slot_id, processed_upload, storage, now,
-    )
-    project.updated_at = now
-    db.commit()
+
+    # storage 寫入（R2 時是同步網路呼叫）下放 threadpool，不凍結 event loop
+    def _upload_and_commit() -> str:
+        with _student_write_lock(student.id):
+            db.refresh(student)  # 進鎖後拿最新 pages_data，避免蓋掉併發請求剛寫的格位
+            key = _apply_photo_to_student(
+                student, project_id, page_index, slot_id, processed_upload, storage, now,
+            )
+            project.updated_at = now
+            db.commit()
+            return key
+
+    key = await run_in_threadpool(_upload_and_commit)
 
     return {"filename": key.split("/")[-1], "path": key}
 
@@ -223,16 +251,29 @@ async def upload_shared_project_photo(
 
     storage = get_storage()
     now = datetime.utcnow()
-    updated = 0
 
-    for student in project.students:
-        _apply_photo_to_student(
-            student, project_id, page_index, slot_id, processed_upload, storage, now,
-        )
-        updated += 1
+    def _fanout_to_all_students() -> int:
+        # 第 1 位實際上傳 bytes，其餘用 storage.copy（R2 為 server-side copy），
+        # 30 人班從 30 次上傳變 1 次上傳＋29 次輕量複製
+        count = 0
+        first_key: str | None = None
+        project.updated_at = now
+        for student in project.students:
+            # 逐學生進寫鎖並 commit：與其他上傳併發時不互相蓋寫 pages_data
+            with _student_write_lock(student.id):
+                db.refresh(student)
+                key = _apply_photo_to_student(
+                    student, project_id, page_index, slot_id, processed_upload, storage, now,
+                    source_key=first_key,
+                )
+                db.commit()
+            if first_key is None:
+                first_key = key
+            count += 1
+        return count
 
-    project.updated_at = now
-    db.commit()
+    # 整段 fanout（可能數十次 storage 操作）下放 threadpool，不凍結 event loop
+    updated = await run_in_threadpool(_fanout_to_all_students)
 
     return {
         "ok": True,
@@ -263,7 +304,7 @@ async def batch_upload_photos(
 
     - mapping：JSON 字串，格式 {"<student_id>": "<filename>"}
     - overwrite_existing=false 時跳過已有照片的學生（記入 skipped）
-    - 單筆失敗不中斷整批，最後一起 commit
+    - 單筆失敗不中斷整批；逐筆進學生寫鎖 commit（容忍多 chunk 併發）
     """
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
@@ -284,7 +325,6 @@ async def batch_upload_photos(
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    any_change = False
 
     for student_id_str, filename in mapping_data.items():
         if student_id_str not in students_by_id:
@@ -304,13 +344,6 @@ async def batch_upload_photos(
             })
             continue
 
-        if not overwrite_existing and _student_has_photo(student, page_index, slot_id):
-            skipped.append({
-                "student_id": student.id, "filename": filename,
-                "reason": "already_has_photo",
-            })
-            continue
-
         try:
             processed_upload = await read_and_process_photo_upload(upload_file)
         except HTTPException as exc:
@@ -326,10 +359,23 @@ async def batch_upload_photos(
             })
             continue
 
+        # 寫入（含 skip 判斷）進學生寫鎖並逐筆 commit：
+        # 精靈的兩個 chunk 併發打同一學生時不會互相蓋寫格位
+        def _apply_and_commit(student=student, processed_upload=processed_upload) -> str | None:
+            with _student_write_lock(student.id):
+                db.refresh(student)
+                if not overwrite_existing and _student_has_photo(student, page_index, slot_id):
+                    return None
+                key = _apply_photo_to_student(
+                    student, project_id, page_index, slot_id, processed_upload, storage, now,
+                )
+                project.updated_at = now
+                db.commit()
+                return key
+
         try:
-            key = _apply_photo_to_student(
-                student, project_id, page_index, slot_id, processed_upload, storage, now,
-            )
+            # storage 寫入下放 threadpool，不凍結 event loop（R2 時是同步網路呼叫）
+            key = await run_in_threadpool(_apply_and_commit)
         except Exception:
             failed.append({
                 "student_id": student.id, "filename": filename,
@@ -337,12 +383,14 @@ async def batch_upload_photos(
             })
             continue
 
-        succeeded.append({"student_id": student.id, "filename": filename, "path": key})
-        any_change = True
+        if key is None:
+            skipped.append({
+                "student_id": student.id, "filename": filename,
+                "reason": "already_has_photo",
+            })
+            continue
 
-    if any_change:
-        project.updated_at = now
-        db.commit()
+        succeeded.append({"student_id": student.id, "filename": filename, "path": key})
 
     return {
         "ok": True,
@@ -385,12 +433,14 @@ def get_photo_thumbnail(
     headers = {**PHOTO_THUMBNAIL_HEADERS, "X-Photo-Thumbnail-Key": quote(thumbnail_key, safe="/")}
 
     try:
-        if storage.exists(thumbnail_key):
-            return Response(
-                content=storage.get_bytes(thumbnail_key),
-                media_type="image/jpeg",
-                headers={**headers, "X-Photo-Thumbnail": "HIT"},
-            )
+        # 直接 get、缺檔再生成：省掉 R2 模式下每次多一趟 head_object 的 RTT
+        return Response(
+            content=storage.get_bytes(thumbnail_key),
+            media_type="image/jpeg",
+            headers={**headers, "X-Photo-Thumbnail": "HIT"},
+        )
+    except FileNotFoundError:
+        pass
     except Exception:
         pass
 
@@ -432,6 +482,14 @@ def update_photo_mapping(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
+
+    # mapping 也是 pages_data 的 read-modify-write：與上傳共用學生寫鎖
+    with _student_write_lock(student.id):
+        db.refresh(student)
+        return _apply_photo_mapping(project, student, payload, db)
+
+
+def _apply_photo_mapping(project, student: Student, payload: PhotoMappingPayload, db: Session) -> dict:
     pages_data = _parse_json_field(student.pages_data_json, "pages_data_json")
 
     all_pages = payload.pages
@@ -446,6 +504,15 @@ def update_photo_mapping(
                 if path_str:
                     incoming_paths.add(path_str)
 
+    # 前端送來的照片物件不帶 v（上傳版本），先依 path 收集現有的 v，
+    # 寫入時補回去——否則移動/調整照片會遺失版本欄位，
+    # 之後同名重傳的預覽快取就換不了 hash
+    photo_version_by_path: dict[str, int] = {}
+    for page in pages_data:
+        for record in (page.get("photos") or {}).values():
+            if isinstance(record, dict) and record.get("path") and "v" in record:
+                photo_version_by_path[record["path"]] = record["v"]
+
     # 第一步：所有頁面的非 null 項目先寫入。不要為了格位異動重命名檔案；
     # R2 copy/delete 對拖曳交換太慢，且 render 只需要 DB mapping 中的 path。
     for page_index_str, slot_updates in all_pages.items():
@@ -459,6 +526,8 @@ def update_photo_mapping(
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is None:
                 continue
+            if isinstance(photo_path, dict) and photo_path.get("path") in photo_version_by_path and "v" not in photo_path:
+                photo_path = {**photo_path, "v": photo_version_by_path[photo_path["path"]]}
             pages_data[page_index]["photos"][slot_id_str] = photo_path
 
     # 第二步：所有頁面的 null 項目統一清除，只刪除未被移走的檔案

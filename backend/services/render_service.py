@@ -270,6 +270,17 @@ def render_album(
     return images
 
 
+SCREEN_OUTPUT_SIZE = (794, 1123)
+
+
+def derive_screen_images(print_images: list[Image.Image]) -> list[Image.Image]:
+    """由列印圖降採樣產生螢幕圖，取代整輪第二次渲染（渲染時間近乎砍半）。"""
+    return [
+        img.convert("RGB").resize(SCREEN_OUTPUT_SIZE, Image.LANCZOS)
+        for img in print_images
+    ]
+
+
 def _print_ready_image(img: Image.Image) -> Image.Image:
     rgb_image = img.convert("RGB")
     if rgb_image.size == PRINT_OUTPUT_SIZE:
@@ -280,7 +291,7 @@ def _print_ready_image(img: Image.Image) -> Image.Image:
 def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
     """將相冊頁面轉成 PDF bytes 並回傳。
 
-    mode='print'  — A4@300dpi（2480×3508），lossless PNG
+    mode='print'  — A4@300dpi（2480×3508），JPEG quality=95（照片內容 PNG 反而肥 5-8 倍且壓縮極慢）
     mode='screen' — 維持原始尺寸，JPEG quality=72，以 96dpi 儲存（A4 大小，省資源）
     """
     import img2pdf
@@ -293,7 +304,7 @@ def save_album_pdf(images: list[Image.Image], mode: str = "print") -> bytes:
         else:
             # 列印畫質：使用原生 A4@300dpi 圖像，舊呼叫者傳小圖時才 fallback resize
             a4_img = _print_ready_image(img)
-            a4_img.save(buf, format="PNG", dpi=PRINT_OUTPUT_DPI)
+            a4_img.save(buf, format="JPEG", quality=PRINT_IMAGE_QUALITY, dpi=PRINT_OUTPUT_DPI)
         pages_bytes.append(buf.getvalue())
     return img2pdf.convert(pages_bytes)
 

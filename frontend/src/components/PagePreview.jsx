@@ -5,12 +5,27 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { buildStudentPagePreviewUrl } from "../api/urls";
 
-export default function PagePreview({ projectId, studentId, pageIndex, timestamp }) {
+// src 可覆寫圖片來源（全班編輯器用專案層級預覽，其餘沿用學生頁預覽）
+export default function PagePreview({ projectId, studentId, pageIndex, timestamp, src = null }) {
   const [isLoaded, setIsLoaded] = useState(false);
+  // 載入失敗自動重試一次（例如剛好撞上後端渲染排隊），再失敗才放棄
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     setIsLoaded(false);
-  }, [projectId, studentId, pageIndex, timestamp]);
+    setRetryNonce(0);
+  }, [projectId, studentId, pageIndex, timestamp, src]);
+
+  const baseSrc = src ?? `${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${timestamp}`;
+  const imageSrc = retryNonce > 0 ? `${baseSrc}&retry=${retryNonce}` : baseSrc;
+
+  const handleError = () => {
+    if (retryNonce === 0) {
+      window.setTimeout(() => setRetryNonce(1), 1500);
+      return;
+    }
+    setIsLoaded(true);
+  };
 
   return (
     <div
@@ -23,12 +38,12 @@ export default function PagePreview({ projectId, studentId, pageIndex, timestamp
         </div>
       )}
       <img
-        key={timestamp}
-        src={`${buildStudentPagePreviewUrl(projectId, studentId, pageIndex)}?t=${timestamp}`}
+        key={`${timestamp}-${retryNonce}`}
+        src={imageSrc}
         alt={`第 ${pageIndex + 1} 頁`}
         className="w-full h-full object-cover"
         onLoad={() => setIsLoaded(true)}
-        onError={() => setIsLoaded(true)}
+        onError={handleError}
       />
     </div>
   );

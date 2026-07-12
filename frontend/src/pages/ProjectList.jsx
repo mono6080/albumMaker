@@ -679,6 +679,9 @@ export default function ProjectList() {
     </>
   );
 
+  // 零專案且無封存時封存鈕是噪音，藏起來；新建鈕的跨欄也跟著這個旗標走
+  const showArchiveButton = projects.length > 0 || archivedProjects.length > 0;
+
   return (
     <div className="w-full">
       <ConfirmModal
@@ -704,10 +707,11 @@ export default function ProjectList() {
             className={responsiveActionItemClass}
           >
             <CircleHelp className="w-4 h-4" />
-            <span className="whitespace-nowrap">製作教學</span>
+            <span className="hidden sm:inline">製作教學</span>
+            <span className="sm:hidden">教學</span>
           </Button>
           {/* 零專案且無封存時是噪音，先藏 */}
-          {(projects.length > 0 || archivedProjects.length > 0) && (
+          {showArchiveButton && (
           <Button
             type="button"
             onClick={() => setShowArchive(v => !v)}
@@ -731,7 +735,8 @@ export default function ProjectList() {
             data-guide="project-create-button"
             variant="primary"
             size="touch"
-            className={`${responsiveActionItemClass} col-span-2 sm:col-span-1`}
+            // 三顆鈕時新建跨兩欄補滿第二列；只剩兩顆（無封存）時與教學同列，避免孤懸半寬
+            className={`${responsiveActionItemClass} ${showArchiveButton ? "col-span-2 sm:col-span-1" : ""}`}
           >
             <Plus className="w-4 h-4" />
             <span className="whitespace-nowrap">新建專案</span>

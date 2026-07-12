@@ -15,6 +15,7 @@ import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 import { Badge, Button, Surface } from "./ui";
 import ConfirmModal from "./ConfirmModal";
 import { batchUploadPhotos } from "../api/projectApi";
+import { compressImageFiles } from "../utils/imageCompression";
 import {
   assignFile, clearAssignment, emptyMatch, matchByName, matchByNamePageSlot,
   matchByNameSlotSequence, matchBySequence, swapAssignments,
@@ -247,11 +248,15 @@ export default function BatchPhotoWizard({
 
   // ── 檔案選擇 ───────────────────────────────────────────────────────────
 
-  const handleFilesSelected = (fileList) => {
+  const handleFilesSelected = async (fileList) => {
     const incoming = Array.from(fileList);
-    const accepted = incoming.filter(isAcceptedImageFile);
-    const rejected = incoming.length - accepted.length;
+    const acceptedRaw = incoming.filter(isAcceptedImageFile);
+    const rejected = incoming.length - acceptedRaw.length;
     if (rejected > 0) toast.error(`已忽略 ${rejected} 個非 JPEG/PNG/WebP/HEIC 檔案`);
+
+    // 選檔時就先壓縮（>1.5MB 的 JPEG/PNG/WebP 縮到長邊 2560）：
+    // 校園 WiFi 上行慢，20 張原圖 80MB → 壓後 ~15MB，傳輸省 ~80%
+    const accepted = await compressImageFiles(acceptedRaw);
 
     // 依檔名去重（同檔名後者覆蓋前者）
     const merged = new Map();
@@ -293,41 +298,52 @@ export default function BatchPhotoWizard({
     setUploadStatus({ phase: "uploading", percent: 0 });
     setUploadOutcome(null);
     try {
-      for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex++) {
-        const chunk = uploadChunks[chunkIndex];
-        const updateChunkStatus = (phase, chunkPercent, retrying = false) => {
-          const weightedProgress = completedAssignments + (chunkPercent / 100) * chunk.assignments.length;
-          setUploadStatus({
-            phase,
-            retrying,
-            percent: Math.round((weightedProgress / totalAssignments) * 100),
-            completed: completedAssignments,
-            total: totalAssignments,
-            chunk: chunkIndex + 1,
-            chunks: uploadChunks.length,
-            targetLabel: getTargetLabel(chunk),
-          });
-        };
+      // 兩路重疊：一個 chunk 在後端做影像處理時，下一個 chunk 同時在傳輸，
+      // 網路與伺服器 CPU 不再互等（整批時間近乎砍半）
+      const progressByChunk = new Map();
+      let completedChunks = 0;
+      let nextChunkCursor = 0;
 
+      const updateAggregateStatus = (phase, retrying, activeChunk) => {
+        const partial = [...progressByChunk.values()].reduce((sum, value) => sum + value, 0);
+        setUploadStatus({
+          phase,
+          retrying,
+          percent: Math.round(((completedAssignments + partial) / totalAssignments) * 100),
+          completed: completedAssignments,
+          total: totalAssignments,
+          chunk: Math.min(completedChunks + 1, uploadChunks.length),
+          chunks: uploadChunks.length,
+          targetLabel: activeChunk ? getTargetLabel(activeChunk) : undefined,
+        });
+      };
+
+      const processChunk = async (chunkIndex) => {
+        const chunk = uploadChunks[chunkIndex];
         let response = null;
         let chunkError = null;
         for (let attempt = 1; attempt <= CHUNK_MAX_ATTEMPTS; attempt++) {
           try {
-            updateChunkStatus("uploading", 0, attempt > 1);
+            progressByChunk.set(chunkIndex, 0);
+            updateAggregateStatus("uploading", attempt > 1, chunk);
             response = await batchUploadPhotos(
               projectId,
               chunk.pageIndex,
               chunk.slotId,
               chunk.assignments,
               { overwriteExisting },
-              pct => updateChunkStatus(pct >= 100 ? "processing" : "uploading", pct, attempt > 1),
+              pct => {
+                progressByChunk.set(chunkIndex, (pct / 100) * chunk.assignments.length);
+                updateAggregateStatus(pct >= 100 ? "processing" : "uploading", attempt > 1, chunk);
+              },
             );
             chunkError = null;
             break;
           } catch (error) {
             chunkError = error;
             if (!isRetryableUploadError(error) || attempt === CHUNK_MAX_ATTEMPTS) break;
-            updateChunkStatus("uploading", 0, true);
+            progressByChunk.set(chunkIndex, 0);
+            updateAggregateStatus("uploading", true, chunk);
             await new Promise(resolve => setTimeout(resolve, chunkRetryDelayMs(error)));
           }
         }
@@ -343,17 +359,18 @@ export default function BatchPhotoWizard({
         } else {
           mergeBatchOutcome(merged, response.data ?? {});
         }
+        progressByChunk.delete(chunkIndex);
         completedAssignments += chunk.assignments.length;
-        setUploadStatus({
-          phase: chunkIndex === uploadChunks.length - 1 ? "saving" : "uploading",
-          percent: Math.round((completedAssignments / totalAssignments) * 100),
-          completed: completedAssignments,
-          total: totalAssignments,
-          chunk: chunkIndex + 1,
-          chunks: uploadChunks.length,
-          targetLabel: getTargetLabel(chunk),
-        });
-      }
+        completedChunks += 1;
+        updateAggregateStatus(completedChunks === uploadChunks.length ? "saving" : "uploading", false, chunk);
+      };
+
+      const chunkWorker = async () => {
+        while (nextChunkCursor < uploadChunks.length) {
+          await processChunk(nextChunkCursor++);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, uploadChunks.length) }, chunkWorker));
 
       setUploadOutcome(merged);
       setFailedChunks(stillFailedChunks);
@@ -457,7 +474,8 @@ export default function BatchPhotoWizard({
                   全部清除
                 </button>
               </div>
-              <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-6">
+              {/* 手機 2 格一層（同照片管理的節奏），sm 以上再加密 */}
+              <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-6">
                 {files.map((file) => (
                   <FileTile
                     key={`${file.name}__${file.lastModified}`}
@@ -752,11 +770,13 @@ function UploadProgress({ status }) {
 
 function FileTile({ file, url, onRemove }) {
   return (
-    <div className="group relative aspect-square overflow-hidden rounded-md border border-gray-200 bg-white">
+    // 方形用 padding-bottom 百分比而非 aspect-ratio：WebKit 在 grid 內
+    // 不會用 aspect-ratio 撐行高，行高不足時上下列會互疊
+    <div className="group relative w-full overflow-hidden rounded-md border border-gray-200 bg-white pb-[100%]">
       {url ? (
-        <img src={url} alt={file.name} className="h-full w-full object-cover" />
+        <img src={url} alt={file.name} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
-        <div className="flex h-full w-full items-center justify-center text-gray-300">
+        <div className="absolute inset-0 flex items-center justify-center text-gray-300">
           <ImageIcon className="h-5 w-5" />
         </div>
       )}
@@ -1068,15 +1088,16 @@ function StudentCell({ student, index, file, url, canTapAssign, onTap, onClearAs
           </button>
         )}
       </div>
-      <div className="relative aspect-square bg-gray-50">
+      {/* 方形用 padding-bottom 百分比而非 aspect-ratio（WebKit grid 行高問題，見 FileTile） */}
+      <div className="relative w-full bg-gray-50 pb-[100%]">
         {url ? (
           <img
             src={url} alt={file.name} draggable={false}
-            className="h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
             style={{ WebkitTouchCallout: "none", userSelect: "none" }}
           />
         ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-amber-600">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-amber-600">
             <ImageIcon className="h-5 w-5 opacity-60" />
             <span className="text-[10px]">未配對</span>
           </div>
@@ -1092,7 +1113,8 @@ function PoolArea({ isEmpty, children }) {
   return (
     <div
       ref={setNodeRef}
-      className={`grid grid-cols-3 gap-2 rounded-lg border bg-gray-50/60 p-2 sm:grid-cols-6 md:grid-cols-8 ${
+      // 手機 2 格一層（同照片管理的節奏），sm 以上再加密
+      className={`grid grid-cols-2 gap-2 rounded-lg border bg-gray-50/60 p-2 sm:grid-cols-6 md:grid-cols-8 ${
         isOver ? "border-red-400 ring-2 ring-red-200" : "border-gray-200"
       }`}
     >
@@ -1117,7 +1139,8 @@ function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
       {...listeners}
       onClick={onTap}
       style={{ touchAction: "manipulation" }}
-      className={`group relative aspect-square cursor-grab overflow-hidden rounded-md border bg-white transition-all active:cursor-grabbing ${
+      // 方形用 padding-bottom 百分比而非 aspect-ratio（WebKit grid 行高問題，見 FileTile）
+      className={`group relative w-full cursor-grab overflow-hidden rounded-md border bg-white pb-[100%] transition-all active:cursor-grabbing ${
         isFocused
           ? "border-indigo-500 ring-2 ring-indigo-300"
           : assignedName
@@ -1129,11 +1152,11 @@ function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
       {url ? (
         <img
           src={url} alt={file.name} draggable={false}
-          className="h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-cover"
           style={{ WebkitTouchCallout: "none", userSelect: "none" }}
         />
       ) : (
-        <div className="flex h-full w-full items-center justify-center text-gray-300">
+        <div className="absolute inset-0 flex items-center justify-center text-gray-300">
           <ImageIcon className="h-5 w-5" />
         </div>
       )}

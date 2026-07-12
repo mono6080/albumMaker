@@ -5,6 +5,7 @@
 import io
 import json
 import posixpath
+import time
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -507,6 +508,8 @@ async def upload_background(
     template_page.background_filename = key
     page_layout = json.loads(template_page.layout_json)
     page_layout["background_filename"] = key
+    # 同檔名重傳 key 不變：蓋版本戳讓相冊渲染的 dirty-skip 能察覺背景已換
+    page_layout["background_version"] = int(time.time())
     template_page.layout_json = json.dumps(page_layout)
     db.commit()
 

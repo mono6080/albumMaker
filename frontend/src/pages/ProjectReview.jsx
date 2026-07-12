@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { completeProject, fetchProject as getProject, renderStudent, reopenProject } from "../api/projectApi";
-import { fetchTemplate as getTemplate } from "../api/templateApi";
+import { fetchTemplateCached as getTemplate } from "../api/templateApi";
 import {
   buildStudentPagePreviewUrl as previewUrl,
   buildDownloadPdfUrl as downloadPdf,
@@ -31,6 +31,7 @@ import { startProductGuide } from "../utils/productGuide";
 import { showRetryToast } from "../utils/retryToast";
 import { computeStudentPhotoProgress } from "../utils/photoProgress";
 import ConfirmModal from "../components/ConfirmModal";
+import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import RosterModal from "../components/RosterModal";
 import {
   createFileFromBlob,
@@ -39,6 +40,7 @@ import {
   getShareFailureMessage,
   isMobileDevice,
   shareFiles,
+  triggerNativeDownload,
 } from "../utils/browserFiles";
 
 const PROJECT_REVIEW_GUIDE_STEPS = [
@@ -93,7 +95,7 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   },
 ];
 
-const REVIEW_PREVIEW_CONCURRENCY = 2;
+const REVIEW_PREVIEW_CONCURRENCY = 3;
 const REVIEW_PREVIEW_MAX_RETRIES = 4;
 let activeReviewPreviewLoads = 0;
 const queuedReviewPreviewLoads = [];
@@ -287,6 +289,9 @@ export default function ProjectReview() {
     try {
       const projectResponse = await getProject(id);
       setProject(projectResponse.data);
+      // 預覽 URL 的版本戳跟著 updated_at 走：內容沒變就沿用同一組 URL，
+      // 瀏覽器快取（後端已改為 private, max-age）能吃到，來回切頁不重載縮圖牆
+      setTs(new Date(projectResponse.data.updated_at).getTime() || Date.now());
       const templateResponse = await getTemplate(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
       setImageShareDrafts({});
@@ -322,7 +327,6 @@ export default function ProjectReview() {
     try {
       await renderStudent(id, studentId);
       await loadProject();
-      setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
         renderClient,
@@ -395,7 +399,6 @@ export default function ProjectReview() {
 
       await renderStudent(id, studentId);
       await loadProject();
-      setTs(Date.now());
       const effectiveMode = canDownloadPrint ? outputMode : "screen";
       await downloadApiBlob(
         renderClient,
@@ -408,27 +411,47 @@ export default function ProjectReview() {
     }
   };
 
+  // 逐位渲染（單人失敗不中斷整批），失敗者自動補渲一輪；回傳仍失敗的名單
+  const renderAllStudentsWithRetry = async (students, onProgress) => {
+    const failedStudents = [];
+    for (let i = 0; i < students.length; i++) {
+      onProgress?.(i + 1, students.length);
+      try { await renderStudent(id, students[i].id); }
+      catch { failedStudents.push(students[i]); }
+    }
+    const stillFailed = [];
+    for (const studentRecord of failedStudents) {
+      try { await renderStudent(id, studentRecord.id); }
+      catch { stillFailed.push(studentRecord); }
+    }
+    return stillFailed;
+  };
+
   const handleDownloadAll = async () => {
     const students = project.students;
     if (!students.length) return;
     setRenderingAll(true);
     setRenderAllProgress({ current: 0, total: students.length });
     try {
-      for (let i = 0; i < students.length; i++) {
-        setRenderAllProgress({ current: i + 1, total: students.length });
-        await renderStudent(id, students[i].id);
-      }
-      await loadProject();
-      setTs(Date.now());
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await downloadApiBlob(
-        renderClient,
-        downloadAllZip(id, effectiveMode),
-        "albums.zip",
+      const stillFailed = await renderAllStudentsWithRetry(
+        students,
+        (current, total) => setRenderAllProgress({ current, total }),
       );
+      await loadProject();
+      if (stillFailed.length > 0) {
+        // 內容沒變的學生後端會直接跳過，重試只重做失敗的，不用怕整批重來
+        showRetryToast(`${stillFailed.map(s => s.name).join("、")} 產生失敗`, handleDownloadAll);
+        return;
+      }
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
+      // ZIP 動輒數百 MB：走瀏覽器原生下載，不經 axios blob（避免 timeout 與整包塞記憶體）
+      triggerNativeDownload(downloadAllZip(id, effectiveMode));
+      toast.success("已開始下載，請留意瀏覽器的下載列");
     } catch { showRetryToast("批次產生失敗", handleDownloadAll); }
-    setRenderingAll(false);
-    setRenderAllProgress(null);
+    finally {
+      setRenderingAll(false);
+      setRenderAllProgress(null);
+    }
   };
 
   const handleDownloadAllImages = async () => {
@@ -464,18 +487,19 @@ export default function ProjectReview() {
         return;
       }
 
-      for (let i = 0; i < students.length; i++) {
-        setRenderAllImagesProgress({ current: i + 1, total: students.length });
-        await renderStudent(id, students[i].id);
-      }
-      await loadProject();
-      setTs(Date.now());
-      const effectiveMode = canDownloadPrint ? outputMode : "screen";
-      await downloadApiBlob(
-        renderClient,
-        downloadAllImagesZip(id, effectiveMode),
-        "album-images.zip",
+      const stillFailed = await renderAllStudentsWithRetry(
+        students,
+        (current, total) => setRenderAllImagesProgress({ current, total }),
       );
+      await loadProject();
+      if (stillFailed.length > 0) {
+        showRetryToast(`${stillFailed.map(s => s.name).join("、")} 產生失敗`, handleDownloadAllImages);
+        return;
+      }
+      const effectiveMode = canDownloadPrint ? outputMode : "screen";
+      // 圖片 ZIP 比 PDF ZIP 更大：一樣走瀏覽器原生下載
+      triggerNativeDownload(downloadAllImagesZip(id, effectiveMode));
+      toast.success("已開始下載，請留意瀏覽器的下載列");
     } catch { showRetryToast("批次產生圖片失敗", handleDownloadAllImages); }
     finally {
       setRenderingAllImages(false);
@@ -648,7 +672,23 @@ export default function ProjectReview() {
           </>
         )}
         actions={(
-          <div className="flex gap-2">
+          // 與編輯頁相同的功能鈕排版（行動版滿寬網格）
+          <ResponsiveActionGroup mobileColumns={canEditCurrentProject ? 3 : 1}>
+            {/* 與編輯頁右上的「班級總覽」互為對稱切換按鈕（同專案卡的雙入口用語與用色） */}
+            {canEditCurrentProject && (
+              <Button
+                as={Link}
+                to={`/projects/${id}/edit`}
+                data-guide="review-edit-link"
+                variant="primary"
+                size="touch"
+                className={responsiveActionItemClass}
+              >
+                <Pencil className="w-4 h-4" />
+                <span className="hidden sm:inline">編輯相本</span>
+                <span className="sm:hidden">編輯</span>
+              </Button>
+            )}
             {/* 名單是工作台上的資料，用 Modal 管理，不再是獨立頁面 */}
             {canEditCurrentProject && (
               <Button
@@ -657,18 +697,25 @@ export default function ProjectReview() {
                 data-guide="review-roster-button"
                 variant="secondary"
                 size="touch"
+                className={responsiveActionItemClass}
               >
                 <Users className="w-4 h-4" />
                 <span className="hidden sm:inline">學生名單</span>
                 <span className="sm:hidden">名單</span>
               </Button>
             )}
-            <Button type="button" onClick={startGuide} variant="secondary" size="touch">
+            <Button
+              type="button"
+              onClick={startGuide}
+              variant="secondary"
+              size="touch"
+              className={responsiveActionItemClass}
+            >
               <CircleHelp className="w-4 h-4" />
               <span className="hidden sm:inline">製作教學</span>
               <span className="sm:hidden">教學</span>
             </Button>
-          </div>
+          </ResponsiveActionGroup>
         )}
       />
 
@@ -1002,7 +1049,7 @@ export default function ProjectReview() {
                         className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
                       >
                         <ReviewPreviewImage
-                          src={`${previewUrl(id, student.id, i)}?t=${ts}`}
+                          src={`${previewUrl(id, student.id, i, 0.4)}&t=${ts}`}
                           alt={`p${i + 1}`}
                           className="w-full h-24 object-cover"
                         />
@@ -1203,7 +1250,7 @@ export default function ProjectReview() {
         students={project.students}
         photoProgressByStudentId={photoProgressByStudentId}
         // 改名後名字渲染在縮圖裡，重載完要 bust 預覽快取
-        onChanged={async () => { await loadProject(); setTs(Date.now()); }}
+        onChanged={loadProject}
         // 後端對 admin 不鎖內容，前端一致：admin 在鎖定後仍可管理名單
         isLocked={isProjectCompleted && !isAdmin}
       />

@@ -8,7 +8,6 @@ import time
 import uuid
 
 from database import SessionLocal
-from services.request_limiter import album_render_limiter
 from services.roster_service import render_missing_semester_albums
 
 logger = logging.getLogger(__name__)
@@ -47,13 +46,12 @@ def _render_job_public_state(job: dict) -> dict:
 def start_render_missing_job(
     period_ids: list[int], roster_child_ids: list[int] | None
 ) -> dict:
-    """啟動補渲染背景 job：先佔渲染併發槽（滿載此處即 503），再開執行緒跑。
+    """啟動補渲染背景 job：渲染槽由 render_missing_semester_albums 逐位取用，
+    job 本身不整段佔槽（老師的單本渲染可與 job 交錯）。
 
     回傳初始 job 狀態（total 要等第一遍掃描完成才有值，先為 None）。
     """
     _prune_finished_render_jobs()
-    limiter_context = album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試")
-    limiter_context.__enter__()
 
     job = {
         "job_id": uuid.uuid4().hex,
@@ -86,7 +84,6 @@ def start_render_missing_job(
         finally:
             job["finished_at_monotonic"] = time.monotonic()
             db.close()
-            limiter_context.__exit__(None, None, None)
 
     threading.Thread(target=run_render_job, name=f"render-job-{job['job_id'][:8]}", daemon=True).start()
     return _render_job_public_state(job)

@@ -19,8 +19,9 @@ from services.project_service import (
     make_safe_filename,
     render_and_save_student_album,
 )
-from services.request_limiter import zip_build_limiter
+from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.storage import get_storage
+from services.zip_stream import StreamingZipBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -274,9 +275,11 @@ def render_missing_semester_albums(
         if project.id not in layouts_by_project_id:
             layouts_by_project_id[project.id] = get_template_page_layouts(project)
         try:
-            render_and_save_student_album(
-                project, student, project.id, db, layouts_by_project_id[project.id]
-            )
+            # 逐位取渲染槽（而非整個 job 佔住）：老師同時按單本渲染不會整段被 job 卡死
+            with album_render_limiter.acquire_blocking():
+                render_and_save_student_album(
+                    project, student, project.id, db, layouts_by_project_id[project.id]
+                )
             rendered_count += 1
         except Exception as render_error:
             db.rollback()
@@ -469,24 +472,6 @@ def build_teacher_overview_workbook(
     return output_buffer.read()
 
 
-class _StreamingZipBuffer(io.RawIOBase):
-    """收集 zipfile 寫出的 bytes 供逐段吐出（非 seekable，zipfile 自動改走 data descriptor）。"""
-
-    def __init__(self):
-        self._pending_chunks: list[bytes] = []
-
-    def writable(self) -> bool:
-        return True
-
-    def write(self, data) -> int:
-        self._pending_chunks.append(bytes(data))
-        return len(data)
-
-    def drain(self) -> list[bytes]:
-        drained_chunks, self._pending_chunks = self._pending_chunks, []
-        return drained_chunks
-
-
 def _plan_semester_export_zip(
     db: Session,
     period_ids: list[int],
@@ -588,7 +573,7 @@ def open_semester_export_zip_stream(
 
     def stream_zip_chunks():
         try:
-            zip_buffer = _StreamingZipBuffer()
+            zip_buffer = StreamingZipBuffer()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
                 for archive_path, pdf_key in zip_entries:
                     zip_archive.writestr(archive_path, storage.get_bytes(pdf_key))

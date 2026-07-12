@@ -20,9 +20,11 @@ backend/uploads/
 backend/uploads_bak*/
 backend/.r2-cache/
 
-# DB
+# DB（含 SQLite WAL 模式的側檔）
 *.db
 *.db.bak*
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 

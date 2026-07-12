@@ -694,7 +694,7 @@ def test_public_preview_endpoints_do_not_require_auth():
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)
         assert project_preview.headers["content-type"].startswith("image/jpeg")
-        assert "no-store" in project_preview.headers["cache-control"]
+        assert "max-age" in project_preview.headers["cache-control"]
         assert project_preview.content.startswith(b"\xff\xd8")
 
 
@@ -998,7 +998,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_preview, 200)
         assert student_preview.headers["content-type"].startswith("image/jpeg")
-        assert "no-store" in student_preview.headers["cache-control"]
+        assert "max-age" in student_preview.headers["cache-control"]
 
         stale_student_default = client.put(
             f"/api/projects/{project_id}/batch/texts",
@@ -1014,7 +1014,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
-        assert "no-store" in project_blank_preview.headers["cache-control"]
+        assert "max-age" in project_blank_preview.headers["cache-control"]
         assert project_blank_preview.headers["x-preview-cache"] == "MISS"
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / project_preview_key).exists()
@@ -1027,13 +1027,13 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview_cached = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview_cached, 200)
-        assert "no-store" in project_blank_preview_cached.headers["cache-control"]
+        assert "max-age" in project_blank_preview_cached.headers["cache-control"]
         assert project_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert project_blank_preview_cached.content == project_blank_preview.content
 
         student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview, 200)
-        assert "no-store" in student_blank_preview.headers["cache-control"]
+        assert "max-age" in student_blank_preview.headers["cache-control"]
         assert student_blank_preview.headers["x-preview-cache"] == "MISS"
         student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
         assert (tmp_path / "uploads" / student_preview_key).exists()
@@ -1046,7 +1046,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         student_blank_preview_cached = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview_cached, 200)
-        assert "no-store" in student_blank_preview_cached.headers["cache-control"]
+        assert "max-age" in student_blank_preview_cached.headers["cache-control"]
         assert student_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert student_blank_preview_cached.content == student_blank_preview.content
 
@@ -1055,6 +1055,14 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         render_payload = render_response.json()
         assert render_payload["pages"] == 1
         assert render_payload["pdf"].endswith(".pdf")
+        assert render_payload["skipped"] is False
+
+        # dirty-skip：內容未變的重渲直接沿用既有輸出
+        rerender_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
+        assert_status(rerender_response, 200)
+        assert rerender_response.json()["skipped"] is True
+        assert rerender_response.json()["pdf"] == render_payload["pdf"]
+        assert rerender_response.json()["pages"] == 1
 
         download_pdf = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf?mode=print")
         assert_status(download_pdf, 200)
@@ -1149,3 +1157,67 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert_status(missing_old_photo, 404)
         moved_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2")
         assert_status(moved_photo, 200)
+
+        # 內容變更（照片換格）後 dirty-skip 失效，重渲會真的重做
+        rerender_after_edit = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
+        assert_status(rerender_after_edit, 200)
+        assert rerender_after_edit.json()["skipped"] is False
+
+
+def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
+    """預覽快取為純內容定址：改 B 學生不作廢 A 學生的快取；改 A 自己才 MISS。"""
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("cache_scope"))
+
+        batch_response = client.post(
+            f"/api/projects/{project_id}/students/batch", json=["Cache A", "Cache B"]
+        )
+        assert_status(batch_response, 200)
+        detail = client.get(f"/api/projects/{project_id}")
+        student_a, student_b = [s["id"] for s in detail.json()["students"]]
+
+        # 暖 A 的快取
+        first = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert_status(first, 200)
+        assert first.headers["x-preview-cache"] == "MISS"
+        warmed = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert warmed.headers["x-preview-cache"] == "HIT"
+
+        # 改 B 的文字（會 bump project.updated_at）→ A 的快取必須仍然 HIT
+        edit_b = client.put(
+            f"/api/projects/{project_id}/batch/texts",
+            json={"students": {str(student_b): {"0": {"1": "B 的字"}}}},
+        )
+        assert_status(edit_b, 200)
+        still_hit = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert still_hit.headers["x-preview-cache"] == "HIT"
+
+        # 改 A 自己的文字 → A 的快取換 key，MISS 重渲染
+        edit_a = client.put(
+            f"/api/projects/{project_id}/batch/texts",
+            json={"students": {str(student_a): {"0": {"1": "A 的字"}}}},
+        )
+        assert_status(edit_a, 200)
+        after_own_edit = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert after_own_edit.headers["x-preview-cache"] == "MISS"
+
+        # 同名重傳（key 不變、bytes 變）→ v 欄位換 hash，快取 MISS
+        upload_1 = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            files={"file": ("same.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(upload_1, 200)
+        client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        warmed_photo = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert warmed_photo.headers["x-preview-cache"] == "HIT"
+        upload_2 = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            files={"file": ("same.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(upload_2, 200)
+        after_reupload = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
+        assert after_reupload.headers["x-preview-cache"] == "MISS"

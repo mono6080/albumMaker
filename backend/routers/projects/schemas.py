@@ -35,6 +35,8 @@ class StudentInProject(BaseModel):
     order_index: int
     pages_data: Any  # JSON 結構，不強制型別
     output_filename: Optional[str] = None
+    # 前端預覽 URL 的版本戳（瀏覽器快取 busting 用）
+    updated_at: Optional[datetime] = None
 
 
 class ProjectDetail(BaseModel):
@@ -52,6 +54,8 @@ class ProjectDetail(BaseModel):
     archive_expires_at: Optional[datetime] = None
     # 全班完成時間：非 NULL 代表內容鎖定
     completed_at: Optional[datetime] = None
+    # 前端預覽 URL 的版本戳（瀏覽器快取 busting 用）
+    updated_at: Optional[datetime] = None
     label_texts: Any
     students: list[StudentInProject]
 
@@ -66,9 +70,10 @@ class CommentOut(BaseModel):
 
 
 class RenderStudentResult(BaseModel):
-    """單生渲染結果"""
+    """單生渲染結果；skipped=True 表示內容未變、沿用既有輸出"""
     pdf: Optional[str] = None
     pages: Optional[int] = None
+    skipped: bool = False
 
 
 class PhotoSlotValue(BaseModel):

@@ -35,6 +35,17 @@ export const downloadApiBlob = async (apiClient, url, fallbackFilename) => {
   return filename;
 };
 
+// 大 ZIP 走瀏覽器原生下載（cookie 認證照常帶）：
+// 不經 axios blob — 避免 timeout 與整包塞進記憶體
+export const triggerNativeDownload = (url) => {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+};
+
 export const createFileFromBlob = (blob, filename, fallbackType = "application/octet-stream") => {
   if (typeof File === "undefined") return null;
   return new File([blob], filename, { type: blob.type || fallbackType });

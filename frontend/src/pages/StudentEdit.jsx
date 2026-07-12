@@ -7,12 +7,11 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { fetchProject, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
-import { fetchTemplate } from "../api/templateApi";
+import { fetchTemplateCached } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { usePermissions } from "../hooks/usePermissions";
 import {
   Camera,
-  ChevronLeft,
   ChevronRight,
   CircleHelp,
   Eye,
@@ -37,64 +36,6 @@ import {
 } from "../utils/labelTextEntries";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 
-const STUDENT_EDIT_GUIDE_STEPS = [
-  {
-    element: '[data-guide="student-page-nav"]',
-    title: "切換頁面",
-    description: "整頁一起換：預覽、照片格與文字都會跟著切到同一頁，一頁做完換下一頁。",
-    side: "bottom",
-    align: "center",
-  },
-  {
-    element: '[data-guide="student-preview-panel"]',
-    title: "頁面預覽",
-    description: "顯示目前頁面的合成預覽，可重新整理；頁尾可刪除此頁或還原。",
-    side: "right",
-    align: "center",
-  },
-  {
-    element: '[data-guide="scope-switcher"]',
-    title: "切換編輯範圍",
-    description: "用上一位、下一位或下拉切換學生；按「全班」可改全班一起套用的照片與文字。切換前會先儲存目前文字。",
-    side: "bottom",
-    align: "center",
-  },
-  {
-    element: '[data-guide="student-photo-manager"]',
-    title: "照片管理",
-    description: "這裡是目前頁面的照片格。點空格上傳；已有照片時可調整裁切位置與縮放、更換、刪除或交換格子。",
-    side: "left",
-    align: "start",
-  },
-  {
-    element: '[data-guide="student-photo-scope"]',
-    title: "本頁／整本",
-    description: "切到「整本」會顯示所有頁的照片格：可以一次上傳全書照片、跨頁拖曳調換；點某格時預覽也會跳到那一頁。",
-    side: "left",
-    align: "center",
-  },
-  {
-    element: '[data-guide="student-multi-upload"]',
-    title: "多選上傳",
-    description: "可以一次選多張照片，填入目前檢視（本頁或整本）的剩餘空格；過大的照片會先壓縮再上傳。",
-    side: "left",
-    align: "center",
-  },
-  {
-    element: '[data-guide="student-text-panel"]',
-    title: "個別文字",
-    description: "需要為單一學生覆寫文字時，在這裡輸入。清空會輸出空白；按恢復預設可回到共用文字或模板文字。",
-    side: "left",
-    align: "start",
-  },
-  {
-    element: '[data-guide="student-text-insert-name"]',
-    title: "插入 {name}",
-    description: "點一下就能在游標位置加入姓名變數，輸出時會替換成這位學生姓名。",
-    side: "top",
-    align: "end",
-  },
-];
 
 // ── 主頁面元件 ────────────────────────────────────────────────────────────────
 
@@ -110,7 +51,7 @@ export default function StudentEdit() {
   const [activePage, setActivePage] = useState(0);
   const [labelTexts, setLabelTexts] = useState({});  // { [pageIndex]: { [labelId]: text | { text, text_align } } }
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
-  const [previewTimestampSeed] = useState(() => Date.now());
+  const [previewTimestampSeed, setPreviewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
@@ -155,8 +96,13 @@ export default function StudentEdit() {
         return;
       }
       setStudent(foundStudent);
+      // 預覽 URL 版本戳跟著 updated_at 走，內容沒變時瀏覽器快取可命中
+      if (foundStudent.updated_at) {
+        setPreviewTimestampSeed(new Date(foundStudent.updated_at).getTime() || Date.now());
+      }
 
-      const templateResponse = await fetchTemplate(projectResponse.data.template_id);
+      // 切學生時模板不變：走 5 分鐘快取，省掉每次重抓數百 KB 的模板 JSON
+      const templateResponse = await fetchTemplateCached(projectResponse.data.template_id);
       setTemplate(templateResponse.data);
       setProjectLabelTexts(projectResponse.data.label_texts || {});
 
@@ -275,7 +221,76 @@ export default function StudentEdit() {
   };
 
   const startGuide = () => {
-    startProductGuide(STUDENT_EDIT_GUIDE_STEPS);
+    // 動態步驟（同全班編輯的教學）：行動版面板是分頁制，
+    // 導覽自己切到對的分頁（桌機三欄常駐、不受影響）
+    const steps = [
+      {
+        element: '[data-guide="student-page-nav"]',
+        title: "切換頁面",
+        description: "整頁一起換：預覽、照片格與文字都會跟著切到同一頁，一頁做完換下一頁。",
+        side: "bottom",
+        align: "center",
+      },
+      {
+        element: '[data-guide="student-preview-panel"]',
+        title: "頁面預覽",
+        description: "顯示目前頁面的合成預覽，可重新整理；頁尾可刪除此頁或還原。",
+        side: "right",
+        align: "center",
+        onBeforeStep: () => { setMobileTab("preview"); },
+      },
+      {
+        element: '[data-guide="scope-switcher"]',
+        title: "切換編輯範圍",
+        description: "用上一位、下一位或下拉切換學生；按「全班」可改全班一起套用的照片與文字。切換前會先儲存目前文字。",
+        side: "bottom",
+        align: "center",
+      },
+      {
+        element: '[data-guide="student-photo-manager"]',
+        title: "照片管理",
+        description: "這裡是目前頁面的照片格。點空格上傳；已有照片時可調整裁切位置與縮放、更換、刪除或交換格子。",
+        side: "left",
+        align: "start",
+        onBeforeStep: () => { setMobileTab("photo"); },
+      },
+      {
+        element: '[data-guide="student-photo-scope"]',
+        title: "本頁／整本",
+        description: "切到「整本」會顯示所有頁的照片格：可以一次上傳全書照片、跨頁拖曳調換；點某格時預覽也會跳到那一頁。",
+        side: "left",
+        align: "center",
+        onBeforeStep: () => { setMobileTab("photo"); },
+      },
+      {
+        element: '[data-guide="student-multi-upload"]',
+        title: "多選上傳",
+        description: "可以一次選多張照片，填入目前檢視（本頁或整本）的剩餘空格；過大的照片會先壓縮再上傳。",
+        side: "left",
+        align: "center",
+        onBeforeStep: () => { setMobileTab("photo"); },
+      },
+      {
+        // 桌面與行動版是兩個實例（student-text-panel / student-text-panel-mobile），
+        // 用前綴比對讓兩邊都吃得到
+        element: '[data-guide^="student-text-panel"]',
+        title: "個別文字",
+        description: "需要為單一學生覆寫文字時，在這裡輸入。清空會輸出空白；按恢復預設可回到共用文字或模板文字。",
+        side: "left",
+        align: "start",
+        onBeforeStep: () => { setMobileTab("text"); },
+      },
+      {
+        element: '[data-guide="student-text-insert-name"]',
+        title: "插入 {name}",
+        description: "點一下就能在游標位置加入姓名變數，輸出時會替換成這位學生姓名。",
+        side: "top",
+        align: "end",
+        onBeforeStep: () => { setMobileTab("text"); },
+      },
+    ];
+
+    startProductGuide(steps);
   };
 
   // target 為 null 時切到全班共用 scope（ClassEdit）
@@ -334,29 +349,29 @@ export default function StudentEdit() {
         title={student.name}
         badge={<Badge tone="review">編輯學生</Badge>}
         meta={(
+          // 與全班編輯完全一致的麵包屑：只到「相本專案」，互切走右上按鈕
           <>
-            {/* hidden 與 Button 自帶的 inline-flex 會互相打架，改用外層 wrapper 控制顯示 */}
-            <span className="hidden sm:inline-flex">
-              <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
-                相本專案
-              </Button>
-            </span>
-            <ChevronRight className="hidden h-3.5 w-3.5 flex-shrink-0 text-gray-300 sm:block" />
-            <Button
-              as={Link}
-              to={`/projects/${projectId}/review`}
-              variant="ghost"
-              size="xs"
-              className="min-w-0 text-gray-400"
-            >
-              <ChevronLeft className="inline h-3.5 w-3.5 sm:hidden" />
-              <span className="inline-block max-w-[14rem] truncate align-bottom sm:max-w-none">{project.name}</span>
+            <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
+              <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
+              相本專案
             </Button>
           </>
         )}
         actions={(
-        // 下載集中在班級總覽（學生卡與交件下載），編輯頁只留教學
-        <ResponsiveActionGroup mobileColumns={1}>
+        // 下載集中在班級總覽；右上與班級總覽的「編輯相本」互為對稱切換按鈕
+        <ResponsiveActionGroup mobileColumns={2}>
+          <Button
+            as={Link}
+            to={`/projects/${projectId}/review`}
+            data-guide="editor-review-link"
+            variant="review"
+            size="touch"
+            className={responsiveActionItemClass}
+          >
+            <Eye className="w-4 h-4" />
+            <span className="hidden sm:inline">班級總覽</span>
+            <span className="sm:hidden">總覽</span>
+          </Button>
           <Button
             type="button"
             onClick={startGuide}
@@ -379,14 +394,13 @@ export default function StudentEdit() {
         </div>
       )}
 
-      {/* 編輯範圍切換：全班共用 pill ＋ 學生切換；存檔狀態常駐於此 */}
+      {/* 編輯範圍切換：全班/個別＋學生切換；存檔狀態常駐於此 */}
       <ScopeSwitcher
         students={students}
         currentStudentId={studentId}
         onSwitch={handleScopeSwitch}
         isBusy={isSwitchingStudent}
         saveStatus={saveStatus}
-        backTo={`/projects/${projectId}/review`}
       />
 
       {/* 行動裝置分頁切換 */}

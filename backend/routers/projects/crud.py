@@ -130,6 +130,7 @@ def get_project(
         "deleted_at": project.deleted_at,
         "archive_expires_at": project.archive_expires_at,
         "completed_at": project.completed_at,
+        "updated_at": project.updated_at,
         "label_texts": _parse_json_field(project.label_texts_json or "{}", "label_texts_json"),
         "students": [
             {
@@ -138,6 +139,7 @@ def get_project(
                 "order_index": student.order_index,
                 "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
                 "output_filename": student.output_filename,
+                "updated_at": student.updated_at,
             }
             for student in project.students
         ],

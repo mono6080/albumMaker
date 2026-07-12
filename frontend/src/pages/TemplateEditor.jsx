@@ -35,6 +35,7 @@ import BubbleKonvaShape from "../components/canvas/BubbleKonvaShape";
 import StickerNode from "../components/canvas/StickerNode";
 import PropertyPanel from "../components/PropertyPanel";
 import ConfirmModal from "../components/ConfirmModal";
+import { Button } from "../components/ui";
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
@@ -1192,14 +1193,16 @@ export default function TemplateEditor() {
           照片總計 {totalPhotoCount} 張
         </span>
         <div className="ml-auto flex items-center gap-2" data-guide="top-actions">
-          <button
+          {/* 與全站教學鈕同一顆 token（secondary） */}
+          <Button
             type="button"
             onClick={startEditorGuide}
-            className="inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+            variant="secondary"
+            size="sm"
           >
             <CircleHelp className="w-4 h-4" />
             製作教學
-          </button>
+          </Button>
           <span className="inline-flex items-center gap-2" data-guide="history-actions">
           <button
             type="button"

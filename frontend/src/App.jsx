@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
@@ -6,17 +7,20 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import PrivateRoute from "./components/PrivateRoute";
 import PwaUpdateBanner from "./components/PwaUpdateBanner";
 import { Button } from "./components/ui";
+// 老師的核心路徑（登入→專案→總覽→編輯）維持同步載入，換頁零延遲
 import Login from "./pages/Login";
-import TemplateList from "./pages/TemplateList";
-import TemplateEditor from "./pages/TemplateEditor";
 import ProjectList from "./pages/ProjectList";
 import ClassEdit from "./pages/ClassEdit";
 import ProjectReview from "./pages/ProjectReview";
 import StudentEdit from "./pages/StudentEdit";
-import UserManagement from "./pages/UserManagement";
-import SemesterExport from "./pages/SemesterExport";
-import TeacherOverview from "./pages/TeacherOverview";
-import SettingsPage from "./pages/Settings";
+// 管理端/設計組頁面 lazy 拆出：konva 三件套（~300KB，佔 bundle 31%）
+// 只有模板編輯器用得到，老師端不需要下載與 parse
+const TemplateList = lazy(() => import("./pages/TemplateList"));
+const TemplateEditor = lazy(() => import("./pages/TemplateEditor"));
+const UserManagement = lazy(() => import("./pages/UserManagement"));
+const SemesterExport = lazy(() => import("./pages/SemesterExport"));
+const TeacherOverview = lazy(() => import("./pages/TeacherOverview"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
 import './App.css';
 
 const ROLE_LABELS = {
@@ -148,6 +152,12 @@ function AppContent() {
       <PwaUpdateBanner />
       <Nav />
       <main className={mainClassName}>
+        {/* lazy 頁面載入中的輕量 fallback（核心路徑不經過這裡） */}
+        <Suspense
+          fallback={
+            <div className="flex h-64 items-center justify-center text-gray-400">載入中...</div>
+          }
+        >
         <Routes>
           {/* 登入頁（公開） */}
           <Route path="/login" element={<Login />} />
@@ -226,6 +236,7 @@ function AppContent() {
           {/* 打錯或失效的網址一律回首頁，不留空白頁 */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </main>
     </AuthProvider>
   );
