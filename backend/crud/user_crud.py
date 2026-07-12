@@ -46,9 +46,9 @@ def get_visible_owner_ids(current_user: User, db: Session) -> list[int] | None:
     if current_user.role in ("admin", "art_team"):
         return None
     if current_user.role == "supervisor":
-        return get_subordinate_user_ids(current_user.id, db) + [current_user.id]
+        return get_subordinate_user_ids(current_user.id, db) + [int(current_user.id)]
     if current_user.role == "teacher":
-        return [current_user.id]
+        return [int(current_user.id)]
     return []
 
 
