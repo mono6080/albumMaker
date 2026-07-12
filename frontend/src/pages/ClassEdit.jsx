@@ -20,25 +20,24 @@ import {
   Crop,
   Eye,
   ImagePlus,
-  Images,
   Loader2,
   RefreshCw,
   Type,
   Upload,
-  Users,
   X,
 } from "lucide-react";
 import AlbumPageNav from "../components/AlbumPageNav";
 import BatchPhotoWizard from "../components/BatchPhotoWizard";
+import ClassPhotoPanel from "../components/ClassPhotoPanel";
+import ClassPhotoStrategyPicker from "../components/ClassPhotoStrategyPicker";
+import ClassTextPanel from "../components/ClassTextPanel";
 import FormModal from "../components/FormModal";
 import ImageCropModal from "../components/ImageCropModal";
 import PanelSwitcher from "../components/PanelSwitcher";
-import PhotoSlotCard from "../components/PhotoSlotCard";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import ScopeSwitcher from "../components/ScopeSwitcher";
 import PagePreview from "../components/PagePreview";
-import TextLabelFieldRow from "../components/TextLabelFieldRow";
-import { AutoSaveStatus, Badge, Button, IconButton, PageHeader, Surface } from "../components/ui";
+import { Badge, Button, IconButton, PageHeader } from "../components/ui";
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { getPhotoCropBox } from "../utils/photoUtils";
 import { handleApiError } from "../utils/apiError";
@@ -367,8 +366,7 @@ export default function ClassEdit() {
 
   // ── 照片面板（策略選擇 → 選格 → 上傳） ──────────────────────────────────
 
-  // 照片卡固定 110px 高、寬依格位長寬比（見 PhotoSlotCard），
-  // 取最寬者決定格線欄寬，避免寬格位在窄欄溢出（作法同 PhotoManager）
+  // 格位幾何資料留在頁面計算：照片面板（選格格線）與「放照片」Modal（預覽比例、裁切框）共用
   const slotItems = activePagePhotoSlots.map((slot, slotIndex) => {
     const frameRect = getPhotoFrameRect(slot, { dimensionMode: getPhotoSlotDimensionMode(activePageLayout) });
     return {
@@ -386,98 +384,18 @@ export default function ClassEdit() {
       transform: { scale: 1, offsetX: 0, offsetY: 0 },
     };
   });
-  const maxSlotCardWidth = slotItems.length
-    ? Math.max(...slotItems.map(item => Math.round(110 * item.slotW / item.slotH)))
-    : 110;
-
-  // 與個別編輯的照片格同款外觀（灰底方格＋角標）；點格開「放照片」Modal
-  const slotPickerSection = slotItems.length > 0 ? (
-    <div
-      data-guide="class-shared-photo-slots"
-      // 與個別編輯的照片格同規則：手機固定 2 格一層，sm 以上依最寬卡片自適應
-      className="grid gap-3 max-sm:grid-cols-2!"
-      style={{
-        gridTemplateColumns: `repeat(auto-fill, minmax(min(${maxSlotCardWidth + 24}px, 100%), 1fr))`,
-      }}
-    >
-      {slotItems.map(slotItem => {
-        const isSelected = String(slotItem.slotId) === String(selectedSharedPhotoSlotId);
-        return (
-          <button
-            key={slotItem.slotId}
-            type="button"
-            onClick={() => openSlotPhotoModal(slotItem.slotId)}
-            aria-pressed={isSelected}
-            // 方形用 padding-bottom 百分比而非 aspect-ratio（WebKit grid 行高問題，見 PhotoManager）
-            className="group relative w-full rounded-xl pb-[100%] transition-all"
-            style={{
-              background: isSelected ? "rgba(99,102,241,0.1)" : "#f3f4f6",
-              outline: isSelected ? "2px solid #6366f1" : "2px solid transparent",
-              cursor: "pointer",
-            }}
-          >
-            <div className="absolute inset-0 flex items-center justify-center">
-              <PhotoSlotCard it={slotItem} url={null} nat={null} />
-            </div>
-            <span className="absolute bottom-1 left-0 right-0 text-center text-[10px] text-gray-400 pointer-events-none select-none">
-              第{activePage + 1}頁·格{slotItem.slotIndex + 1}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  ) : (
-    <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 py-10 text-sm text-gray-400">
-      此頁沒有照片格，請用上方頁碼切到有照片格的頁面
-    </div>
-  );
-
+  // 頁首與選格格線抽至 ClassPhotoPanel；點格後的 Modal 流程仍在本頁
   const photoPanel = (
-    <div data-guide="class-photo-panel">
-      {isProjectCompleted ? (
-        <Surface className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800">
-          此專案已標記全班完成，照片上傳已鎖定；仍可預覽與下載，需主管或管理員退回才能修改。
-        </Surface>
-      ) : project.students.length === 0 ? (
-        <Surface>
-          <div className="py-8 text-center text-gray-400">
-            <Users className="mx-auto mb-3 h-10 w-10 opacity-30" />
-            <p className="text-sm">尚未新增任何學生</p>
-            <p className="mt-1 text-xs">先在班級總覽新增學生名單，再回來放全班照片。</p>
-            <Button as={Link} to={`/projects/${projectId}/review`} variant="primary" className="mt-4">
-              <Users className="h-4 w-4" />
-              回班級總覽新增名單
-            </Button>
-          </div>
-        </Surface>
-      ) : (
-        /* 與個別編輯的照片管理同款頁首：icon＋標題＋meta＋右側動作 */
-        <Surface className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Images className="w-4 h-4 text-amber-500 flex-shrink-0" />
-            <h3 className="font-semibold text-gray-800 text-sm flex-shrink-0">照片管理</h3>
-            <span className="text-xs text-gray-400 min-w-0">
-              第 {activePage + 1} 頁・點一格放全班照片（{project.students.length} 位）
-            </span>
-            {/* 進階入口：檔名已含頁碼與格位的整批檔案，獨立於選格流程之外；
-                token 與個別編輯頁首的「多選上傳」一致（secondary/sm） */}
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="ml-auto whitespace-nowrap"
-              title="檔名需含姓名與格位，例如 小明1-2.jpg＝第 1 頁第 2 格"
-              onClick={() => setIsFilenameBatchWizardOpen(true)}
-            >
-              <ImagePlus className="w-3.5 h-3.5" />
-              依檔名整批匯入
-            </Button>
-          </div>
-
-          {slotPickerSection}
-        </Surface>
-      )}
-    </div>
+    <ClassPhotoPanel
+      isProjectCompleted={isProjectCompleted}
+      projectId={projectId}
+      studentCount={project.students.length}
+      activePage={activePage}
+      slotItems={slotItems}
+      selectedSlotId={selectedSharedPhotoSlotId}
+      onPickSlot={openSlotPhotoModal}
+      onOpenFilenameWizard={() => setIsFilenameBatchWizardOpen(true)}
+    />
   );
 
   // 選格後的後續處理：選分配方式＋上傳，集中在 Modal 內互動
@@ -499,49 +417,7 @@ export default function ClassEdit() {
       }}
     >
       <div data-guide="class-slot-photo-modal" className="space-y-4">
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-violet-600 text-[11px] font-semibold text-white">1</span>
-              <h3 className="text-sm font-semibold text-gray-800">選擇分配方式</h3>
-            </div>
-            <div data-guide="class-photo-strategies" className="grid gap-2 md:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setPhotoStrategy("individual")}
-                aria-pressed={photoStrategy === "individual"}
-                className={`rounded-xl border p-3 text-left transition-all ${
-                  photoStrategy === "individual"
-                    ? "border-violet-400 bg-violet-50/50 ring-2 ring-violet-300"
-                    : "border-gray-200 bg-white hover:border-violet-200 hover:bg-violet-50/30"
-                }`}
-              >
-                <div className="mb-1 flex items-center gap-2">
-                  <h4 className="text-sm font-bold text-gray-900">每人不同張</h4>
-                  <Badge tone="primary">最常用</Badge>
-                </div>
-                <p className="text-xs leading-relaxed text-gray-600">
-                  每位學生這一格放自己的照片，一次上傳多張自動分配。
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPhotoStrategy("shared")}
-                aria-pressed={photoStrategy === "shared"}
-                className={`rounded-xl border p-3 text-left transition-all ${
-                  photoStrategy === "shared"
-                    ? "border-violet-400 bg-violet-50/50 ring-2 ring-violet-300"
-                    : "border-gray-200 bg-white hover:border-violet-200 hover:bg-violet-50/30"
-                }`}
-              >
-                <div className="mb-1 flex items-center gap-2">
-                  <h4 className="text-sm font-bold text-gray-900">全班同一張</h4>
-                </div>
-                <p className="text-xs leading-relaxed text-gray-600">
-                  團體照等共用照片，一張套用到全班這一格。
-                </p>
-              </button>
-            </div>
-          </div>
+          <ClassPhotoStrategyPicker value={photoStrategy} onSelect={setPhotoStrategy} />
 
           {/* 上傳（選了方式才出現） */}
           {photoStrategy !== null && (
@@ -664,50 +540,21 @@ export default function ClassEdit() {
 
   // ── 文字面板（全班共用文字） ─────────────────────────────────────────────
 
-  // 與個別編輯的文字面板同款樣式（共用 TextLabelFieldRow），只差資料層是專案層級
+  // 抽至 ClassTextPanel；label_texts 讀寫操作由本頁的 useLabelTextsEditor 傳入
   const textPanel = (
-    <div data-guide="class-text-panel" className="space-y-4">
-      {activePageTextLabels.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <Type className="w-4 h-4 text-indigo-500" />
-            <h3 className="font-semibold text-gray-800 text-sm">
-              第 {activePage + 1} 頁文字
-            </h3>
-            <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
-              ({"{name}"} 自動代入姓名，清空會輸出空白)
-            </span>
-            <AutoSaveStatus status={saveStatus} className="ml-auto" />
-          </div>
-          <div className="space-y-3">
-            {activePageTextLabels.map(label => {
-              const templateDefaultText = label.text ?? "";
-              const defaultAlign = label.text_align ?? "center";
-              return (
-                <TextLabelFieldRow
-                  key={label.id}
-                  labelId={label.id}
-                  value={getLabelText(activePage, label.id)}
-                  placeholder={templateDefaultText}
-                  defaultText={templateDefaultText}
-                  inheritedValue={templateDefaultText}
-                  hasOverride={hasLabelTextOverride(activePage, label.id)}
-                  align={getLabelAlign(activePage, label.id, defaultAlign)}
-                  disabled={isProjectCompleted}
-                  onChange={value => setLabelText(activePage, label.id, value, defaultAlign)}
-                  onAlignChange={value => setLabelAlign(activePage, label.id, value, defaultAlign)}
-                  onRestoreDefault={() => restoreDefaultLabelText(activePage, label.id, defaultAlign)}
-                  onScheduleSave={scheduleSave}
-                  buttonGuideId="class-text-insert-name"
-                />
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="text-center py-12 text-gray-300 text-sm">此頁沒有可填文字</div>
-      )}
-    </div>
+    <ClassTextPanel
+      activePage={activePage}
+      textLabels={activePageTextLabels}
+      saveStatus={saveStatus}
+      disabled={isProjectCompleted}
+      getLabelText={getLabelText}
+      getLabelAlign={getLabelAlign}
+      hasLabelTextOverride={hasLabelTextOverride}
+      setLabelText={setLabelText}
+      setLabelAlign={setLabelAlign}
+      restoreDefaultLabelText={restoreDefaultLabelText}
+      onScheduleSave={scheduleSave}
+    />
   );
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────

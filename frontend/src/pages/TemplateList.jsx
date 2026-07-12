@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   fetchAllTemplates,
-  createTemplate,
   deleteTemplate,
   renameTemplate,
   fetchTemplateDepartments,
@@ -14,31 +12,23 @@ import {
 import {
   BookOpen,
   CalendarDays,
-  Check,
-  Images,
   LayoutTemplate,
-  Pencil,
   Plus,
-  Trash2,
-  X,
 } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
-import FormModal from "../components/FormModal";
-import {
-  mobileVisibleHoverActionClass,
-  mobileVisibleNamedHoverActionClass,
-} from "../components/ResponsiveActionGroup";
+import CreateTemplateModal from "../components/CreateTemplateModal";
+import TemplateCard from "../components/TemplateCard";
 import {
   Badge,
   Button,
   FormField,
-  IconButton,
   PageHeader,
   SegmentedControl,
   Surface,
   fieldControlClass,
 } from "../components/ui";
 import { useInlineEdit } from "../hooks/useInlineEdit";
+import { statusTone } from "../utils/periodStatus";
 
 const FALLBACK_DEPARTMENTS = [
   { code: "infant", name: "嬰幼部" },
@@ -51,17 +41,6 @@ const PERIOD_STATUSES = [
   { value: "archived", label: "已封存" },
 ];
 
-function statusTone(status) {
-  if (status === "active") return "success";
-  if (status === "archived") return "archive";
-  return "warning";
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  return new Date(value).toLocaleDateString("zh-TW");
-}
-
 export default function TemplateList() {
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
   const [periods, setPeriods] = useState([]);
@@ -73,15 +52,8 @@ export default function TemplateList() {
     department: "infant",
     status: "draft",
   });
-  const [templateForm, setTemplateForm] = useState({
-    name: "",
-    periodId: "",
-    mode: "blank",
-    sourceTemplateId: "",
-  });
   const [showTemplateCreate, setShowTemplateCreate] = useState(false);
   const [creatingPeriod, setCreatingPeriod] = useState(false);
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
 
   const load = useCallback(async () => {
@@ -115,15 +87,6 @@ export default function TemplateList() {
     setSelectedPeriodId(nextPeriod ? String(nextPeriod.id) : "");
   }, [departmentPeriods, selectedPeriodId]);
 
-  useEffect(() => {
-    if (!selectedPeriodId) return;
-    setTemplateForm(form => {
-      const periodStillExists = periods.some(period => String(period.id) === String(form.periodId));
-      if (periodStillExists && form.periodId) return form;
-      return { ...form, periodId: selectedPeriodId };
-    });
-  }, [periods, selectedPeriodId]);
-
   const selectedPeriod = useMemo(
     () => periods.find(period => String(period.id) === String(selectedPeriodId)),
     [periods, selectedPeriodId]
@@ -137,11 +100,6 @@ export default function TemplateList() {
   }, [templates, selectedDepartment, selectedPeriodId]);
 
   // （建立表單已改為 Modal：不再於期別無模板時自動展開，避免一進頁就跳彈窗）
-
-  const periodOptions = useMemo(
-    () => periods.filter(period => period.department === selectedDepartment),
-    [periods, selectedDepartment]
-  );
 
   const { editingId, editingValue: editingName, setEditingValue: setEditingName,
     startEdit, cancelEdit, submitEdit: saveEdit } = useInlineEdit(
@@ -180,33 +138,6 @@ export default function TemplateList() {
       await load();
     } catch {
       toast.error("更新期別狀態失敗");
-    }
-  };
-
-  const handleCreateTemplate = async () => {
-    const targetPeriodId = templateForm.periodId || selectedPeriodId;
-    if (!targetPeriodId) return toast.error("請先選擇期別");
-    if (!templateForm.name.trim()) return toast.error("請填寫模板名稱");
-    if (templateForm.mode === "copy" && !templateForm.sourceTemplateId) {
-      return toast.error("請選擇要複製的模板");
-    }
-
-    setCreatingTemplate(true);
-    try {
-      await createTemplate(
-        templateForm.name.trim(),
-        targetPeriodId,
-        templateForm.mode === "copy" ? templateForm.sourceTemplateId : undefined
-      );
-      toast.success(templateForm.mode === "copy" ? "模板已複製" : "模板已建立");
-      setTemplateForm(form => ({ ...form, name: "", sourceTemplateId: "" }));
-      setShowTemplateCreate(false);
-      await load();
-    } catch (error) {
-      const detail = error.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "建立模板失敗");
-    } finally {
-      setCreatingTemplate(false);
     }
   };
 
@@ -368,75 +299,15 @@ export default function TemplateList() {
       </Surface>
 
       {/* 建立模板 Modal（關閉不清空輸入） */}
-      <FormModal isOpen={showTemplateCreate} title="建立新模板" onClose={() => setShowTemplateCreate(false)}>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <FormField label="模板名稱" className="md:col-span-2">
-            <input
-              id="template-name"
-              data-guide="template-name-input"
-              className={fieldControlClass}
-              placeholder="2026-06 12階 感官世界"
-              value={templateForm.name}
-              onChange={event => setTemplateForm(form => ({ ...form, name: event.target.value }))}
-              onKeyDown={event => event.key === "Enter" && handleCreateTemplate()}
-            />
-          </FormField>
-          <FormField label="目標期別">
-            <select
-              className={fieldControlClass}
-              value={templateForm.periodId || selectedPeriodId}
-              onChange={event => setTemplateForm(form => ({ ...form, periodId: event.target.value }))}
-            >
-              <option value="">請選擇...</option>
-              {periodOptions.map(period => (
-                <option key={period.id} value={period.id}>
-                  {period.name}（{period.status_label}）
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <FormField label="建立方式">
-            <select
-              className={fieldControlClass}
-              value={templateForm.mode}
-              onChange={event => setTemplateForm(form => ({ ...form, mode: event.target.value }))}
-            >
-              <option value="blank">從零開始</option>
-              <option value="copy">複製過往模板</option>
-            </select>
-          </FormField>
-          {templateForm.mode === "copy" && (
-            <FormField label="來源模板" className="md:col-span-2">
-              <select
-                className={fieldControlClass}
-                value={templateForm.sourceTemplateId}
-                onChange={event => setTemplateForm(form => ({ ...form, sourceTemplateId: event.target.value }))}
-              >
-                <option value="">請選擇要複製的模板...</option>
-                {templates.map(template => (
-                  <option key={template.id} value={template.id}>
-                    {template.department_label || "未分類"} / {template.period_name || "未分類"} / {template.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-          )}
-        </div>
-        <div className="mt-4 flex flex-wrap justify-end gap-3">
-          <Button onClick={() => setShowTemplateCreate(false)} variant="ghost">
-            取消
-          </Button>
-          <Button
-            onClick={handleCreateTemplate}
-            disabled={creatingTemplate || !templateForm.name.trim()}
-            data-guide="template-create-button"
-            variant="primary"
-          >
-            <Plus className="h-4 w-4" />
-            {creatingTemplate ? "建立中" : "建立模板"}
-          </Button>
-        </div>
-      </FormModal>
+      <CreateTemplateModal
+        isOpen={showTemplateCreate}
+        onClose={() => setShowTemplateCreate(false)}
+        periods={periods}
+        selectedDepartment={selectedDepartment}
+        selectedPeriodId={selectedPeriodId}
+        templates={templates}
+        onCreated={load}
+      />
 
       {visibleTemplates.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
@@ -450,101 +321,19 @@ export default function TemplateList() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {visibleTemplates.map(template => (
-            <Surface
+            <TemplateCard
               key={template.id}
-              className="group overflow-hidden transition-all hover:border-indigo-200 hover:shadow-md"
-              padding="none"
-              data-guide="template-card"
-            >
-              <div className="p-5">
-                <div className="mb-3 flex items-start justify-between gap-2">
-                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-500">
-                    <BookOpen className="h-4 w-4" />
-                  </div>
-                  <IconButton
-                    label="刪除模板"
-                    onClick={event => handleDelete(template.id, event)}
-                    variant="danger"
-                    className={mobileVisibleHoverActionClass}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </IconButton>
-                </div>
-
-                {editingId === template.id ? (
-                  <div className="mb-2 flex min-w-0 items-center gap-1">
-                    <input
-                      autoFocus
-                      className={`${fieldControlClass} flex-1 py-1 font-semibold`}
-                      value={editingName}
-                      onChange={event => setEditingName(event.target.value)}
-                      onKeyDown={event => {
-                        if (event.key === "Enter") saveEdit(template.id);
-                        if (event.key === "Escape") cancelEdit();
-                      }}
-                    />
-                    <IconButton label="儲存模板名稱" variant="success" onClick={() => saveEdit(template.id)}>
-                      <Check className="h-3.5 w-3.5" />
-                    </IconButton>
-                    <IconButton label="取消編輯模板名稱" onClick={cancelEdit}>
-                      <X className="h-3.5 w-3.5" />
-                    </IconButton>
-                  </div>
-                ) : (
-                  <div className="mb-2 flex min-w-0 items-center gap-1 group/name">
-                    <span className="truncate font-semibold text-gray-900">{template.name}</span>
-                    <IconButton
-                      label="編輯模板名稱"
-                      onClick={() => startEdit(template.id, template.name)}
-                      variant="primary"
-                      size="xs"
-                      className={mobileVisibleNamedHoverActionClass}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </IconButton>
-                  </div>
-                )}
-
-                <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-gray-400" data-guide="template-card-counts">
-                  <Badge tone={statusTone(template.period_status)}>{template.period_status_label || "未分類"}</Badge>
-                  <span>{template.page_count} 頁</span>
-                  <span className="text-gray-300">·</span>
-                  <span className="inline-flex items-center gap-1">
-                    <Images className="h-3 w-3" />
-                    {template.photo_count ?? 0} 張照片
-                  </span>
-                  <span className="text-gray-300">·</span>
-                  <span>{formatDate(template.created_at)}</span>
-                </div>
-
-                <FormField label="所屬期別" className="mb-4">
-                  <select
-                    className={fieldControlClass}
-                    value={template.period_id || ""}
-                    onChange={event => handleMoveTemplate(template, event.target.value)}
-                  >
-                    {periods.map(period => (
-                      <option key={period.id} value={period.id}>
-                        {period.department_label} / {period.name}（{period.status_label}）
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-              </div>
-
-              <div className="border-t border-gray-100 p-3">
-                <Button
-                  as={Link}
-                  to={`/templates/${template.id}/edit`}
-                  data-guide="template-edit-link"
-                  variant="secondary"
-                  fullWidth
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  編輯模板
-                </Button>
-              </div>
-            </Surface>
+              template={template}
+              periods={periods}
+              editingId={editingId}
+              editingName={editingName}
+              onEditStart={startEdit}
+              onEditSave={saveEdit}
+              onEditCancel={cancelEdit}
+              onEditNameChange={setEditingName}
+              onDelete={handleDelete}
+              onMovePeriod={handleMoveTemplate}
+            />
           ))}
         </div>
       )}

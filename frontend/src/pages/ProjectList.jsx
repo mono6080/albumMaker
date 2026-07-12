@@ -1,56 +1,41 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
   fetchAllProjects,
   fetchArchivedProjects,
-  copyStudentsFromProject,
-  createProject,
   deleteProject,
   renameProject,
   restoreProject,
 } from "../api/projectApi";
 import { fetchAvailableTemplates, fetchTemplateDepartments } from "../api/templateApi";
 import {
-  Archive,
   ArchiveRestore,
-  CalendarClock,
-  Check,
   ChevronRight,
   CircleHelp,
-  Eye,
   FolderOpen,
-  MessageSquare,
-  Pencil,
   Plus,
-  RotateCcw,
   Search,
   SlidersHorizontal,
-  Users,
   X,
 } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
 import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
-import FormModal from "../components/FormModal";
+import CreateProjectModal from "../components/CreateProjectModal";
+import ProjectCard, { ArchivedProjectRow } from "../components/ProjectCard";
 import ResponsiveActionGroup, {
-  mobileVisibleHoverActionClass,
-  mobileVisibleNamedHoverActionClass,
   responsiveActionItemClass,
 } from "../components/ResponsiveActionGroup";
 import {
   Badge,
   Button,
   FormField,
-  IconButton,
   PageHeader,
   Surface,
   fieldControlClass,
 } from "../components/ui";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
-
-// ── 專案卡片（memo 化，只在自身資料變動時重渲染）────────────────────────────
 
 const PROJECT_LIST_GUIDE_STEPS = [
   {
@@ -166,193 +151,11 @@ function buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, targetL
   return `沒有符合目前篩選條件的${targetLabel}`;
 }
 
-const ProjectCard = memo(function ProjectCard({
-  project,
-  editingId,
-  editingName,
-  showOwner,
-  canEditProject,
-  onEditStart,
-  onEditSave,
-  onEditCancel,
-  onEditNameChange,
-  onDelete,
-}) {
-  const isEditing = editingId === project.id;
-  const canEdit = canEditProject(project.owner_id);
-
-  return (
-    <Surface
-      padding="none"
-      className="group overflow-hidden transition-all hover:border-indigo-200 hover:shadow-md"
-      data-guide="project-card"
-    >
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            {isEditing ? (
-              <div className="flex items-center gap-1 mb-1 min-w-0">
-                <input
-                  autoFocus
-                  className={`${fieldControlClass} flex-1 py-1 font-semibold`}
-                  value={editingName}
-                  onChange={e => onEditNameChange(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") onEditSave(project.id);
-                    if (e.key === "Escape") onEditCancel();
-                  }}
-                />
-                <IconButton label="儲存專案名稱" variant="success" onClick={() => onEditSave(project.id)}>
-                  <Check className="w-3.5 h-3.5" />
-                </IconButton>
-                <IconButton label="取消編輯專案名稱" onClick={onEditCancel}>
-                  <X className="w-3.5 h-3.5" />
-                </IconButton>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1 group/name min-w-0">
-                <div className="font-semibold text-gray-900 text-lg truncate">{project.name}</div>
-                {canEdit && (
-                  <IconButton
-                    label="編輯專案名稱"
-                    onClick={() => onEditStart(project.id, project.name)}
-                    variant="primary"
-                    size="xs"
-                    className={mobileVisibleNamedHoverActionClass}
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </IconButton>
-                )}
-              </div>
-            )}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-0.5">
-              <Users className="w-3 h-3" />
-              {project.student_count} 位學生 · {new Date(project.created_at).toLocaleDateString("zh-TW")}
-              {project.comment_count > 0 && (
-                <>
-                  <span className="text-gray-300">·</span>
-                  <Link
-                    to={`/projects/${project.id}/review`}
-                    className="inline-flex items-center gap-0.5 font-medium text-violet-600 hover:text-violet-700"
-                    title={`${project.comment_count} 則審閱意見，點擊查看`}
-                  >
-                    <MessageSquare className="w-3 h-3" />
-                    {project.comment_count} 則審閱意見
-                  </Link>
-                </>
-              )}
-              {showOwner && project.owner_name && (
-                <>
-                  <span className="text-gray-300">·</span>
-                  <span>{project.owner_name}</span>
-                </>
-              )}
-              {project.template_period_name && (
-                <>
-                  <span className="text-gray-300">·</span>
-                  <Badge tone="primary">
-                    {project.department_label ? `${project.department_label} / ` : ""}
-                    {project.template_period_name}
-                  </Badge>
-                </>
-              )}
-              {project.completed_at && (
-                <Badge tone="success" title={`完成於 ${new Date(project.completed_at).toLocaleString("zh-TW")}`}>
-                  ✓ 全班完成
-                </Badge>
-              )}
-            </div>
-          </div>
-          {canEdit && (
-            <IconButton
-              label="封存專案"
-              onClick={() => onDelete(project.id)}
-              variant="neutral"
-              className={mobileVisibleHoverActionClass}
-            >
-              <Archive className="w-4 h-4" />
-            </IconButton>
-          )}
-        </div>
-      </div>
-      {/* 兩個入口：編輯（做內容）＋總覽（進度、名單與輸出） */}
-      <div className={`border-t border-gray-100 grid divide-x divide-gray-100 ${canEdit ? "grid-cols-2" : "grid-cols-1"}`}>
-        {canEdit && (
-          <Link
-            to={`/projects/${project.id}/edit`}
-            data-guide="project-edit-link"
-            className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-indigo-600 font-medium hover:bg-indigo-50 transition-colors"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-            編輯相本
-          </Link>
-        )}
-        <Link
-          to={`/projects/${project.id}/review`}
-          data-guide="project-review-link"
-          className="min-w-0 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm text-violet-600 font-medium hover:bg-violet-50 transition-colors"
-        >
-          <Eye className="w-3.5 h-3.5" />
-          班級總覽
-        </Link>
-      </div>
-    </Surface>
-  );
-});
-
-const ArchivedProjectRow = memo(function ArchivedProjectRow({
-  project,
-  showOwner,
-  canEditProject,
-  nowMs,
-  onRestore,
-  isRestoring,
-}) {
-  const expiresAt = project.archive_expires_at ? new Date(project.archive_expires_at) : null;
-  const daysLeft = expiresAt
-    ? Math.max(0, Math.ceil((expiresAt.getTime() - nowMs) / (24 * 60 * 60 * 1000)))
-    : 0;
-
-  return (
-    <div className="grid grid-cols-1 gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-      <div className="min-w-0">
-        <div className="font-medium text-gray-900 truncate">{project.name}</div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
-          <Users className="w-3 h-3" />
-          {project.student_count} 位學生
-          {showOwner && project.owner_name && (
-            <>
-              <span className="text-gray-300">·</span>
-              <span>{project.owner_name}</span>
-            </>
-          )}
-          <span className="text-gray-300">·</span>
-          <CalendarClock className="w-3 h-3" />
-          <span>{daysLeft} 天內可復原</span>
-        </div>
-      </div>
-      {canEditProject(project.owner_id) && (
-        <Button
-          type="button"
-          onClick={() => onRestore(project.id)}
-          disabled={isRestoring}
-          variant="successSoft"
-          size="md"
-        >
-          <RotateCcw className="w-4 h-4" />
-          {isRestoring ? "復原中" : "復原"}
-        </Button>
-      )}
-    </div>
-  );
-});
-
 // ── 專案清單頁面 ──────────────────────────────────────────────────────────────
 
 export default function ProjectList() {
   const { canCreateProject, canEditProject } = usePermissions();
   const { currentUser } = useAuth();
-  const navigate = useNavigate();
   // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
   const showOwner = currentUser?.role !== "teacher";
   const canUseProjectFilters = currentUser?.role === "admin";
@@ -361,16 +164,8 @@ export default function ProjectList() {
   const [listLoadError, setListLoadError] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
-  const [form, setForm] = useState({
-    customName: "",
-    department: "infant",
-    period_id: "",
-    template_id: "",
-    copy_source_id: "",  // 從既有專案複製學生名單（選填）
-  });
   const [showForm, setShowForm] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [nowMs] = useState(() => Date.now());
@@ -490,75 +285,6 @@ export default function ProjectList() {
       .then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS))
       .catch(() => setDepartments(FALLBACK_DEPARTMENTS));
   }, [loadProjectLists]);
-
-  const departmentTemplates = useMemo(
-    () => templates.filter(template => template.department === form.department),
-    [templates, form.department]
-  );
-  const activePeriods = useMemo(() => {
-    const periodMap = new Map();
-    for (const template of departmentTemplates) {
-      if (!template.period_id || periodMap.has(template.period_id)) continue;
-      periodMap.set(template.period_id, {
-        id: template.period_id,
-        name: template.period_name,
-        department: template.department,
-        department_label: template.department_label,
-      });
-    }
-    return Array.from(periodMap.values());
-  }, [departmentTemplates]);
-  const periodTemplates = useMemo(
-    () => departmentTemplates.filter(template => String(template.period_id) === String(form.period_id)),
-    [departmentTemplates, form.period_id]
-  );
-
-  useEffect(() => {
-    const periodExists = activePeriods.some(period => String(period.id) === String(form.period_id));
-    const nextPeriodId = periodExists ? form.period_id : (activePeriods[0]?.id ? String(activePeriods[0].id) : "");
-    const templatesForNextPeriod = departmentTemplates.filter(template => String(template.period_id) === String(nextPeriodId));
-    const templateExists = templatesForNextPeriod.some(template => String(template.id) === String(form.template_id));
-    const nextTemplateId = templateExists ? form.template_id : (templatesForNextPeriod[0]?.id ? String(templatesForNextPeriod[0].id) : "");
-    if (nextPeriodId === form.period_id && nextTemplateId === form.template_id) return;
-    setForm(current => ({
-      ...current,
-      period_id: nextPeriodId,
-      template_id: nextTemplateId,
-    }));
-  }, [activePeriods, departmentTemplates, form.period_id, form.template_id]);
-
-  const selectedTemplate = templates.find(t => String(t.id) === String(form.template_id));
-  const composedName = selectedTemplate
-    ? `${selectedTemplate.name}${form.customName.trim() ? " " + form.customName.trim() : ""}`
-    : form.customName.trim();
-
-  // ── 建立（成功後直接帶去名單頁開始下一步）
-  const handleCreate = async () => {
-    if (!form.template_id) return toast.error("請選擇模板");
-    if (!composedName.trim()) return toast.error("請填寫名稱");
-    setCreating(true);
-    try {
-      const created = await createProject(composedName, form.template_id, form.department, form.period_id);
-      // 選了來源專案就順帶複製學生名單（名冊連結一併延續）
-      if (form.copy_source_id) {
-        try {
-          const copyResult = await copyStudentsFromProject(created.data.id, Number(form.copy_source_id));
-          toast.success(`專案已建立，已複製 ${copyResult.data.created.length} 位學生`);
-        } catch {
-          toast.error("專案已建立，但複製學生名單失敗，請手動新增");
-        }
-      } else {
-        toast.success("專案已建立，先加入學生名單吧");
-      }
-      setForm(current => ({ ...current, customName: "", template_id: "", copy_source_id: "" }));
-      setShowForm(false);
-      navigate(`/projects/${created.data.id}/review`);
-    } catch {
-      toast.error("建立失敗");
-    } finally {
-      setCreating(false);
-    }
-  };
 
   // ── 重命名（樂觀更新）
   const { editingId, editingValue: editingName, setEditingValue: setEditingName,
@@ -789,97 +515,13 @@ export default function ProjectList() {
       )}
 
       {/* Create form（Modal；關閉不清空輸入，誤觸不失資料） */}
-      <FormModal isOpen={showForm} title="新建相本專案" onClose={() => setShowForm(false)}>
-        <div data-guide="project-create-form">
-          <div className="grid grid-cols-1 gap-4 mb-4 md:grid-cols-2">
-            <FormField label="部門">
-              <select
-                className={fieldControlClass}
-                value={form.department}
-                onChange={e => setForm(f => ({
-                  ...f,
-                  department: e.target.value,
-                  period_id: "",
-                  template_id: "",
-                }))}
-              >
-                {departments.map(department => (
-                  <option key={department.code} value={department.code}>{department.name}</option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="期別" hint="這本相本屬於哪一期（由園所行政建立）">
-              <select
-                className={fieldControlClass}
-                value={form.period_id}
-                onChange={e => setForm(f => ({ ...f, period_id: e.target.value, template_id: "" }))}
-                disabled={activePeriods.length <= 1}
-              >
-                {activePeriods.length === 0 ? (
-                  <option value="">尚無使用中期別</option>
-                ) : activePeriods.map(period => (
-                  <option key={period.id} value={period.id}>{period.name}</option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="選擇模板">
-              <select
-                className={fieldControlClass}
-                value={form.template_id}
-                onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
-              >
-                {periodTemplates.length === 0 ? (
-                  <option value="">此期別尚無模板</option>
-                ) : (
-                  <option value="">請選擇...</option>
-                )}
-                {periodTemplates.map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}（{t.page_count} 頁 / {t.photo_count ?? 0} 張照片）
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="自訂名稱" hint="接在模板名稱後，例：分校或班級">
-              <input
-                className={fieldControlClass}
-                placeholder="例：東區校 10階A"
-                value={form.customName}
-                onChange={e => setForm(f => ({ ...f, customName: e.target.value }))}
-              />
-            </FormField>
-            <FormField label="複製學生名單（選填）" hint="從上一期的專案帶入全班名單，不複製照片與文字">
-              <select
-                className={fieldControlClass}
-                value={form.copy_source_id}
-                onChange={e => setForm(f => ({ ...f, copy_source_id: e.target.value }))}
-              >
-                <option value="">不複製</option>
-                {projects
-                  .filter(project => project.student_count > 0)
-                  .map(project => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}（{project.student_count} 位學生）
-                    </option>
-                  ))}
-              </select>
-            </FormField>
-          </div>
-          {composedName && (
-            <div className="text-xs text-gray-500 mb-4 break-words">
-              專案全名：<span className="font-medium text-gray-800">{composedName}</span>
-            </div>
-          )}
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button onClick={() => setShowForm(false)} variant="ghost">
-              取消
-            </Button>
-            <Button onClick={handleCreate} disabled={creating} variant="primary">
-              {creating ? "建立中..." : "建立專案"}
-            </Button>
-          </div>
-        </div>
-      </FormModal>
+      <CreateProjectModal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        templates={templates}
+        departments={departments}
+        projects={projects}
+      />
 
       {/* 零專案時搜尋列是噪音，藏起來讓空狀態引導成為焦點 */}
       {projects.length > 0 && (
