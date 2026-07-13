@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
-from auth import require_role
+from auth import get_current_user, require_role
 from crud.template_crud import get_template_page_or_404
 from database import User, get_db
 from services.file_service import get_background_key, get_sticker_key, read_and_validate_image
@@ -58,6 +58,7 @@ def get_background(
     template_id: int,
     page_id: int,
     db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
     """回傳模板頁面的背景圖檔案。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
@@ -102,6 +103,7 @@ async def upload_sticker(
 def get_sticker(
     template_id: int,
     filename: str,
+    _: User = Depends(get_current_user),
 ):
     """回傳指定貼圖素材檔案。"""
     storage = get_storage()

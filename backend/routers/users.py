@@ -9,11 +9,11 @@ from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
 from crud.user_crud import get_user_or_404, serialize_user_identity
-from database import Project, User, get_db, teacher_supervisors
+from database import Project, ProjectComment, User, get_db, teacher_supervisors
 from services.user_service import (
     create_user_record,
     import_users_from_workbook,
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 class CreateUserBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=50)
     display_name: str = Field(..., min_length=1, max_length=50)
-    password: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=8, max_length=100)
     role: str
     supervisor_id: int | None = None
     supervisor_ids: list[int] | None = None
@@ -40,7 +40,7 @@ class UpdateUserBody(BaseModel):
     role: str | None = None
     supervisor_id: int | None = None
     supervisor_ids: list[int] | None = None
-    new_password: str | None = Field(None, min_length=1, max_length=100)
+    new_password: str | None = Field(None, min_length=8, max_length=100)
     clear_supervisor: bool = False
 
 
@@ -54,7 +54,12 @@ def list_users(
     _: User = Depends(require_role("admin")),
 ):
     """列出所有使用者（含主管顯示名稱）。"""
-    all_users = db.query(User).order_by(User.created_at).all()
+    all_users = (
+        db.query(User)
+        .options(joinedload(User.supervisor), selectinload(User.supervisors))
+        .order_by(User.created_at)
+        .all()
+    )
     return [_serialize_user(user) for user in all_users]
 
 
@@ -166,6 +171,16 @@ def delete_user(
             current_admin.username, current_admin.id,
         )
     db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
+    transferred_comments = db.query(ProjectComment).filter(ProjectComment.author_id == user_id).count()
+    if transferred_comments:
+        logger.warning(
+            "使用者刪除：%s（id=%s）的 %s 則留言作者移交給 admin %s（id=%s）",
+            target_user.username, user_id, transferred_comments,
+            current_admin.username, current_admin.id,
+        )
+        db.query(ProjectComment).filter(ProjectComment.author_id == user_id).update(
+            {"author_id": current_admin.id}
+        )
     db.execute(
         teacher_supervisors.delete().where(teacher_supervisors.c.teacher_id == user_id)
     )

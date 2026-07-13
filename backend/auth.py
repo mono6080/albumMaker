@@ -16,13 +16,19 @@ from database import User, get_db
 
 # 正式部署時必須透過環境變數 SECRET_KEY 設定強密鑰。
 # PRODUCTION=1 時未設定則拒絕啟動；開發環境使用預設值並印出警告。
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+IS_PRODUCTION = _env_flag("PRODUCTION")
 SECRET_KEY = os.environ.get("SECRET_KEY")
+_INSECURE_SECRET_KEYS = {"change_this_to_a_long_random_string", "album-maker-dev-only-do-not-use-in-production"}
+if IS_PRODUCTION and (not SECRET_KEY or SECRET_KEY in _INSECURE_SECRET_KEYS or len(SECRET_KEY) < 32):
+    raise RuntimeError(
+        "正式環境 SECRET_KEY 必須設定為至少 32 字元的隨機值。"
+        "請執行：python -c 'import secrets; print(secrets.token_hex(32))' 並寫入 .env"
+    )
 if not SECRET_KEY:
-    if os.environ.get("PRODUCTION"):
-        raise RuntimeError(
-            "環境變數 SECRET_KEY 未設定。"
-            "請執行：python -c 'import secrets; print(secrets.token_hex(32))' 並寫入 .env"
-        )
     SECRET_KEY = "album-maker-dev-only-do-not-use-in-production"
     print("[WARNING] SECRET_KEY 未設定，使用開發用預設值。正式部署請在 .env 設定 SECRET_KEY 與 PRODUCTION=1")
 ALGORITHM = "HS256"
@@ -44,13 +50,14 @@ def hash_password(plain_password: str) -> str:
 
 # ── JWT 工具 ──────────────────────────────────────────────────────────────────
 
-def create_access_token(user_id: int, username: str, role: str) -> str:
+def create_access_token(user_id: int, username: str, role: str, auth_version: int = 0) -> str:
     """產生包含使用者資訊的 JWT，有效期 ACCESS_TOKEN_EXPIRE_DAYS 天。"""
     expire_at = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     payload = {
         "sub": str(user_id),
         "username": username,
         "role": role,
+        "ver": auth_version,
         "exp": expire_at,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -92,6 +99,8 @@ def get_current_user(
     current_user = db.query(User).filter(User.id == user_id).first()
     if not current_user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="使用者不存在")
+    if int(payload.get("ver", 0)) != int(current_user.auth_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登入狀態已失效，請重新登入")
     return current_user
 
 

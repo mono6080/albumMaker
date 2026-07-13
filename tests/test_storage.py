@@ -7,7 +7,8 @@ import uuid
 
 import pytest
 
-from services.storage import LocalStorageAdapter, R2StorageAdapter
+from services.storage import LocalStorageAdapter, R2StorageAdapter, _validate_r2_serve_mode
+from services.project_service import _clear_student_render_outputs
 
 
 class FakeClientError(Exception):
@@ -168,6 +169,23 @@ def test_r2_delete_prefix_removes_render_output_variants():
     assert client.objects["projects/proj1/output/demo-other.pdf"] == b"other"
 
 
+def test_student_output_cleanup_keeps_same_prefix_student():
+    client = FakeS3Client()
+    adapter = R2StorageAdapter(bucket="bucket", s3_client=client)
+    prefix = "projects/proj1/output"
+    adapter.put(f"{prefix}/班級-小明.pdf", b"print")
+    adapter.put(f"{prefix}/班級-小明_screen.pdf", b"screen")
+    adapter.put(f"{prefix}/班級-小明/images/print/page.jpg", b"image")
+    adapter.put(f"{prefix}/班級-小明二.pdf", b"other")
+
+    _clear_student_render_outputs(adapter, prefix, "班級-小明")
+
+    assert f"{prefix}/班級-小明.pdf" not in client.objects
+    assert f"{prefix}/班級-小明_screen.pdf" not in client.objects
+    assert f"{prefix}/班級-小明/images/print/page.jpg" not in client.objects
+    assert client.objects[f"{prefix}/班級-小明二.pdf"] == b"other"
+
+
 def test_r2_serve_proxy_returns_file_bytes_with_content_type():
     """proxy 模式維持原本由後端回傳檔案的 API 行為。"""
     adapter = R2StorageAdapter(bucket="bucket", s3_client=FakeS3Client())
@@ -194,6 +212,13 @@ def test_r2_serve_redirect_uses_public_base_url_and_encoded_key():
         "https://assets.example.com/base/templates/tmpl1/backgrounds/"
         "page1_%E6%84%9F%E5%AE%98%E4%B8%96%E7%95%8C.jpg"
     )
+
+
+def test_production_rejects_public_r2_redirect_mode():
+    with pytest.raises(RuntimeError, match="繞過媒體登入權限"):
+        _validate_r2_serve_mode("redirect", production=True)
+    _validate_r2_serve_mode("proxy", production=True)
+    _validate_r2_serve_mode("redirect", production=False)
 
 
 def test_r2_key_prefix_is_applied_to_remote_objects_but_not_public_keys():

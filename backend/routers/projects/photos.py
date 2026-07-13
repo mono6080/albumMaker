@@ -2,7 +2,6 @@
 # 處理照片上傳、縮圖、讀取與欄位對應關係更新
 
 import json
-from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -13,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import User, get_db
+from database import User, get_db, utc_now
 from services.file_service import (
     PHOTO_THUMBNAIL_SIZE,
     build_photo_thumbnail_jpeg,
@@ -31,7 +30,7 @@ from services.student_pages import (
     photo_record_key,
 )
 
-from ._helpers import _parse_json_field, assert_project_content_writable
+from ._helpers import _parse_json_field, assert_project_content_writable, assert_project_readable
 from .schemas import (
     BatchPhotoUploadResult,
     PhotoMappingPayload,
@@ -51,12 +50,14 @@ def _get_photo_key_or_404(
     page_index: int,
     slot_id: int,
     db: Session,
+    current_user: User,
 ) -> str:
-    get_project_or_404(project_id, db)
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     pages_data = parse_pages_data(student.pages_data_json)
-    if page_index >= len(pages_data):
+    if page_index < 0 or page_index >= len(pages_data):
         raise HTTPException(status_code=404, detail="找不到頁面")
 
     photo_record = pages_data[page_index].get("photos", {}).get(str(slot_id))
@@ -85,6 +86,41 @@ def _assert_project_photo_slot_exists(project, page_index: int, slot_id: int) ->
         raise HTTPException(status_code=404, detail="找不到照片格")
 
 
+def _validate_photo_mapping(project, student, pages_data: list, mapping: dict) -> dict:
+    allowed_prefix = f"projects/proj{project.id}/photos/student{student.id}/"
+    existing_paths = {
+        photo_record_key(record)
+        for page_data in pages_data
+        for record in (page_data.get("photos") or {}).values()
+        if photo_record_key(record)
+    }
+    validated_mapping = {}
+    for page_index_text, slot_updates in mapping.items():
+        try:
+            page_index = int(page_index_text)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="照片頁面索引格式錯誤")
+        if page_index < 0:
+            raise HTTPException(status_code=400, detail="照片頁面索引不可為負數")
+        validated_slots = {}
+        for slot_id_text, slot_value in slot_updates.items():
+            try:
+                slot_id = int(slot_id_text)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="照片格位格式錯誤")
+            _assert_project_photo_slot_exists(project, page_index, slot_id)
+            if slot_value is None:
+                validated_slots[str(slot_id)] = None
+                continue
+            photo_value = slot_value.model_dump()
+            photo_path = photo_value["path"]
+            if not photo_path.startswith(allowed_prefix) or photo_path not in existing_paths:
+                raise HTTPException(status_code=400, detail="照片路徑不屬於目前學生")
+            validated_slots[str(slot_id)] = photo_value
+        validated_mapping[str(page_index)] = validated_slots
+    return validated_mapping
+
+
 @router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
 async def upload_photo(
     project_id: int,
@@ -97,14 +133,14 @@ async def upload_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
-    processed_upload = await read_and_process_photo_upload(file)
-
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
+    _assert_project_photo_slot_exists(project, page_index, slot_id)
+    processed_upload = await read_and_process_photo_upload(file)
 
     storage = get_storage()
-    now = datetime.utcnow()
+    now = utc_now()
 
     def _mutate(pages_data) -> str:
         key = apply_photo_to_page(
@@ -133,14 +169,13 @@ async def upload_shared_project_photo(
     current_user: User = Depends(get_current_user),
 ):
     """上傳專案共用照片，並套用到所有學生的同一頁同一照片格。"""
-    processed_upload = await read_and_process_photo_upload(file)
-
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     _assert_project_photo_slot_exists(project, page_index, slot_id)
+    processed_upload = await read_and_process_photo_upload(file)
 
     storage = get_storage()
-    now = datetime.utcnow()
+    now = utc_now()
 
     def _fanout_to_all_students() -> int:
         # 第 1 位實際上傳 bytes，其餘用 storage.copy（R2 為 server-side copy），
@@ -211,7 +246,7 @@ async def batch_upload_photos(
     students_by_id = {str(s.id): s for s in project.students}
 
     storage = get_storage()
-    now = datetime.utcnow()
+    now = utc_now()
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
@@ -296,9 +331,10 @@ def get_photo(
     page_index: int,
     slot_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """回傳學生指定欄位的照片檔案。"""
-    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db)
+    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db, current_user)
     storage = get_storage()
     return storage.serve(photo_key)
 
@@ -311,9 +347,10 @@ def get_photo_thumbnail(
     slot_id: int,
     size: int = Query(PHOTO_THUMBNAIL_SIZE, ge=80, le=1200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """回傳學生照片縮圖，供照片管理列表使用。"""
-    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db)
+    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db, current_user)
     storage = get_storage()
     thumbnail_key = get_photo_thumbnail_key(photo_key, size)
     # HTTP header 只能用 latin-1，含中文檔名時需 URL-encode
@@ -373,8 +410,9 @@ def update_photo_mapping(
 
     # mapping 也是 pages_data 的 read-modify-write：與上傳共用學生寫鎖
     def _mutate(pages_data) -> None:
-        apply_photo_mapping(pages_data, payload.pages, storage)
-        now = datetime.utcnow()
+        validated_mapping = _validate_photo_mapping(project, student, pages_data, payload.pages)
+        apply_photo_mapping(pages_data, validated_mapping, storage)
+        now = utc_now()
         student.updated_at = now
         project.updated_at = now
 

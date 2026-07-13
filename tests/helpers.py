@@ -78,7 +78,7 @@ def count_non_whiteish_pixels(image: Image.Image, box: tuple[int, int, int, int]
     sample = image.crop(box).convert("RGB")
     return sum(
         any(channel < threshold for channel in pixel)
-        for pixel in sample.getdata()
+        for pixel in sample.get_flattened_data()
     )
 
 
@@ -169,7 +169,12 @@ def smoke_layout() -> dict:
     }
 
 
-def create_template_with_page(client: TestClient, name: str | None = None) -> tuple[int, int]:
+def create_template_with_page(
+    client: TestClient,
+    name: str | None = None,
+    *,
+    photo_slot_count: int = 1,
+) -> tuple[int, int]:
     template_response = client.post("/api/templates/", data={"name": name or unique_name("template")})
     assert_status(template_response, 200)
     template_id = template_response.json()["id"]
@@ -178,9 +183,20 @@ def create_template_with_page(client: TestClient, name: str | None = None) -> tu
     assert_status(page_response, 200)
     page_id = page_response.json()["id"]
 
+    layout = smoke_layout()
+    if photo_slot_count >= 2:
+        layout["photo_slots"].append({
+            "id": 2,
+            "x": 360,
+            "y": 96,
+            "width": 240,
+            "height": 180,
+            "border": True,
+            "border_width": 8,
+        })
     layout_response = client.put(
         f"/api/templates/{template_id}/pages/{page_id}/layout",
-        json=smoke_layout(),
+        json=layout,
     )
     assert_status(layout_response, 200)
     assert layout_response.json() == {"ok": True}

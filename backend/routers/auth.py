@@ -1,15 +1,13 @@
 # 認證路由模組
 # 提供登入、登出與取得當前使用者資訊的端點
 
-import os
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from auth import create_access_token, get_current_user, verify_password
+from auth import IS_PRODUCTION, create_access_token, get_current_user, verify_password
 from crud.user_crud import get_user_by_username, serialize_user_identity
 from database import User, get_db
 
@@ -17,7 +15,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
 
 # 正式環境（PRODUCTION=1）啟用 Secure 旗標，確保 Cookie 只走 HTTPS
-_IS_PRODUCTION = bool(os.environ.get("PRODUCTION"))
 _COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天，與 JWT 有效期一致
 
 
@@ -45,13 +42,14 @@ def login(
         user_id=target_user.id,
         username=target_user.username,
         role=target_user.role,
+        auth_version=target_user.auth_version or 0,
     )
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
         samesite="lax",
-        secure=_IS_PRODUCTION,
+        secure=IS_PRODUCTION,
         max_age=_COOKIE_MAX_AGE,
         path="/",
     )

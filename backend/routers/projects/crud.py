@@ -1,17 +1,19 @@
 # 專案與學生 CRUD 路由
 # 處理專案建立/讀取/修改/刪除，以及學生的批次新增、改名、刪除與頁面跳過
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form
 from fastapi import HTTPException
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import Project, Student, Template, User, get_db
+from database import Project, ProjectComment, Student, Template, User, get_db, utc_now
 from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
+from services.project_service import purge_expired_archived_projects
 from services.storage import get_storage
 from services.student_pages import ensure_page_entry, mutate_student_pages
 from template_periods import department_label
@@ -31,6 +33,7 @@ from .schemas import (
     ProjectCreated,
     ProjectDetail,
     ProjectSummary,
+    StudentEditorDetail,
 )
 
 router = APIRouter()
@@ -45,7 +48,7 @@ def list_projects(
     """依角色回傳可存取的專案摘要清單（依建立時間降序）。"""
     query = _visible_projects_query(db, current_user).filter(Project.deleted_at.is_(None))
     all_projects = query.order_by(Project.created_at.desc()).all()
-    return [_serialize_project_summary(project) for project in all_projects]
+    return [_serialize_project_summary(project, student_count, comment_count) for project, student_count, comment_count in all_projects]
 
 
 @router.get("/archive", response_model=list[ProjectSummary])
@@ -54,14 +57,15 @@ def list_archived_projects(
     current_user: User = Depends(get_current_user),
 ):
     """回傳 30 天復原期限內的封存專案。"""
-    now = datetime.utcnow()
+    now = utc_now()
+    purge_expired_archived_projects(db, now)
     query = (
         _visible_projects_query(db, current_user)
         .filter(Project.deleted_at.isnot(None))
         .filter(Project.archive_expires_at > now)
     )
     archived_projects = query.order_by(Project.deleted_at.desc()).all()
-    return [_serialize_project_summary(project) for project in archived_projects]
+    return [_serialize_project_summary(project, student_count, comment_count) for project, student_count, comment_count in archived_projects]
 
 
 @router.post("/", response_model=ProjectCreated, status_code=201)
@@ -146,6 +150,47 @@ def get_project(
     }
 
 
+@router.get("/{project_id}/students/{student_id}/editor", response_model=StudentEditorDetail)
+def get_student_editor_detail(
+    project_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """回傳個別編輯器資料；只有目前學生包含 pages_data。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+    student = get_student_or_404(student_id, project_id, db)
+    student_summaries = (
+        db.query(Student.id, Student.name, Student.order_index)
+        .filter(Student.project_id == project_id)
+        .order_by(Student.order_index)
+        .all()
+    )
+    return {
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "template_id": project.template_id,
+            "owner_id": project.owner_id,
+            "completed_at": project.completed_at,
+            "label_texts": _parse_json_field(project.label_texts_json or "{}", "label_texts_json"),
+            "students": [
+                {"id": item.id, "name": item.name, "order_index": item.order_index}
+                for item in student_summaries
+            ],
+        },
+        "student": {
+            "id": student.id,
+            "name": student.name,
+            "order_index": student.order_index,
+            "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
+            "output_filename": student.output_filename,
+            "updated_at": student.updated_at,
+        },
+    }
+
+
 @router.patch("/{project_id}")
 def rename_project(
     project_id: int,
@@ -170,7 +215,7 @@ def delete_project(
     """將指定專案封存 30 天，期限內可復原。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    now = datetime.utcnow()
+    now = utc_now()
     project.deleted_at = now
     project.archive_expires_at = now + timedelta(days=PROJECT_ARCHIVE_DAYS)
     project.updated_at = now
@@ -194,9 +239,10 @@ def restore_project(
     assert_project_writable(project, current_user)
     if project.deleted_at is None:
         return {"ok": True}
-    now = datetime.utcnow()
+    now = utc_now()
     if project.archive_expires_at and project.archive_expires_at <= now:
-        raise HTTPException(status_code=410, detail="此專案已超過 30 天復原期限")
+        purge_expired_archived_projects(db, now)
+        raise HTTPException(status_code=404, detail="專案不存在或已清除")
     project.deleted_at = None
     project.archive_expires_at = None
     project.updated_at = now
@@ -217,7 +263,7 @@ def complete_project(
     if not project.students:
         raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
     if project.completed_at is None:
-        project.completed_at = datetime.utcnow()
+        project.completed_at = utc_now()
         db.commit()
     return {"ok": True, "completed_at": project.completed_at}
 
@@ -240,11 +286,21 @@ def _visible_projects_query(db: Session, current_user: User):
     """依角色回傳可見專案查詢，呼叫端再決定 active/archive 篩選。"""
     from crud.user_crud import get_visible_owner_ids
 
-    # comments 用 selectinload：與 students 同為集合，兩個 joinedload 會產生笛卡兒積
-    query = db.query(Project).options(
+    student_count = (
+        db.query(func.count(Student.id))
+        .filter(Student.project_id == Project.id)
+        .correlate(Project)
+        .scalar_subquery()
+    )
+    comment_count = (
+        db.query(func.count(ProjectComment.id))
+        .filter(ProjectComment.project_id == Project.id)
+        .correlate(Project)
+        .scalar_subquery()
+    )
+    query = db.query(Project, student_count, comment_count).options(
         joinedload(Project.owner),
-        joinedload(Project.students),
-        selectinload(Project.comments),
+        joinedload(Project.template_period),
     )
 
     visible_owner_ids = get_visible_owner_ids(current_user, db)
@@ -253,7 +309,7 @@ def _visible_projects_query(db: Session, current_user: User):
     return query.filter(Project.owner_id.in_(visible_owner_ids))
 
 
-def _serialize_project_summary(project: Project) -> dict:
+def _serialize_project_summary(project: Project, student_count: int, comment_count: int) -> dict:
     return {
         "id": project.id,
         "name": project.name,
@@ -263,8 +319,8 @@ def _serialize_project_summary(project: Project) -> dict:
         "template_period_id": project.template_period_id,
         "template_period_name": project.template_period.name if project.template_period else None,
         "created_at": project.created_at,
-        "student_count": len(project.students),
-        "comment_count": len(project.comments),
+        "student_count": student_count,
+        "comment_count": comment_count,
         "owner_id": project.owner_id,
         "owner_name": project.owner.display_name if project.owner else None,
         "deleted_at": project.deleted_at,

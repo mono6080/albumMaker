@@ -5,11 +5,14 @@
 import hashlib
 import io
 import json
+import logging
 import re
 import zipfile
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
-from database import Project, Student
+from database import Project, Student, utc_now
 from services.label_texts import (
     get_label_entry_text,
     label_entry_has_style_override,
@@ -25,6 +28,36 @@ from services.render_service import (
 )
 from services.storage import get_storage
 from services.zip_stream import open_zip_stream
+
+logger = logging.getLogger(__name__)
+
+
+def purge_expired_archived_projects(db, now: datetime | None = None) -> list[int]:
+    """刪除超過復原期限的專案與整個 storage namespace。"""
+    cutoff = now or utc_now()
+    expired_projects = (
+        db.query(Project)
+        .filter(
+            Project.deleted_at.isnot(None),
+            Project.archive_expires_at.isnot(None),
+            Project.archive_expires_at <= cutoff,
+        )
+        .all()
+    )
+    storage = get_storage()
+    purged_project_ids = []
+    for project in expired_projects:
+        try:
+            storage.delete_prefix(f"projects/proj{project.id}")
+        except Exception as storage_error:
+            logger.error("過期專案 storage 清理失敗 project_id=%s: %s", project.id, storage_error)
+            continue
+        purged_project_ids.append(project.id)
+        db.delete(project)
+    if purged_project_ids:
+        db.commit()
+        logger.info("已清理過期封存專案 project_ids=%s", purged_project_ids)
+    return purged_project_ids
 
 
 # ── 檔名與目錄工具 ─────────────────────────────────────────────────────────────
@@ -49,9 +82,12 @@ def build_combined_stem(project_name: str, student_name: str) -> str:
 def student_pdf_key_for_mode(base_key: str, output_mode: str) -> str:
     """由列印版 PDF key（students.output_filename）推導指定畫質的 key。
 
-    screen 版＝同 stem 加 _screen 後綴；對 `.pdf` 副檔名的硬假設見 known-issues.md。
+    screen 版＝同檔名主體加 _screen 後綴，保留原副檔名。
     """
-    return base_key[:-4] + "_screen.pdf" if output_mode == "screen" else base_key
+    if output_mode != "screen":
+        return base_key
+    path = PurePosixPath(base_key)
+    return str(path.with_name(f"{path.stem}_screen{path.suffix}"))
 
 
 # ── HTTP 下載標頭工具 ──────────────────────────────────────────────────────────
@@ -189,8 +225,35 @@ def get_template_page_layouts(project: Project) -> list[dict]:
 
 # ── 渲染與儲存 ─────────────────────────────────────────────────────────────────
 
-# 渲染管線版本：渲染邏輯有視覺影響的修改時 +1，讓 dirty-skip 全部失效重渲
-_RENDER_PIPELINE_VERSION = 1
+_SERVICES_DIR = Path(__file__).resolve().parent
+_RENDER_PIPELINE_FILES = (
+    _SERVICES_DIR / "render_service.py",
+    _SERVICES_DIR / "element_renderers.py",
+    _SERVICES_DIR / "draw_helpers.py",
+    _SERVICES_DIR / "photo_frame_geometry.py",
+    _SERVICES_DIR / "design_tokens.json",
+)
+
+
+def _render_pipeline_fingerprint(paths: tuple[Path, ...] = _RENDER_PIPELINE_FILES) -> str:
+    """由實際渲染來源自動推導版本，避免修改視覺邏輯卻忘記手動 bump。"""
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:20]
+
+
+_RENDER_PIPELINE_VERSION = _render_pipeline_fingerprint()
+
+
+def _clear_student_render_outputs(storage, output_prefix: str, combined_stem: str) -> None:
+    """只清除指定學生的兩份 PDF 與專屬頁面圖／render state。"""
+    storage.delete(f"{output_prefix}/{combined_stem}.pdf")
+    storage.delete(f"{output_prefix}/{combined_stem}_screen.pdf")
+    storage.delete_prefix(f"{output_prefix}/{combined_stem}")
 
 
 def _album_render_hash(page_layouts: list[dict], student_name: str, student_pages_data: list) -> str:
@@ -280,7 +343,7 @@ def render_and_save_student_album(
     rendered_screen_images = derive_screen_images(rendered_print_images)
 
     # 清除該學生舊的輸出（PDF + 頁面圖），避免無限累積
-    storage.delete_prefix(f"{output_prefix}/{combined_stem}")
+    _clear_student_render_outputs(storage, output_prefix, combined_stem)
     storage.put(print_key, save_album_pdf(rendered_print_images, mode="print"))
     storage.put(screen_key, save_album_pdf(rendered_screen_images, mode="screen"))
     for filename, img_bytes in save_album_images(rendered_print_images, combined_stem, mode="print").items():

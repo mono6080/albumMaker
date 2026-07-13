@@ -9,8 +9,9 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from auth import get_current_user
 from crud.template_crud import get_template_or_404, get_template_page_or_404
-from database import get_db
+from database import User, get_db
 from services.render_service import render_page
 
 from ._helpers import _template_page_layout_with_background
@@ -36,6 +37,7 @@ def preview_template_page(
     template_id: int,
     page_id: int,
     db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
     """渲染模板頁面預覽圖（以「姓名」佔位符代替學生姓名），回傳 JPEG。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
@@ -56,6 +58,7 @@ def preview_template_spread(
     template_id: int,
     start_page_index: int,
     db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
     """將模板中連續兩頁合併為橫向預覽圖，回傳 JPEG。"""
     template = get_template_or_404(template_id, db)

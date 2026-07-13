@@ -113,6 +113,18 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
         )
         assert_status(unsupported_type, 415)
 
+        spoofed_type = client.post(
+            photo_url,
+            files={"file": ("fake.jpg", b"not an image", "image/jpeg")},
+        )
+        assert_status(spoofed_type, 415)
+
+        invalid_slot = client.post(
+            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/999",
+            files={"file": ("valid.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(invalid_slot, 404)
+
         oversized_photo = client.post(
             photo_url,
             files={"file": ("too-large.jpg", large_jpeg_bytes(), "image/jpeg")},
@@ -141,6 +153,19 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
             files={"file": ("edge.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(valid_upload, 200)
+
+        sanitized_upload = client.post(
+            photo_url,
+            files={"file": ("../../escaped.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(sanitized_upload, 200)
+        assert sanitized_upload.json()["path"].endswith("/p0_slot1_escaped.jpg")
+
+        client.cookies.clear()
+        assert_status(client.get(photo_url), 401)
+        assert_status(client.get(f"{photo_url}/thumbnail"), 401)
+        login(client)
+        assert_status(client.get(photo_url), 200)
 
         thumbnail = client.get(f"{photo_url}/thumbnail")
         assert_status(thumbnail, 200)
@@ -178,6 +203,46 @@ def test_render_failure_edges_for_templates_without_pages():
         assert_status(render_all, 200)
         assert render_all.json()["rendered"] == []
         assert render_all.json()["errors"] == [{"student": "No Page Student", "error": "產生失敗"}]
+
+
+def test_template_in_use_cannot_be_deleted(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client)
+        background_upload = client.post(
+            f"/api/templates/{template_id}/pages/{page_id}/background",
+            files={"file": ("keep.png", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(background_upload, 200)
+        create_project(client, template_id, name=unique_name("template_reference"))
+
+        blocked_delete = client.delete(f"/api/templates/{template_id}")
+        assert_status(blocked_delete, 409)
+        assert_status(client.get(f"/api/templates/{template_id}"), 200)
+        assert_status(client.get(f"/api/templates/{template_id}/pages/{page_id}/background"), 200)
+
+
+def test_deleting_comment_author_transfers_comments_to_admin():
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("comment_transfer"))
+        art_team, art_password = create_user(client, "art_team")
+
+        client.cookies.clear()
+        login(client, art_team["username"], art_password)
+        comment = client.post(f"/api/projects/{project_id}/comments", data={"content": "保留此留言"})
+        assert_status(comment, 201)
+
+        client.cookies.clear()
+        admin_identity = login(client)
+        assert_status(client.delete(f"/api/users/{art_team['id']}"), 200)
+        comments = client.get(f"/api/projects/{project_id}/comments")
+        assert_status(comments, 200)
+        assert comments.json()[0]["author_id"] == admin_identity["user_id"]
+        assert comments.json()[0]["content"] == "保留此留言"
 
 
 def test_project_mutation_role_edges(monkeypatch, tmp_path):
@@ -226,7 +291,7 @@ def test_photo_mapping_swap_keeps_both_files(monkeypatch, tmp_path):
 
     with started_client() as client:
         login(client)
-        template_id, _ = create_template_with_page(client)
+        template_id, _ = create_template_with_page(client, photo_slot_count=2)
         project_id = create_project(client, template_id, name=unique_name("mapping_swap_project"))
         student_id = create_student(client, project_id)
 
@@ -269,6 +334,41 @@ def test_photo_mapping_swap_keeps_both_files(monkeypatch, tmp_path):
         assert_status(swapped_first_slot, 200)
         swapped_second_slot = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2")
         assert_status(swapped_second_slot, 200)
+
+
+def test_photo_mapping_rejects_foreign_storage_path(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        first_project_id = create_project(client, template_id, name=unique_name("mapping_owner"))
+        second_project_id = create_project(client, template_id, name=unique_name("mapping_foreign"))
+        first_student_id = create_student(client, first_project_id, "First Student")
+        second_student_id = create_student(client, second_project_id, "Second Student")
+
+        first_upload = client.post(
+            f"/api/projects/{first_project_id}/students/{first_student_id}/pages/0/photos/1",
+            files={"file": ("first.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(first_upload, 200)
+        second_upload = client.post(
+            f"/api/projects/{second_project_id}/students/{second_student_id}/pages/0/photos/1",
+            files={"file": ("second.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(second_upload, 200)
+
+        foreign_mapping = client.put(
+            f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            json={"pages": {"0": {"1": {"path": second_upload.json()["path"]}}}},
+        )
+        assert_status(foreign_mapping, 400)
+
+        own_mapping = client.put(
+            f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            json={"pages": {"0": {"1": {"path": first_upload.json()["path"]}}}},
+        )
+        assert_status(own_mapping, 200)
 
 
 def test_corrupt_project_json_returns_422():

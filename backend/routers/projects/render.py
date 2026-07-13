@@ -80,12 +80,14 @@ def preview_project_page(
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     t: str | None = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
 
     page_layouts = get_template_page_layouts(project)
-    if page_index >= len(page_layouts):
+    if page_index < 0 or page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
     project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
@@ -119,13 +121,15 @@ def preview_student_page(
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     t: str | None = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """渲染學生個人頁面預覽，回傳 JPEG。"""
     project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
     page_layouts = get_template_page_layouts(project)
-    if page_index >= len(page_layouts):
+    if page_index < 0 or page_index >= len(page_layouts):
         raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
     project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")

@@ -3,7 +3,7 @@
 # contracts against the tmp SQLite database configured in conftest.py.
 
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -39,7 +39,7 @@ def test_health_and_auth_cookie_roundtrip():
     with started_client() as client:
         health = client.get("/api/health")
         assert_status(health, 200)
-        assert health.json() == {"status": "ok"}
+        assert health.json() == {"status": "ok", "database": "ok"}
 
         unauthenticated = client.get("/api/auth/me")
         assert_status(unauthenticated, 401)
@@ -244,11 +244,26 @@ def test_user_management_allows_multiple_teacher_supervisors():
         assert teacher_after_demote["supervisor_ids"] == [second_supervisor["id"]]
 
 
-def test_project_delete_archives_and_restore_recovers():
+def test_project_delete_archives_and_restore_recovers(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
         project_id = create_project(client, template_id, name=unique_name("archive_project"))
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/batch", json=["Archived Student"]),
+            200,
+        )
+        project_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(project_detail, 200)
+        student_id = project_detail.json()["students"][0]["id"]
+        upload_response = client.post(
+            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            files={"file": ("archived.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(upload_response, 200)
+        project_storage_dir = tmp_path / "uploads" / "projects" / f"proj{project_id}"
+        assert project_storage_dir.exists()
 
         delete_response = client.delete(f"/api/projects/{project_id}")
         assert_status(delete_response, 200)
@@ -282,7 +297,7 @@ def test_project_delete_archives_and_restore_recovers():
         db = SessionLocal()
         try:
             archived_project = db.query(Project).filter(Project.id == project_id).one()
-            archived_project.archive_expires_at = datetime.utcnow() - timedelta(days=1)
+            archived_project.archive_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
             db.commit()
         finally:
             db.close()
@@ -290,9 +305,15 @@ def test_project_delete_archives_and_restore_recovers():
         expired_archive = client.get("/api/projects/archive")
         assert_status(expired_archive, 200)
         assert project_id not in {project["id"] for project in expired_archive.json()}
+        assert not project_storage_dir.exists()
+        db = SessionLocal()
+        try:
+            assert db.query(Project).filter(Project.id == project_id).first() is None
+        finally:
+            db.close()
 
         expired_restore = client.post(f"/api/projects/{project_id}/restore")
-        assert_status(expired_restore, 410)
+        assert_status(expired_restore, 404)
 
 
 def test_admin_can_import_users_from_excel():
@@ -344,24 +365,42 @@ def test_admin_can_import_users_from_excel():
         assert login_payload["role"] == "teacher"
 
 
-def test_admin_can_reset_user_password_to_short_value():
+def test_admin_password_reset_rejects_short_value_and_revokes_old_token():
     with started_client() as client:
         login(client)
-        art_team, _ = create_user(client, "art_team")
+        art_team, original_password = create_user(client, "art_team")
 
-        reset_response = client.patch(
+        client.cookies.clear()
+        login(client, art_team["username"], original_password)
+        old_access_token = client.cookies.get("access_token")
+
+        client.cookies.clear()
+        login(client)
+
+        short_reset = client.patch(
             f"/api/users/{art_team['id']}",
             json={"new_password": "admin"},
+        )
+        assert_status(short_reset, 422)
+
+        new_password = "new-password-456"
+        reset_response = client.patch(
+            f"/api/users/{art_team['id']}",
+            json={"new_password": new_password},
         )
         assert_status(reset_response, 200)
 
         client.cookies.clear()
-        login_payload = login(client, art_team["username"], "admin")
+        client.cookies.set("access_token", old_access_token)
+        assert_status(client.get("/api/auth/me"), 401)
+
+        client.cookies.clear()
+        login_payload = login(client, art_team["username"], new_password)
         assert login_payload["username"] == art_team["username"]
         assert login_payload["role"] == "art_team"
 
 
-def test_admin_can_create_user_with_short_initial_password():
+def test_admin_cannot_create_user_with_short_initial_password():
     with started_client() as client:
         login(client)
         username = unique_name("short_password_user")
@@ -374,12 +413,7 @@ def test_admin_can_create_user_with_short_initial_password():
                 "role": "art_team",
             },
         )
-        assert_status(create_response, 201)
-
-        client.cookies.clear()
-        login_payload = login(client, username, "admin")
-        assert login_payload["username"] == username
-        assert login_payload["role"] == "art_team"
+        assert_status(create_response, 422)
 
 
 def test_role_access_and_none_login_contracts():
@@ -497,13 +531,18 @@ def test_role_access_and_none_login_contracts():
         assert_status(art_writes_admin, 403)
 
 
-def test_public_preview_endpoints_do_not_require_auth():
+def test_preview_endpoints_require_auth():
     with started_client() as client:
         login(client)
         template_id, page_id = create_template_with_page(client)
         project_id = create_project(client, template_id)
 
         client.cookies.clear()
+        assert_status(client.get(f"/api/templates/{template_id}/pages/{page_id}/preview"), 401)
+        assert_status(client.get(f"/api/templates/{template_id}/spread-preview/0"), 401)
+        assert_status(client.get(f"/api/projects/{project_id}/preview/0"), 401)
+
+        login(client)
         template_preview = client.get(f"/api/templates/{template_id}/pages/{page_id}/preview")
         assert_status(template_preview, 200)
         assert template_preview.headers["content-type"].startswith("image/jpeg")
@@ -523,6 +562,36 @@ def test_public_preview_endpoints_do_not_require_auth():
         assert project_preview.headers["content-type"].startswith("image/jpeg")
         assert "max-age" in project_preview.headers["cache-control"]
         assert project_preview.content.startswith(b"\xff\xd8")
+
+
+def test_student_editor_endpoint_only_returns_current_student_pages(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("student_editor"))
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/batch", json=["Current", "Sibling"]),
+            200,
+        )
+        detail = client.get(f"/api/projects/{project_id}").json()
+        current = detail["students"][0]
+        upload = client.post(
+            f"/api/projects/{project_id}/students/{current['id']}/pages/0/photos/1",
+            files={"file": ("current.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(upload, 200)
+
+        editor = client.get(f"/api/projects/{project_id}/students/{current['id']}/editor")
+        assert_status(editor, 200)
+        payload = editor.json()
+        assert payload["student"]["id"] == current["id"]
+        assert payload["student"]["pages_data"][0]["photos"]["1"]["path"] == upload.json()["path"]
+        assert [student["name"] for student in payload["project"]["students"]] == ["Current", "Sibling"]
+        assert all("pages_data" not in student for student in payload["project"]["students"])
+
+        client.cookies.clear()
+        assert_status(client.get(f"/api/projects/{project_id}/students/{current['id']}/editor"), 401)
 
 
 def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_path):
@@ -561,6 +630,9 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
         assert_status(layout_without_background, 200)
 
         client.cookies.clear()
+        assert_status(client.get(f"/api/templates/{template_id}/pages/{page_id}/preview"), 401)
+        assert_status(client.get(f"/api/templates/{template_id}/spread-preview/0"), 401)
+        login(client)
         template_preview = client.get(f"/api/templates/{template_id}/pages/{page_id}/preview")
         assert_status(template_preview, 200)
         spread_preview = client.get(f"/api/templates/{template_id}/spread-preview/0")
@@ -800,7 +872,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
     with started_client() as client:
         login(client)
-        template_id, _ = create_template_with_page(client)
+        template_id, _ = create_template_with_page(client, photo_slot_count=2)
         project_id = create_project(client, template_id, name=unique_name("render_project"))
 
         batch_response = client.post(f"/api/projects/{project_id}/students/batch", json=["Render Student"])

@@ -11,6 +11,7 @@ from crud.user_crud import SUPERVISABLE_ROLES, get_user_or_404
 from database import User, teacher_supervisors
 
 VALID_ROLES = {"admin", "art_team", "supervisor", "teacher", "none"}
+MIN_PASSWORD_LENGTH = 8
 ROLE_ALIASES = {
     "admin": "admin",
     "管理員": "admin",
@@ -134,8 +135,8 @@ def create_user_record(
         raise HTTPException(status_code=400, detail="帳號不能為空")
     if not display_name:
         raise HTTPException(status_code=400, detail="顯示名稱不能為空")
-    if not password:
-        raise HTTPException(status_code=400, detail="密碼不能為空")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"密碼至少需要 {MIN_PASSWORD_LENGTH} 個字元")
 
     if role == "teacher" and not supervisor_ids:
         raise HTTPException(status_code=400, detail="帶班老師必須指定主管")
@@ -215,9 +216,10 @@ def update_user_record(
 
     if new_password is not None:
         stripped_password = new_password.strip()
-        if not stripped_password:
-            raise HTTPException(status_code=400, detail="新密碼不能為空")
+        if len(stripped_password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"新密碼至少需要 {MIN_PASSWORD_LENGTH} 個字元")
         target_user.hashed_password = hash_password(stripped_password)
+        target_user.auth_version = int(target_user.auth_version or 0) + 1
 
 
 def _build_import_column_map(header_row: tuple) -> dict[str, int]:

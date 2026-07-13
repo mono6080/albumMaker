@@ -5,8 +5,9 @@
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,10 +16,12 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
+from sqlalchemy import text
 
-from database import init_db
+from database import SessionLocal, get_db, init_db
 from migrations import run_migrations
 from routers import templates, projects, auth, users, roster
+from services.project_service import purge_expired_archived_projects
 
 logger = logging.getLogger("album_maker.requests")
 
@@ -62,7 +65,20 @@ def apply_frontend_cache_headers(response, path: str) -> None:
         response.headers["Service-Worker-Allowed"] = "/"
 
 
-app = FastAPI(title="幼兒園相本製作系統")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """初始化 schema／migration，並在啟動時清理到期封存資料。"""
+    init_db()
+    run_migrations()
+    db = SessionLocal()
+    try:
+        purge_expired_archived_projects(db)
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(title="幼兒園相本製作系統", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -71,7 +87,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """為所有回應加入基本安全 HTTP Headers，防止 Clickjacking、MIME sniffing 等攻擊。"""
     async def dispatch(self, request: Request, call_next):
         started_at = time.monotonic()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("unhandled_request method=%s path=%s", request.method, request.url.path)
+            raise
         elapsed = time.monotonic() - started_at
         response.headers["X-Response-Time"] = f"{elapsed:.3f}"
         response.headers["X-Frame-Options"] = "DENY"
@@ -119,16 +139,10 @@ app.include_router(roster.router)
 
 
 @app.get("/api/health")
-def health_check():
-    """健康檢查端點，確認後端服務正常運行。"""
-    return {"status": "ok"}
-
-
-@app.on_event("startup")
-def on_startup():
-    """啟動時初始化資料庫結構並執行待遷移的 schema 變更。"""
-    init_db()
-    run_migrations()
+def health_check(db=Depends(get_db)):
+    """健康檢查同時驗證 API 與 SQLite 連線。"""
+    db.execute(text("SELECT 1"))
+    return {"status": "ok", "database": "ok"}
 
 
 # 掛載靜態資源（JS / CSS 編譯包，帶 hash 可永久快取）

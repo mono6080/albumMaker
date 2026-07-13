@@ -3,7 +3,7 @@
 # 路由層僅負責 HTTP 接收與回應，單筆查詢與重名檢查委派給 crud 層
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from auth import get_current_user, require_role
 from crud.template_crud import ensure_period_name_unique, get_period_or_404
@@ -31,7 +31,7 @@ def list_template_periods(
     _: User = Depends(get_current_user),
 ):
     """回傳模板期別清單。"""
-    query = db.query(TemplatePeriod)
+    query = db.query(TemplatePeriod).options(selectinload(TemplatePeriod.templates))
     if department:
         query = query.filter(TemplatePeriod.department == _validate_department(department))
     if status:

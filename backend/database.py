@@ -1,8 +1,13 @@
 import os
+from datetime import datetime, timezone
+
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Table, Float
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from datetime import datetime
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+
+
+def utc_now() -> datetime:
+    """回傳 SQLite 相容的 naive UTC；來源使用 timezone-aware API。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 SQLALCHEMY_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "sqlite:///./album_maker.db"
@@ -45,10 +50,12 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     # 角色：admin | art_team | supervisor | teacher | none
     role = Column(String, nullable=False, default="none")
+    # 密碼重設時遞增；JWT 的 ver 必須相同，讓既有登入狀態立即失效。
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
     ui_font_scale = Column(Float, nullable=False, default=1.0, server_default="1.0")
     # 舊版單一主管欄位；新版多主管資料存在 teacher_supervisors，保留此欄位相容舊資料/API
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     supervisor = relationship("User", remote_side="User.id", foreign_keys=[supervisor_id], back_populates="subordinates")
     subordinates = relationship("User", foreign_keys=[supervisor_id], back_populates="supervisor")
@@ -76,7 +83,7 @@ class TemplatePeriod(Base):
     department = Column(String, nullable=False)
     name = Column(String, nullable=False)
     status = Column(String, nullable=False, default="draft")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     templates = relationship("Template", back_populates="period", order_by="Template.created_at.desc()")
     projects = relationship("Project", back_populates="template_period")
@@ -87,7 +94,7 @@ class Template(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     period = relationship("TemplatePeriod", back_populates="templates")
     pages = relationship("TemplatePage", back_populates="template", cascade="all, delete-orphan", order_by="TemplatePage.page_number")
     projects = relationship("Project", back_populates="template")
@@ -112,8 +119,8 @@ class Project(Base):
     template_period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
     # 專案所有者（帶班老師或 admin），nullable 以相容歷史資料
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     deleted_at = Column(DateTime, nullable=True)
     archive_expires_at = Column(DateTime, nullable=True)
     # 全班完成時間：非 NULL 代表老師已確認完成，內容鎖定（主管/admin 可退回）
@@ -135,7 +142,7 @@ class RosterChild(Base):
     __tablename__ = "roster_children"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     students = relationship("Student", back_populates="roster_child")
 
 
@@ -149,8 +156,8 @@ class Student(Base):
     output_filename = Column(String, nullable=True)
     # 名冊連結：NULL 代表同名歧義待 admin 確認（見 roster_service.resolve_roster_child_id）
     roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     project = relationship("Project", back_populates="students")
     roster_child = relationship("RosterChild", back_populates="students")
 
@@ -162,7 +169,7 @@ class ProjectComment(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     project = relationship("Project", back_populates="comments")
     author = relationship("User", back_populates="comments")
 

@@ -4,7 +4,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProjectSummary(BaseModel):
@@ -60,6 +60,29 @@ class ProjectDetail(BaseModel):
     students: list[StudentInProject]
 
 
+class StudentEditorStudentSummary(BaseModel):
+    """學生切換器只需的最小資料。"""
+    id: int
+    name: str
+    order_index: int
+
+
+class StudentEditorProject(BaseModel):
+    """個別學生編輯器所需的精簡專案資料。"""
+    id: int
+    name: str
+    template_id: int
+    owner_id: Optional[int] = None
+    completed_at: Optional[datetime] = None
+    label_texts: Any
+    students: list[StudentEditorStudentSummary]
+
+
+class StudentEditorDetail(BaseModel):
+    project: StudentEditorProject
+    student: StudentInProject
+
+
 class CommentOut(BaseModel):
     """審閱留言"""
     id: int
@@ -78,10 +101,12 @@ class RenderStudentResult(BaseModel):
 
 class PhotoSlotValue(BaseModel):
     """單一照片欄位的資料（null 表示清除）"""
-    path: str
-    scale: float = 1.0
-    offset_x: float = 0.0
-    offset_y: float = 0.0
+    path: str = Field(..., min_length=1, max_length=500)
+    scale: float = Field(1.0, ge=0.1, le=10.0)
+    offset_x: float = Field(0.0, ge=-10.0, le=10.0)
+    offset_y: float = Field(0.0, ge=-10.0, le=10.0)
+    brightness: float = Field(1.0, ge=0.1, le=3.0)
+    contrast: float = Field(1.0, ge=0.1, le=3.0)
 
 
 class PhotoMappingPayload(BaseModel):
@@ -108,7 +133,7 @@ class PhotoMappingPayload(BaseModel):
     - 跨頁互換時先收集所有 incoming_paths，避免先刪後找不到。
     - renames 保留為向後相容欄位，目前固定回傳空物件。
     """
-    pages: dict[str, dict[str, Any]] = {}
+    pages: dict[str, dict[str, PhotoSlotValue | None]] = Field(default_factory=dict)
 
 
 class PhotoMappingResult(BaseModel):

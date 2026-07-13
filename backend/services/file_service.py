@@ -20,6 +20,7 @@ _BYTES_PER_MB = 1024 * 1024
 PHOTO_UPLOAD_COMPRESS_OVER_MB = 10
 PHOTO_UPLOAD_COMPRESS_TARGET_MB = 5
 PHOTO_UPLOAD_HARD_LIMIT_MB = 50
+MAX_IMAGE_PIXELS = 60_000_000
 _heif_opener_registered = False
 
 
@@ -54,6 +55,35 @@ def _is_supported_photo_upload(file: UploadFile) -> bool:
     return file.content_type in _ALLOWED_PHOTO_IMAGE_TYPES or _is_heif_upload(file)
 
 
+def sanitize_upload_filename(original_filename: str | None, fallback: str = "upload") -> str:
+    """只保留檔名本身，避免客戶端檔名改寫其他 storage namespace。"""
+    normalized = (original_filename or fallback).replace("\\", "/")
+    filename = PurePosixPath(normalized).name.strip()
+    filename = "".join(character for character in filename if ord(character) >= 32)
+    if filename in {"", ".", ".."}:
+        filename = fallback
+    return filename[:180]
+
+
+def _assert_image_dimensions(image: Image.Image) -> None:
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=415, detail="圖片尺寸無效")
+    if width * height > MAX_IMAGE_PIXELS:
+        raise HTTPException(status_code=413, detail="圖片像素尺寸過大，請先降低解析度")
+
+
+def _validate_image_bytes(file_bytes: bytes) -> None:
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as image:
+            _assert_image_dimensions(image)
+            image.verify()
+    except HTTPException:
+        raise
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=415, detail="無法讀取圖片，請確認檔案格式") from exc
+
+
 def get_photo_key(
     project_id: int,
     student_id: int,
@@ -66,7 +96,8 @@ def get_photo_key(
 
     格式：projects/proj{project_id}/photos/student{student_id}/p{page_index}_slot{slot_id}_{filename}
     """
-    filename = f"p{page_index}_slot{slot_id}_{original_filename}"
+    safe_filename = sanitize_upload_filename(original_filename, "photo")
+    filename = f"p{page_index}_slot{slot_id}_{safe_filename}"
     return f"projects/proj{project_id}/photos/student{student_id}/{filename}"
 
 
@@ -109,7 +140,8 @@ def get_background_key(template_id: int, page_id: int, original_filename: str) -
 
     格式：templates/tmpl{template_id}/backgrounds/page{page_id}_{filename}
     """
-    return f"templates/tmpl{template_id}/backgrounds/page{page_id}_{original_filename}"
+    safe_filename = sanitize_upload_filename(original_filename, "background")
+    return f"templates/tmpl{template_id}/backgrounds/page{page_id}_{safe_filename}"
 
 
 def get_sticker_key(template_id: int, original_filename: str) -> str:
@@ -118,7 +150,10 @@ def get_sticker_key(template_id: int, original_filename: str) -> str:
 
     格式：templates/tmpl{template_id}/stickers/{filename}
     """
-    return f"templates/tmpl{template_id}/stickers/{original_filename}"
+    if original_filename == "":
+        return f"templates/tmpl{template_id}/stickers/"
+    safe_filename = sanitize_upload_filename(original_filename, "sticker")
+    return f"templates/tmpl{template_id}/stickers/{safe_filename}"
 
 
 async def read_and_validate_image(file: UploadFile, max_mb: int = 10) -> bytes:
@@ -128,11 +163,12 @@ async def read_and_validate_image(file: UploadFile, max_mb: int = 10) -> bytes:
     file_bytes = await file.read()
     if len(file_bytes) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {max_mb} MB")
+    await run_in_threadpool(_validate_image_bytes, file_bytes)
     return file_bytes
 
 
 def _jpeg_upload_filename(original_filename: str | None) -> str:
-    original_name = Path(original_filename or "photo").name
+    original_name = sanitize_upload_filename(original_filename, "photo")
     original_path = Path(original_name)
     if original_path.suffix.lower() in {".jpg", ".jpeg"}:
         return original_name
@@ -171,9 +207,12 @@ def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int, is_heif: bool = F
         if is_heif:
             _register_heif_opener()
         with Image.open(io.BytesIO(file_bytes)) as raw_image:
+            _assert_image_dimensions(raw_image)
             image = _flatten_to_rgb(ImageOps.exif_transpose(raw_image))
             image.load()
-    except (OSError, UnidentifiedImageError) as exc:
+    except HTTPException:
+        raise
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
         raise HTTPException(status_code=415, detail="無法讀取圖片，請確認檔案格式") from exc
 
     if max(image.size) > PHOTO_MAX_LONG_EDGE:
@@ -219,9 +258,10 @@ async def read_and_process_photo_upload(
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {hard_limit_mb} MB")
 
     if not is_heif and len(file_bytes) <= compress_over_mb * _BYTES_PER_MB:
+        await run_in_threadpool(_validate_image_bytes, file_bytes)
         return ProcessedImageUpload(
             data=file_bytes,
-            filename=file.filename or "photo",
+            filename=sanitize_upload_filename(file.filename, "photo"),
             compressed=False,
         )
 

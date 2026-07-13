@@ -561,6 +561,13 @@ def _resolve_storage_path(value: str | None, uploads_dir: Path) -> str | None:
     project_root = uploads_dir.parent.parent
     return str((project_root / path).resolve())
 
+
+def _validate_r2_serve_mode(serve_mode: str, production: bool) -> None:
+    if production and serve_mode == "redirect":
+        raise RuntimeError(
+            "正式環境不可使用 R2_SERVE_MODE=redirect：公開 URL 會繞過媒體登入權限；請使用 proxy"
+        )
+
 def get_storage() -> StorageAdapter:
     """
     回傳當前使用的 StorageAdapter 實例。
@@ -583,6 +590,9 @@ def get_storage() -> StorageAdapter:
         _STORAGE_CACHE_KEY = cache_key
         return _STORAGE_INSTANCE
     if backend == "r2":
+        serve_mode = os.getenv("R2_SERVE_MODE", "proxy")
+        production = os.getenv("PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        _validate_r2_serve_mode(serve_mode, production)
         _STORAGE_INSTANCE = R2StorageAdapter(
             bucket=os.getenv("R2_BUCKET"),
             account_id=os.getenv("R2_ACCOUNT_ID"),
@@ -590,7 +600,7 @@ def get_storage() -> StorageAdapter:
             secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
             endpoint_url=os.getenv("R2_ENDPOINT_URL"),
             public_base_url=os.getenv("R2_PUBLIC_BASE_URL"),
-            serve_mode=os.getenv("R2_SERVE_MODE", "proxy"),
+            serve_mode=serve_mode,
             key_prefix=os.getenv("R2_KEY_PREFIX"),
             local_cache_dir=_resolve_storage_path(os.getenv("R2_LOCAL_CACHE_DIR"), UPLOADS_DIR),
             local_mirror_dir=_resolve_storage_path(os.getenv("R2_LOCAL_MIRROR_DIR"), UPLOADS_DIR),

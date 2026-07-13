@@ -52,6 +52,7 @@ def test_migrations_idempotent():
         assert "teacher_supervisors" in tables
         user_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
         assert "ui_font_scale" in user_columns
+        assert "auth_version" in user_columns
         project_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
         assert "deleted_at" in project_columns
         assert "archive_expires_at" in project_columns

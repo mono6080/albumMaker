@@ -3,13 +3,14 @@
 # 路由層僅負責 HTTP 接收與回應，複製流程委派給 services/template_service
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
 from crud.template_crud import get_period_or_404, get_template_or_404, get_template_page_or_404
-from database import Template, TemplatePage, TemplatePeriod, User, get_db
+from database import Project, Template, TemplatePage, TemplatePeriod, User, get_db
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -28,6 +29,7 @@ from ._helpers import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
@@ -41,7 +43,7 @@ def list_templates(
     _: User = Depends(get_current_user),
 ):
     """回傳所有模板的摘要清單（依建立時間降序）。"""
-    query = db.query(Template)
+    query = db.query(Template).options(joinedload(Template.period), selectinload(Template.pages))
     if department or available:
         query = query.join(TemplatePeriod, Template.period_id == TemplatePeriod.id)
     if department:
@@ -142,10 +144,14 @@ def delete_template(
 ):
     """刪除指定模板及其所有頁面與關聯檔案（背景圖、貼圖）。"""
     template = get_template_or_404(template_id, db)
-    # 先刪除 storage 檔案（背景圖、貼圖），再 commit，確保兩者一致
-    get_storage().delete_prefix(f"templates/tmpl{template_id}")
+    if db.query(Project).filter(Project.template_id == template_id).first():
+        raise HTTPException(status_code=409, detail="此模板仍有專案使用，無法刪除")
     db.delete(template)
     db.commit()
+    try:
+        get_storage().delete_prefix(f"templates/tmpl{template_id}")
+    except Exception as storage_error:
+        logger.error("模板已刪除但素材清理失敗 template_id=%s: %s", template_id, storage_error)
     return {"ok": True}
 
 

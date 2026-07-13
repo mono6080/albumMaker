@@ -1,4 +1,8 @@
-from services.project_service import merge_project_label_texts_into_pages
+from services.project_service import (
+    _render_pipeline_fingerprint,
+    merge_project_label_texts_into_pages,
+    student_pdf_key_for_mode,
+)
 
 
 def test_empty_student_label_text_overrides_project_label_text():
@@ -66,3 +70,20 @@ def test_project_label_alignment_merges_with_student_text_override():
     assert merged[0]["label_texts"] == {
         "1": {"text": "Student custom", "text_align": "right"},
     }
+
+
+def test_render_pipeline_fingerprint_changes_with_source(tmp_path):
+    source = tmp_path / "renderer.py"
+    source.write_text("version = 1", encoding="utf-8")
+    first = _render_pipeline_fingerprint((source,))
+    source.write_text("version = 2", encoding="utf-8")
+    assert _render_pipeline_fingerprint((source,)) != first
+
+
+def test_screen_pdf_key_preserves_path_and_extension():
+    assert student_pdf_key_for_mode("projects/proj1/output/demo.PDF", "screen") == (
+        "projects/proj1/output/demo_screen.PDF"
+    )
+    assert student_pdf_key_for_mode("projects/proj1/output/demo.PDF", "print") == (
+        "projects/proj1/output/demo.PDF"
+    )

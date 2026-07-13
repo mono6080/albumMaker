@@ -23,6 +23,7 @@ def run_migrations():
         _add_bubble_texts_json_column(connection)
         _add_users_table(connection)
         _add_user_preferences_columns(connection)
+        _add_user_auth_version_column(connection)
         _add_teacher_supervisors_table(connection)
         _add_owner_id_to_projects(connection)
         _add_project_comments_table(connection)
@@ -49,6 +50,17 @@ def _add_project_completed_at_column(connection):
     }
     if "completed_at" not in existing_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN completed_at DATETIME"))
+        connection.commit()
+
+
+def _add_user_auth_version_column(connection):
+    """新增 JWT 失效版本；既有使用者從 0 開始。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(users)"))
+    }
+    if "auth_version" not in existing_columns:
+        connection.execute(text("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0"))
         connection.commit()
 
 
@@ -79,6 +91,7 @@ def _add_users_table(connection):
                 display_name TEXT NOT NULL,
                 hashed_password TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'none',
+                auth_version INTEGER NOT NULL DEFAULT 0,
                 ui_font_scale REAL NOT NULL DEFAULT 1.0,
                 supervisor_id INTEGER REFERENCES users(id),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP

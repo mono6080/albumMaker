@@ -42,21 +42,15 @@
   模板 art_team 獨佔；刪除 user 時其專案過繼給執行刪除的 admin
 - 非 admin 下載 PDF 時 `mode` 一律強制降為 `screen`
 
-## 圖片端點不加 auth（安全例外，勿「修正」）
+## 圖片端點認證
 
-`<img src>` 是瀏覽器原生請求，不帶 Authorization header。以下 GET 端點**不掛**
-`get_current_user`，加上會讓外網（ngrok / 正式網域）圖片全部 401、頁面全黑：
-
-- 模板：`pages/{page_id}/background`、`stickers/{filename}`、
-  `pages/{page_id}/preview`、`spread-preview/{start_page_index}`
-- 專案：`students/{sid}/pages/{p}/photos/{slot}`（含 thumbnail）、
-  `preview/{page}`、`students/{sid}/preview/{page}`
-
-資料操作端點則一律要掛認證。
+所有圖片與預覽 GET 端點都必須掛 `get_current_user`；專案照片與預覽另外執行
+`assert_project_readable`。同源 `<img src>` 雖不帶 Bearer header，仍會自動帶上
+HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 
 ## 端點清單
 
-🔓 = 不需登入（即上節的圖片 serving）。
+除登入與 health check 外，所有端點都需要登入。
 
 ### 認證 `/api/auth`
 
@@ -86,10 +80,10 @@
 | GET / PATCH / DELETE | `/{id}` | 詳情（含頁面）/ 改名或移動期別 / 刪除 |
 | POST | `/{id}/pages` | 新增頁 |
 | PUT / DELETE | `/{id}/pages/{page_id}/layout`、`…/pages/{page_id}` | 更新版型 / 刪頁 |
-| POST / GET 🔓 | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖 |
+| POST / GET | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖 |
 | POST / GET 🔓 | `/{id}/stickers`、`/{id}/stickers/{filename}` | 上傳 / 取得貼圖 |
-| GET 🔓 | `/{id}/pages/{page_id}/preview` | 單頁預覽 JPEG（姓名佔位） |
-| GET 🔓 | `/{id}/spread-preview/{start_page_index}` | 雙頁跨頁預覽 |
+| GET | `/{id}/pages/{page_id}/preview` | 單頁預覽 JPEG（姓名佔位） |
+| GET | `/{id}/spread-preview/{start_page_index}` | 雙頁跨頁預覽 |
 
 ### 專案 `/api/projects`
 
@@ -109,14 +103,14 @@
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全體 |
 | POST | `/{id}/photos/batch/pages/{page}/slots/{slot}` | 依 mapping 批次分配 |
-| GET 🔓 | `…/photos/{slot}`、`…/photos/{slot}/thumbnail` | 照片原圖 / 縮圖 |
+| GET | `…/photos/{slot}`、`…/photos/{slot}/thumbnail` | 照片原圖 / 縮圖 |
 | PUT | `/{id}/students/{sid}/photos/mapping` | 更新照片位移縮放對應 |
 | GET / PUT | `/{id}/label_texts` | 專案層級對應文字 |
 | PUT | `/{id}/students/{sid}/pages/{page}/texts` | 學生單頁文字 |
 | PUT | `/{id}/batch/texts` | 批次更新多學生文字 |
 | GET / POST | `/{id}/comments` | 留言清單 / 新增（admin, art_team, supervisor） |
 | DELETE | `/{id}/comments/{cid}` | 刪留言（自己的；admin 可刪全部） |
-| GET 🔓 | `/{id}/preview/{page}`、`/{id}/students/{sid}/preview/{page}` | 預覽 JPEG |
+| GET | `/{id}/preview/{page}`、`/{id}/students/{sid}/preview/{page}` | 預覽 JPEG |
 | POST | `/{id}/students/{sid}/render`、`/{id}/render/all` | 渲染單一 / 全體 |
 | GET | `/{id}/students/{sid}/pdf?mode=print\|screen` | 下載 PDF（非 admin 強制 screen） |
 | GET | `…/{sid}/images`、`…/{sid}/images/{page_number}` | 學生圖片 ZIP / 單張 |

@@ -2,7 +2,6 @@
 # 處理專案層級與學生個人的對應文字讀取、更新與批次更新
 
 import json
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -10,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import User, get_db
+from database import User, get_db, utc_now
 
 from services.student_pages import ensure_page_entry, mutate_student_pages
 
@@ -48,7 +47,7 @@ def update_project_label_texts(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     project.label_texts_json = json.dumps(payload)
-    project.updated_at = datetime.utcnow()
+    project.updated_at = utc_now()
     db.commit()
     return {"ok": True}
 
@@ -70,7 +69,7 @@ def update_student_label_texts(
     # 進學生寫鎖：文字自動儲存與照片上傳併發打同一學生時不互相蓋寫 pages_data
     def _mutate(pages_data) -> None:
         ensure_page_entry(pages_data, page_index)["label_texts"] = texts
-        now = datetime.utcnow()
+        now = utc_now()
         student.updated_at = now
         project.updated_at = now
 
@@ -89,7 +88,7 @@ def batch_update_texts(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     students_payload = payload.students
-    now = datetime.utcnow()
+    now = utc_now()
 
     # 逐學生進寫鎖並 commit（交易粒度從整批一次變逐學生一次，
     # 換取與照片上傳併發時不互相蓋寫 pages_data）

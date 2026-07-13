@@ -21,11 +21,12 @@ def test_password_roundtrip():
 
 def test_jwt_roundtrip():
     """create_access_token 產生的 token 經 decode 後應還原原始欄位。"""
-    token = create_access_token(1, "alice", "admin")
+    token = create_access_token(1, "alice", "admin", auth_version=3)
     payload = decode_access_token(token)
     assert payload["sub"] == "1"
     assert payload["username"] == "alice"
     assert payload["role"] == "admin"
+    assert payload["ver"] == 3
 
 
 def test_jwt_invalid_token_raises_401():
