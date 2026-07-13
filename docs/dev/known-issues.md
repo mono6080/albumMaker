@@ -1,10 +1,19 @@
 # 已知落差與開放問題（Known Issues / Drift）
 
-> Owns：所有「已知但尚未處理」的程式碼落差（drift）與未定案設計問題。
+> Owns：所有「已知但尚未處理」的程式碼落差（drift）、未定案設計問題與營運缺口。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-12（兩頁制重構後多代理深審，59 項發現已修 confirmed 全數）。
+> 最後盤點：2026-07-13（33 項重構＋大檔拆分＋防漂移機制後）。
 
 ---
+
+## 營運缺口（依風險排序，2026-07-13 記錄）
+
+1. **資料備份自動化（風險最大）**：正式站 SQLite DB 無任何備份機制，
+   老師的相本資料全在裡面；磁碟故障＝全滅。方案：cron +
+   `sqlite3 .backup` + 上傳 R2 或異地。uploads volume 同理
+2. **錯誤監控**：後端 exception 只進 docker logs 無人看。最低成本：
+   log 掃描 cron 發現 ERROR 即通知；正規：接 Sentry（免費額度即可）
+3. **Uptime 監控**：外部服務打 `/api/health`，服務掛掉能先於使用者發現
 
 ## 已知 DRIFT（先記、不修）
 
@@ -39,7 +48,10 @@
 - **dirty-skip 對「渲染程式碼變更」不敏感**：內容指紋只涵蓋資料
   （版面/文字/照片），改渲染邏輯要手動 bump `_RENDER_PIPELINE_VERSION`
   （規則見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)），忘了 bump
-  舊相冊不會套用視覺修正
+  舊相冊不會套用視覺修正。**改進方向（已評估）**：version 改為
+  「渲染相關檔案（render_service / element_renderers / draw_helpers /
+  photo_frame_geometry）內容 hash」自動推導，把人為記憶換成機械保證——
+  與 contract pins / banned patterns 同一哲學，成本約半天
 - **同名前綴學生的輸出誤刪**：`render_and_save_student_album` 以
   `delete_prefix(output/{stem})` 清舊輸出，學生「小明」會掃到「小明二」的
   `{stem}二.pdf`（stem 為前綴時）。歷史行為、實務上班內同前綴名罕見
