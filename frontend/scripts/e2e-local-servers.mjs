@@ -58,17 +58,31 @@ async function waitForUrl(name, url, timeoutMs) {
 
 let shuttingDown = false;
 
-function shutdown(exitCode = 0) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  for (const child of [...children].reverse()) {
-    if (!child.killed) child.kill(isWindows ? "SIGTERM" : "SIGTERM");
+async function stopProcessTree(child) {
+  if (child.killed || child.exitCode !== null) return;
+  if (!isWindows) {
+    child.kill("SIGTERM");
+    return;
   }
-  setTimeout(() => process.exit(exitCode), 250);
+  await new Promise(resolveStop => {
+    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.once("exit", resolveStop);
+    killer.once("error", resolveStop);
+  });
 }
 
-process.on("SIGINT", () => shutdown(0));
-process.on("SIGTERM", () => shutdown(0));
+async function shutdown(exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await Promise.all([...children].reverse().map(stopProcessTree));
+  process.exit(exitCode);
+}
+
+process.on("SIGINT", () => { void shutdown(0); });
+process.on("SIGTERM", () => { void shutdown(0); });
 
 startProcess("backend", isWindows ? "python.exe" : "python", ["../scripts/e2e_server.py"]);
 startProcess("vite", isWindows ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"]);

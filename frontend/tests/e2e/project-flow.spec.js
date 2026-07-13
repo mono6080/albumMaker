@@ -61,6 +61,11 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.getByRole("button", { name: "新增學生名單" }).click();
   const rosterDialog = page.getByRole("dialog", { name: "學生名單" });
   await expect(rosterDialog).toBeVisible();
+  await expect.poll(() => rosterDialog.evaluate(dialog => dialog.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(rosterDialog).toHaveCount(0);
+  await page.getByRole("button", { name: "新增學生名單" }).click();
+  await expect(rosterDialog).toBeVisible();
   await rosterDialog.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
   await rosterDialog.getByRole("button", { name: "新增" }).click();
   await expect(rosterDialog.getByText("已登記學生（2 位）")).toBeVisible();

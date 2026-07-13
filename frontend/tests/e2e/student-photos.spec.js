@@ -71,6 +71,20 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
   );
   expect(swappedFirstPhoto.ok()).toBeTruthy();
   expect(swappedFirstPhoto.headers()["content-type"]).toContain("image/png");
+
+  // 權限保護後的硬驗收：Cookie 登入狀態下，真實 <img> 必須完成解碼；
+  // 清除 Cookie 後，同一媒體 URL 必須被後端拒絕。
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  const displayedPhoto = page.locator('[data-guide="photo-slot-image"]').first();
+  await expect(displayedPhoto).toBeVisible();
+  await expect.poll(
+    () => displayedPhoto.evaluate(image => image.complete && image.naturalWidth > 0),
+    { timeout: 15_000 },
+  ).toBe(true);
+  const protectedMediaUrl = await displayedPhoto.getAttribute("src");
+  await page.context().clearCookies();
+  const anonymousMedia = await page.request.get(protectedMediaUrl);
+  expect(anonymousMedia.status()).toBe(401);
 });
 
 

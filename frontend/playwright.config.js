@@ -21,24 +21,21 @@ const config = {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+    },
   ],
 };
 
 if (!skipWebServer) {
-  config.webServer = [
-    {
-      command: "python ../scripts/e2e_server.py",
-      url: "http://127.0.0.1:8765/api/health",
-      reuseExistingServer,
-      timeout: 30_000,
-    },
-    {
-      command: "npm run dev -- --host 127.0.0.1",
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer,
-      timeout: 30_000,
-    },
-  ];
+  // 單一 supervisor 同時管理 backend/Vite，Windows 才能在測試後清完整行程樹。
+  config.webServer = {
+    command: "npm run dev:e2e",
+    url: "http://127.0.0.1:8765/api/health",
+    reuseExistingServer,
+    timeout: 90_000,
+  };
 }
 
 export default defineConfig(config);
