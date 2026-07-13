@@ -132,7 +132,8 @@ export default function UserList({
                 <div className="flex items-center gap-1.5">
                   <input
                     type="password"
-                    placeholder="新密碼"
+                    minLength={8}
+                    placeholder="至少 8 字元"
                     value={resetPasswords[user.id] ?? ""}
                     onChange={(e) =>
                       setResetPasswords((prev) => ({ ...prev, [user.id]: e.target.value }))
@@ -269,7 +270,8 @@ export default function UserList({
               <div className="flex items-center gap-2">
                 <input
                   type="password"
-                  placeholder="新密碼"
+                  minLength={8}
+                  placeholder="至少 8 字元"
                   value={resetPasswords[user.id] ?? ""}
                   onChange={(e) =>
                     setResetPasswords((prev) => ({ ...prev, [user.id]: e.target.value }))

@@ -13,6 +13,7 @@ import {
 import { apiClient, renderClient } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
+import useDialogA11y from "../hooks/useDialogA11y";
 import {
   Badge,
   Button,
@@ -113,6 +114,10 @@ export default function ProjectReview() {
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   const [preview, setPreview] = useState(null);
+  const previewDialogRef = useDialogA11y({
+    isOpen: Boolean(preview),
+    onClose: () => setPreview(null),
+  });
   const [imageShareDrafts, setImageShareDrafts] = useState({});
   const [allImagesShareDraft, setAllImagesShareDraft] = useState(null);
   const [ts, setTs] = useState(() => Date.now());
@@ -755,6 +760,11 @@ export default function ProjectReview() {
           onClick={() => setPreview(null)}
         >
           <Surface
+            ref={previewDialogRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-label="學生頁面預覽"
             padding="none"
             variant="dialog"
             className="max-w-md w-full overflow-hidden"
@@ -900,7 +910,7 @@ export default function ProjectReview() {
         message={confirmModal?.message}
         confirmLabel={confirmModal?.confirmLabel}
         confirmVariant={confirmModal?.confirmVariant}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
 

@@ -3,6 +3,7 @@
 
 import { MessageCircle, Send, Trash2 } from "lucide-react";
 import { Button, IconButton, Surface, fieldControlClass } from "./ui";
+import CompositionTextarea from "./CompositionTextarea";
 
 export default function ReviewCommentsPanel({
   comments,
@@ -69,10 +70,10 @@ export default function ReviewCommentsPanel({
       {canComment && (
         <>
           <div className="flex gap-2 min-w-0">
-            <textarea
+            <CompositionTextarea
               rows={2}
               value={newCommentText}
-              onChange={(e) => onChangeNewComment(e.target.value)}
+              onChange={onChangeNewComment}
               placeholder="輸入審閱意見..."
               className={`${fieldControlClass} flex-1 resize-none`}
               onKeyDown={(e) => {

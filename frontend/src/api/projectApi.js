@@ -31,6 +31,10 @@ export const createProject = (projectName, templateId, department, templatePerio
 export const fetchProject = (projectId) =>
   apiClient.get(`/projects/${projectId}`);
 
+/** 個別編輯器資料：目前學生含完整 pages_data，其餘學生只回切換器摘要。 */
+export const fetchStudentEditor = (projectId, studentId) =>
+  apiClient.get(`/projects/${projectId}/students/${studentId}/editor`);
+
 /** 修改專案名稱（行內編輯） */
 export const renameProject = (projectId, newName) =>
   apiClient.patch(`/projects/${projectId}`, new URLSearchParams({ name: newName }));

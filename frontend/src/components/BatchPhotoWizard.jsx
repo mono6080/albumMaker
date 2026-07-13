@@ -22,6 +22,7 @@ import {
   matchByNameSlotSequence, matchBySequence, swapAssignments,
 } from "../utils/photoMatcher";
 import { handleApiError } from "../utils/apiError";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 const ACCEPTED_TYPES = [
   "image/jpeg",
@@ -190,6 +191,11 @@ export default function BatchPhotoWizard({
     }
     onClose();
   };
+  const dialogRef = useDialogA11y({
+    isOpen,
+    onClose: requestClose,
+    closeOnEscape: !isUploading && !isCloseConfirmOpen,
+  });
 
   const pages = useMemo(() => template?.pages || [], [template]);
   const isFilenameScope = scope === "filename";
@@ -612,6 +618,8 @@ export default function BatchPhotoWizard({
       onClick={isUploading ? undefined : requestClose}
     >
       <Surface
+        ref={dialogRef}
+        tabIndex={-1}
         variant="dialog"
         padding="lg"
         className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-4"

@@ -10,6 +10,7 @@ import { batchAddStudents, deleteStudent, renameStudent } from "../api/projectAp
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { showRetryToast } from "../utils/retryToast";
 import ConfirmModal from "./ConfirmModal";
+import CompositionTextarea from "./CompositionTextarea";
 import FormModal from "./FormModal";
 import { Badge, Button, IconButton, fieldControlClass } from "./ui";
 
@@ -105,13 +106,13 @@ export default function RosterModal({
                 批次新增
               </div>
               <div className="flex min-w-0 gap-2">
-                <textarea
+                <CompositionTextarea
                   rows={3}
                   data-guide="roster-add-input"
                   className={`${fieldControlClass} flex-1 resize-none`}
                   placeholder="每行一位，或用逗號 / 頓號分隔"
                   value={namesInput}
-                  onChange={event => setNamesInput(event.target.value)}
+                  onChange={setNamesInput}
                 />
                 <Button
                   onClick={handleAddStudents}
@@ -202,7 +203,7 @@ export default function RosterModal({
       <ConfirmModal
         isOpen={!!confirmModal}
         message={confirmModal?.message}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
     </>

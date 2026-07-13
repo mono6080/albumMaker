@@ -1,9 +1,9 @@
 // 表單用 Modal：背板＋Esc 關閉、標題列含關閉鈕
 // 呼叫端自行保留表單 state（關閉不清空，誤觸不會遺失輸入）
 
-import { useEffect } from "react";
 import { X } from "lucide-react";
 import { IconButton, Surface } from "./ui";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 export default function FormModal({
   isOpen,
@@ -12,15 +12,7 @@ export default function FormModal({
   children,
   maxWidthClass = "max-w-2xl",
 }) {
-  // Esc 關閉
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  const dialogRef = useDialogA11y({ isOpen, onClose });
 
   if (!isOpen) return null;
   return (
@@ -29,6 +21,8 @@ export default function FormModal({
       onClick={onClose}
     >
       <Surface
+        ref={dialogRef}
+        tabIndex={-1}
         variant="dialog"
         padding="lg"
         className={`flex max-h-[90vh] w-full ${maxWidthClass} flex-col overflow-y-auto`}

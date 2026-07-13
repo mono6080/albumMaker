@@ -73,7 +73,7 @@ function getUploadFailureMessage(error, count = 1) {
 // 檢視範圍可切「本頁／整本」：顯示、多選上傳與空格計算跟著檢視走，
 // 整本模式可一次上傳全書照片、跨頁拖曳調換；存檔邏輯永遠涵蓋整本。
 // onPageFocus：整本模式點某格時回報該頁，讓預覽/文字面板同步跳頁
-export default function PhotoManager({ projectId, studentId, pages, student, onPhotoSaved, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
+export default function PhotoManager({ projectId, studentId, pages, student, onPhotoSaved, onSaveStateChange, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
       (p.layout?.photo_slots || []).map((s, slotIndex) => ({
@@ -312,6 +312,22 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
   const isDirty = (it) =>
     it.pendingFile !== null || it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
   const hasDirty = items.some(isDirty);
+  const isSaveBusy = hasDirty || uploadStatus !== null;
+
+  useEffect(() => {
+    onSaveStateChange?.(isSaveBusy);
+    return () => onSaveStateChange?.(false);
+  }, [isSaveBusy, onSaveStateChange]);
+
+  useEffect(() => {
+    if (!isSaveBusy) return undefined;
+    const warnBeforeUnload = event => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [isSaveBusy]);
   // 檢視範圍：page＝跟著全域頁碼、book＝整本（一次上傳全書、跨頁調換用）
   const [viewScope, setViewScope] = useState("page");
   const effectiveActivePage = viewScope === "book" ? null : activePage;
@@ -566,7 +582,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
           const dirty = isDirty(it);
           const rk = `${it.pi}_${it.slotId}`;
           const nat = aspectMap[rk];
-          const isSelected = isTouchDevice && selectedIdx === idx;
+          const isSelected = selectedIdx === idx;
           const isItemDisabled = disabled || skippedPages.has(it.pi);
           // 左右移只在「目前檢視中、非刪除頁」的格子間移動，避免把照片搬進看不見的頁
           const swapPosition = swappableIndexes.indexOf(idx);
@@ -577,11 +593,11 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
           // 整本檢視的頁界標示
           const isFirstOfPage = idx === 0 || items[idx - 1]?.pi !== it.pi;
 
-          const handleCellClick = () => {
+          const handleCellClick = (forceSelection = false) => {
             if (isItemDisabled) return;
             // 整本模式：點格讓預覽/文字面板同步跳到該頁
             if (effectiveActivePage == null && activePage != null && it.pi !== activePage) onPageFocus?.(it.pi);
-            if (isTouchDevice) {
+            if (isTouchDevice || forceSelection) {
               // 已選取另一格 → 點此格直接交換（空格 = 移動過去）
               if (selectedIdx != null && selectedIdx !== idx) {
                 handleSwap(selectedIdx, idx);
@@ -615,7 +631,18 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
               data-page-index={it.pi}
               ref={dndRef}
               {...dndListeners}
-              onClick={handleCellClick}
+              onClick={() => handleCellClick(false)}
+              onKeyDown={event => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleCellClick(true);
+                }
+              }}
+              role="button"
+              tabIndex={isItemDisabled ? -1 : 0}
+              aria-pressed={isSelected}
+              aria-label={`第 ${it.pi + 1} 頁格位 ${it.slotIndex + 1}${url ? "，已有照片；按 Enter 選取後可與其他格交換" : "，空白；按 Enter 上傳或接收選取的照片"}`}
               // 方形用 padding-bottom 百分比而非 aspect-ratio：WebKit 在 grid 內
               // 不會用 aspect-ratio 撐行高，行高不足時上下列會互疊
               className="group relative w-full rounded-xl pb-[100%] transition-all"
@@ -645,17 +672,17 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
 
               {/* Desktop hover overlay */}
               {url && !isItemDisabled && !isTouchDevice && (
-                <div className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 pointer-events-none">
+                <div className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex items-center justify-center gap-1.5 pointer-events-none">
                   <div className="pointer-events-auto flex gap-1.5">
-                    <button onClick={e => { e.stopPropagation(); openEditModal(idx); }} title="位移/縮放"
+                    <button type="button" aria-label="編輯照片位置與縮放" onClick={e => { e.stopPropagation(); openEditModal(idx); }} title="位移/縮放"
                       className="w-7 h-7 bg-white/20 hover:bg-white/40 rounded-lg flex items-center justify-center transition-colors">
                       <ZoomIn className="w-3 h-3 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }} title="更換"
+                    <button type="button" aria-label="更換照片" onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }} title="更換"
                       className="w-7 h-7 bg-white/20 hover:bg-white/40 rounded-lg flex items-center justify-center transition-colors">
                       <RefreshCw className="w-3 h-3 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); }} title="刪除"
+                    <button type="button" aria-label="刪除照片" onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); }} title="刪除"
                       className="w-7 h-7 bg-red-500/70 hover:bg-red-600 rounded-lg flex items-center justify-center transition-colors">
                       <X className="w-3 h-3 text-white" />
                     </button>
@@ -670,6 +697,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
                   {/* Top row: move left / move right */}
                   <div className="flex gap-2">
                     <button
+                      type="button"
+                      aria-label="向前一格移動"
                       onClick={e => { e.stopPropagation(); if (swapPrevIdx != null) { handleSwap(idx, swapPrevIdx); setSelectedIdx(swapPrevIdx); } }}
                       disabled={swapPrevIdx == null}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
@@ -677,6 +706,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
                       <ChevronLeft className="w-4 h-4 text-white" />
                     </button>
                     <button
+                      type="button"
+                      aria-label="向後一格移動"
                       onClick={e => { e.stopPropagation(); if (swapNextIdx != null) { handleSwap(idx, swapNextIdx); setSelectedIdx(swapNextIdx); } }}
                       disabled={swapNextIdx == null}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center disabled:opacity-30 transition-colors"
@@ -686,15 +717,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
                   </div>
                   {/* Bottom row: edit / replace / delete */}
                   <div className="flex gap-2">
-                    <button onClick={e => { e.stopPropagation(); setSelectedIdx(null); openEditModal(idx); }}
+                    <button type="button" aria-label="編輯照片位置與縮放" onClick={e => { e.stopPropagation(); setSelectedIdx(null); openEditModal(idx); }}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center transition-colors">
                       <ZoomIn className="w-4 h-4 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }}
+                    <button type="button" aria-label="更換照片" onClick={e => { e.stopPropagation(); replaceRefs.current[rk]?.click(); }}
                       className="w-9 h-9 bg-white/20 active:bg-white/40 rounded-xl flex items-center justify-center transition-colors">
                       <RefreshCw className="w-4 h-4 text-white" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); setSelectedIdx(null); }}
+                    <button type="button" aria-label="刪除照片" onClick={e => { e.stopPropagation(); setConfirmDeleteIdx(idx); setSelectedIdx(null); }}
                       className="w-9 h-9 bg-red-500/70 active:bg-red-600 rounded-xl flex items-center justify-center transition-colors">
                       <X className="w-4 h-4 text-white" />
                     </button>

@@ -26,6 +26,7 @@ export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   // loading：true 表示尚在向後端確認 Cookie session，避免閃爍跳轉
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
 
   const applyAuthenticatedUser = useCallback((userData) => {
     const normalizedUser = normalizeUserPayload(userData);
@@ -50,18 +51,36 @@ export function AuthProvider({ children }) {
 
   // ── 頁面載入時嘗試還原 session（Cookie 由瀏覽器自動帶） ──────────────────
 
-  useEffect(() => {
-    fetchMe()
-      .then((response) => applyAuthenticatedUser(response.data))
-      .catch((error) => {
+  const refreshSession = useCallback(async () => {
+    setIsLoading(true);
+    setAuthError(null);
+    try {
+      const response = await fetchMe();
+      applyAuthenticatedUser(response.data);
+    } catch (error) {
         // 只在 401 時確認未登入；網路錯誤不清除 session
         if (error.response?.status === 401) {
           setCurrentUser(null);
           resetStoredUiFontScale();
+        } else {
+          setAuthError(error);
         }
-      })
-      .finally(() => setIsLoading(false));
+    } finally {
+      setIsLoading(false);
+    }
   }, [applyAuthenticatedUser]);
+
+  useEffect(() => {
+    refreshSession();
+  }, [refreshSession]);
+
+  useEffect(() => {
+    const retryWhenOnline = () => {
+      if (authError) refreshSession();
+    };
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, [authError, refreshSession]);
 
   // ── 登入 ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +88,7 @@ export function AuthProvider({ children }) {
     const response = await apiLogin(username, password);
     // Cookie 由後端 Set-Cookie 寫入，前端只保存使用者資訊到 state
     applyAuthenticatedUser(response.data);
+    setAuthError(null);
     return response.data;
   }, [applyAuthenticatedUser]);
 
@@ -81,11 +101,12 @@ export function AuthProvider({ children }) {
       // 網路錯誤時仍清除本地 state，確保 UI 跳回登入頁
     }
     setCurrentUser(null);
+    setAuthError(null);
     resetStoredUiFontScale();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ currentUser, isLoading, login, logout, updateCurrentUser }}>
+    <AuthContext.Provider value={{ currentUser, isLoading, authError, refreshSession, login, logout, updateCurrentUser }}>
       {children}
     </AuthContext.Provider>
   );

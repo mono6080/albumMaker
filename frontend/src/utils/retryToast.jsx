@@ -20,5 +20,5 @@ export const showRetryToast = (message, onRetry) => {
         ✕
       </button>
     </div>
-  ), { duration: 8000 });
+  ), { duration: 8000, style: { pointerEvents: "auto" } });
 };

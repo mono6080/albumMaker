@@ -4,6 +4,7 @@
 import { useId, useRef } from "react";
 
 import ColorPicker from "./ColorPicker";
+import CompositionTextarea from "./CompositionTextarea";
 import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
 import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
@@ -74,12 +75,12 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
           插入 {NAME_VARIABLE}
         </button>
       </span>
-      <textarea
+      <CompositionTextarea
         id={textareaId}
         ref={textareaRef}
         rows={rows}
         value={value ?? ""}
-        onChange={event => onChange(event.target.value)}
+        onChange={onChange}
         className="border rounded px-2 py-1 text-sm"
       />
     </div>

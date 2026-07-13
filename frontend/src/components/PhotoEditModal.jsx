@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 // eslint-disable-next-line react-refresh/only-export-components -- hook 與 Modal 同檔是刻意的打包
 export function usePhotoEditModal({ items, displayUrl, onApplyTransform }) {
@@ -147,6 +148,7 @@ export default function PhotoEditModal({ edit, items, displayUrl }) {
     onCropMouseDown, onCropTouchStart, onCropTouchMove, onEditImgLoad,
     applyEditModal, adjustZoom,
   } = edit;
+  const dialogRef = useDialogA11y({ onClose: () => setEditModal(null) });
 
   // Non-passive wheel handler — 必須用 addEventListener 才能 preventDefault
   useEffect(() => {
@@ -189,6 +191,11 @@ export default function PhotoEditModal({ edit, items, displayUrl }) {
       onTouchEnd={() => { editDragRef.current.dragging = false; }}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="編輯照片"
         data-guide="photo-edit-modal"
         className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full sm:w-auto"
         style={{ maxHeight: "95dvh" }}

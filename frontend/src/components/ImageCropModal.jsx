@@ -5,6 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 const FRAME_DISPLAY_W = 397;
 
@@ -43,6 +44,7 @@ export default function ImageCropModal({
   const containerRef = useRef(null);
   const isDragging   = useRef(false);
   const lastPos      = useRef({ x: 0, y: 0 });
+  const dialogRef = useDialogA11y({ onClose: onCancel });
 
   // 保持最新狀態供非同步事件處理器使用（避免 stale closure）
   const stateRef = useRef({ scale: 1, panX: 0, panY: 0, imgNat: null });
@@ -174,7 +176,14 @@ export default function ImageCropModal({
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2">
-      <div className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4 max-h-[94dvh] max-w-[calc(100vw-8px)] overflow-y-auto">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="bg-white rounded-xl shadow-2xl p-5 flex flex-col gap-4 max-h-[94dvh] max-w-[calc(100vw-8px)] overflow-y-auto"
+      >
         <div>
           <h2 className="font-semibold text-gray-800">{title}</h2>
           {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}

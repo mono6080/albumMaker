@@ -209,7 +209,7 @@ export default function UserManagement() {
       <ConfirmModal
         isOpen={!!confirmModal}
         message={confirmModal?.message}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
       {supervisorEditorUser && (
@@ -256,7 +256,8 @@ export default function UserManagement() {
           <input
             required
             type="password"
-            placeholder="初始密碼"
+            minLength={8}
+            placeholder="初始密碼（至少 8 字元）"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"

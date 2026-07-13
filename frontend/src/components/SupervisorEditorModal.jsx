@@ -2,6 +2,7 @@
 // 更新邏輯在 UserManagement 頁，這裡只負責呈現與轉發事件
 
 import { X } from "lucide-react";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 export default function SupervisorEditorModal({
   // 被編輯的使用者
@@ -13,9 +14,18 @@ export default function SupervisorEditorModal({
   onToggle,
   onClose,
 }) {
+  const dialogRef = useDialogA11y({ onClose });
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-200">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4" onClick={onClose}>
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="編輯主管"
+        onClick={event => event.stopPropagation()}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-gray-200"
+      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
             <div className="font-semibold text-gray-900 text-sm">編輯主管</div>
@@ -24,7 +34,9 @@ export default function SupervisorEditorModal({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="關閉主管編輯"
             className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
             title="關閉"
           >
@@ -51,6 +63,7 @@ export default function SupervisorEditorModal({
         </div>
         <div className="px-5 py-3 border-t border-gray-100 flex justify-end">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-900 text-white hover:bg-gray-800"
           >

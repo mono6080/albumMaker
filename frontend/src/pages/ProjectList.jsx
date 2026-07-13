@@ -413,7 +413,7 @@ export default function ProjectList() {
       <ConfirmModal
         isOpen={!!confirmModal}
         message={confirmModal?.message}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
         confirmLabel={confirmModal?.confirmLabel}
         confirmVariant={confirmModal?.confirmVariant}

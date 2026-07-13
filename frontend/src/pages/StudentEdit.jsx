@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
-import { fetchProject, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
+import { fetchStudentEditor, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
 import { fetchTemplateCached } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
@@ -49,6 +49,7 @@ export default function StudentEdit() {
     setLabelText, setLabelAlign, restoreDefaultLabelText,
   } = useLabelTextsEditor();
   const [isSwitchingStudent, setIsSwitchingStudent] = useState(false);
+  const [isPhotoSaving, setIsPhotoSaving] = useState(false);
   const [previewTimestampSeed, setPreviewTimestampSeed] = useState(() => Date.now());
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
@@ -83,16 +84,9 @@ export default function StudentEdit() {
 
   const loadStudentData = useCallback(async () => {
     try {
-      const projectResponse = await fetchProject(projectId);
-      setProject(projectResponse.data);
-
-      const foundStudent = projectResponse.data.students.find(
-        (studentRecord) => studentRecord.id === Number(studentId)
-      );
-      if (!foundStudent) {
-        setLoadError("找不到該學生");
-        return;
-      }
+      const editorResponse = await fetchStudentEditor(projectId, studentId);
+      const { project: projectData, student: foundStudent } = editorResponse.data;
+      setProject(projectData);
       setStudent(foundStudent);
       // 預覽 URL 版本戳跟著 updated_at 走，內容沒變時瀏覽器快取可命中
       if (foundStudent.updated_at) {
@@ -100,9 +94,9 @@ export default function StudentEdit() {
       }
 
       // 切學生時模板不變：走 5 分鐘快取，省掉每次重抓數百 KB 的模板 JSON
-      const templateResponse = await fetchTemplateCached(projectResponse.data.template_id);
+      const templateResponse = await fetchTemplateCached(projectData.template_id);
       setTemplate(templateResponse.data);
-      setProjectLabelTexts(projectResponse.data.label_texts || {});
+      setProjectLabelTexts(projectData.label_texts || {});
 
       // 初始化對應文字狀態：只保留可填文字，固定文字永遠使用模板內容。
       const initialTexts = {};
@@ -248,7 +242,10 @@ export default function StudentEdit() {
 
   // target 為 null 時切到全班共用 scope（ClassEdit）
   const handleScopeSwitch = async (target) => {
-    if (isSwitchingStudent) return;
+    if (isSwitchingStudent || isPhotoSaving) {
+      if (isPhotoSaving) toast("照片正在儲存，完成後即可切換");
+      return;
+    }
     if (target != null && String(target) === String(studentId)) return;
 
     setIsSwitchingStudent(true);
@@ -352,7 +349,7 @@ export default function StudentEdit() {
         students={students}
         currentStudentId={studentId}
         onSwitch={handleScopeSwitch}
-        isBusy={isSwitchingStudent}
+        isBusy={isSwitchingStudent || isPhotoSaving}
         saveStatus={saveStatus}
       />
 
@@ -409,6 +406,7 @@ export default function StudentEdit() {
             disabled={isProjectCompleted}
             activePage={activePage}
             onPageFocus={setActivePage}
+            onSaveStateChange={setIsPhotoSaving}
             onPhotoSaved={() => { refreshAllPreviews(); }}
           />
         </div>

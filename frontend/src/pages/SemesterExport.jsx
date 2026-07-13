@@ -471,7 +471,7 @@ export default function SemesterExport() {
         message={confirmModal?.message}
         confirmLabel={confirmModal?.confirmLabel}
         confirmVariant={confirmModal?.confirmVariant}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
     </div>

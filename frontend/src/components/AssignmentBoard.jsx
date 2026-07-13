@@ -122,7 +122,7 @@ export default function AssignmentBoard({ students, matchResult, files, getUrl, 
       >
         <div className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-800">
           💡 拖曳（手機長按後拖）照片到學生指派、拖學生互換、拖到照片池取消；
-          或先點照片、再點目標學生。點已配對學生的照片可直接拿起改分給別人。
+          或先點照片、再點目標學生。鍵盤可用 Tab 移動、Enter／空白鍵拿起或放下。
         </div>
 
         {/* 拿起中的照片提示列：黏在頂端，捲動時仍可見 */}
@@ -215,6 +215,16 @@ function StudentCell({ student, index, file, url, canTapAssign, onTap, onClearAs
       ref={(node) => { setDragRef(node); setDropRef(node); }}
       {...listeners}
       onClick={onTap}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onTap();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={file ? `${student.name}，已配對 ${file.name}` : `${student.name}，未配對`}
       style={{ touchAction: "manipulation" }}
       className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white transition-all ${
         isOver
@@ -293,6 +303,16 @@ function PoolPhoto({ file, url, assignedName, isFocused, onTap }) {
       ref={setNodeRef}
       {...listeners}
       onClick={onTap}
+      onKeyDown={event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onTap();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isFocused}
+      aria-label={`${file.name}${assignedName ? `，已配對給 ${assignedName}` : "，未使用"}`}
       style={{ touchAction: "manipulation" }}
       // 方形用 padding-bottom 百分比而非 aspect-ratio（WebKit grid 行高問題，見 FileTile）
       className={`group relative w-full cursor-grab overflow-hidden rounded-md border bg-white pb-[100%] transition-all active:cursor-grabbing ${

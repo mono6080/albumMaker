@@ -5,11 +5,13 @@ import { useState } from "react";
 import { BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 
 import { buildTemplateSpreadPreviewUrl } from "../api/urls";
+import useDialogA11y from "../hooks/useDialogA11y";
 
 export default function SpreadPreviewModal({ templateId, pageCount, initialPageIndex, onClose }) {
   // 每次開啟都重新掛載，因此初始組別與時間戳直接由 useState 初始化
   const [spreadStartIndex, setSpreadStartIndex] = useState(() => Math.floor(initialPageIndex / 2) * 2);
   const [spreadPreviewTimestamp, setSpreadPreviewTimestamp] = useState(() => Date.now());
+  const dialogRef = useDialogA11y({ onClose });
 
   const lastSpreadStartIndex = Math.max(0, Math.floor((pageCount - 1) / 2) * 2);
   const spreadEndIndex = Math.min(spreadStartIndex + 1, pageCount - 1);
@@ -18,6 +20,8 @@ export default function SpreadPreviewModal({ templateId, pageCount, initialPageI
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="雙頁預覽"

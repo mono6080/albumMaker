@@ -20,6 +20,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: false,
+      includeAssets: ['offline.html', 'favicon.svg', 'icons/*.png'],
       // 離線 fallback 頁（由 workbox 在 navigate 失敗時回退）
       filename: 'sw.js',
       manifest: {
@@ -46,15 +47,7 @@ export default defineConfig({
             urlPattern: /^\/api\//,
             handler: 'NetworkOnly',
           },
-          {
-            // 圖片（uploads）：先試網路，失敗才用快取
-            urlPattern: /^\/uploads\//,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'uploads-cache',
-              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
-            },
-          },
+          // 媒體現在也是受 Cookie 保護的 /api 端點；不可放進跨帳號共用的 SW cache。
         ],
       },
       // 產生獨立的 offline.html fallback

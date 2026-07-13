@@ -169,7 +169,7 @@ export default function TemplateList() {
       <ConfirmModal
         isOpen={!!confirmModal}
         message={confirmModal?.message}
-        onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
 
