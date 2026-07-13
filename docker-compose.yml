@@ -4,10 +4,12 @@ services:
     volumes:
       - uploads:/app/uploads
       - db:/app/db
+      - backups:/app/backups
       - production_album_maker_socket:/album_maker_socket
     env_file:
       - .env
     environment:
+      PRODUCTION: ${PRODUCTION:-1}
       PHOTO_UPLOAD_CONCURRENCY: ${PHOTO_UPLOAD_CONCURRENCY:-2}
       # 排隊逾時需大於單一重任務時間，否則兩人同用時排隊者必 503（見 request_limiter.py）
       HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS: ${HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS:-10}
@@ -27,4 +29,5 @@ networks:
 volumes:
   uploads:
   db:
+  backups:
   production_album_maker_socket:

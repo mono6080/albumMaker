@@ -41,7 +41,7 @@ docker compose up -d --build
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
 | `SECRET_KEY` | 無（**必設**） | JWT 簽名密鑰；`python -c "import secrets; print(secrets.token_hex(32))"` 產生。`PRODUCTION=1` 未設則拒絕啟動；開發模式用內建預設值並警告 |
-| `PRODUCTION` | 未設定 | 設 `1`：Cookie 加 Secure flag（需 HTTPS）+ 強制 SECRET_KEY |
+| `PRODUCTION` | 本機未設定；Compose 預設 `1` | 設 `1`：Cookie 加 Secure flag（需 HTTPS）+ 強制 SECRET_KEY |
 | `DATABASE_URL` | `sqlite:///./album_maker.db` | 資料庫連線字串（僅支援 SQLite，見 architecture.md 非目標） |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,...` | CORS 允許來源，逗號分隔 |
 | `STORAGE_BACKEND` | `local` | `local` / `r2` |
@@ -49,8 +49,8 @@ docker compose up -d --build
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | 未設定 | R2 API 金鑰；r2 模式必填 |
 | `R2_BUCKET` | 未設定 | bucket 名稱；r2 模式必填 |
 | `R2_ENDPOINT_URL` | 未設定 | 自訂 endpoint；未設時用 `https://<account>.r2.cloudflarestorage.com` |
-| `R2_SERVE_MODE` | `proxy` | `proxy` 後端代理回傳；`redirect` 轉址到 `R2_PUBLIC_BASE_URL` |
-| `R2_PUBLIC_BASE_URL` | 未設定 | redirect 模式必填 |
+| `R2_SERVE_MODE` | `proxy` | `proxy` 後端代理回傳；`redirect` 會公開永久 URL，正式環境會拒絕啟動 |
+| `R2_PUBLIC_BASE_URL` | 未設定 | 僅非正式環境的 redirect 模式使用 |
 | `R2_KEY_PREFIX` | 未設定 | key 前綴；e2e / staging 隔離用（如 `__e2e/<run-id>`） |
 | `R2_READ_CACHE_MAX_BYTES` | `157286400` | 記憶體讀取快取上限；`0` 停用 |
 | `R2_LOCAL_CACHE_DIR` | 未設定 | 本機寫入快取目錄（僅本機測試建議） |
@@ -63,6 +63,42 @@ docker compose up -d --build
 | `HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS` | `10.0` | 重任務排隊逾時秒數，超時回 503（背景 job 走 `acquire_blocking` 不受此限） |
 
 `.env` 已被 `.gitignore` 排除；金鑰不得 commit。
+
+## 備份、驗證與還原
+
+正式環境至少每日建立一次備份；大量匯入／刪除前再手動建立一次。SQLite 使用線上
+backup API 取得一致快照，本機 storage 會一併封裝，產物以 SHA-256 manifest 驗證：
+
+```bash
+docker compose exec app python /app/scripts/backup_data.py create \
+  --output-dir /app/backups --keep-days 30
+docker compose exec app python /app/scripts/backup_data.py verify \
+  /app/backups/album-maker-backup-YYYYMMDDTHHMMSSZ
+```
+
+`backups` 是獨立 named volume；仍應用主機排程把它同步到異機／物件儲存。R2 模式只
+備份 SQLite，manifest 會明確標示未包含 R2 物件；R2 bucket 必須另外啟用版本控管或
+跨 bucket 複寫，不能把本機 cache 當備份。
+
+還原前先停止 app，並先執行 `verify`。還原是取代性操作，沒有
+`--confirm-replace` 會拒絕執行：
+
+```bash
+docker compose stop app
+docker compose run --rm app python /app/scripts/backup_data.py restore \
+  /app/backups/album-maker-backup-YYYYMMDDTHHMMSSZ \
+  --database-destination /app/db/album_maker.db \
+  --uploads-destination /app/uploads --confirm-replace
+docker compose start app
+```
+
+## 健康檢查與告警
+
+`GET /api/health` 會實際執行 SQLite `SELECT 1`；Docker image 亦每 30 秒透過
+UDS（compose）或 localhost TCP（Dockerfile 預設）探測此端點。正式環境仍應由
+外部 uptime 服務探測 `https://<網域>/api/health`，並對非 200 與 Docker
+`unhealthy` 設定通知。未捕捉例外會以 `unhandled_request method=... path=...`
+寫入 ERROR log，可交由 log agent／Sentry 收集。
 
 ## 網路邊界
 

@@ -27,13 +27,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 後端程式碼
 COPY backend/ .
+COPY scripts/backup_data.py /app/scripts/backup_data.py
 
 # 前端編譯結果（放在 main.py 預期的相對位置）
 COPY --from=frontend-builder /build/dist/ /frontend/dist/
 
 # 建立 uploads 目錄（會被 volume 覆蓋，但確保初始存在）
 RUN mkdir -p uploads
+RUN mkdir -p backups
 
 EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["python", "healthcheck.py"]
 
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8765"]

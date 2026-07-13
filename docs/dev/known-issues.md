@@ -8,20 +8,13 @@
 
 ## 營運缺口（依風險排序，2026-07-13 記錄）
 
-1. **資料備份自動化（風險最大）**：正式站 SQLite DB 無任何備份機制，
-   老師的相本資料全在裡面；磁碟故障＝全滅。方案：cron +
-   `sqlite3 .backup` + 上傳 R2 或異地。uploads volume 同理
-2. **錯誤監控**：後端 exception 只進 docker logs 無人看。最低成本：
-   log 掃描 cron 發現 ERROR 即通知；正規：接 Sentry（免費額度即可）
-3. **Uptime 監控**：外部服務打 `/api/health`，服務掛掉能先於使用者發現
-
-## 已知 DRIFT（先記、不修）
-
-- **`vite.config.js` runtimeCaching `^/uploads/` 是死規則**：實際照片 serving
-  路徑是 `/api/projects/.../photos/...`，不在 `/uploads/` 下
-- **`LocalStorageAdapter._path()` 的 shared-prefix 理論邊界**：`base=/uploads`
-  與 `resolved=/uploads_evil` 的 startswith 比對問題。實務上 base 是固定目錄
-  不會撞 prefix，且已有 regression test 鎖住行為；若未來改路徑命名需注意
+1. **異地備份排程仍需部署端設定**：repo 已有 `scripts/backup_data.py`，支援
+   SQLite 線上快照、本機媒體封裝、SHA-256 驗證與還原，Docker 也有獨立
+   backups volume；但正式主機仍需以 cron 執行並同步到異機／物件儲存。
+2. **錯誤通知管道仍需部署端設定**：未捕捉 exception 已用結構化 ERROR log
+   記錄 method/path，但尚未配置 Sentry 或 log 掃描通知收件人。
+3. **外部 uptime 告警仍需部署端設定**：`/api/health` 已檢查 SQLite，Docker
+   HEALTHCHECK 也已接上；仍需外部監控服務定期探測正式網域並設定通知。
 
 ## 開放設計問題
 
@@ -32,8 +25,6 @@
 - **新 storage adapter 的 EXIF transpose**：`open_image()` 必須做
   exif_transpose 是介面 invariant（已記入
   [storage.md](storage.md#storageadapter-抽象)）；新增 adapter 時要有對應契約測試
-- **`output_filename` 對 `.pdf` 的硬假設**：存列印版 key，screen 版靠
-  `[:-4] + "_screen.pdf"` 字串操作；日後若新增其他輸出格式會被卡住
 - **PWA SW 與 SPA catch-all 的同名 race**：目前「先實體檔案、後 index.html」
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
@@ -45,16 +36,6 @@
 - **補渲染 job 狀態存記憶體**：`services/export_jobs.py` 的 job registry
   是程序內 dict，後端重啟即消失（補渲染冪等、重新發起即可）；
   若未來走多 worker 需改外部儲存
-- **dirty-skip 對「渲染程式碼變更」不敏感**：內容指紋只涵蓋資料
-  （版面/文字/照片），改渲染邏輯要手動 bump `_RENDER_PIPELINE_VERSION`
-  （規則見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)），忘了 bump
-  舊相冊不會套用視覺修正。**改進方向（已評估）**：version 改為
-  「渲染相關檔案（render_service / element_renderers / draw_helpers /
-  photo_frame_geometry）內容 hash」自動推導，把人為記憶換成機械保證——
-  與 contract pins / banned patterns 同一哲學，成本約半天
-- **同名前綴學生的輸出誤刪**：`render_and_save_student_album` 以
-  `delete_prefix(output/{stem})` 清舊輸出，學生「小明」會掃到「小明二」的
-  `{stem}二.pdf`（stem 為前綴時）。歷史行為、實務上班內同前綴名罕見
 
 ## 測試缺口（未來高 leverage gate）
 
