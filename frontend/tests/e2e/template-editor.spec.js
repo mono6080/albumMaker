@@ -74,8 +74,24 @@ test("admin can create a template and place canvas elements", async ({ page }) =
 
   await page.getByRole("button", { name: /選取/ }).click();
   await canvas.click({ position: { x: 270, y: 287 } });
+  const inspector = page.getByRole("complementary", { name: "編輯器檢查器" });
+  const propertiesTab = inspector.getByRole("tab", { name: "屬性" });
+  const layersTab = inspector.getByRole("tab", { name: "圖層" });
+  await expect(propertiesTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("純文字屬性")).toBeVisible();
-  const templateTextArea = page.locator("textarea").first();
+  const transformSection = inspector.getByRole("button", { name: "位置與尺寸", exact: true });
+  await transformSection.click();
+  await expect(transformSection).toHaveAttribute("aria-expanded", "true");
+  await propertiesTab.press("ArrowRight");
+  await expect(layersTab).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("heading", { name: "圖層清單" })).toBeVisible();
+  await inspector.getByRole("button", { name: /\{name\}的文字標題/ }).click();
+  await expect(layersTab).toHaveAttribute("aria-selected", "true");
+  await layersTab.press("Home");
+  await expect(propertiesTab).toHaveAttribute("aria-selected", "true");
+  await expect(transformSection).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("純文字屬性")).toBeVisible();
+  const templateTextArea = page.locator('[data-guide="property-panel"] textarea').first();
   await templateTextArea.fill("主角：");
   await page.getByRole("button", { name: "插入 {name}" }).click();
   await expect(templateTextArea).toHaveValue("主角：{name}");
@@ -89,6 +105,20 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await expect(page.getByRole("img", { name: "雙頁合併預覽" })).toBeVisible();
   await page.getByRole("button", { name: "關閉雙頁預覽" }).click();
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(layersTab).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("heading", { name: "圖層清單" })).toBeVisible();
+
+  for (const width of [1024, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await inspector.scrollIntoViewIfNeeded();
+    await expect(inspector).toBeVisible();
+    const hasHorizontalOverflow = await page.evaluate(() => (
+      document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+    ));
+    expect(hasHorizontalOverflow).toBe(false);
+  }
 });
 
 
@@ -198,7 +228,7 @@ test("select mode shows hover outlines for the current direct canvas object", as
   await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
   await expect.poll(readHoverOutline).toEqual({ count: 0, parentId: null });
   await page.getByRole("button", { name: "進入群組" }).click();
-  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible')).toContainText("群組 1");
 
   await canvas.hover({ position: toCanvasPosition(400, 300) });
   await expect.poll(readHoverOutline).toEqual({ count: 1, parentId: `sticker-${sticker.id}` });

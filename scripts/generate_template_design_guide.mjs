@@ -329,7 +329,8 @@ const GUIDE_MARKERS = {
     { n: 1, relativeTo: '[data-guide="canvas-frame"]', rect: CANVAS_TARGETS.photoSlot1, text: "照片格選取框。被選取的元素會出現藍色框與控制點。" },
     { n: 2, selector: '[data-guide="property-position-size"]', text: "位置與尺寸。可直接輸入數字，方便對齊多個照片格。" },
     { n: 3, selector: '[data-guide="flip-size"]', padding: 3, text: "翻轉長寬。快速把橫式格改成直式格，或反過來。" },
-    { n: 4, selector: '[data-guide="photo-visual-style"]', text: "外框、圓角、陰影。用來控制照片放進來後的視覺效果。" },
+    { n: 4, selector: '[data-guide="photo-appearance"]', text: "外框與圓角。用來控制照片放進來後的框型。" },
+    { n: 5, selector: '[data-guide="photo-visual-style"]', text: "陰影與效果。需要時再展開調整，避免常用設定被推到下方。" },
   ],
   textContent: [
     { n: 1, selector: '[data-guide="tool-add-text"]', text: "純文字工具。新增標題、日期、頁尾等可替換文字。" },
@@ -624,12 +625,18 @@ async function main() {
     await page.getByRole("button", { name: "↖ 選取", exact: true }).click();
     await canvas.click({ position: { x: realToDisplay(198), y: realToDisplay(292) } });
     await page.getByText("照片格屬性").waitFor();
+    const photoPropertyPanel = page.locator('[data-guide="property-panel"]');
+    await photoPropertyPanel.getByRole("button", { name: "位置與尺寸" }).click();
+    await photoPropertyPanel.getByRole("button", { name: "陰影與效果" }).click();
     const photo = await screenshot(page, "05-photo-properties.png", { markers: GUIDE_MARKERS.photo });
 
     await page.getByRole("button", { name: "↖ 選取", exact: true }).click();
     await canvas.click({ position: { x: realToDisplay(390), y: realToDisplay(816) } });
     await page.getByText("純文字屬性").waitFor();
     const textContent = await screenshot(page, "06-text-content.png", { markers: GUIDE_MARKERS.textContent });
+    await page.locator('[data-guide="property-panel"]')
+      .getByRole("button", { name: "陰影與效果" })
+      .click();
     await page.getByText("文字陰影").scrollIntoViewIfNeeded();
     const text = await screenshot(page, "07-text-shadow.png", { markers: GUIDE_MARKERS.text });
 

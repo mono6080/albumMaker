@@ -15,7 +15,7 @@ import {
   Text as KonvaText,
   Transformer,
 } from "react-konva";
-import { BookOpen, Camera, CircleHelp, Redo2, Undo2 } from "lucide-react";
+import { BookOpen, Camera, CircleHelp, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
 
 import {
   fetchTemplate,
@@ -46,6 +46,7 @@ import {
 import LayerListPanel from "../components/LayerListPanel";
 import PropertyPanel from "../components/PropertyPanel";
 import GroupSelectionPanel from "../components/GroupSelectionPanel";
+import EditorInspector from "../components/EditorInspector";
 import ConfirmModal from "../components/ConfirmModal";
 import SpreadPreviewModal from "../components/SpreadPreviewModal";
 import { Button } from "../components/ui";
@@ -156,8 +157,8 @@ const EDITOR_GUIDE_STEPS = [
   },
   {
     element: '[data-guide="property-region"]',
-    title: "屬性面板",
-    description: "點選畫布元素後，這裡會出現位置、尺寸、照片框樣式、文字角色、陰影等精準設定。純排版文字可設為固定文字，避免老師端修改。",
+    title: "屬性與圖層",
+    description: "用屬性調整選取物件；切到圖層可精準選取群組、文字、照片格與貼圖。純排版文字可設為固定文字，避免老師端修改。",
     side: "left",
     align: "center",
   },
@@ -286,6 +287,7 @@ export default function TemplateEditor() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
+  const [inspectorTab, setInspectorTab] = useState("layers");
 
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
@@ -299,6 +301,12 @@ export default function TemplateEditor() {
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
   const isolationGroupId = isolationPath.length ? isolationPath[isolationPath.length - 1] : null;
   const selectedElement = selectedRefs.length === 1 ? selectedRefs[0] : null;
+
+  useEffect(() => {
+    if (!marqueeGesture && selectedRefs.length === 0) {
+      setInspectorTab("layers");
+    }
+  }, [marqueeGesture, selectedRefs.length]);
 
   const setSelectedElement = useCallback((nextSelection) => {
     setSelectedRefs(currentRefs => {
@@ -315,6 +323,7 @@ export default function TemplateEditor() {
   // ── 分頁草稿與復原/重做歷史（useLayoutHistory）─────────────────────────────
   const clearSelection = useCallback(() => {
     setSelectedRefs([]);
+    setInspectorTab("layers");
   }, []);
   const beginCanvasGesture = useCallback((kind) => {
     activeCanvasGestureRef.current = kind;
@@ -326,6 +335,7 @@ export default function TemplateEditor() {
   const resetEditorView = useCallback(() => {
     activeCanvasGestureRef.current = null;
     setSelectedRefs([]);
+    setInspectorTab("layers");
     setHoveredRef(null);
     setIsolationPath([]);
     setMarqueeGesture(null);
@@ -506,6 +516,7 @@ export default function TemplateEditor() {
   const handleAddPage = async () => {
     await addTemplatePage(templateId);
     await loadTemplate();
+    setInspectorTab("layers");
     setCurrentPageIndex(template.pages.length);
     toast.success("已新增頁面");
   };
@@ -517,6 +528,7 @@ export default function TemplateEditor() {
       onConfirm: async () => {
         dropPageHistory(currentPage.id);
         await deleteTemplatePage(templateId, currentPage.id);
+        setInspectorTab("layers");
         setCurrentPageIndex(Math.max(0, currentPageIndex - 1));
         await loadTemplate();
         toast.success("已刪除頁面");
@@ -567,6 +579,7 @@ export default function TemplateEditor() {
         stickers: [...(currentLayout.stickers || []), newSticker],
       }));
       setIsolationPath([]);
+      setInspectorTab("properties");
       setSelectedElement({ type: "sticker", id: newSticker.id });
       toast.success("貼圖已上傳");
     } catch {
@@ -609,6 +622,16 @@ export default function TemplateEditor() {
   const handleSelectGroup = useCallback((groupId, options = {}) => {
     handleSelectDirectRef({ type: "group", id: groupId }, options);
   }, [handleSelectDirectRef]);
+
+  const handleCanvasSelectElement = useCallback((elementRef, options = {}) => {
+    setInspectorTab("properties");
+    handleSelectElement(elementRef, options);
+  }, [handleSelectElement]);
+
+  const handleCanvasSelectGroup = useCallback((groupId, options = {}) => {
+    setInspectorTab("properties");
+    handleSelectGroup(groupId, options);
+  }, [handleSelectGroup]);
 
   const enterGroup = useCallback((groupId, preferredHit = null) => {
     if (!pageLayout) return;
@@ -778,6 +801,7 @@ export default function TemplateEditor() {
           exitGroup();
         } else if (!isInputTarget) {
           keyEvent.preventDefault();
+          setInspectorTab("layers");
           setSelectedRefs([]);
         }
         return;
@@ -1074,6 +1098,7 @@ export default function TemplateEditor() {
     if (event.evt?.button != null && event.evt.button !== 0) return;
     const pointer = getPointerCoordinates();
     if (!pointer) return;
+    setInspectorTab("properties");
     setMarqueeGesture({
       startDisplay: pointer.display,
       currentDisplay: pointer.display,
@@ -1193,6 +1218,7 @@ export default function TemplateEditor() {
         photo_slots: [...currentLayout.photo_slots, { ...newSlot, z_index: getNextZIndex(currentLayout) }],
       }));
       setIsolationPath([]);
+      setInspectorTab("properties");
       setSelectedElement({ type: "photo", id: newSlot.id });
       return;
     }
@@ -1217,12 +1243,14 @@ export default function TemplateEditor() {
         text_labels: [...(currentLayout.text_labels || []), { ...newTextLabel, z_index: getNextZIndex(currentLayout) }],
       }));
       setIsolationPath([]);
+      setInspectorTab("properties");
       setSelectedElement({ type: "text", id: newTextLabel.id });
       return;
     }
 
     // 選取模式：點擊空白處取消選取
     if (e.target === stageRef.current && !e.evt?.shiftKey) {
+      setInspectorTab("layers");
       setSelectedElement(null);
     }
   };
@@ -1313,7 +1341,7 @@ export default function TemplateEditor() {
     currentPageIndex,
     updateElement,
     setSelectedElement,
-    onSelectElement: handleSelectElement,
+    onSelectElement: handleCanvasSelectElement,
     onActivateElement: handleActivateElement,
     onGestureStart: beginCanvasGesture,
     onGestureEnd: endCanvasGesture,
@@ -1341,11 +1369,11 @@ export default function TemplateEditor() {
           listening: activeTool === "select" && !disabled,
           onClick: (event) => {
             event.cancelBubble = true;
-            handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
           },
           onTap: (event) => {
             event.cancelBubble = true;
-            handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
           },
           onDblClick: (event) => {
             event.cancelBubble = true;
@@ -1375,11 +1403,11 @@ export default function TemplateEditor() {
         listening: activeTool === "select" && !disabled,
         onClick: (event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         },
         onTap: (event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         },
         onDblClick: (event) => {
           event.cancelBubble = true;
@@ -1474,11 +1502,11 @@ export default function TemplateEditor() {
         listening={activeTool === "select"}
         onClick={(event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         }}
         onTap={(event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         }}
         onDblClick={(event) => {
           event.cancelBubble = true;
@@ -1547,7 +1575,7 @@ export default function TemplateEditor() {
   );
 
   return (
-    <div className="flex flex-col">
+    <div className="mx-auto flex w-full max-w-[1042px] flex-col lg:-mx-4 lg:w-auto xl:mx-auto xl:w-full">
       <ConfirmModal
         isOpen={!!confirmModal}
         message={confirmModal?.message}
@@ -1563,7 +1591,7 @@ export default function TemplateEditor() {
         />
       )}
       {/* 頂部標題列 */}
-      <div className="flex items-center gap-3 mb-3 flex-shrink-0" data-guide="editor-header">
+      <div className="mb-3 flex flex-shrink-0 flex-wrap items-center gap-3" data-guide="editor-header">
         <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
           ← 返回
         </button>
@@ -1616,14 +1644,6 @@ export default function TemplateEditor() {
             <BookOpen className="w-4 h-4" />
             雙頁預覽
           </button>
-          {selectedRefs.length > 0 && (
-            <button
-              onClick={deleteSelectedElement}
-              className="px-3 py-1 text-sm rounded border border-red-300 text-red-500 hover:bg-red-50"
-            >
-              刪除選取
-            </button>
-          )}
           <button
             onClick={handleSaveLayout}
             disabled={isSaving || hasRepairableMaterialLinks}
@@ -1661,9 +1681,9 @@ export default function TemplateEditor() {
       )}
 
       {/* 三欄主體 */}
-      <div className="flex gap-4">
+      <div className="flex flex-wrap gap-2 lg:flex-nowrap xl:gap-4">
         {/* 左側工具欄 */}
-        <div className="flex-shrink-0 w-40 flex flex-col gap-4" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
+        <div className="flex w-36 flex-shrink-0 flex-col gap-4 lg:w-40" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
           {/* 工具 */}
           <div data-guide="tool-panel">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">工具</p>
@@ -1721,7 +1741,10 @@ export default function TemplateEditor() {
               {template.pages.map((templatePage, pageTabIndex) => (
                 <button
                   key={templatePage.id}
-                  onClick={() => setCurrentPageIndex(pageTabIndex)}
+                  onClick={() => {
+                    setInspectorTab("layers");
+                    setCurrentPageIndex(pageTabIndex);
+                  }}
                   className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
                     currentPageIndex === pageTabIndex
                       ? "bg-indigo-600 text-white border-indigo-600"
@@ -1875,9 +1898,15 @@ export default function TemplateEditor() {
           </p>
         </div>
 
-        {/* 右側：屬性面板 */}
-        <div className="flex-1 min-w-0 overflow-y-auto" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }} data-guide="property-region">
-          {selectedRefs.length > 1 ? (
+        {/* 右側：固定屬性／圖層檢查器 */}
+        <EditorInspector
+          activeTab={inspectorTab}
+          onTabChange={setInspectorTab}
+          selectedRefs={selectedRefs}
+          currentPageIndex={currentPageIndex}
+          maxHeight={CANVAS_DISPLAY_HEIGHT}
+          onDeleteSelection={deleteSelectedElement}
+          propertyPanel={selectedRefs.length > 1 ? (
             <GroupSelectionPanel
               items={selectedItems}
               onGroup={handleCreateGroup}
@@ -1920,6 +1949,22 @@ export default function TemplateEditor() {
               }}
             />
           ) : (
+            <div className="rounded-lg border border-dashed border-gray-200 bg-white px-5 py-8 text-center">
+              <SlidersHorizontal className="mx-auto h-6 w-6 text-gray-300" />
+              <h2 className="mt-3 text-sm font-semibold text-gray-700">尚未選取物件</h2>
+              <p className="mt-1 text-xs leading-5 text-gray-400">
+                從畫布點選物件以編輯屬性，或前往圖層清單精準選取。
+              </p>
+              <button
+                type="button"
+                onClick={() => setInspectorTab("layers")}
+                className="mt-4 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+              >
+                查看圖層
+              </button>
+            </div>
+          )}
+          layerPanel={(
             <LayerListPanel
               pageLayout={pageLayout}
               sortedPageElements={sortedPageElements}
@@ -1937,7 +1982,7 @@ export default function TemplateEditor() {
               onNavigateIsolation={navigateIsolation}
             />
           )}
-        </div>
+        />
       </div>
     </div>
   );

@@ -112,7 +112,7 @@ test("nested isolation, Ctrl+G toggle and undo retain the deepest valid scope", 
   await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
 
   await page.keyboard.press("Enter");
-  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible')).toContainText("群組 1");
   await canvas.click({ position: canvasPoint(120, 180) });
   await page.keyboard.down("Shift");
   await canvas.click({ position: canvasPoint(390, 180) });
@@ -122,15 +122,15 @@ test("nested isolation, Ctrl+G toggle and undo retain the deepest valid scope", 
   await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
 
   await page.keyboard.press("Enter");
-  await expect(page.locator('[data-guide="isolation-breadcrumb"] button')).toHaveCount(3);
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible button')).toHaveCount(3);
   await page.keyboard.press("Escape");
-  await expect(page.locator('[data-guide="isolation-breadcrumb"] button')).toHaveCount(2);
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible button')).toHaveCount(2);
 
   await page.keyboard.press("Control+g");
   await expect(page.getByText("已選取 2 個物件")).toBeVisible();
   await page.getByRole("button", { name: "復原" }).click();
   await expect(page.getByRole("button", { name: "離開群組" })).toBeVisible();
-  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible')).toContainText("群組 1");
   await expect(page.getByRole("button", { name: /物件群組/ })).toBeVisible();
 
   await saveTemplateLayout(page);
@@ -296,7 +296,7 @@ test("group corner resize preserves typography through transient commit undo and
   await expectTypography();
 
   await page.getByRole("button", { name: "復原" }).click();
-  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible')).toContainText("群組 1");
   await expect(positionInputs.nth(0)).toHaveValue(String(text.x));
   await expect(positionInputs.nth(1)).toHaveValue(String(text.y));
   await expect(positionInputs.nth(2)).toHaveValue(String(text.width));
@@ -304,7 +304,7 @@ test("group corner resize preserves typography through transient commit undo and
   await expectTypography();
 
   await page.getByRole("button", { name: "重做" }).click();
-  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]:visible')).toContainText("群組 1");
   await expect(positionInputs.nth(2)).toHaveValue(String(scaledText.width));
   await expect(positionInputs.nth(3)).toHaveValue(String(scaledText.height));
   await expectTypography();
@@ -479,6 +479,9 @@ test("sticker analysis creates and linked text resets without changing topology 
   await page.locator("textarea").first().fill("保留這段文字");
   const fontSizeNumber = page.locator("label").filter({ hasText: "字級（pt）" }).locator('input[type="number"]');
   await fontSizeNumber.fill("36");
+  await page.locator('[data-guide="property-panel"]')
+    .getByRole("button", { name: "位置與尺寸" })
+    .click();
   const positionInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
   await positionInputs.nth(0).fill(String(createdText.x + 40));
   await page.getByRole("button", { name: "重新分析並重設文字框" }).click();
