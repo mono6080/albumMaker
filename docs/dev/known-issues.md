@@ -18,6 +18,10 @@
 
 ## 開放設計問題
 
+- **Illustrator 式群組尚未實作**：新版契約詳見
+  [Illustrator 式群組 v1 規格](../specs/illustrator-style-groups-v1.md)；舊資料自動群組 migration
+  明確延後到群組功能完成並驗收後
+
 - **多 worker 下的並發**：`render_album` 是純 PIL（無共享 mutable state），
   但 uvicorn workers > 1 時 SQLite 寫入會搶鎖。目前單 worker、低並發沒事
 - **S3 / R2 的中文 key**：照片 key 的 `{filename}` 保留使用者原檔名（可能中文）。
