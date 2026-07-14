@@ -1,6 +1,6 @@
 # Illustrator 式群組與素材文字框輔助 v1 規格
 
-> 狀態：實作契約。基線 `fab0732`，實作 branch `feat/illustrator-style-groups`。
+> 狀態：已實作並通過完整回歸。基線 `fab0732`，實作 branch `feat/illustrator-style-groups`。
 > 舊 safe-area / text-owned-background 實驗不構成相容契約。
 
 ## Verdict
