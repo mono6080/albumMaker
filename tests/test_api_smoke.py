@@ -560,6 +560,7 @@ def test_preview_endpoints_require_auth():
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)
         assert project_preview.headers["content-type"].startswith("image/jpeg")
+        assert "private" in project_preview.headers["cache-control"]
         assert "max-age" in project_preview.headers["cache-control"]
         assert project_preview.content.startswith(b"\xff\xd8")
 
@@ -621,6 +622,11 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
             files={"file": ("red.png", png_bytes((20, 20), (230, 20, 20, 255)), "image/png")},
         )
         assert_status(background_upload, 200)
+        background_url = f"/api/templates/{template_id}/pages/{page_id}/background"
+        background = client.get(background_url)
+        assert_status(background, 200)
+        with Image.open(BytesIO(background.content)) as background_image:
+            assert background_image.size == (20, 20)
 
         # 模擬 TemplateEditor 後續儲存版面時只送元素 layout，導致 layout_json 不含 background_filename。
         layout_without_background = client.put(
@@ -630,6 +636,7 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
         assert_status(layout_without_background, 200)
 
         client.cookies.clear()
+        assert_status(client.get(background_url), 401)
         assert_status(client.get(f"/api/templates/{template_id}/pages/{page_id}/preview"), 401)
         assert_status(client.get(f"/api/templates/{template_id}/spread-preview/0"), 401)
         login(client)
@@ -678,6 +685,8 @@ def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
         assert_status(sticker, 200)
         with Image.open(BytesIO(sticker.content)) as sticker_image:
             assert sticker_image.size == (320, 120)
+        client.cookies.clear()
+        assert_status(client.get(f"/api/templates/{template_id}/stickers/wide.png"), 401)
 
 
 def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
@@ -900,6 +909,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_preview, 200)
         assert student_preview.headers["content-type"].startswith("image/jpeg")
+        assert "private" in student_preview.headers["cache-control"]
         assert "max-age" in student_preview.headers["cache-control"]
 
         stale_student_default = client.put(
@@ -916,6 +926,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
+        assert "private" in project_blank_preview.headers["cache-control"]
         assert "max-age" in project_blank_preview.headers["cache-control"]
         assert project_blank_preview.headers["x-preview-cache"] == "MISS"
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]

@@ -139,7 +139,10 @@ def _is_canonical_template_sticker_key(template_id: int, path: str) -> bool:
 
 
 def _matches_saved_sticker(page_layout: dict, sticker_id, path: str) -> bool:
-    requested_id = canonical_id(sticker_id)
+    try:
+        requested_id = canonical_id(sticker_id)
+    except ValueError:
+        return False
     matches = []
     for sticker in page_layout.get("stickers") or []:
         if not isinstance(sticker, dict):
@@ -169,6 +172,13 @@ def suggest_material_text_box(
     template_page = get_template_page_or_404(page_id, template_id, db)
     page_layout = json.loads(template_page.layout_json)
     path = payload.path
+    try:
+        canonical_id(payload.sticker_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_sticker_reference", "message": "貼圖 ID 格式不正確"},
+        ) from exc
     if not (
         _is_canonical_template_sticker_key(template_id, path)
         or _matches_saved_sticker(page_layout, payload.sticker_id, path)

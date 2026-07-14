@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 
 from database import SessionLocal, TemplatePage
 from routers.templates import assets as template_assets
+from services.layout_groups import MAX_JAVASCRIPT_SAFE_INTEGER
 from services.material_text_box import (
     DETECTOR_VERSION,
     analyze_material_text_box,
@@ -20,7 +21,6 @@ from tests.helpers import (
     create_user,
     login,
     started_client,
-    unique_name,
     use_tmp_uploads,
 )
 
@@ -185,8 +185,19 @@ def test_suggestion_storage_adapter_is_strictly_read_only(monkeypatch):
                 "request_token": "read-only",
             },
         )
+        unsafe_id = client.post(
+            f"/api/templates/{template_id}/pages/{page_id}/material-text-box-suggestion",
+            json={
+                "sticker_id": MAX_JAVASCRIPT_SAFE_INTEGER + 1,
+                "path": path,
+                "source_revision": None,
+                "request_token": "unsafe-canonical-id",
+            },
+        )
 
         assert_status(response, 200)
+        assert_status(unsafe_id, 422)
+        assert unsafe_id.json()["detail"]["code"] == "invalid_sticker_reference"
         assert fake_storage.calls == [("open_image", path)]
 
 
@@ -262,10 +273,21 @@ def test_saved_legacy_sticker_path_is_the_only_namespace_exception(monkeypatch, 
                 "request_token": "legacy-wrong-id",
             },
         )
+        unsafe_id = client.post(
+            f"/api/templates/{template_id}/pages/{page_id}/material-text-box-suggestion",
+            json={
+                "sticker_id": MAX_JAVASCRIPT_SAFE_INTEGER + 1,
+                "path": legacy_path,
+                "source_revision": None,
+                "request_token": "legacy-unsafe-id",
+            },
+        )
 
         assert_status(accepted, 200)
         assert accepted.json()["source_revision"] == _expected_revision(data)
         assert_status(rejected, 422)
+        assert_status(unsafe_id, 422)
+        assert unsafe_id.json()["detail"]["code"] == "invalid_sticker_reference"
 
 
 def test_suggestion_requires_privileged_role_and_exact_payload(monkeypatch, tmp_path):

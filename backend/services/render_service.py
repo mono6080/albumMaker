@@ -65,6 +65,7 @@ import io
 import os
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw
 
@@ -124,7 +125,9 @@ def _scale_number(value, scale: float):
     return value
 
 
-def _scale_layout_item(item: dict, scale_x: float, scale_y: float) -> dict:
+def _scale_layout_item(item: Any, scale_x: float, scale_y: float) -> Any:
+    if not isinstance(item, dict):
+        return deepcopy(item)
     uniform_scale = (scale_x + scale_y) / 2
     scaled = {}
     for key, value in item.items():
@@ -154,10 +157,12 @@ def scale_layout(layout: dict, scale_x: float, scale_y: float | None = None, tar
     )
 
     for collection_key in ("photo_slots", "text_bubbles", "text_labels", "stickers"):
-        scaled_layout[collection_key] = [
-            _scale_layout_item(item, scale_x, scale_y)
-            for item in layout.get(collection_key, [])
-        ]
+        collection = layout.get(collection_key, [])
+        scaled_layout[collection_key] = (
+            [_scale_layout_item(item, scale_x, scale_y) for item in collection]
+            if isinstance(collection, list)
+            else deepcopy(collection)
+        )
 
     if layout.get("footer"):
         scaled_layout["footer"] = _scale_layout_item(layout["footer"], scale_x, scale_y)
@@ -211,10 +216,17 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     photos = page_data.get("photos", {})
     label_texts = page_data.get("label_texts", {})
     photo_slot_dimension_mode = get_photo_slot_dimension_mode(layout)
-    photo_slots = [
-        build_photo_frame_slot(slot, photo_slot_dimension_mode)
-        for slot in layout.get("photo_slots", [])
-    ]
+    raw_photo_slots = layout.get("photo_slots", [])
+    photo_slots = (
+        [
+            build_photo_frame_slot(slot, photo_slot_dimension_mode)
+            if isinstance(slot, dict)
+            else slot
+            for slot in raw_photo_slots
+        ]
+        if isinstance(raw_photo_slots, list)
+        else raw_photo_slots
+    )
     traversal_layout = {**layout, "photo_slots": photo_slots}
     for elem_type, elem_data, elem_index in iter_layout_render_elements(traversal_layout):
         if elem_type == "photo":
