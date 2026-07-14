@@ -1,5 +1,6 @@
 import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
 import { buildRootRenderNodes, getFlattenedRenderElements } from "./layoutGroups.js";
+import { getVisibleLayoutElementOrdinals } from "./layoutLayerState.js";
 
 import { DESIGN_TOKENS } from "../constants/designTokens.js";
 import {
@@ -161,8 +162,15 @@ export function getFooterModel(footer) {
 
 export function buildRenderLayoutModel(layout, pageIndex = 0, options) {
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
-  const elements = getAllElementsSorted(layout, options).map(({ type, data, index }) => {
-    if (type === "photo") return getPhotoSlotModel(data, index, pageIndex, photoSlotDimensionMode);
+  const visiblePhotoOrdinals = getVisibleLayoutElementOrdinals(layout, "photo");
+  const elements = getAllElementsSorted(layout, {
+    ...(options || {}),
+    visibleOnly: true,
+  }).map(({ type, data, index }) => {
+    if (type === "photo") {
+      const visibleIndex = (visiblePhotoOrdinals.get(String(data.id)) ?? (index + 1)) - 1;
+      return getPhotoSlotModel(data, visibleIndex, pageIndex, photoSlotDimensionMode);
+    }
     if (type === "text") return getTextLabelModel(data);
     return { type, id: data.id, box: getDisplayBox(data) };
   });

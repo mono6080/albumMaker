@@ -1,3 +1,5 @@
+import { getVisibleLayoutElements } from "./layoutLayerState.js";
+
 export const TEXT_LABEL_ROLES = {
   FILLABLE: "fillable",
   STATIC: "static",
@@ -16,7 +18,7 @@ export function isFillableTextLabel(label = {}) {
 }
 
 export function getFillableTextLabels(layout = {}) {
-  return (layout?.text_labels || []).filter(isFillableTextLabel);
+  return getVisibleLayoutElements(layout, "text").filter(isFillableTextLabel);
 }
 
 export function filterFillableLabelTexts(textLabels = [], labelTexts = {}) {

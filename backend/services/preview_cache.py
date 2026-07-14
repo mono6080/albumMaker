@@ -10,6 +10,7 @@ import io
 import json
 import logging
 
+from services.layout_groups import layout_for_render_fingerprint
 from services.render_service import render_preview_page
 from services.request_limiter import preview_render_limiter
 from services.storage import get_storage
@@ -17,8 +18,8 @@ from services.storage import get_storage
 logger = logging.getLogger(__name__)
 
 PREVIEW_JPEG_QUALITY = 80
-# v6：氣泡框已移除，隔離仍可能包含氣泡像素的舊預覽。
-PREVIEW_CACHE_VERSION = "project-preview-v6-no-bubbles"
+# v7：圖層 visible 契約會影響像素，locked／layer_name 不影響。
+PREVIEW_CACHE_VERSION = "project-preview-v7-layer-visibility"
 
 
 def preview_scale_key(scale: float) -> str:
@@ -27,8 +28,11 @@ def preview_scale_key(scale: float) -> str:
 
 
 def _preview_payload_hash(payload: dict) -> str:
+    hash_payload = {**payload}
+    if isinstance(hash_payload.get("layout"), dict):
+        hash_payload["layout"] = layout_for_render_fingerprint(hash_payload["layout"])
     payload_json = json.dumps(
-        {"version": PREVIEW_CACHE_VERSION, **payload},
+        {"version": PREVIEW_CACHE_VERSION, **hash_payload},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

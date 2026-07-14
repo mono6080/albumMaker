@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from crud.template_crud import get_period_or_404
 from database import Template, TemplatePage, TemplatePeriod
+from services.layout_groups import iter_layout_render_elements
 from template_periods import (
     DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
     DEFAULT_TEMPLATE_PERIOD_NAME,
@@ -23,7 +24,10 @@ def _count_template_photo_slots(template: Template) -> int:
     total = 0
     for page in template.pages:
         layout = json.loads(page.layout_json)
-        total += len(layout.get("photo_slots") or [])
+        total += sum(
+            element_type == "photo"
+            for element_type, _, _ in iter_layout_render_elements(layout)
+        )
     return total
 
 

@@ -19,6 +19,7 @@ from services.label_texts import (
     merge_label_entries,
     normalize_label_entry,
 )
+from services.layout_groups import layout_for_render_fingerprint
 from services.render_service import (
     PRINT_OUTPUT_SIZE,
     derive_screen_images,
@@ -266,7 +267,7 @@ def _album_render_hash(page_layouts: list[dict], student_name: str, student_page
     payload = json.dumps(
         {
             "pipeline": _RENDER_PIPELINE_VERSION,
-            "layouts": page_layouts,
+            "layouts": [layout_for_render_fingerprint(layout) for layout in page_layouts],
             "name": student_name,
             "pages": student_pages_data,
         },

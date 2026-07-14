@@ -19,6 +19,7 @@ from services.file_service import (
     get_photo_thumbnail_key,
     read_and_process_photo_upload,
 )
+from services.layout_groups import iter_layout_render_elements
 from services.request_limiter import require_photo_upload_slot
 from services.storage import get_storage
 from services.student_pages import (
@@ -81,8 +82,12 @@ def _assert_project_photo_slot_exists(project, page_index: int, slot_id: int) ->
 
     template_page = project.template.pages[page_index]
     layout = _parse_json_field(template_page.layout_json, "layout_json")
-    photo_slots = layout.get("photo_slots") or []
-    if not any(str(slot.get("id")) == str(slot_id) for slot in photo_slots):
+    visible_photo_slots = (
+        element
+        for element_type, element, _ in iter_layout_render_elements(layout)
+        if element_type == "photo"
+    )
+    if not any(str(slot.get("id")) == str(slot_id) for slot in visible_photo_slots):
         raise HTTPException(status_code=404, detail="找不到照片格")
 
 

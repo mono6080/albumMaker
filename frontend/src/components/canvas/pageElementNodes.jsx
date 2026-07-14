@@ -173,6 +173,16 @@ export function makePhotoControlProps(data, {
   const insets = getPhotoFrameInsets(data);
   const displayContentW = toDisplayCoord(contentRect.width);
   const displayContentH = toDisplayCoord(contentRect.height);
+  const syncVisualNode = (controlNode) => {
+    const visualNode = controlNode.getLayer()?.findOne(
+      candidate => candidate.id() === `photo-visual-${data.id}`,
+    );
+    if (!visualNode) return;
+    visualNode.position(controlNode.position());
+    visualNode.rotation(controlNode.rotation());
+    visualNode.scale({ x: controlNode.scaleX(), y: controlNode.scaleY() });
+    visualNode.getLayer()?.batchDraw();
+  };
 
   return {
     id: `photo-${data.id}`,
@@ -188,6 +198,7 @@ export function makePhotoControlProps(data, {
     draggable: isSelectMode,
     listening: isSelectMode,
     onDragStart: () => onGestureStart?.("photo-drag"),
+    onDragMove: e => syncVisualNode(e.currentTarget),
     onDragEnd: (e) => {
       try {
         const node = e.target;
@@ -206,6 +217,7 @@ export function makePhotoControlProps(data, {
       }
     },
     onTransformStart: () => onGestureStart?.("photo-transform"),
+    onTransform: e => syncVisualNode(e.currentTarget),
     onTransformEnd: (e) => {
       try {
         const node = e.target;
@@ -330,6 +342,7 @@ export function renderPhotoSlotNode(
     <Fragment key={`photo-${data.id}`}>
       <Group
         key={`photo-visual-${data.id}`}
+        id={`photo-visual-${data.id}`}
         x={toDisplayCoord(frameRect.x + frameRect.width / 2)}
         y={toDisplayCoord(frameRect.y + frameRect.height / 2)}
         offsetX={displayW / 2}

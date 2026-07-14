@@ -834,6 +834,68 @@ def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_pat
         assert_status(second_still_exists, 200)
 
 
+def test_hidden_group_photo_slot_is_not_counted_or_writable(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client, photo_slot_count=2)
+        template_detail = client.get(f"/api/templates/{template_id}")
+        assert_status(template_detail, 200)
+        layout = template_detail.json()["pages"][0]["layout"]
+        layout["group_contract"] = "nested-world-v2"
+        layout["groups"] = [{
+            "id": "hidden-slot-group",
+            "z_index": 0,
+            "selection_rotation": 0,
+            "visible": False,
+            "children": [
+                {"type": "photo", "id": 1},
+                {"type": "text", "id": 1},
+            ],
+        }]
+        update_layout = client.put(
+            f"/api/templates/{template_id}/pages/{page_id}/layout",
+            json=layout,
+        )
+        assert_status(update_layout, 200)
+
+        templates = client.get("/api/templates/")
+        assert_status(templates, 200)
+        summary = next(item for item in templates.json() if item["id"] == template_id)
+        assert summary["photo_count"] == 1
+        refreshed_detail = client.get(f"/api/templates/{template_id}")
+        assert_status(refreshed_detail, 200)
+        assert refreshed_detail.json()["photo_count"] == 1
+
+        project_id = create_project(client, template_id)
+        batch_response = client.post(
+            f"/api/projects/{project_id}/students/batch",
+            json=["Hidden Slot Student"],
+        )
+        assert_status(batch_response, 200)
+        project_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(project_detail, 200)
+        student_id = project_detail.json()["students"][0]["id"]
+
+        hidden_upload = client.post(
+            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            files={"file": ("hidden.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(hidden_upload, 404)
+
+        visible_upload = client.post(
+            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2",
+            files={"file": ("visible.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(visible_upload, 200)
+        hidden_mapping = client.put(
+            f"/api/projects/{project_id}/students/{student_id}/photos/mapping",
+            json={"pages": {"0": {"1": {"path": visible_upload.json()["path"]}}}},
+        )
+        assert_status(hidden_mapping, 404)
+
+
 def test_project_comments_contracts():
     with started_client() as client:
         login(client)

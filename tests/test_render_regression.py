@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
+import services.render_service as render_service
 from services.render_service import PRINT_OUTPUT_SIZE, render_album, render_page
 
 
@@ -73,6 +74,63 @@ def test_render_page_supports_migrated_photo_slot_content_box_geometry():
     migrated_image = render_page(migrated_layout, student_name="Ada", page_data={}, page_index=0)
 
     assert ImageChops.difference(legacy_image, migrated_image).getbbox() is None
+
+
+def test_render_page_skips_hidden_layout_elements():
+    layout = load_layout()
+    layout["photo_slots"][0]["visible"] = False
+    layout["text_labels"][0]["visible"] = False
+
+    image = render_page(
+        layout,
+        student_name="Ada",
+        page_data={"label_texts": {"1": "This override must stay hidden"}},
+        page_index=0,
+    )
+
+    assert count_non_white_pixels(image, (40, 52, 190, 172)) == 0
+    assert count_non_white_pixels(image, (58, 250, 358, 332)) == 0
+    assert count_non_white_pixels(image, (36, 1058, 250, 1102)) > 20
+
+
+def test_render_page_placeholder_indices_skip_hidden_slots_and_keep_collection_order(
+    monkeypatch,
+):
+    layout = {
+        "canvas_width": 300,
+        "canvas_height": 200,
+        "group_contract": "nested-world-v2",
+        "photo_slots": [
+            {"id": "hidden", "visible": False, "x": 0, "y": 0, "width": 40, "height": 30},
+            {"id": "ancestor-hidden", "x": 0, "y": 40, "width": 40, "height": 30},
+            {"id": "second", "z_index": 20, "x": 50, "y": 0, "width": 40, "height": 30},
+            {"id": "first", "z_index": 10, "x": 100, "y": 0, "width": 40, "height": 30},
+        ],
+        "text_labels": [],
+        "stickers": [{"id": "hidden-sticker", "x": 50, "y": 40, "width": 20, "height": 20}],
+        "groups": [
+            {
+                "id": "hidden-group",
+                "z_index": 0,
+                "selection_rotation": 0,
+                "visible": False,
+                "children": [
+                    {"type": "photo", "id": "ancestor-hidden"},
+                    {"type": "sticker", "id": "hidden-sticker"},
+                ],
+            }
+        ],
+    }
+    rendered_slots = []
+
+    def capture_photo_slot(_canvas, slot, _photos, _page_index, slot_index=0):
+        rendered_slots.append((slot["id"], slot_index))
+
+    monkeypatch.setattr(render_service, "render_photo_slot", capture_photo_slot)
+
+    render_page(layout, student_name="Ada", page_data={}, page_index=0)
+
+    assert rendered_slots == [("first", 1), ("second", 0)]
 
 
 def test_render_album_print_output_renders_on_native_canvas():

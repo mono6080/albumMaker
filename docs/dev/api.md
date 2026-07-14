@@ -78,6 +78,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別） |
 | GET / POST | `/` | 模板摘要清單 / 建立（可複製既有模板） |
 | GET / PATCH / DELETE | `/{id}` | 詳情（含頁面）/ 改名或移動期別 / 刪除 |
+| PUT | `/{id}/pages` | 原子儲存完整頁面快照；`expected_page_ids` 做結構衝突檢查，單次完成新增、刪除、重排與版型更新 |
 | POST | `/{id}/pages` | 新增頁 |
 | PUT / DELETE | `/{id}/pages/{page_id}/layout`、`…/pages/{page_id}` | 更新版型 / 刪頁 |
 | POST / GET | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖 |

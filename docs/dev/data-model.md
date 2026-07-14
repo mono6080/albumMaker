@@ -95,7 +95,8 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   "canvas_height": 1123,
   "group_contract": "nested-world-v2",
   "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
-    { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3 }
+    { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3,
+      "layer_name": "主照片", "visible": true, "locked": false }
   ],
   "text_labels": [              // 對應文字：可被專案/學生層覆蓋
     { "id": 1, "x": 80, "y": 820, "width": 640, "height": 80,
@@ -110,6 +111,7 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   ],
   "groups": [                 // flat registry；以 group ref 表達任意深度巢狀
     { "id": "caption", "z_index": 0, "selection_rotation": 0,
+      "layer_name": "標題組", "visible": true, "locked": false,
       "children": [{ "type": "sticker", "id": 1 }, { "type": "text", "id": 1 }] },
     { "id": "page-block", "z_index": 4, "selection_rotation": 0,
       "children": [
@@ -126,6 +128,11 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 
 - `{name}` 渲染時替換為學生姓名（變數處理見 `frontend/src/utils/textVariables.js`
   與後端渲染層）
+- **圖層 metadata**：`photo_slots[]` / `text_labels[]` / `stickers[]` / `groups[]` 都可選存
+  `layer_name` / `visible` / `locked`。沒存 `visible` 等同可見，只有布林值 `false`
+  才隱藏；沒存 `locked` 等同未鎖定。群組隱藏會使整個 descendant subtree 不渲染，
+  也不列入專案照片格／文字格與進度統計；既有學生照片和文字覆寫仍保留，
+  重新顯示後可繼續使用。舊 layout 不需 migration。
 - 氣泡框元素已移除；`text_bubbles` 不屬於現行 layout schema。資料遷移只會自動清除空陣列，
   非空舊資料會保留供人工檢查，儲存 API 會明確拒絕。
 - **photo_slots 尺寸模式**：現行為 `content-box-v1`（照片內容區與外框 insets 分離），

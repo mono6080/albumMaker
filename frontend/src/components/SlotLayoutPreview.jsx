@@ -3,6 +3,7 @@
 
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
+import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 
 export default function SlotLayoutPreview({
   page,
@@ -15,7 +16,7 @@ export default function SlotLayoutPreview({
   const layout = page.layout || {};
   const canvasW = layout.canvas_width || CANVAS_REAL_WIDTH;
   const canvasH = layout.canvas_height || CANVAS_REAL_HEIGHT;
-  const slots = layout.photo_slots || [];
+  const slots = getVisibleLayoutElements(layout, "photo");
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
   const scale = height / canvasH;
   const previewW = Math.round(canvasW * scale);

@@ -35,6 +35,8 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   學生姓名 + `_RENDER_PIPELINE_VERSION`）比對上次的指紋檔（key 見
   [storage.md](storage.md#storage-key-格式)）；一致且 PDF 還在就直接跳過，
   回傳 `skipped=True`。全班重渲只重做真的改過的學生
+- 圖層 `layer_name` / `locked` 是編輯器 metadata，不納入相冊與預覽的渲染指紋；
+  `visible` 會改變像素，因此必須納入
 - **改渲染邏輯必把 `_RENDER_PIPELINE_VERSION` +1**，否則舊輸出因指紋一致
   不會被重渲（視覺修正不會生效）
 - 背景圖同檔名重傳靠 layout 的 `background_version`（`upload_background`
@@ -55,7 +57,8 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   可繪製物件。Renderer 以每個 group subtree 當 stacking block，依 scope `children[]` 遞迴展平；
   grouped leaf 不再從 root 重複畫。前端 traversal 在 `utils/layoutGroups.js`，後端 traversal 在
   `services/layout_groups.py`；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy
-  flat traversal，確保每個元素仍只畫一次。
+  flat traversal，確保每個元素仍只畫一次。圖層可見性契約見
+  [data-model.md 的 layout_json](data-model.md#layout_json-格式)。
 - 任一 scope 的 direct group 可移動、旋轉、四角等比縮放；雙擊或 Enter 每次進一層 isolation 後，
   direct children 才能分別編輯。Group bounds 由 descendant world geometry 即時計算，不存入 layout；
   group scale 改 leaf frame，但 text typography 在即時預覽與 commit 後皆保持原值。素材文字 link
@@ -64,9 +67,12 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   縮放時 Transformer 對照片格 `keepRatio` 且只留四角把手，屬性面板寬高輸入
   等比連動。底層 `photo_slots` 資料結構不變（仍存任意 width/height，
   舊模板的非標準比例照常渲染，縮放時鎖各自現有比例）
-- 草稿與歷史：`draftLayouts`（per-page dirty layout ref）+ `layoutHistories`
-  （per-page undo/redo，上限 100），抽在 `hooks/useLayoutHistory.js`
-- 儲存流程：只挑 dirty page 逐頁呼叫 `updatePageLayout`；開跨頁預覽前強制先儲存
+- 草稿與歷史：`draftLayouts`（以穩定 `editorKey` 索引的 per-page dirty layout ref）+
+  `layoutHistories`（per-page undo/redo，上限 100），抽在 `hooks/useLayoutHistory.js`。新頁在按儲存前
+  只有 client key，不會先寫入資料庫。
+- 儲存流程：新增、刪除與版型修改都先留在前端；使用者明確按「儲存」後，才以
+  `PUT /api/templates/{id}/pages` 送出完整頁面快照，由後端在單一 transaction 內完成新增、刪除、
+  重排與版型更新。儲存失敗會保留本地草稿；有未儲存變更時，跨頁預覽會提示先儲存且不會隱式寫 DB。
 
 ## PIL ⇄ Konva 補償條目
 

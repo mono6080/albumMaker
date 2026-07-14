@@ -37,6 +37,34 @@ function InspectorSection({ title, children, defaultOpen = true, dataGuide, clas
   );
 }
 
+function PropertyCommitBoundary({ onPropertyCommit, children }) {
+  const handleClickCapture = (event) => {
+    if (!onPropertyCommit || !event.target.closest?.("button")) return;
+    queueMicrotask(onPropertyCommit);
+  };
+
+  return (
+    <div
+      onBlurCapture={() => onPropertyCommit?.()}
+      onPointerUpCapture={() => onPropertyCommit?.()}
+      onClickCapture={handleClickCapture}
+    >
+      {children}
+    </div>
+  );
+}
+
+function LockedPropertyNotice() {
+  return (
+    <div
+      role="status"
+      className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800"
+    >
+      此物件已鎖定。解除鎖定後才能修改屬性。
+    </div>
+  );
+}
+
 // 滑桿 + 數字輸入的組合控制項
 function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
   return (
@@ -48,23 +76,35 @@ function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" })
 }
 
 // 字體選擇器格狀按鈕
-function FontPicker({ value, onChange, guideId }) {
+function FontPicker({ value, onChange, guideId, recentFonts = [] }) {
+  const recentFontValues = new Set(recentFonts.map(fontValue => String(fontValue).trim()));
+  const renderFontButton = (fontOption) => {
+    const isRecent = recentFontValues.has(fontOption.value);
+    return (
+    <button
+      key={fontOption.value}
+      type="button"
+      onClick={() => onChange(fontOption.value)}
+      aria-label={fontOption.label}
+      title={isRecent ? `${fontOption.label}（最近使用）` : fontOption.label}
+      style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
+      className={`flex min-w-0 items-center gap-1 rounded border px-2 py-1.5 text-left text-sm transition-colors ${
+        value === fontOption.value
+          ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+          : "border-gray-200 text-gray-700 hover:border-gray-300"
+      }`}
+    >
+      <span className="min-w-0 flex-1 truncate">{fontOption.label}</span>
+      {isRecent && (
+        <span aria-hidden="true" className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-400" />
+      )}
+    </button>
+    );
+  };
+
   return (
     <div className="grid grid-cols-2 gap-1.5" data-guide={guideId}>
-      {FONT_OPTIONS.map(fontOption => (
-        <button
-          key={fontOption.value}
-          onClick={() => onChange(fontOption.value)}
-          style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
-          className={`px-2 py-1.5 rounded border text-sm text-left truncate transition-colors ${
-            value === fontOption.value
-              ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-              : "border-gray-200 hover:border-gray-300 text-gray-700"
-          }`}
-        >
-          {fontOption.label}
-        </button>
-      ))}
+      {FONT_OPTIONS.map(fontOption => renderFontButton(fontOption))}
     </div>
   );
 }
@@ -113,7 +153,7 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
   );
 }
 
-function TextShadowControls({ elementData, onPropertyChange }) {
+function TextShadowControls({ elementData, onPropertyChange, recentColors }) {
   const enabled = !!(elementData.text_shadow_enabled ?? false);
 
   return (
@@ -133,6 +173,7 @@ function TextShadowControls({ elementData, onPropertyChange }) {
           <ColorPicker
             label="陰影顏色"
             value={elementData.text_shadow_color ?? "#000000"}
+            recentColors={recentColors}
             onChange={colorValue => onPropertyChange({ text_shadow_color: colorValue })}
           />
 
@@ -200,9 +241,75 @@ function IsolationBreadcrumb({ trail, onNavigate, tailLabel }) {
   );
 }
 
+function FavoriteStyleControls({
+  elementType,
+  elementData,
+  favoriteStyles,
+  onSaveFavoriteStyle,
+  onApplyFavoriteStyle,
+  onRemoveFavoriteStyle,
+}) {
+  const matchingStyles = favoriteStyles.filter(favoriteStyle => favoriteStyle?.type === elementType);
+
+  return (
+    <section
+      className="space-y-2 rounded-lg border border-gray-200 bg-white p-3"
+      data-guide="favorite-style-controls"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-medium text-gray-700">常用樣式</h4>
+        <button
+          type="button"
+          onClick={() => onSaveFavoriteStyle?.(elementType, elementData)}
+          disabled={!onSaveFavoriteStyle}
+          className="rounded border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+        >
+          儲存目前樣式
+        </button>
+      </div>
+
+      {matchingStyles.length > 0 ? (
+        <div className="space-y-1.5">
+          {matchingStyles.map((favoriteStyle, index) => {
+            const label = favoriteStyle.name || favoriteStyle.label || `常用樣式 ${index + 1}`;
+            return (
+              <div
+                key={favoriteStyle.id ?? `${elementType}-favorite-${index}`}
+                className="flex min-w-0 items-center overflow-hidden rounded border border-gray-200 bg-white"
+              >
+                <button
+                  type="button"
+                  onClick={() => onApplyFavoriteStyle?.(favoriteStyle)}
+                  disabled={!onApplyFavoriteStyle}
+                  title={`套用${label}`}
+                  className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+                >
+                  {label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveFavoriteStyle?.(favoriteStyle.id)}
+                  disabled={!onRemoveFavoriteStyle}
+                  aria-label={`刪除常用樣式 ${label}`}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center border-l border-gray-200 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-gray-300"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">尚未儲存常用樣式</p>
+      )}
+    </section>
+  );
+}
+
 function GroupPropertyPanel({
   group,
   bounds,
+  isLocked,
   isolationTrail,
   onNavigateIsolation,
   onLayerChange,
@@ -214,6 +321,8 @@ function GroupPropertyPanel({
       <div className="px-1 py-1">
         <h3 className="font-semibold">物件群組</h3>
       </div>
+
+      {isLocked && <LockedPropertyNotice />}
 
       <IsolationBreadcrumb
         trail={isolationTrail}
@@ -240,33 +349,35 @@ function GroupPropertyPanel({
         <span>高 {Math.round(bounds?.height ?? 0)}</span>
       </div>
 
-      <InspectorSection title="圖層順序" defaultOpen={false} dataGuide="property-section-layer-order">
-        <div className="flex gap-1">
-          {[
-            { dir: "bottom", label: "⬇ 最底" },
-            { dir: "down", label: "↓ 下移" },
-            { dir: "up", label: "↑ 上移" },
-            { dir: "top", label: "⬆ 最頂" },
-          ].map(({ dir, label }) => (
-            <button
-              key={dir}
-              type="button"
-              onClick={() => onLayerChange?.(dir)}
-              className="flex-1 px-1 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </InspectorSection>
+      <fieldset disabled={isLocked} className="space-y-3 border-0 p-0 disabled:opacity-60">
+        <InspectorSection title="圖層順序" defaultOpen={false} dataGuide="property-section-layer-order">
+          <div className="flex gap-1">
+            {[
+              { dir: "bottom", label: "⬇ 最底" },
+              { dir: "down", label: "↓ 下移" },
+              { dir: "up", label: "↑ 上移" },
+              { dir: "top", label: "⬆ 最頂" },
+            ].map(({ dir, label }) => (
+              <button
+                key={dir}
+                type="button"
+                onClick={() => onLayerChange?.(dir)}
+                className="flex-1 rounded border border-gray-200 px-1 py-1 text-xs hover:bg-gray-50"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </InspectorSection>
 
-      <button
-        type="button"
-        onClick={() => onUngroup?.(group?.id)}
-        className="w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
-      >
-        解除群組
-      </button>
+        <button
+          type="button"
+          onClick={() => onUngroup?.(group?.id)}
+          className="w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+        >
+          解除群組
+        </button>
+      </fieldset>
     </div>
   );
 }
@@ -506,7 +617,7 @@ function TextContentSection({ elementData, onPropertyChange }) {
   );
 }
 
-function TextTypographySection({ elementData, onPropertyChange }) {
+function TextTypographySection({ elementData, onPropertyChange, recentColors, recentFonts }) {
   return (
     <InspectorSection title="字體與排版" dataGuide="text-typography">
       <div className="flex flex-col gap-1">
@@ -533,14 +644,15 @@ function TextTypographySection({ elementData, onPropertyChange }) {
         </div>
       </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">字體</span>
         <FontPicker
           value={elementData.font_family}
+          recentFonts={recentFonts}
           onChange={fontValue => onPropertyChange({ font_family: fontValue })}
           guideId="text-font-picker"
         />
-      </label>
+      </div>
 
       <label className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">字級（pt）</span>
@@ -552,23 +664,6 @@ function TextTypographySection({ elementData, onPropertyChange }) {
         />
       </label>
 
-      <ColorPicker
-        label="文字顏色"
-        value={elementData.font_color ?? "#333333"}
-        onChange={colorValue => onPropertyChange({ font_color: colorValue })}
-        guideId="text-color"
-      />
-    </InspectorSection>
-  );
-}
-
-function TextLayoutDetailsSection({ elementData, onPropertyChange }) {
-  return (
-    <InspectorSection
-      title="排版細節"
-      defaultOpen={false}
-      dataGuide="text-layout-details"
-    >
       <label className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">行距</span>
         <SliderInput
@@ -591,6 +686,14 @@ function TextLayoutDetailsSection({ elementData, onPropertyChange }) {
           onChange={event => onPropertyChange({ letter_spacing: Number(event.target.value) })}
         />
       </label>
+
+      <ColorPicker
+        label="文字顏色"
+        value={elementData.font_color ?? "#333333"}
+        recentColors={recentColors}
+        onChange={colorValue => onPropertyChange({ font_color: colorValue })}
+        guideId="text-color"
+      />
     </InspectorSection>
   );
 }
@@ -599,7 +702,15 @@ export default function PropertyPanel({
   selectedElement,
   elementData,
   onPropertyChange,
+  onPropertyCommit,
   onLayerChange,
+  isLocked = false,
+  recentColors = [],
+  recentFonts = [],
+  favoriteStyles = [],
+  onSaveFavoriteStyle,
+  onApplyFavoriteStyle,
+  onRemoveFavoriteStyle,
   selectionScope = "root",
   selectedGroup = null,
   isolationTrail = [],
@@ -613,15 +724,18 @@ export default function PropertyPanel({
 }) {
   if (selectedElement.type === "group") {
     return (
-      <GroupPropertyPanel
-        group={selectedGroup ?? elementData}
-        bounds={elementData}
-        isolationTrail={isolationTrail}
-        onNavigateIsolation={onNavigateIsolation}
-        onLayerChange={onLayerChange}
-        onEnterGroup={onEnterGroup}
-        onUngroup={onUngroup}
-      />
+      <PropertyCommitBoundary onPropertyCommit={onPropertyCommit}>
+        <GroupPropertyPanel
+          group={selectedGroup ?? elementData}
+          bounds={elementData}
+          isLocked={isLocked}
+          isolationTrail={isolationTrail}
+          onNavigateIsolation={onNavigateIsolation}
+          onLayerChange={onLayerChange}
+          onEnterGroup={onEnterGroup}
+          onUngroup={onUngroup}
+        />
+      </PropertyCommitBoundary>
     );
   }
 
@@ -633,68 +747,92 @@ export default function PropertyPanel({
     : "純文字屬性";
 
   return (
-    <div className="flex flex-col gap-3" data-guide="property-panel">
-      <div className="order-first px-1 py-1">
-        <h3 className="font-semibold">{panelTitle}</h3>
+    <PropertyCommitBoundary onPropertyCommit={onPropertyCommit}>
+      <div className="flex flex-col gap-3" data-guide="property-panel">
+        <div className="order-first px-1 py-1">
+          <h3 className="font-semibold">{panelTitle}</h3>
+        </div>
+
+        {isLocked && <LockedPropertyNotice />}
+
+        {selectionScope === "isolation" && (
+          <IsolationBreadcrumb
+            trail={isolationTrail}
+            onNavigate={onNavigateIsolation}
+            tailLabel={isSticker ? "圖片" : isTextLabel ? "文字" : "子物件"}
+          />
+        )}
+
+        <fieldset disabled={isLocked} className="flex flex-col gap-3 border-0 p-0 disabled:opacity-60">
+          {(isPhotoSlot || isTextLabel) && (
+            <FavoriteStyleControls
+              elementType={selectedElement.type}
+              elementData={elementData}
+              favoriteStyles={favoriteStyles}
+              onSaveFavoriteStyle={onSaveFavoriteStyle}
+              onApplyFavoriteStyle={onApplyFavoriteStyle}
+              onRemoveFavoriteStyle={onRemoveFavoriteStyle}
+            />
+          )}
+
+          {!materialActionsDisabled && (isSticker || (isTextLabel && materialTextLink)) && (
+            <button
+              type="button"
+              disabled={isAnalyzingMaterial}
+              onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
+              className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isAnalyzingMaterial
+                ? "分析圖片中…"
+                : materialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
+            </button>
+          )}
+
+          {/* 照片格專屬屬性 */}
+          {isPhotoSlot && (
+            <PhotoAppearanceSection elementData={elementData} onPropertyChange={onPropertyChange} />
+          )}
+
+          {/* 純文字專屬屬性 */}
+          {isTextLabel && (
+            <>
+              <TextContentSection elementData={elementData} onPropertyChange={onPropertyChange} />
+              <TextTypographySection
+                elementData={elementData}
+                onPropertyChange={onPropertyChange}
+                recentColors={recentColors}
+                recentFonts={recentFonts}
+              />
+            </>
+          )}
+
+          <TransformSection
+            isPhotoSlot={isPhotoSlot}
+            elementData={elementData}
+            onPropertyChange={onPropertyChange}
+          />
+
+          {isTextLabel && (
+            <InspectorSection
+              title="陰影與效果"
+              defaultOpen={false}
+              dataGuide="property-section-effects"
+            >
+              <TextShadowControls
+                elementData={elementData}
+                onPropertyChange={onPropertyChange}
+                recentColors={recentColors}
+              />
+            </InspectorSection>
+          )}
+
+          {isPhotoSlot && (
+            <PhotoEffectsSection elementData={elementData} onPropertyChange={onPropertyChange} />
+          )}
+
+          <LayerOrderSection onLayerChange={onLayerChange} />
+        </fieldset>
       </div>
-
-      {selectionScope === "isolation" && (
-        <IsolationBreadcrumb
-          trail={isolationTrail}
-          onNavigate={onNavigateIsolation}
-          tailLabel={isSticker ? "圖片" : isTextLabel ? "文字" : "子物件"}
-        />
-      )}
-      {!materialActionsDisabled && (isSticker || (isTextLabel && materialTextLink)) && (
-        <button
-          type="button"
-          disabled={isAnalyzingMaterial}
-          onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
-          className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isAnalyzingMaterial
-            ? "分析圖片中…"
-            : materialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
-        </button>
-      )}
-
-      {/* 照片格專屬屬性 */}
-      {isPhotoSlot && (
-        <PhotoAppearanceSection elementData={elementData} onPropertyChange={onPropertyChange} />
-      )}
-
-      {/* 純文字專屬屬性 */}
-      {isTextLabel && (
-        <>
-          <TextContentSection elementData={elementData} onPropertyChange={onPropertyChange} />
-          <TextTypographySection elementData={elementData} onPropertyChange={onPropertyChange} />
-        </>
-      )}
-
-      <TransformSection
-        isPhotoSlot={isPhotoSlot}
-        elementData={elementData}
-        onPropertyChange={onPropertyChange}
-      />
-
-      {isTextLabel && (
-        <>
-          <TextLayoutDetailsSection elementData={elementData} onPropertyChange={onPropertyChange} />
-          <InspectorSection
-            title="陰影與效果"
-            defaultOpen={false}
-            dataGuide="property-section-effects"
-          >
-            <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />
-          </InspectorSection>
-        </>
-      )}
-
-      {isPhotoSlot && (
-        <PhotoEffectsSection elementData={elementData} onPropertyChange={onPropertyChange} />
-      )}
-
-      <LayerOrderSection onLayerChange={onLayerChange} />
-    </div>
+    </PropertyCommitBoundary>
   );
 }

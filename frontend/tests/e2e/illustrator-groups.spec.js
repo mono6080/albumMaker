@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+import { getNodeBounds } from "../../src/utils/layoutGroups.js";
 import {
   createTemplateWithLayout,
+  dragWithSteps,
   fetchTemplatePageLayout,
   loginViaApi,
   redPng,
@@ -25,6 +27,40 @@ function baseLayout(overrides = {}) {
 
 function canvasPoint(realX, realY) {
   return { x: Math.round(realX * SCALE), y: Math.round(realY * SCALE) };
+}
+
+function expectNear(actual, expected, tolerance = 0.5) {
+  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(tolerance);
+}
+
+function assertGroupGeometry(scene, bounds) {
+  const expectedWidth = bounds.width * SCALE;
+  const expectedHeight = bounds.height * SCALE;
+  const expectedCenterX = bounds.centerX * SCALE;
+  const expectedCenterY = bounds.centerY * SCALE;
+
+  expect(scene.transformer.boundToControl).toBeTruthy();
+  expectNear(scene.control.localRect.x, -expectedWidth / 2);
+  expectNear(scene.control.localRect.y, -expectedHeight / 2);
+  expectNear(scene.control.localRect.width, expectedWidth);
+  expectNear(scene.control.localRect.height, expectedHeight);
+  expectNear(scene.control.x, expectedCenterX);
+  expectNear(scene.control.y, expectedCenterY);
+  expectNear(scene.control.rotation, bounds.rotation, 0.05);
+  expectNear(scene.control.scaleX, 1, 0.001);
+  expectNear(scene.control.scaleY, 1, 0.001);
+
+  expectNear(scene.visual.x, scene.control.x, 0.01);
+  expectNear(scene.visual.y, scene.control.y, 0.01);
+  expectNear(scene.visual.rotation, scene.control.rotation, 0.01);
+  expectNear(scene.visual.scaleX, scene.control.scaleX, 0.001);
+  expectNear(scene.visual.scaleY, scene.control.scaleY, 0.001);
+
+  expectNear(scene.transformer.center.x, expectedCenterX);
+  expectNear(scene.transformer.center.y, expectedCenterY);
+  expectNear(scene.transformer.width, expectedWidth);
+  expectNear(scene.transformer.height, expectedHeight);
+  expectNear(scene.transformer.rotation, bounds.rotation, 0.05);
 }
 
 async function openEditor(page, templateId) {
@@ -138,6 +174,231 @@ test("nested isolation, Ctrl+G toggle and undo retain the deepest valid scope", 
   expect(layout.group_contract).toBe("nested-world-v2");
   expect(layout.groups).toHaveLength(2);
   expect(layout.groups.some(group => group.children.some(child => child.type === "group"))).toBeTruthy();
+});
+
+test("unselected photo drag synchronizes visual and control before mouseup", async ({ page }) => {
+  const photo = {
+    id: 711,
+    x: 120,
+    y: 180,
+    width: 210,
+    height: 280,
+    rotation: 17,
+    border: true,
+    border_width: 18,
+    z_index: 0,
+  };
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E photo live drag ${Date.now()}`,
+    baseLayout({ photo_slots: [photo] }),
+  );
+  const canvas = await openEditor(page, templateId);
+
+  const readPhotoPair = () => page.evaluate(({ photoId, inset, scale }) => {
+    const stage = window.Konva?.stages?.find(candidate => (
+      candidate.findOne(node => node.id() === `photo-${photoId}`)
+    ));
+    const control = stage?.findOne(node => node.id() === `photo-${photoId}`);
+    const visual = stage?.findOne(node => node.id() === `photo-visual-${photoId}`);
+    if (!control || !visual) return null;
+    const controlContentOrigin = control.getAbsoluteTransform().point({ x: 0, y: 0 });
+    const visualContentOrigin = visual.getAbsoluteTransform().point({
+      x: inset * scale,
+      y: inset * scale,
+    });
+    const nodeState = node => ({
+      x: node.x(),
+      y: node.y(),
+      rotation: node.rotation(),
+      scaleX: node.scaleX(),
+      scaleY: node.scaleY(),
+    });
+    return {
+      control: nodeState(control),
+      visual: nodeState(visual),
+      controlContentOrigin,
+      visualContentOrigin,
+      transformerNodeCount: stage.findOne("Transformer")?.nodes().length ?? 0,
+    };
+  }, { photoId: photo.id, inset: photo.border_width, scale: SCALE });
+
+  await expect.poll(readPhotoPair).not.toBeNull();
+  const before = await readPhotoPair();
+  expect(before.transformerNodeCount).toBe(0);
+
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Template canvas has no bounding box");
+  const start = canvasPoint(photo.x + photo.width / 2, photo.y + photo.height / 2);
+  const end = canvasPoint(photo.x + photo.width / 2 + 90, photo.y + photo.height / 2 + 70);
+  await page.mouse.move(canvasBox.x + start.x, canvasBox.y + start.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(canvasBox.x + end.x, canvasBox.y + end.y, { steps: 12 });
+    await expect.poll(async () => {
+      const scene = await readPhotoPair();
+      return scene ? Math.hypot(
+        scene.control.x - before.control.x,
+        scene.control.y - before.control.y,
+      ) : 0;
+    }).toBeGreaterThan(25);
+
+    const duringDrag = await readPhotoPair();
+    expect(duringDrag.transformerNodeCount).toBe(0);
+    expectNear(duringDrag.visual.x, duringDrag.control.x, 0.01);
+    expectNear(duringDrag.visual.y, duringDrag.control.y, 0.01);
+    expectNear(duringDrag.visual.rotation, duringDrag.control.rotation, 0.01);
+    expectNear(duringDrag.visual.scaleX, duringDrag.control.scaleX, 0.001);
+    expectNear(duringDrag.visual.scaleY, duringDrag.control.scaleY, 0.001);
+    expectNear(duringDrag.visualContentOrigin.x, duringDrag.controlContentOrigin.x, 0.02);
+    expectNear(duringDrag.visualContentOrigin.y, duringDrag.controlContentOrigin.y, 0.02);
+  } finally {
+    await page.mouse.up();
+  }
+});
+
+test("45 degree group transformer matches bounds before and after resize commit", async ({ page }) => {
+  const pivot = { x: 300, y: 350 };
+  const rotation = 45;
+  const radians = rotation * Math.PI / 180;
+  const rotateFrame = (frame) => {
+    const center = {
+      x: frame.x + frame.width / 2,
+      y: frame.y + frame.height / 2,
+    };
+    const dx = center.x - pivot.x;
+    const dy = center.y - pivot.y;
+    const rotatedCenter = {
+      x: pivot.x + dx * Math.cos(radians) - dy * Math.sin(radians),
+      y: pivot.y + dx * Math.sin(radians) + dy * Math.cos(radians),
+    };
+    return {
+      ...frame,
+      x: rotatedCenter.x - frame.width / 2,
+      y: rotatedCenter.y - frame.height / 2,
+      rotation,
+    };
+  };
+  const texts = [
+    rotateFrame({ id: 721, x: 250, y: 250, width: 100, height: 50 }),
+    rotateFrame({ id: 722, x: 250, y: 400, width: 100, height: 50 }),
+  ].map((frame, index) => ({
+    ...frame,
+    text: `旋轉群組 ${index + 1}`,
+    text_role: "static",
+    font_size: 22,
+    font_color: "#333333",
+    font_family: "msjh",
+    text_align: "center",
+    line_height: 1.4,
+    z_index: index,
+  }));
+  const group = {
+    id: 723,
+    z_index: 0,
+    selection_rotation: rotation,
+    children: texts.map(text => ({ type: "text", id: text.id })),
+  };
+  const layout = baseLayout({
+    group_contract: "nested-world-v2",
+    text_labels: texts,
+    groups: [group],
+  });
+  const initialBounds = getNodeBounds(layout, { type: "group", id: group.id });
+  expectNear(initialBounds.width, 100, 0.01);
+  expectNear(initialBounds.height, 200, 0.01);
+  expectNear(initialBounds.centerX, pivot.x, 0.01);
+  expectNear(initialBounds.centerY, pivot.y, 0.01);
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E rotated group geometry ${Date.now()}`,
+    layout,
+  );
+  const canvas = await openEditor(page, templateId);
+  await canvas.click({ position: canvasPoint(pivot.x, pivot.y) });
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+
+  const readGroupGeometry = () => page.evaluate((groupId) => {
+    const stage = window.Konva?.stages?.find(candidate => (
+      candidate.findOne(node => node.id() === `group-${groupId}`)
+    ));
+    const control = stage?.findOne(node => node.id() === `group-${groupId}`);
+    const visual = stage?.findOne(node => node.id() === `group-visual-${groupId}`);
+    const transformer = stage?.findOne("Transformer");
+    const anchorNames = ["top-left", "top-right", "bottom-right", "bottom-left"];
+    const anchors = anchorNames.map(name => transformer?.findOne(`.${name}`));
+    if (!control || !visual || !transformer || anchors.some(anchor => !anchor?.visible())) return null;
+    const [topLeft, topRight, bottomRight, bottomLeft] = anchors.map(
+      anchor => anchor.getAbsolutePosition(),
+    );
+    const center = {
+      x: (topLeft.x + topRight.x + bottomRight.x + bottomLeft.x) / 4,
+      y: (topLeft.y + topRight.y + bottomRight.y + bottomLeft.y) / 4,
+    };
+    const rawRotation = Math.atan2(
+      topRight.y - topLeft.y,
+      topRight.x - topLeft.x,
+    ) * 180 / Math.PI;
+    const normalizedRotation = ((rawRotation + 180) % 360 + 360) % 360 - 180;
+    const nodeState = node => ({
+      x: node.x(),
+      y: node.y(),
+      rotation: node.rotation(),
+      scaleX: node.scaleX(),
+      scaleY: node.scaleY(),
+    });
+    return {
+      control: {
+        ...nodeState(control),
+        localRect: control.getClientRect({
+          skipTransform: true,
+          skipShadow: true,
+          skipStroke: true,
+        }),
+      },
+      visual: nodeState(visual),
+      transformer: {
+        boundToControl: transformer.nodes().some(node => node === control),
+        center,
+        width: Math.hypot(topRight.x - topLeft.x, topRight.y - topLeft.y),
+        height: Math.hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y),
+        rotation: normalizedRotation,
+        bottomRight,
+      },
+    };
+  }, group.id);
+
+  await expect.poll(readGroupGeometry).not.toBeNull();
+  const beforeResize = await readGroupGeometry();
+  assertGroupGeometry(beforeResize, initialBounds);
+
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Template canvas has no bounding box");
+  const { center, bottomRight } = beforeResize.transformer;
+  const resizeFactor = 1.35;
+  const target = {
+    x: center.x + (bottomRight.x - center.x) * resizeFactor,
+    y: center.y + (bottomRight.y - center.y) * resizeFactor,
+  };
+  await page.mouse.move(canvasBox.x + bottomRight.x, canvasBox.y + bottomRight.y);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + target.x, canvasBox.y + target.y, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(async () => (await readGroupGeometry())?.transformer.width ?? 0)
+    .toBeGreaterThan(beforeResize.transformer.width * 1.15);
+  await saveTemplateLayout(page);
+  const savedLayout = await fetchTemplatePageLayout(page, templateId);
+  const committedBounds = getNodeBounds(savedLayout, { type: "group", id: group.id });
+  expect(committedBounds.width).toBeGreaterThan(initialBounds.width * 1.15);
+  expectNear(committedBounds.rotation, rotation, 0.01);
+
+  await expect.poll(readGroupGeometry).not.toBeNull();
+  const afterResize = await readGroupGeometry();
+  assertGroupGeometry(afterResize, committedBounds);
 });
 
 test("group corner resize preserves typography through transient commit undo and reload", async ({ page }) => {
@@ -411,6 +672,140 @@ test("marquee selects every supported direct node type and a group without creat
   await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
 });
 
+test("layer metadata, ordering and multi-selection tools persist for direct leaves", async ({ page }) => {
+  await loginViaApi(page);
+  const textItems = [
+    {
+      id: 901,
+      x: 100,
+      y: 140,
+      width: 180,
+      height: 70,
+      rotation: 0,
+      text: "第一個文字",
+      text_role: "static",
+      font_family: "msjh",
+      font_size: 24,
+      font_color: "#333333",
+      text_align: "center",
+      line_height: 1.4,
+      z_index: 0,
+    },
+    {
+      id: 902,
+      x: 350,
+      y: 330,
+      width: 230,
+      height: 90,
+      rotation: 0,
+      text: "第二個文字",
+      text_role: "static",
+      font_family: "kaiu",
+      font_size: 30,
+      font_color: "#555555",
+      text_align: "left",
+      line_height: 1.4,
+      z_index: 1,
+    },
+    {
+      id: 903,
+      x: 180,
+      y: 540,
+      width: 160,
+      height: 60,
+      rotation: 0,
+      text: "第三個文字",
+      text_role: "static",
+      font_family: "msjh",
+      font_size: 22,
+      font_color: "#777777",
+      text_align: "right",
+      line_height: 1.4,
+      z_index: 2,
+    },
+  ];
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E layer management ${Date.now()}`,
+    baseLayout({ text_labels: textItems }),
+  );
+  await openEditor(page, templateId);
+  await page.getByRole("tab", { name: "圖層", exact: true }).click();
+
+  const layerRow = id => page.locator(`[data-layer-ref="text:${id}"]`);
+  const selectLayer = id => layerRow(id).locator(":scope > button:not([aria-label])");
+  const canvasHasTextNode = id => page.evaluate(textId => (
+    window.Konva?.stages?.some(stage => Boolean(stage.findOne(`#text-${textId}`))) ?? false
+  ), id);
+  const textById = (layout, id) => layout.text_labels.find(item => String(item.id) === String(id));
+  const rootOrder = layout => [...layout.text_labels]
+    .sort((left, right) => left.z_index - right.z_index)
+    .map(item => item.id);
+
+  const firstRow = layerRow(901);
+  await firstRow.getByRole("button", { name: "重新命名圖層", exact: true }).click();
+  const renameInput = firstRow.getByRole("textbox", { name: /重新命名/ });
+  await renameInput.fill("主標題圖層");
+  await renameInput.press("Enter");
+  await expect(firstRow).toContainText("主標題圖層");
+
+  await firstRow.getByRole("button", { name: "隱藏圖層", exact: true }).click();
+  await saveTemplateLayout(page);
+  let saved = await fetchTemplatePageLayout(page, templateId);
+  expect(textById(saved, 901)).toMatchObject({
+    layer_name: "主標題圖層",
+    visible: false,
+  });
+  await expect.poll(() => canvasHasTextNode(901)).toBe(false);
+
+  await firstRow.getByRole("button", { name: "顯示圖層", exact: true }).click();
+  await expect.poll(() => canvasHasTextNode(901)).toBe(true);
+  await selectLayer(901).click();
+  const xBeforeLockedMove = textById(saved, 901).x;
+  await firstRow.getByRole("button", { name: "鎖定圖層", exact: true }).click();
+  await page.locator("body").press("ArrowRight");
+  await saveTemplateLayout(page);
+  saved = await fetchTemplatePageLayout(page, templateId);
+  expect(textById(saved, 901)).toMatchObject({
+    visible: true,
+    locked: true,
+    x: xBeforeLockedMove,
+  });
+
+  await firstRow.getByRole("button", { name: "解除鎖定圖層", exact: true }).click();
+  const sourceHandle = firstRow.getByRole("button", { name: "拖曳重新排序圖層", exact: true });
+  await dragWithSteps(page, sourceHandle, layerRow(903));
+  await saveTemplateLayout(page);
+  saved = await fetchTemplatePageLayout(page, templateId);
+  expect(textById(saved, 901).locked).toBe(false);
+  expect(rootOrder(saved)).toEqual([902, 903, 901]);
+
+  await selectLayer(901).click();
+  await page.keyboard.down("Shift");
+  await selectLayer(902).click();
+  await page.keyboard.up("Shift");
+  await page.getByRole("tab", { name: "屬性", exact: true }).click();
+  const multiSelectionPanel = page.locator('[data-guide="group-selection-panel"]');
+  await expect(multiSelectionPanel).toContainText("已選取 2 個物件");
+  await multiSelectionPanel.getByRole("button", { name: "靠左", exact: true }).click();
+  await multiSelectionPanel.getByLabel("字級（pt）", { exact: true }).fill("42");
+  await saveTemplateLayout(page);
+
+  saved = await fetchTemplatePageLayout(page, templateId);
+  const firstSavedText = textById(saved, 901);
+  const secondSavedText = textById(saved, 902);
+  expect(firstSavedText.x).toBe(100);
+  expect(secondSavedText.x).toBe(firstSavedText.x);
+  expect(firstSavedText.font_size).toBe(42);
+  expect(secondSavedText.font_size).toBe(42);
+  expect(firstSavedText).toMatchObject({
+    layer_name: "主標題圖層",
+    visible: true,
+    locked: false,
+  });
+  expect(rootOrder(saved)).toEqual([902, 903, 901]);
+});
+
 test("sticker analysis creates and linked text resets without changing topology or typography", async ({ page }) => {
   await loginViaApi(page);
   const { templateId, pageId } = await createTemplateWithLayout(
@@ -663,7 +1058,8 @@ test("exact sticker and text shortcut links and fits without grouping or reorder
   await page.keyboard.down("Shift");
   await canvas.click({ position: canvasPoint(530, 240) });
   await page.keyboard.up("Shift");
-  await expect(page.getByRole("button", { name: "建立群組", exact: true })).toBeVisible();
+  await expect(page.locator('[data-guide="group-selection-panel"]')
+    .getByRole("button", { name: "建立群組", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "符合素材並連結文字框" }).click();
   await expect(page.getByText("已重設文字框")).toBeVisible();
   await saveTemplateLayout(page);

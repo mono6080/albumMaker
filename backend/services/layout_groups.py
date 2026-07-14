@@ -4,12 +4,15 @@
 and group refs.  Leaves stay in their existing layout collections and
 remain the sole geometry authority.  ``flat-world-v1`` keeps its original
 one-level text/sticker validation and render compatibility for persisted data.
+Render traversal skips leaves with ``visible is False`` and whole subtrees
+whose group has ``visible is False``.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from copy import deepcopy
 from typing import Any, Iterator
 
 
@@ -44,6 +47,7 @@ _FORBIDDEN_GROUP_GEOMETRY = {
     "matrix",
     "transform",
 }
+_EDITOR_ONLY_LAYOUT_KEYS = {"layer_name", "locked"}
 
 
 class LayoutGroupValidationError(ValueError):
@@ -998,6 +1002,24 @@ def iter_layout_render_elements(
     while stack:
         node = stack.pop()
         if node["kind"] == "element":
-            yield node["type"], node["data"], node["index"]
+            if node["data"].get("visible") is not False:
+                yield node["type"], node["data"], node["index"]
+            continue
+        if node["group"].get("visible") is False:
             continue
         stack.extend(reversed(node["children"]))
+
+
+def layout_for_render_fingerprint(layout: dict) -> dict:
+    """移除不影響像素的編輯器 metadata，避免改名／鎖定觸發重渲。"""
+    normalized_layout = deepcopy(layout)
+    for collection_name in ("photo_slots", "text_labels", "stickers", "groups"):
+        collection = normalized_layout.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, dict):
+                continue
+            for key in _EDITOR_ONLY_LAYOUT_KEYS:
+                item.pop(key, None)
+    return normalized_layout

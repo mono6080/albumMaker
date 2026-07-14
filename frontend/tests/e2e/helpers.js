@@ -164,13 +164,19 @@ export function layoutWithPhotoSlots(layout, count) {
 
 
 export async function saveTemplateLayout(page) {
-  const saveButton = page.getByRole("button", { name: "儲存" });
+  const saveButton = page.getByRole("button", { name: "儲存", exact: true });
   const saveResponse = page.waitForResponse(
-    response => response.url().includes("/layout") && response.request().method() === "PUT" && response.ok(),
+    response => (
+      response.request().method() === "PUT"
+      && /^\/api\/templates\/\d+\/pages\/?$/.test(new URL(response.url()).pathname)
+      && response.ok()
+    ),
   );
   await saveButton.click();
   await saveResponse;
-  await expect(saveButton).toBeEnabled();
+  await expect.poll(async () => (
+    await saveButton.count() === 0 || await saveButton.isEnabled()
+  )).toBeTruthy();
 }
 
 
@@ -207,7 +213,13 @@ export async function waitForResponseAfter(page, predicate, action) {
 
 
 export async function fetchTemplatePageLayout(page, templateId) {
-  const detailResponse = await page.request.get(`/api/templates/${templateId}`);
-  const detail = await detailResponse.json();
+  const detail = await fetchTemplateDetail(page, templateId);
   return detail.pages[0].layout;
+}
+
+
+export async function fetchTemplateDetail(page, templateId) {
+  const detailResponse = await page.request.get(`/api/templates/${templateId}`);
+  expect(detailResponse.ok()).toBeTruthy();
+  return await detailResponse.json();
 }

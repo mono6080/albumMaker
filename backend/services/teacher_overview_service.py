@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import User
 from services.label_texts import get_label_entry_text
+from services.layout_groups import iter_layout_render_elements
 from services.project_service import (
     get_template_page_layouts,
     merge_project_label_texts_into_pages,
@@ -41,12 +42,16 @@ def _summarize_student_progress(
         if page_data.get("skip"):
             continue
         page_photos = page_data.get("photos") or {}
-        for photo_slot in layout.get("photo_slots", []):
-            photo_total_count += 1
-            if page_photos.get(str(photo_slot.get("id"))):
-                photo_filled_count += 1
         merged_label_texts = page_data.get("label_texts") or {}
-        for text_label in layout.get("text_labels", []):
+        for element_type, element, _ in iter_layout_render_elements(layout):
+            if element_type == "photo":
+                photo_total_count += 1
+                if page_photos.get(str(element.get("id"))):
+                    photo_filled_count += 1
+                continue
+            if element_type != "text":
+                continue
+            text_label = element
             label_id = str(text_label.get("id"))
             effective_text = get_label_entry_text(merged_label_texts.get(label_id))
             if effective_text is None:

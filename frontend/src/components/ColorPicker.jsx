@@ -23,9 +23,44 @@ const PRESETS = [
  *   onChange : (hexString) => void
  *   label    : 選填標籤文字
  */
-export default function ColorPicker({ value, onChange, label, guideId }) {
+export default function ColorPicker({ value, onChange, label, guideId, recentColors = [] }) {
   const nativeRef = useRef(null);
   const safeValue = value || "#000000";
+  const normalizedRecentColors = [...new Set(
+    recentColors
+      .map(color => String(color).trim().toUpperCase())
+      .filter(color => /^#[0-9A-F]{6}$/.test(color)),
+  )];
+  const recentColorSet = new Set(normalizedRecentColors);
+  const presetColorSet = new Set(PRESETS.map(color => color.toUpperCase()));
+  const customRecentColors = normalizedRecentColors.filter(color => !presetColorSet.has(color));
+  const renderSwatch = (color, keyPrefix = "preset") => {
+    const isActive = safeValue.toLowerCase() === color.toLowerCase();
+    const isRecent = recentColorSet.has(color.toUpperCase());
+    return (
+      <button
+        key={`${keyPrefix}-${color}`}
+        type="button"
+        title={isRecent ? `${color}（最近使用）` : color}
+        aria-label={`使用顏色 ${color}`}
+        onClick={() => onChange(color)}
+        style={{
+          background: color,
+          boxShadow: isActive
+            ? "0 0 0 2px #fff, 0 0 0 4px #4F46E5"
+            : "inset 0 0 0 1px rgba(0,0,0,0.15)",
+        }}
+        className="relative h-6 w-6 rounded-md transition-transform hover:scale-110 focus:outline-none"
+      >
+        {isRecent && (
+          <span
+            aria-hidden="true"
+            className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full border border-white bg-indigo-500"
+          />
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-2" data-guide={guideId}>
@@ -33,31 +68,25 @@ export default function ColorPicker({ value, onChange, label, guideId }) {
         <span className="text-xs text-gray-500 block">{label}</span>
       )}
 
+      {customRecentColors.length > 0 && (
+        <div className="space-y-1">
+          <span className="block text-[11px] font-medium text-gray-400">最近自訂</span>
+          <div className="flex flex-wrap gap-1">
+            {customRecentColors.map(color => renderSwatch(color, "custom-recent"))}
+          </div>
+        </div>
+      )}
+
       {/* ── 常見色票 ── */}
       <div className="grid grid-cols-8 gap-1">
-        {PRESETS.map(c => {
-          const isActive = safeValue.toLowerCase() === c.toLowerCase();
-          return (
-            <button
-              key={c}
-              title={c}
-              onClick={() => onChange(c)}
-              style={{
-                background: c,
-                boxShadow: isActive
-                  ? "0 0 0 2px #fff, 0 0 0 4px #4F46E5"
-                  : "inset 0 0 0 1px rgba(0,0,0,0.15)",
-              }}
-              className="w-6 h-6 rounded-md transition-transform hover:scale-110 focus:outline-none"
-            />
-          );
-        })}
+        {PRESETS.map(color => renderSwatch(color))}
       </div>
 
       {/* ── 調色盤 + hex 輸入 ── */}
       <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
         {/* 目前色塊（點擊開啟系統調色盤） */}
         <button
+          type="button"
           title="開啟調色盤"
           onClick={() => nativeRef.current?.click()}
           style={{ background: safeValue }}
@@ -83,6 +112,7 @@ export default function ColorPicker({ value, onChange, label, guideId }) {
         />
         {/* 調色盤按鈕 */}
         <button
+          type="button"
           onClick={() => nativeRef.current?.click()}
           className="ml-auto text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors whitespace-nowrap"
         >
@@ -94,8 +124,9 @@ export default function ColorPicker({ value, onChange, label, guideId }) {
           type="color"
           value={safeValue}
           onChange={e => onChange(e.target.value)}
-          className="sr-only"
+          className="pointer-events-none fixed left-0 top-0 h-px w-px opacity-0"
           aria-hidden="true"
+          tabIndex={-1}
         />
       </div>
     </div>

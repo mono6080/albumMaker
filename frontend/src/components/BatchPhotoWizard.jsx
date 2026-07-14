@@ -23,6 +23,7 @@ import {
 } from "../utils/photoMatcher";
 import { handleApiError } from "../utils/apiError";
 import useDialogA11y from "../hooks/useDialogA11y";
+import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 
 const ACCEPTED_TYPES = [
   "image/jpeg",
@@ -200,7 +201,7 @@ export default function BatchPhotoWizard({
   const pages = useMemo(() => template?.pages || [], [template]);
   const isFilenameScope = scope === "filename";
   const activePage = pages[pageIndex];
-  const activePageSlots = activePage?.layout?.photo_slots || [];
+  const activePageSlots = getVisibleLayoutElements(activePage?.layout, "photo");
   const targetSlot = activePageSlots.find((s) => String(s.id) === String(slotId));
   const targetSlotIndex = activePageSlots.findIndex((s) => String(s.id) === String(slotId));
 

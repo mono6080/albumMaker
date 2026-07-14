@@ -135,6 +135,31 @@ def test_malformed_persisted_groups_fall_back_to_complete_legacy_traversal(caplo
     assert "legacy flat traversal" in caplog.text
 
 
+def test_render_traversal_skips_hidden_leaf_and_group_subtree():
+    layout = _layout_with_group()
+    layout["groups"][0]["visible"] = False
+
+    assert [
+        (element_type, element["id"])
+        for element_type, element, _ in iter_layout_render_elements(layout)
+    ] == [("sticker", 303)]
+
+    layout["stickers"][1]["visible"] = False
+    assert list(iter_layout_render_elements(layout)) == []
+
+
+def test_malformed_group_fallback_still_skips_hidden_leaves():
+    layout = _layout_with_group()
+    layout["groups"][0]["visible"] = False
+    layout["groups"][0]["children"][1]["id"] = "missing"
+    layout["stickers"][0]["visible"] = False
+
+    assert [
+        (element_type, element["id"])
+        for element_type, element, _ in iter_layout_render_elements(layout)
+    ] == [("text", "202"), ("sticker", 303)]
+
+
 def test_validator_reports_normalized_id_collision_membership_and_invalid_link():
     layout = _layout_with_group()
     layout["text_labels"].append({"id": 202})
@@ -326,7 +351,7 @@ def test_template_copy_preserves_group_refs_and_asset_revision_while_rewriting_p
 
 def test_group_traversal_participates_in_render_and_preview_cache_versions():
     assert "layout_groups.py" in {path.name for path in _RENDER_PIPELINE_FILES}
-    assert PREVIEW_CACHE_VERSION == "project-preview-v6-no-bubbles"
+    assert PREVIEW_CACHE_VERSION == "project-preview-v7-layer-visibility"
 
 
 def test_unknown_contract_is_invalid_even_without_nonempty_groups():
@@ -511,6 +536,17 @@ def test_v2_nested_tree_supports_all_leaf_types_and_preserves_photo_index():
         ("text", "text-1", 1),
         ("photo", "photo-child", 1),
     ]
+
+
+def test_v2_hidden_ancestor_skips_its_whole_nested_subtree():
+    layout = _nested_v2_layout()
+    layout["photo_slots"][0]["visible"] = False
+    layout["groups"][1]["visible"] = False
+
+    assert [
+        (element_type, element["id"])
+        for element_type, element, _ in iter_layout_render_elements(layout)
+    ] == [("text", "text-outer"), ("photo", "photo-child")]
 
 
 def test_v2_validator_reports_cycle_self_missing_and_multi_parent_paths():

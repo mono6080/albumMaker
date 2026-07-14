@@ -1,4 +1,5 @@
 import { getNodeBounds, getScopeNodes } from "./layoutGroups.js";
+import { getNodeLayerState } from "./layoutLayerState.js";
 
 const EPSILON = 1e-6;
 
@@ -116,6 +117,8 @@ export function getMarqueeSelectableRefs(
   const selectionPolygon = rectCorners(selectionRect);
   return getScopeNodes(layout || {}, parentGroupId).filter(ref => {
     try {
+      const layerState = getNodeLayerState(layout, ref);
+      if (!layerState.isVisible || layerState.isLocked) return false;
       return polygonsIntersect(selectionPolygon, getNodeBounds(layout, ref).corners);
     } catch {
       return false;

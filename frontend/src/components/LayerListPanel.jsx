@@ -1,12 +1,19 @@
-// 模板編輯器右側閒置面板：目前頁面統計 + 圖層清單（純顯示）
-// 從 TemplateEditor 抽出；點擊圖層以 onSelectElement 回呼選取元素
+// 模板編輯器右側圖層面板：頁面統計、圖層選取與圖層管理
+// 從 TemplateEditor 抽出；所有版面變更仍透過 callback 交由父層提交
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { closestCenter, DndContext, useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   ChevronLeft,
+  Eye,
+  EyeOff,
+  GripVertical,
   Group as GroupIcon,
   Image as ImageIcon,
   Layers,
+  Lock,
+  LockOpen,
+  Pencil,
   Square,
   Type as TypeIcon,
 } from "lucide-react";
@@ -14,6 +21,10 @@ import {
 import { getPhotoContentRect } from "../utils/photoFrameGeometry.js";
 import { ELEMENT_ARRAY_KEY } from "../utils/renderLayoutModel";
 import { isFillableTextLabel } from "../utils/textLabelRoles";
+import {
+  getNodeLayerState,
+  getVisibleLayoutElementOrdinals,
+} from "../utils/layoutLayerState.js";
 
 const ELEMENT_TYPE_META = {
   photo: {
@@ -44,6 +55,186 @@ function truncatePreviewText(value, fallback = "未設定文字") {
   return normalized.length > 24 ? `${normalized.slice(0, 24)}...` : normalized;
 }
 
+function getLayerKey(layerRef) {
+  return `${layerRef.type}:${String(layerRef.id)}`;
+}
+
+function LayerRow({
+  layerRef,
+  defaultTitle,
+  description,
+  meta,
+  layerName,
+  isVisible,
+  isLocked,
+  visibilityInherited = false,
+  lockInherited = false,
+  isSelected,
+  onSelect,
+  onDoubleClick,
+  onRenameLayer,
+  onToggleVisibility,
+  onToggleLock,
+  canReorder,
+}) {
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const titleId = useId();
+  const layerKey = getLayerKey(layerRef);
+  const normalizedLayerName = String(layerName ?? "").trim();
+  const title = normalizedLayerName || defaultTitle;
+  const Icon = meta.Icon;
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDragNodeRef,
+    setActivatorNodeRef,
+    isDragging,
+  } = useDraggable({
+    id: layerKey,
+    data: { layerRef },
+    disabled: !canReorder,
+  });
+  const { setNodeRef: setDropNodeRef, isOver } = useDroppable({
+    id: layerKey,
+    data: { layerRef },
+    disabled: !canReorder,
+  });
+
+  const handleStartRename = () => {
+    setRenameValue(normalizedLayerName);
+    setIsRenaming(true);
+  };
+
+  const handleCommitRename = () => {
+    const nextName = renameValue.trim();
+    setIsRenaming(false);
+    if (nextName !== normalizedLayerName) onRenameLayer?.(layerRef, nextName);
+  };
+
+  return (
+    <div
+      ref={(node) => {
+        setDragNodeRef(node);
+        setDropNodeRef(node);
+      }}
+      className={`group/layer flex w-full min-w-0 items-center gap-1 rounded-lg border px-1.5 py-2 transition-colors ${
+        isSelected
+          ? "border-indigo-400 bg-indigo-50"
+          : isOver
+            ? "border-indigo-400 bg-indigo-50/70"
+            : "border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/40"
+      } ${isDragging ? "opacity-40" : ""}`}
+      data-layer-ref={layerKey}
+    >
+      <span id={titleId} className="sr-only">{title}</span>
+      {canReorder && (
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          aria-label="拖曳重新排序圖層"
+          title={`拖曳調整「${title}」的圖層順序`}
+          className="flex h-7 w-6 flex-shrink-0 cursor-grab items-center justify-center rounded text-gray-300 hover:bg-white hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 active:cursor-grabbing"
+          style={{ touchAction: "none" }}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+      )}
+
+      {isRenaming ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+          <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
+            <Icon className="h-4 w-4" />
+          </span>
+          <input
+            type="text"
+            value={renameValue}
+            onChange={event => setRenameValue(event.target.value)}
+            onBlur={handleCommitRename}
+            onKeyDown={event => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                handleCommitRename();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setIsRenaming(false);
+              }
+            }}
+            placeholder={defaultTitle}
+            aria-label={`重新命名「${title}」`}
+            className="min-w-0 flex-1 rounded border border-indigo-300 bg-white px-2 py-1 text-sm text-gray-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            autoFocus
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onSelect}
+          onDoubleClick={onDoubleClick}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+        >
+          <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
+            <Icon className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className={`block truncate text-sm font-medium ${isVisible ? "text-gray-800" : "text-gray-400 line-through"}`}>
+              {title}
+            </span>
+            <span className="block truncate text-xs text-gray-400">{description}</span>
+          </span>
+        </button>
+      )}
+
+      <div className="flex flex-shrink-0 items-center gap-0.5">
+        {onRenameLayer && !isRenaming && (
+          <button
+            type="button"
+            onClick={handleStartRename}
+            aria-label="重新命名圖層"
+            aria-describedby={titleId}
+            title={`重新命名「${title}」`}
+            className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {onToggleVisibility && (
+          <button
+            type="button"
+            onClick={() => !visibilityInherited && onToggleVisibility(layerRef)}
+            disabled={visibilityInherited}
+            aria-label={visibilityInherited ? "圖層由上層群組隱藏" : isVisible ? "隱藏圖層" : "顯示圖層"}
+            aria-describedby={titleId}
+            title={visibilityInherited ? "請先顯示上層群組" : `${isVisible ? "隱藏" : "顯示"}「${title}」`}
+            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed ${
+              isVisible ? "text-gray-400 hover:text-indigo-600" : "text-gray-300 hover:text-indigo-600"
+            }`}
+          >
+            {isVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          </button>
+        )}
+        {onToggleLock && (
+          <button
+            type="button"
+            onClick={() => !lockInherited && onToggleLock(layerRef)}
+            disabled={lockInherited}
+            aria-label={lockInherited ? "圖層由上層群組鎖定" : isLocked ? "解除鎖定圖層" : "鎖定圖層"}
+            aria-describedby={titleId}
+            title={lockInherited ? "請先解除上層群組鎖定" : `${isLocked ? "解除鎖定" : "鎖定"}「${title}」`}
+            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed ${
+              isLocked ? "bg-amber-50 text-amber-600" : "text-gray-400 hover:text-indigo-600"
+            }`}
+          >
+            {isLocked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function LayerListPanel({
   pageLayout,
   sortedPageElements,
@@ -60,6 +251,10 @@ export default function LayerListPanel({
   onEnterGroup,
   onExitGroup,
   onNavigateIsolation,
+  onRenameLayer,
+  onToggleVisibility,
+  onToggleLock,
+  onReorderLayer,
 }) {
   const groupClickTimerRef = useRef(null);
 
@@ -101,9 +296,11 @@ export default function LayerListPanel({
     text: pageLayout?.text_labels?.length ?? 0,
     sticker: pageLayout?.stickers?.length ?? 0,
   };
+  const visiblePhotoOrdinals = getVisibleLayoutElementOrdinals(pageLayout, "photo");
   const hasIsolation = isolationTrail.length > 0 || !!isolationGroup;
 
   const getElementOrdinal = (type, elementId) => {
+    if (type === "photo") return visiblePhotoOrdinals.get(String(elementId)) ?? null;
     const arrayKey = ELEMENT_ARRAY_KEY[type];
     const source = pageLayout?.[arrayKey] || [];
     const index = source.findIndex(element => element.id === elementId);
@@ -130,6 +327,13 @@ export default function LayerListPanel({
       return `${Math.round(data.width ?? 0)} x ${Math.round(data.height ?? 0)} px`;
     }
     return "";
+  };
+
+  const handleDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const activeRef = active.data.current?.layerRef;
+    const overRef = over.data.current?.layerRef;
+    if (activeRef && overRef) onReorderLayer?.(activeRef, overRef);
   };
 
   return (
@@ -214,62 +418,63 @@ export default function LayerListPanel({
             尚未放置元素
           </div>
         ) : (
-          <div className="space-y-2">
-            {layerPanelItems.map((item) => {
-              if (item.kind === "group" || item.type === "group") {
-                const groupData = item.data ?? item;
-                const childCount = item.children?.length ?? groupData.children?.length ?? 0;
-                const groupTitle = "物件群組";
-                const meta = ELEMENT_TYPE_META.group;
-                const Icon = meta.Icon;
-                return (
-                  <button
-                    key={`group-${item.id}`}
-                    type="button"
-                    onClick={event => handleGroupClick(item.id, { additive: event.shiftKey })}
-                    onDoubleClick={() => handleGroupDoubleClick(item.id)}
-                    className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
-                      selectedKeys.has(`group-${item.id}`)
-                        ? "border-indigo-400 bg-indigo-50"
-                        : "border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/40"
-                    }`}
-                  >
-                    <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-gray-800">{groupTitle}</span>
-                      <span className="block truncate text-xs text-gray-400">{childCount} 個子物件 · 雙擊進入</span>
-                    </span>
-                  </button>
-                );
-              }
+          <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <div className="space-y-2">
+              {layerPanelItems.map((item) => {
+                if (item.kind === "group" || item.type === "group") {
+                  const groupData = item.data ?? item;
+                  const childCount = item.children?.length ?? groupData.children?.length ?? 0;
+                  const layerRef = { type: "group", id: item.id };
+                  const layerState = getNodeLayerState(pageLayout, layerRef);
+                  return (
+                    <LayerRow
+                      key={`group-${item.id}`}
+                      layerRef={layerRef}
+                      defaultTitle="物件群組"
+                      description={`${childCount} 個子物件 · 雙擊進入`}
+                      meta={ELEMENT_TYPE_META.group}
+                      layerName={groupData.layer_name}
+                      isVisible={layerState.isVisible}
+                      isLocked={layerState.isLocked}
+                      visibilityInherited={groupData.visible !== false && !layerState.isVisible}
+                      lockInherited={groupData.locked !== true && layerState.isLocked}
+                      isSelected={selectedKeys.has(`group-${item.id}`)}
+                      onSelect={event => handleGroupClick(item.id, { additive: event.shiftKey })}
+                      onDoubleClick={() => handleGroupDoubleClick(item.id)}
+                      onRenameLayer={onRenameLayer}
+                      onToggleVisibility={onToggleVisibility}
+                      onToggleLock={onToggleLock}
+                      canReorder={Boolean(onReorderLayer) && !layerState.isLocked}
+                    />
+                  );
+                }
 
-              const { type, data } = item;
-              const meta = ELEMENT_TYPE_META[type] ?? ELEMENT_TYPE_META.text;
-              const Icon = meta.Icon;
-              return (
-                <button
-                  key={`${type}-${data.id}`}
-                  type="button"
-                  onClick={event => onSelectElement(type, data.id, { additive: event.shiftKey })}
-                  className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
-                    selectedKeys.has(`${type}-${data.id}`)
-                      ? "border-indigo-400 bg-indigo-50"
-                      : "border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/40"
-                  }`}
-                >
-                  <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-gray-800">{getLayerTitle({ type, data })}</span>
-                    <span className="block truncate text-xs text-gray-400">{getLayerDescription({ type, data })}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                const { type, data } = item;
+                const layerRef = { type, id: data.id };
+                const layerState = getNodeLayerState(pageLayout, layerRef);
+                return (
+                  <LayerRow
+                    key={`${type}-${data.id}`}
+                    layerRef={layerRef}
+                    defaultTitle={getLayerTitle({ type, data })}
+                    description={getLayerDescription({ type, data })}
+                    meta={ELEMENT_TYPE_META[type] ?? ELEMENT_TYPE_META.text}
+                    layerName={data.layer_name}
+                    isVisible={layerState.isVisible}
+                    isLocked={layerState.isLocked}
+                    visibilityInherited={data.visible !== false && !layerState.isVisible}
+                    lockInherited={data.locked !== true && layerState.isLocked}
+                    isSelected={selectedKeys.has(`${type}-${data.id}`)}
+                    onSelect={event => onSelectElement(type, data.id, { additive: event.shiftKey })}
+                    onRenameLayer={onRenameLayer}
+                    onToggleVisibility={onToggleVisibility}
+                    onToggleLock={onToggleLock}
+                    canReorder={Boolean(onReorderLayer) && !layerState.isLocked}
+                  />
+                );
+              })}
+            </div>
+          </DndContext>
         )}
       </div>
     </div>

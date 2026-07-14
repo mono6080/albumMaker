@@ -17,8 +17,11 @@ from services.photo_frame_geometry import (
     PHOTO_SLOT_CONTENT_BOX_MODE,
     PHOTO_SLOT_DIMENSION_MODE_KEY,
 )
-from services.layout_groups import validate_layout_groups
 from services.storage import get_storage
+from services.template_page_snapshot_service import (
+    normalize_template_page_layout,
+    replace_template_pages_snapshot,
+)
 from services.template_service import copy_template_pages
 from template_periods import department_label, period_status_label
 
@@ -28,6 +31,7 @@ from ._helpers import (
     _serialize_template_summary,
     _validate_department,
 )
+from .schemas import TemplatePageSnapshotRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -158,6 +162,22 @@ def delete_template(
 
 # ── 模板頁面 CRUD ─────────────────────────────────────────────────────────────
 
+@router.put("/{template_id}/pages")
+def replace_pages_snapshot(
+    template_id: int,
+    payload: TemplatePageSnapshotRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin", "art_team")),
+):
+    """以完整快照原子儲存模板頁面的新增、刪除、排序與版面。"""
+    template = get_template_or_404(template_id, db)
+    return replace_template_pages_snapshot(
+        template,
+        payload.expected_page_ids,
+        [page.model_dump() for page in payload.pages],
+        db,
+    )
+
 @router.post("/{template_id}/pages")
 def add_page(
     template_id: int,
@@ -206,30 +226,7 @@ def update_page_layout(
 ):
     """更新模板頁面的佈局 JSON。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
-    legacy_bubbles = layout.get("text_bubbles")
-    if legacy_bubbles not in (None, []):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "removed_layout_element",
-                "errors": [{
-                    "path": "text_bubbles",
-                    "message": "text_bubbles is no longer supported",
-                }],
-            },
-        )
-    layout = dict(layout)
-    layout.pop("text_bubbles", None)
-    group_errors = validate_layout_groups(layout)
-    if group_errors:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "invalid_layout_group",
-                "errors": group_errors,
-            },
-        )
-    template_page.layout_json = json.dumps(layout)
+    template_page.layout_json = json.dumps(normalize_template_page_layout(layout))
     db.commit()
     return {"ok": True}
 

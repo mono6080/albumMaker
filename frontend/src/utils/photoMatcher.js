@@ -1,6 +1,8 @@
 // 批次照片分配的純函式配對演算法
 // 統一回傳 { assignments: [{studentId, file}], unmatched: studentId[], unused: File[] }
 
+import { getVisibleLayoutElements } from "./layoutLayerState.js";
+
 const stem = (file) => file.name.replace(/\.[^.]+$/, "");
 const normalizeSlotSuffix = (value) => value.trim().replace(/^[\s_-]+/, "");
 
@@ -24,7 +26,7 @@ function buildSlotLookups(pages) {
   let sequence = 1;
 
   pages.forEach((page, pageIndex) => {
-    const slots = page?.layout?.photo_slots || [];
+    const slots = getVisibleLayoutElements(page?.layout, "photo");
     slots.forEach((slot, slotIndex) => {
       const target = { pageIndex, slotId: slot.id, slotIndex };
       byPageSlot.set(`${pageIndex + 1}-${slotIndex + 1}`, target);

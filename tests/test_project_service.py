@@ -1,4 +1,8 @@
+from copy import deepcopy
+
+from services.preview_cache import _preview_payload_hash
 from services.project_service import (
+    _album_render_hash,
     _render_pipeline_fingerprint,
     merge_project_label_texts_into_pages,
     student_pdf_key_for_mode,
@@ -78,6 +82,50 @@ def test_render_pipeline_fingerprint_changes_with_source(tmp_path):
     first = _render_pipeline_fingerprint((source,))
     source.write_text("version = 2", encoding="utf-8")
     assert _render_pipeline_fingerprint((source,)) != first
+
+
+def test_render_fingerprints_ignore_editor_metadata_but_include_visibility():
+    layout = {
+        "photo_slots": [{"id": 1, "x": 0, "y": 0, "width": 20, "height": 20}],
+        "text_labels": [{"id": 2, "x": 0, "y": 0, "width": 20, "height": 20}],
+        "stickers": [],
+        "group_contract": "nested-world-v2",
+        "groups": [{
+            "id": "group-1",
+            "z_index": 0,
+            "selection_rotation": 0,
+            "children": [
+                {"type": "photo", "id": 1},
+                {"type": "text", "id": 2},
+            ],
+        }],
+    }
+    page_data = [{"page_index": 0, "photos": {}, "label_texts": {}}]
+    base_album_hash = _album_render_hash([layout], "Ada", page_data)
+    base_preview_hash = _preview_payload_hash({"layout": layout, "page_data": page_data[0]})
+
+    editor_only_layout = deepcopy(layout)
+    editor_only_layout["photo_slots"][0].update({
+        "layer_name": "封面照片",
+        "locked": True,
+    })
+    editor_only_layout["groups"][0].update({
+        "layer_name": "封面群組",
+        "locked": True,
+    })
+    assert _album_render_hash([editor_only_layout], "Ada", page_data) == base_album_hash
+    assert _preview_payload_hash({
+        "layout": editor_only_layout,
+        "page_data": page_data[0],
+    }) == base_preview_hash
+
+    hidden_layout = deepcopy(editor_only_layout)
+    hidden_layout["groups"][0]["visible"] = False
+    assert _album_render_hash([hidden_layout], "Ada", page_data) != base_album_hash
+    assert _preview_payload_hash({
+        "layout": hidden_layout,
+        "page_data": page_data[0],
+    }) != base_preview_hash
 
 
 def test_screen_pdf_key_preserves_path_and_extension():

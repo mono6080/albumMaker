@@ -215,9 +215,27 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         else raw_photo_slots
     )
     traversal_layout = {**layout, "photo_slots": photo_slots}
-    for elem_type, elem_data, elem_index in iter_layout_render_elements(traversal_layout):
+    render_elements = list(iter_layout_render_elements(traversal_layout))
+    visible_photo_slot_objects = {
+        id(elem_data)
+        for elem_type, elem_data, _ in render_elements
+        if elem_type == "photo"
+    }
+    visible_photo_indices: dict[int, int] = {}
+    if isinstance(photo_slots, list):
+        for slot in photo_slots:
+            if id(slot) in visible_photo_slot_objects:
+                visible_photo_indices[id(slot)] = len(visible_photo_indices)
+
+    for elem_type, elem_data, elem_index in render_elements:
         if elem_type == "photo":
-            render_photo_slot(canvas, elem_data, photos, page_index, slot_index=elem_index)
+            render_photo_slot(
+                canvas,
+                elem_data,
+                photos,
+                page_index,
+                slot_index=visible_photo_indices[id(elem_data)],
+            )
         elif elem_type == "text":
             render_text_label(canvas, elem_data, label_texts, student_name)
         elif elem_type == "sticker":

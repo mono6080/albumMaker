@@ -2,6 +2,8 @@
 // 與後端 roster_service._summarize_student_progress 同一規則：
 // 略過 skip 頁；一格有照片紀錄即算已填
 
+import { getVisibleLayoutElements } from "./layoutLayerState.js";
+
 /**
  * @param {Array}  pagesData     學生 pages_data（每項含 page_index / photos / skip）
  * @param {Array}  templatePages 模板頁陣列（每頁含 layout.photo_slots）
@@ -16,7 +18,7 @@ export function computeStudentPhotoProgress(pagesData, templatePages) {
   (templatePages || []).forEach((templatePage, pageIndex) => {
     const pageData = pageDataByIndex.get(pageIndex);
     if (pageData?.skip) return;
-    const photoSlots = templatePage.layout?.photo_slots || [];
+    const photoSlots = getVisibleLayoutElements(templatePage.layout, "photo");
     total += photoSlots.length;
     const photos = pageData?.photos || {};
     photoSlots.forEach(photoSlot => {

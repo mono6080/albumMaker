@@ -19,6 +19,7 @@ from tests.helpers import (
 )
 
 from database import SessionLocal, Student
+from services.teacher_overview_service import _summarize_student_progress
 
 
 def create_active_period(client: TestClient, department: str = "infant") -> dict:
@@ -398,6 +399,48 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         login(client, managed_teacher["username"], teacher_password)
         forbidden = client.get("/api/roster/teacher-progress", params={"period_ids": [period["id"]]})
         assert_status(forbidden, 403)
+
+
+def test_teacher_progress_ignores_hidden_group_photos_and_texts():
+    layout = smoke_layout()
+    layout["photo_slots"].append({
+        "id": 2,
+        "x": 360,
+        "y": 96,
+        "width": 240,
+        "height": 180,
+    })
+    layout["text_labels"].append({
+        "id": 2,
+        "x": 96,
+        "y": 480,
+        "width": 360,
+        "height": 96,
+        "text": "",
+    })
+    layout["group_contract"] = "nested-world-v2"
+    layout["groups"] = [{
+        "id": "hidden-progress",
+        "z_index": 10,
+        "selection_rotation": 0,
+        "visible": False,
+        "children": [
+            {"type": "photo", "id": 2},
+            {"type": "text", "id": 2},
+        ],
+    }]
+
+    result = _summarize_student_progress(
+        [{
+            "page_index": 0,
+            "photos": {"1": "visible.jpg", "2": "hidden.jpg"},
+            "label_texts": {"2": ""},
+        }],
+        [layout],
+        {},
+    )
+
+    assert result == (1, 1, 0)
 
 
 def start_and_wait_render_job(client: TestClient, period_ids: list[int], timeout_seconds: float = 60) -> dict:

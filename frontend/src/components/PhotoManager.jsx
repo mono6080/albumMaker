@@ -14,6 +14,7 @@ import { runWithConcurrency } from "../utils/concurrency";
 import { isRetryableUploadError, retryDelayMs } from "../utils/uploadRetry";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
+import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 
 const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
 
@@ -76,7 +77,7 @@ function getUploadFailureMessage(error, count = 1) {
 export default function PhotoManager({ projectId, studentId, pages, student, onPhotoSaved, onSaveStateChange, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
-      (p.layout?.photo_slots || []).map((s, slotIndex) => ({
+      getVisibleLayoutElements(p.layout, "photo").map((s, slotIndex) => ({
         pi, slotId: s.id, slotIndex,
         slotW: s.width, slotH: s.height,
         dimensionMode: getPhotoSlotDimensionMode(p.layout),

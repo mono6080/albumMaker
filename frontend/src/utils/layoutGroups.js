@@ -420,16 +420,41 @@ function nodeRef(node) {
   return { type: node.type, id: node.id };
 }
 
-export function buildRootRenderNodes(layout, options) {
-  return buildLayoutGraph(layout || {}, options).rootNodes;
+function filterVisibleRenderNodes(nodes) {
+  const output = [];
+  const stack = [];
+  const rootNodes = nodes || [];
+  for (let index = rootNodes.length - 1; index >= 0; index -= 1) {
+    stack.push({ node: rootNodes[index], target: output });
+  }
+  while (stack.length) {
+    const { node, target } = stack.pop();
+    if (!node || node.data?.visible === false) continue;
+    if (node.kind !== "group") {
+      target.push(node);
+      continue;
+    }
+    const visibleGroup = { ...node, children: [] };
+    target.push(visibleGroup);
+    for (let index = node.children.length - 1; index >= 0; index -= 1) {
+      stack.push({ node: node.children[index], target: visibleGroup.children });
+    }
+  }
+  return output;
 }
 
-export function flattenRenderNodes(nodes) {
+export function buildRootRenderNodes(layout, options = {}) {
+  const rootNodes = buildLayoutGraph(layout || {}, options).rootNodes;
+  return options.visibleOnly ? filterVisibleRenderNodes(rootNodes) : rootNodes;
+}
+
+export function flattenRenderNodes(nodes, { visibleOnly = false } = {}) {
   const output = [];
   const stack = [...(nodes || [])].reverse();
   while (stack.length) {
     const node = stack.pop();
     if (!node) continue;
+    if (visibleOnly && node.data?.visible === false) continue;
     if (node.kind === "group") {
       for (let index = node.children.length - 1; index >= 0; index -= 1) {
         stack.push(node.children[index]);
@@ -442,7 +467,7 @@ export function flattenRenderNodes(nodes) {
 }
 
 export function getFlattenedRenderElements(layout, options) {
-  return flattenRenderNodes(buildRootRenderNodes(layout, options));
+  return flattenRenderNodes(buildRootRenderNodes(layout, options), options);
 }
 
 export function getGroupById(layout, id) {

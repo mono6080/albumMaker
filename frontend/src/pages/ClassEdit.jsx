@@ -41,6 +41,7 @@ import { Badge, Button, IconButton, PageHeader } from "../components/ui";
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { getPhotoCropBox } from "../utils/photoUtils";
 import { handleApiError } from "../utils/apiError";
+import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
 
@@ -171,7 +172,7 @@ export default function ClassEdit() {
 
   useEffect(() => {
     if (!template) return;
-    const pagePhotoSlots = template.pages[activePage]?.layout?.photo_slots || [];
+    const pagePhotoSlots = getVisibleLayoutElements(template.pages[activePage]?.layout, "photo");
     setSelectedSharedPhotoSlotId(previousSlotId =>
       pagePhotoSlots.some(slot => String(slot.id) === String(previousSlotId))
         ? previousSlotId
@@ -239,7 +240,7 @@ export default function ClassEdit() {
   const startGuide = () => {
     // 動態步驟：教學會實際打開「放照片」Modal 示範選分配方式與上傳，
     // 結束（或中途關閉）時自動把 Modal 收掉
-    const firstSlot = (template?.pages[activePage]?.layout?.photo_slots || [])[0];
+    const firstSlot = getVisibleLayoutElements(template?.pages[activePage]?.layout, "photo")[0];
     const canDemoSlotModal = Boolean(firstSlot) && !isProjectCompleted;
 
     const steps = [
@@ -335,7 +336,7 @@ export default function ClassEdit() {
   const pageCount = templatePages.length;
   const activePageLayout = templatePages[activePage]?.layout;
   const activePageTextLabels = getFillableTextLabels(activePageLayout);
-  const activePagePhotoSlots = activePageLayout?.photo_slots || [];
+  const activePagePhotoSlots = getVisibleLayoutElements(activePageLayout, "photo");
   const selectedSharedPhotoSlot = activePagePhotoSlots.find(
     slot => String(slot.id) === String(selectedSharedPhotoSlotId)
   );
