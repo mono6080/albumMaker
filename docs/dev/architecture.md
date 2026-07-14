@@ -62,7 +62,7 @@ backend/
   services/
     render_service.py    渲染公開 API：render_page / render_album / save_album_pdf /
                          save_album_images；持有 UPLOADS_DIR（storage.py 從這裡 import，不能移走）
-    element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label / text_bubble
+    element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label
     draw_helpers.py      PIL 低階工具：字型、合成、形狀、文字換行、陰影
     project_service.py   相冊輸出（dirty-skip）、ZIP 串流、label_texts 合併、安全檔名
     student_pages.py     pages_data_json 的併發安全寫入入口（學生寫鎖、空頁 schema、
@@ -89,8 +89,8 @@ components/  純顯示或輕量互動；canvas/ 子目錄是 Konva 專用元件
 hooks/       可重用 state 邏輯（useAutoSave / usePermissions / useInlineEdit），不含 JSX
 api/         只做 HTTP，不含業務判斷（authApi / templateApi / projectApi / urls）
 context/     AuthContext（全域 currentUser）
-constants/   靜態資料（shapes / fonts），不含邏輯
-utils/       純函式工具（photoUtils / bubbleGeometry / renderLayoutModel / …）
+constants/   靜態資料（fonts / design tokens），不含邏輯
+utils/       純函式工具（photoUtils / photoFrameGeometry / renderLayoutModel / …）
 ```
 
 - `api.js` 與 `api/index.js` 是向後相容 barrel，舊頁面仍從此引入；新程式碼直接 import `api/*.js`

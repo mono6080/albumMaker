@@ -14,6 +14,7 @@ const pdfPath = resolve(docsDir, "template-design-guide-step-by-step-dom.pdf");
 const targetMetaPath = resolve(assetDir, "guide-targets.json");
 const baseUrl = "http://127.0.0.1:5173";
 const apiUrl = "http://127.0.0.1:8765/api";
+const adminPassword = process.env.GUIDE_ADMIN_PASSWORD ?? "admin";
 
 const realToDisplay = value => Math.round(value * 530 / 794);
 const roundPercent = value => Math.round(value * 100) / 100;
@@ -62,7 +63,7 @@ async function createBackgroundImage(browser) {
 async function createDemoTemplate(context, backgroundPath) {
   await requireOk(
     await context.request.post(`${apiUrl}/auth/login`, {
-      form: { username: "admin", password: "admin" },
+      form: { username: "admin", password: adminPassword },
     }),
     "login",
   );
@@ -110,15 +111,6 @@ async function createDemoTemplate(context, backgroundPath) {
       { id: 2, x: 452, y: 172, width: 255, height: 330, border: true, border_width: 8, border_radius: 16, rotation: 4, z_index: 11 },
       { id: 3, x: 112, y: 520, width: 240, height: 180, border: true, border_width: 8, border_radius: 14, rotation: 2, z_index: 12 },
     ],
-    text_bubbles: [
-      {
-        id: 1, x: 430, y: 560, width: 260, height: 95, shape: "speech_left", fill: "#FDE68A",
-        border_color: "#F59E0B", border_width: 2, border_radius: 22,
-        text: "{name} 正在分享今天的發現！", font_size: 20, font_family: "msjhbd", font_color: "#334155",
-        text_shadow_enabled: true, text_shadow_color: "#FFFFFF", text_shadow_opacity: 180, text_shadow_offset_x: 1,
-        text_shadow_offset_y: 1, text_shadow_blur: 2, z_index: 30,
-      },
-    ],
     text_labels: [
       {
         id: 1, x: 84, y: 760, width: 620, height: 110, text: "{name} 的感官探索紀錄",
@@ -141,7 +133,6 @@ async function createDemoTemplate(context, backgroundPath) {
       { id: 3, x: 106, y: 510, width: 260, height: 205, border: true, border_width: 8, border_radius: 18, rotation: 3, z_index: 12 },
       { id: 4, x: 430, y: 510, width: 250, height: 205, border: true, border_width: 8, border_radius: 18, rotation: 0, z_index: 13 },
     ],
-    text_bubbles: [],
     text_labels: [
       {
         id: 1, x: 110, y: 780, width: 570, height: 98, text: "今天我最喜歡的活動是：",
@@ -487,7 +478,7 @@ async function buildPdf(screenshots) {
 
   <section class="page-break">
     <h2>6. 新增文字與姓名變數</h2>
-    <p class="step-intro">純文字適合標題、日期、頁尾與說明文字；氣泡框適合短句或對話。需要自動帶入學生姓名時，請使用 <span class="kbd">{name}</span>。</p>
+    <p class="step-intro">純文字適合標題、日期、頁尾、短句與說明文字。需要自動帶入學生姓名時，請使用 <span class="kbd">{name}</span>。</p>
     <ol class="actions">
       <li>左側工具選「純文字」。</li>
       <li>在畫布上點擊新增文字框。</li>
@@ -533,7 +524,7 @@ async function buildPdf(screenshots) {
         <li>□ 每頁背景都已上傳。</li>
         <li>□ 照片總計符合企劃需求。</li>
         <li>□ 每個照片格尺寸、位置、旋轉角度合理。</li>
-        <li>□ 純文字與氣泡文字沒有超出框線。</li>
+        <li>□ 純文字沒有超出框線。</li>
         <li>□ 需要帶學生姓名的地方都有使用 {name}。</li>
       </ul>
       <ul class="checklist">
@@ -551,7 +542,7 @@ async function buildPdf(screenshots) {
     <h3>背景看起來被裁掉</h3>
     <p>重新上傳背景，在裁切視窗調整位置與縮放。背景原圖若不是 A4 比例，一定會有局部裁切。</p>
     <h3>文字在背景上不清楚</h3>
-    <p>調整文字顏色，或開啟文字陰影。背景太花時，也可以改用氣泡框承載文字。</p>
+    <p>調整文字顏色、位置或字級，必要時開啟文字陰影。</p>
     <h3>照片格方向放反</h3>
     <p>選取照片格，在右側「位置與尺寸」點「翻轉長寬」。</p>
     <p class="small">本文件由本機系統截圖產生，截圖素材位於 docs/assets/template-guide/。</p>
@@ -617,6 +608,8 @@ async function main() {
 
     await page.goto("/templates");
     await page.getByText(templateName).waitFor();
+    await page.getByRole("button", { name: "建立模板" }).click();
+    await page.locator('[data-guide="template-name-input"]').waitFor();
     const list = await screenshot(page, "01-template-list.png", { markers: GUIDE_MARKERS.list });
 
     await page.goto(`/templates/${templateId}/edit`);
@@ -626,7 +619,7 @@ async function main() {
     const pages = await screenshot(page, "03-page-tools.png", { markers: GUIDE_MARKERS.pages });
 
     const canvas = page.locator(".konvajs-content canvas").first();
-    await page.getByRole("button", { name: "＋ 照片格", exact: true }).click();
+    await page.getByRole("button", { name: "＋ 照片格 3:4 直式", exact: true }).click();
     const photoTool = await screenshot(page, "04-photo-tool.png", { markers: GUIDE_MARKERS.photoTool });
     await page.getByRole("button", { name: "↖ 選取", exact: true }).click();
     await canvas.click({ position: { x: realToDisplay(198), y: realToDisplay(292) } });

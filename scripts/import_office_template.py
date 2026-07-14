@@ -639,7 +639,7 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
     layout = {
         "canvas_width": CANVAS_W, "canvas_height": CANVAS_H,
         "background_filename": bg_fname,
-        "photo_slots": photo_slots, "text_bubbles": [],
+        "photo_slots": photo_slots,
         "text_labels": text_labels, "stickers": stickers,
         "footer": None,
     }

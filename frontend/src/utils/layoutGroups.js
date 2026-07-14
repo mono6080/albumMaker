@@ -13,7 +13,6 @@ export const MATERIAL_TEXT_LINK_KIND = "material-text-v1";
 
 const ELEMENT_SPECS = [
   ["photo_slots", "photo", 0, 0],
-  ["text_bubbles", "bubble", 100, 1],
   ["text_labels", "text", 200, 2],
   ["stickers", "sticker", 300, 3],
 ];

@@ -1,7 +1,7 @@
 """Validation and deterministic traversal for world-coordinate groups.
 
-``nested-world-v2`` is an arbitrary-depth forest over photo, bubble, text,
-sticker, and group refs.  Leaves stay in their existing layout collections and
+``nested-world-v2`` is an arbitrary-depth forest over photo, text, sticker,
+and group refs.  Leaves stay in their existing layout collections and
 remain the sole geometry authority.  ``flat-world-v1`` keeps its original
 one-level text/sticker validation and render compatibility for persisted data.
 """
@@ -24,7 +24,6 @@ GROUP_CONTRACT = V1_GROUP_CONTRACT
 
 _ELEMENT_SPECS = (
     ("photo_slots", "photo", 0, 0),
-    ("text_bubbles", "bubble", 100, 1),
     ("text_labels", "text", 200, 2),
     ("stickers", "sticker", 300, 3),
 )
@@ -556,7 +555,7 @@ def _validate_v2_layout_groups(
                 errors.append(
                     _error(
                         f"{child_path}.type",
-                        "child type must be photo, bubble, text, sticker, or group",
+                        "child type must be photo, text, sticker, or group",
                         group_id=raw_group_id,
                         child_type=child_type,
                         child_id=raw_child_id,

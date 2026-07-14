@@ -17,8 +17,8 @@ from services.storage import get_storage
 logger = logging.getLogger(__name__)
 
 PREVIEW_JPEG_QUALITY = 80
-# v5：nested-world-v2 會改變 leaf traversal，隔離舊 flat-world 預覽像素。
-PREVIEW_CACHE_VERSION = "project-preview-v5-nested-groups"
+# v6：氣泡框已移除，隔離仍可能包含氣泡像素的舊預覽。
+PREVIEW_CACHE_VERSION = "project-preview-v6-no-bubbles"
 
 
 def preview_scale_key(scale: float) -> str:

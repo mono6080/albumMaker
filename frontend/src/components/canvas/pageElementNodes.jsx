@@ -22,7 +22,11 @@ import {
   snapPhotoSlotStandardRatio,
 } from "../../utils/photoFrameGeometry.js";
 import { isFillableTextLabel } from "../../utils/textLabelRoles";
-import BubbleKonvaShape from "./BubbleKonvaShape";
+import {
+  OBJECT_HOVER_OUTLINE_NAME,
+  OBJECT_HOVER_STROKE,
+  OBJECT_HOVER_STROKE_WIDTH,
+} from "./canvasHover.js";
 
 const PHOTO_CONTENT_MIN_HEIGHT = 40;
 
@@ -295,7 +299,14 @@ export function getTextShadowProps(data, typographyScale = 1) {
   };
 }
 
-export function renderPhotoSlotNode(data, elemIndex, isSelected, controlProps, { photoSlotDimensionMode, currentPageIndex }) {
+export function renderPhotoSlotNode(
+  data,
+  elemIndex,
+  isSelected,
+  isHovered,
+  controlProps,
+  { photoSlotDimensionMode, currentPageIndex },
+) {
   const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
   const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
   const insets = getPhotoFrameInsets(data);
@@ -363,73 +374,15 @@ export function renderPhotoSlotNode(data, elemIndex, isSelected, controlProps, {
       </Group>
       <Group key={`photo-control-${data.id}`} {...controlProps}>
         <Rect
+          name={isHovered && !isSelected ? OBJECT_HOVER_OUTLINE_NAME : undefined}
           width={contentDisplayW}
           height={contentDisplayH}
           fill={isSelected ? "rgba(79,70,229,0.03)" : "rgba(255,255,255,0.01)"}
+          stroke={isHovered && !isSelected ? OBJECT_HOVER_STROKE : undefined}
+          strokeWidth={isHovered && !isSelected ? OBJECT_HOVER_STROKE_WIDTH : 0}
         />
       </Group>
     </Fragment>
-  );
-}
-
-export function renderBubbleNode(
-  data,
-  isSelected,
-  groupProps,
-  { suppressSelectedStroke = false, typographyScale = 1 } = {},
-) {
-  const displayW = toDisplayCoord(data.width);
-  const displayH = toDisplayCoord(data.height);
-  const safeTypographyScale = Number.isFinite(typographyScale) && typographyScale > 0
-    ? typographyScale
-    : 1;
-  const displayBorderRadius = data.border_radius != null
-    ? toDisplayCoord(data.border_radius) / safeTypographyScale
-    : Math.round(Math.min(displayW, displayH) / 5);
-  const displayBorderWidth = (data.border_width ?? 0) > 0
-    ? toDisplayCoord(data.border_width) / safeTypographyScale
-    : 0;
-  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20)) / safeTypographyScale;
-  const textInset = 4 / safeTypographyScale;
-  return (
-    <Group key={`bubble-${data.id}`} {...groupProps}>
-      <BubbleKonvaShape
-        width={displayW} height={displayH}
-        shape={data.shape ?? "ellipse"}
-        fill={data.fill ?? "#FDED6E"}
-        borderColor={data.border_color}
-        borderWidth={displayBorderWidth}
-        borderRadius={displayBorderRadius}
-      />
-      <KonvaText
-        name="typography-content"
-        x={textInset} y={textInset}
-        width={Math.max(1, displayW - textInset * 2)}
-        height={Math.max(1, displayH - textInset * 2)}
-        text={(data.text ?? "").substring(0, 30)}
-        fontSize={fontSize}
-        fill={data.font_color ?? "#333333"}
-        fontFamily={getFontCss(data.font_family)}
-        fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-        align="center"
-        verticalAlign="middle"
-        wrap="word"
-        letterSpacing={toDisplayCoord(data.letter_spacing ?? 0) / safeTypographyScale}
-        lineHeight={data.line_height ?? 1.4}
-        {...getTextShadowProps(data, safeTypographyScale)}
-        listening={false}
-      />
-      {isSelected && !suppressSelectedStroke && (
-        <Rect
-          width={displayW} height={displayH}
-          fill="transparent"
-          stroke="#4F46E5" strokeWidth={2}
-          listening={false}
-        />
-      )}
-      {/* 透明點擊感應區 */}
-      <Rect width={displayW} height={displayH} fill="transparent" />
-    </Group>
   );
 }
 
@@ -437,7 +390,7 @@ export function renderTextLabelNode(
   data,
   isSelected,
   groupProps,
-  { suppressSelectedStroke = false, typographyScale = 1 } = {},
+  { isHovered = false, suppressSelectedStroke = false, typographyScale = 1 } = {},
 ) {
   const displayW = toDisplayCoord(data.width);
   const displayH = toDisplayCoord(data.height);
@@ -447,16 +400,22 @@ export function renderTextLabelNode(
   const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24)) / safeTypographyScale;
   const textInset = 4 / safeTypographyScale;
   const isFillable = isFillableTextLabel(data);
+  const showHoverOutline = isHovered && !isSelected;
   return (
     <Group key={`text-${data.id}`} {...groupProps}>
       <Rect
+        name={showHoverOutline ? OBJECT_HOVER_OUTLINE_NAME : undefined}
         width={displayW} height={displayH}
         fill="transparent"
-        stroke={isSelected && suppressSelectedStroke
+        stroke={showHoverOutline
+          ? OBJECT_HOVER_STROKE
+          : isSelected && suppressSelectedStroke
           ? "transparent"
-          : isSelected ? "#4F46E5" : isFillable ? "#AAAAAA" : "#6B7280"}
-        strokeWidth={isSelected && suppressSelectedStroke ? 0 : isSelected ? 2 : 1}
-        dash={isSelected ? [] : isFillable ? [4, 3] : []}
+          : isSelected ? "#4F46E5" : isFillable ? "transparent" : "#6B7280"}
+        strokeWidth={showHoverOutline
+          ? OBJECT_HOVER_STROKE_WIDTH
+          : isSelected && suppressSelectedStroke ? 0 : isSelected ? 2 : isFillable ? 0 : 1}
+        dash={[]}
         listening={false}
       />
       <KonvaText

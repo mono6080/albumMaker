@@ -3,6 +3,8 @@
 #
 # DB 路徑來自 conftest 設定的 tmp 檔案，不會碰到 backend/album_maker.db
 
+import json
+
 from sqlalchemy import text
 
 
@@ -28,6 +30,20 @@ def test_migrations_idempotent():
                 VALUES ('migration_teacher', 'Migration Teacher', 'hashed', 'teacher', :supervisor_id)
             """),
             {"supervisor_id": supervisor_id},
+        )
+        template_id = conn.execute(
+            text("INSERT INTO templates (name) VALUES ('Migration layout') RETURNING id")
+        ).scalar_one()
+        conn.execute(
+            text("""
+                INSERT INTO template_pages (template_id, page_number, layout_json)
+                VALUES (:template_id, 0, :empty_layout), (:template_id, 1, :nonempty_layout)
+            """),
+            {
+                "template_id": template_id,
+                "empty_layout": json.dumps({"photo_slots": [], "text_bubbles": []}),
+                "nonempty_layout": json.dumps({"text_bubbles": [{"id": "keep-for-review"}]}),
+            },
         )
 
     # 第二次執行：所有 migration 都應冪等
@@ -56,6 +72,20 @@ def test_migrations_idempotent():
         project_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
         assert "deleted_at" in project_columns
         assert "archive_expires_at" in project_columns
+
+        migrated_layouts = [
+            json.loads(row[0])
+            for row in conn.execute(text(
+                "SELECT layout_json FROM template_pages WHERE template_id = :template_id ORDER BY page_number"
+            ), {"template_id": template_id})
+        ]
+        assert "text_bubbles" not in migrated_layouts[0]
+        assert migrated_layouts[1]["text_bubbles"] == [{"id": "keep-for-review"}]
+        backup_count = conn.execute(text("""
+            SELECT COUNT(*) FROM template_page_layout_migration_backups
+            WHERE migration_name = 'remove_empty_text_bubbles_v1'
+        """)).scalar_one()
+        assert backup_count == 1
 
         migrated_assignment = conn.execute(text("""
             SELECT ts.supervisor_id

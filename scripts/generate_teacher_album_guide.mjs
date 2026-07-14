@@ -255,7 +255,6 @@ async function createTemplate(context, browser, periodId) {
       { id: 2, x: 430, y: 210, width: 250, height: 320, border: true, border_width: 8, border_radius: 18, rotation: 3, z_index: 11 },
       { id: 3, x: 100, y: 520, width: 255, height: 200, border: true, border_width: 8, border_radius: 18, rotation: 1, z_index: 12 },
     ],
-    text_bubbles: [],
     text_labels: [
       {
         id: 1, x: 96, y: 770, width: 600, height: 96, text: "{name} 的校園探索",

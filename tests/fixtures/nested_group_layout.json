@@ -26,20 +26,19 @@
       "z_index": 1
     }
   ],
-  "text_bubbles": [
+  "text_labels": [
     {
-      "id": "bubble-inner",
+      "id": "text-inner",
       "x": 120,
       "y": 370,
       "width": 220,
       "height": 100,
       "rotation": -6,
-      "text": "{name}的泡泡",
+      "text": "{name}的內層文字",
+      "text_role": "static",
       "font_size": 18,
       "z_index": 8
-    }
-  ],
-  "text_labels": [
+    },
     {
       "id": "text-root",
       "x": 180,
@@ -60,8 +59,8 @@
       "width": 520,
       "height": 190,
       "rotation": 4,
-      "path": "templates/fixture/stickers/bubble.png",
-      "filename": "bubble.png",
+      "path": "templates/fixture/stickers/banner.png",
+      "filename": "banner.png",
       "asset_revision": "sha256:fixture",
       "z_index": 9
     }
@@ -73,7 +72,7 @@
       "selection_rotation": 0,
       "children": [
         { "type": "photo", "id": "photo-inner" },
-        { "type": "bubble", "id": "bubble-inner" }
+        { "type": "text", "id": "text-inner" }
       ]
     },
     {

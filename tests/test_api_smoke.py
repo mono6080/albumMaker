@@ -605,7 +605,6 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
             "canvas_width": 794,
             "canvas_height": 1123,
             "photo_slots": [],
-            "text_bubbles": [],
             "text_labels": [],
             "stickers": [],
             "footer": None,

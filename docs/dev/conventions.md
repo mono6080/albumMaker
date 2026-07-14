@@ -28,8 +28,8 @@
 | 布林 state | `is` / `has` 開頭 | `isRendering`、`isAddingStudents` |
 | 事件處理函式 | `handle` 開頭 | `handleRenderPdf`、`handlePhotoSaved` |
 | API 函式 | 動詞 + 名詞 | `fetchAllTemplates`、`batchUpdateStudentTexts` |
-| 元件 | `PascalCase` | `BubbleSVG`、`PhotoManager` |
-| 常數（模組級） | `UPPER_SNAKE_CASE` | `BUBBLE_SHAPES`、`CANVAS_DISPLAY_WIDTH` |
+| 元件 | `PascalCase` | `StickerNode`、`PhotoManager` |
+| 常數（模組級） | `UPPER_SNAKE_CASE` | `FONT_OPTIONS`、`CANVAS_DISPLAY_WIDTH` |
 | CSS | Tailwind utility，不另建命名 | — |
 | 注釋語言 | **中文** | `// 防抖自動儲存，500ms 後觸發` |
 

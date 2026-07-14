@@ -12,11 +12,11 @@ render_service.py    公開 API：render_page / render_album / render_preview_pa
                      scale_layout* / save_album_pdf / save_album_images
    ↓
 element_renderers.py 各元素渲染：render_photo_slot / render_sticker /
-                     render_text_label / render_text_bubble
+                     render_text_label
    ↓
 draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
                      apply_rounded_corners / add_drop_shadow /
-                     draw_speech_bubble / wrap_text / draw_line_with_spacing
+                     wrap_text / draw_line_with_spacing
 ```
 
 - 輸出畫質分 **print**（列印）與 **screen**（螢幕）兩種模式；
@@ -48,18 +48,17 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   z-index 工具在 `utils/renderLayoutModel.js`（其 `buildRenderLayoutModel`
   等 model 函式僅供 render-parity 腳本消費，編輯器實際的 Konva 節點渲染在
   `components/canvas/pageElementNodes.jsx`）
-- 四種元素對應 `layout_json` 的四個陣列（格式見
+- 三種元素對應 `layout_json` 的三個陣列（格式見
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)）：
-  photo → `photo_slots`、text → `text_labels`、bubble → `text_bubbles`（自訂
-  `BubbleKonvaShape`）、sticker → `stickers`（`StickerNode`）
-- **Illustrator 式通用巢狀群組**：`groups[]` 可引用 photo/bubble/text/sticker/group，但不是第五種
+  photo → `photo_slots`、text → `text_labels`、sticker → `stickers`（`StickerNode`）
+- **Illustrator 式通用巢狀群組**：`groups[]` 可引用 photo/text/sticker/group，但不是第四種
   可繪製物件。Renderer 以每個 group subtree 當 stacking block，依 scope `children[]` 遞迴展平；
   grouped leaf 不再從 root 重複畫。前端 traversal 在 `utils/layoutGroups.js`，後端 traversal 在
   `services/layout_groups.py`；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy
   flat traversal，確保每個元素仍只畫一次。
 - 任一 scope 的 direct group 可移動、旋轉、四角等比縮放；雙擊或 Enter 每次進一層 isolation 後，
   direct children 才能分別編輯。Group bounds 由 descendant world geometry 即時計算，不存入 layout；
-  group scale 改 leaf frame，但 text/bubble typography 在即時預覽與 commit 後皆保持原值。素材文字 link
+  group scale 改 leaf frame，但 text typography 在即時預覽與 commit 後皆保持原值。素材文字 link
   不參與 traversal；圖片分析只建立或重設普通文字框，絕不為了文字 fit 拉伸圖片、縮字或改內容。
 - **照片格固定比例（UI 層限制）**：新增工具只提供 3:4 直式與 4:3 橫式兩種；
   縮放時 Transformer 對照片格 `keepRatio` 且只留四角把手，屬性面板寬高輸入
@@ -68,7 +67,6 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 - 草稿與歷史：`draftLayouts`（per-page dirty layout ref）+ `layoutHistories`
   （per-page undo/redo，上限 100），抽在 `hooks/useLayoutHistory.js`
 - 儲存流程：只挑 dirty page 逐頁呼叫 `updatePageLayout`；開跨頁預覽前強制先儲存
-- `BubbleSVG` 是 ProjectReview 用的純 SVG 顯示元件，幾何計算與後端 PIL 一致
 
 ## PIL ⇄ Konva 補償條目
 

@@ -60,9 +60,6 @@ def test_render_page_smoke_fixture_draws_expected_regions():
     # Empty photo slots should render as a gray placeholder frame.
     assert_pixel_close(image, (55, 67), (238, 238, 238))
 
-    # Bubble body should render with its configured fill.
-    assert_pixel_close(image, (308, 70), (253, 230, 138))
-
     # Text label and footer regions should contain rendered glyph pixels.
     assert count_non_white_pixels(image, (58, 250, 358, 332)) > 20
     assert count_non_white_pixels(image, (36, 1058, 250, 1102)) > 20
@@ -93,7 +90,6 @@ def test_render_album_print_output_renders_on_native_canvas():
     scale_y = PRINT_OUTPUT_SIZE[1] / layout["canvas_height"]
 
     assert_pixel_close(image, (round(55 * scale_x), round(67 * scale_y)), (238, 238, 238))
-    assert_pixel_close(image, (round(308 * scale_x), round(70 * scale_y)), (253, 230, 138))
     assert count_non_white_pixels(
         image,
         (
@@ -142,7 +138,6 @@ def test_render_page_label_text_is_visually_centered_in_box():
             "text_align": "center",
         }
     ]
-    layout["text_bubbles"] = []
     layout["photo_slots"] = []
     layout["footer"] = None
 
@@ -206,7 +201,7 @@ def test_render_page_static_text_label_ignores_label_text_override():
     assert ImageChops.difference(template_text, fillable_override).getbbox() is not None
 
 
-def test_render_page_text_shadow_changes_label_and_bubble_regions():
+def test_render_page_text_shadow_changes_label_region():
     layout = load_layout()
     shadow_layout = deepcopy(layout)
     shadow_fields = {
@@ -218,7 +213,6 @@ def test_render_page_text_shadow_changes_label_and_bubble_regions():
         "text_shadow_blur": 0,
     }
     shadow_layout["text_labels"][0].update(shadow_fields)
-    shadow_layout["text_bubbles"][0].update(shadow_fields)
 
     page_data = {"label_texts": {"1": "Shadow label"}}
     plain = render_page(layout, student_name="Ada", page_data=page_data, page_index=0)
@@ -227,8 +221,4 @@ def test_render_page_text_shadow_changes_label_and_bubble_regions():
     assert ImageChops.difference(
         plain.crop((58, 250, 380, 350)),
         shadowed.crop((58, 250, 380, 350)),
-    ).getbbox() is not None
-    assert ImageChops.difference(
-        plain.crop((246, 58, 390, 150)),
-        shadowed.crop((246, 58, 390, 150)),
     ).getbbox() is not None

@@ -1,11 +1,10 @@
 // PropertyPanel — 模板編輯器右側屬性面板
-// 依選取元素類型（照片格 / 氣泡框 / 純文字 / 貼圖）顯示對應屬性控制項
+// 依選取元素類型（照片格 / 純文字 / 貼圖）顯示對應屬性控制項
 
 import { useId, useRef } from "react";
 
 import ColorPicker from "./ColorPicker";
 import CompositionTextarea from "./CompositionTextarea";
-import { BUBBLE_SHAPES } from "../constants/shapes";
 import { FONT_OPTIONS } from "../constants/fonts";
 import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
 import { TEXT_LABEL_ROLES, getTextLabelRole } from "../utils/textLabelRoles";
@@ -275,13 +274,11 @@ export default function PropertyPanel({
   }
 
   const isPhotoSlot = selectedElement.type === "photo";
-  const isBubble = selectedElement.type === "bubble";
   const isTextLabel = selectedElement.type === "text";
   const isSticker = selectedElement.type === "sticker";
   const panelTitle = isPhotoSlot ? "📷 照片格屬性"
     : isSticker ? "🖼️ 貼圖素材屬性"
-    : isTextLabel ? "Ａ 純文字屬性"
-    : "💬 氣泡框屬性";
+    : "Ａ 純文字屬性";
 
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
@@ -464,119 +461,6 @@ export default function PropertyPanel({
                   />
                 </label>
               </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* 氣泡框專屬屬性 */}
-      {isBubble && (
-        <>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">形狀</span>
-            <div className="grid grid-cols-5 gap-1">
-              {BUBBLE_SHAPES.map(shapeOption => (
-                <button
-                  key={shapeOption.value}
-                  onClick={() => onPropertyChange({ shape: shapeOption.value })}
-                  title={shapeOption.label}
-                  className={`flex flex-col items-center gap-0.5 py-1.5 rounded border text-xs transition-colors ${
-                    elementData.shape === shapeOption.value
-                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                      : "border-gray-200 hover:border-gray-300 text-gray-600"
-                  }`}
-                >
-                  <span className="text-base leading-none">{shapeOption.icon}</span>
-                  <span className="text-[10px]">{shapeOption.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {elementData.shape !== "ellipse" && (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-gray-500">圓角半徑（px）</span>
-              <SliderInput
-                min={0}
-                max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
-                value={elementData.border_radius ?? Math.round(Math.min(elementData.width, elementData.height) / 5)}
-                onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
-              />
-            </label>
-          )}
-
-          <ColorPicker
-            label="背景顏色"
-            value={elementData.fill}
-            onChange={colorValue => onPropertyChange({ fill: colorValue })}
-          />
-
-          <VariableTextarea
-            label={`預設文字（可用 ${NAME_VARIABLE} 代入姓名）`}
-            value={elementData.text ?? ""}
-            onChange={textValue => onPropertyChange({ text: textValue })}
-            guideId="bubble-text-content"
-          />
-
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">字體</span>
-            <FontPicker
-              value={elementData.font_family}
-              onChange={fontValue => onPropertyChange({ font_family: fontValue })}
-              guideId="bubble-font-picker"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-500">字級（pt）</span>
-            <SliderInput
-              min={10} max={72}
-              value={elementData.font_size ?? 20}
-              onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
-            />
-          </label>
-
-          <ColorPicker
-            label="文字顏色"
-            value={elementData.font_color ?? "#333333"}
-            onChange={colorValue => onPropertyChange({ font_color: colorValue })}
-            guideId="bubble-text-color"
-          />
-
-          <TextShadowControls elementData={elementData} onPropertyChange={onPropertyChange} />
-
-          <div className="space-y-2 pt-1 border-t border-gray-100">
-            <span className="text-xs text-gray-500 block">外框</span>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={!!(elementData.border_color && (elementData.border_width ?? 0) > 0)}
-                  onChange={event => onPropertyChange(
-                    event.target.checked
-                      ? { border_color: elementData.border_color || "#555555", border_width: elementData.border_width || 2 }
-                      : { border_color: null, border_width: 0 }
-                  )}
-                />
-                顯示外框
-              </label>
-              {elementData.border_color && (elementData.border_width ?? 0) > 0 && (
-                <label className="flex items-center gap-1 text-xs text-gray-500 ml-auto">
-                  粗細
-                  <input
-                    type="number" min="1" max="20"
-                    value={elementData.border_width ?? 2}
-                    onChange={event => onPropertyChange({ border_width: Number(event.target.value) })}
-                    className="border rounded px-1 py-0.5 text-sm w-14 text-center"
-                  />
-                </label>
-              )}
-            </div>
-            {elementData.border_color && (elementData.border_width ?? 0) > 0 && (
-              <ColorPicker
-                value={elementData.border_color ?? "#555555"}
-                onChange={colorValue => onPropertyChange({ border_color: colorValue })}
-              />
             )}
           </div>
         </>

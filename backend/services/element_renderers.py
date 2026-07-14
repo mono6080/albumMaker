@@ -7,7 +7,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 from services.draw_helpers import (
     get_font, load_key_for_box, paste_rotated,
     apply_rounded_corners, add_drop_shadow,
-    draw_speech_bubble, wrap_text,
+    wrap_text,
     _line_width_with_spacing, draw_line_with_spacing,
 )
 from services.label_texts import get_label_entry_align, get_label_entry_text
@@ -336,72 +336,3 @@ def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, stude
     _draw_shadow(canvas, label["x"], start_y)
     draw = ImageDraw.Draw(canvas, "RGBA")
     _draw_lines(draw, label["x"], start_y, font_color)
-
-
-def render_text_bubble(canvas: Image.Image, bubble: dict, student_name: str) -> None:
-    """渲染氣泡框（含背景與文字），使用模板內定義的文字。"""
-    raw_text = bubble.get("text", "")
-    text = raw_text.replace("{name}", student_name)
-    rotation = bubble.get("rotation", 0)
-    font_size = bubble.get("font_size", 20)
-    font_color = bubble.get("font_color", "#333333")
-    font = get_font(font_size, bubble.get("font_family"))
-    line_height = int(font_size * bubble.get("line_height", 1.4))
-    bw_px, bh_px = int(bubble["width"]), int(bubble["height"])
-    shadow = _text_shadow_settings(bubble)
-    draw = ImageDraw.Draw(canvas, "RGBA")
-
-    def _draw_bubble_text(target_draw: ImageDraw.ImageDraw, center_x: int, ty: int,
-                          lines: list[str], fill) -> None:
-        for line_index, line in enumerate(lines):
-            target_draw.text(
-                (center_x, ty + line_index * line_height),
-                line,
-                fill=fill,
-                font=font,
-                anchor="mt",
-            )
-
-    def _draw_bubble_text_shadow(target: Image.Image, center_x: int, ty: int, lines: list[str]) -> None:
-        if not shadow:
-            return
-        shadow_layer = Image.new("RGBA", target.size, (0, 0, 0, 0))
-        shadow_draw = ImageDraw.Draw(shadow_layer, "RGBA")
-        _draw_bubble_text(
-            shadow_draw,
-            center_x + shadow["offset_x"],
-            ty + shadow["offset_y"],
-            lines,
-            shadow["color"],
-        )
-        if shadow["blur"] > 0:
-            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow["blur"]))
-        _composite_rgba_layer(target, shadow_layer)
-
-    if rotation:
-        diag = int(math.sqrt(bw_px**2 + bh_px**2)) + 4
-        pad_img = (diag - min(bw_px, bh_px)) // 2 + 2
-        tmp_w, tmp_h = bw_px + pad_img * 2, bh_px + pad_img * 2
-        tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
-        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-        shifted = {**bubble, "x": pad_img, "y": pad_img}
-        draw_speech_bubble(tmp_draw, shifted)
-        txt_pad = 14
-        lines = wrap_text(text, font, bw_px - txt_pad * 2, tmp_draw)
-        total_h = len(lines) * line_height
-        ty = pad_img + (bh_px - total_h) // 2
-        _draw_bubble_text_shadow(tmp, pad_img + bw_px // 2, ty, lines)
-        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-        _draw_bubble_text(tmp_draw, pad_img + bw_px // 2, ty, lines, font_color)
-        paste_rotated(canvas, tmp, bubble["x"] + bw_px / 2, bubble["y"] + bh_px / 2, rotation)
-        return
-
-    draw_speech_bubble(draw, bubble)
-    pad = 14
-    max_text_w = bubble["width"] - pad * 2
-    lines = wrap_text(text, font, max_text_w, draw)
-    total_text_h = len(lines) * line_height
-    text_start_y = bubble["y"] + (bubble["height"] - total_text_h) // 2
-    _draw_bubble_text_shadow(canvas, bubble["x"] + bubble["width"] // 2, text_start_y, lines)
-    draw = ImageDraw.Draw(canvas, "RGBA")
-    _draw_bubble_text(draw, bubble["x"] + bubble["width"] // 2, text_start_y, lines, font_color)

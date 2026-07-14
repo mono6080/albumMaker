@@ -36,16 +36,12 @@ assert.equal(model.stage.width, CANVAS_DISPLAY_WIDTH);
 assert.equal(model.stage.height, CANVAS_DISPLAY_HEIGHT);
 assertClose(model.stage.scale, CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH);
 
-assert.deepEqual(model.elements.map(element => element.type), ["photo", "bubble", "text", "footer"]);
+assert.deepEqual(model.elements.map(element => element.type), ["photo", "text", "footer"]);
 
-const [photo, bubble, text, footer] = model.elements;
+const [photo, text, footer] = model.elements;
 assert.equal(photo.innerFill, "#EEEEEE");
 assert.equal(photo.placeholderText, "P1·1");
 assertPointInside({ x: toDisplayCoord(55), y: toDisplayCoord(67) }, photo.innerBox);
-
-assert.equal(bubble.fill, "#FDE68A");
-assert.equal(bubble.fontColor, "#111827");
-assertPointInside({ x: toDisplayCoord(308), y: toDisplayCoord(70) }, bubble.box);
 
 assert.equal(text.text, "Default label");
 assert.equal(text.fontColor, "#1F2937");

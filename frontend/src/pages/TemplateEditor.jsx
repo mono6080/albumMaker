@@ -29,11 +29,16 @@ import {
 import ImageCropModal from "../components/ImageCropModal";
 import StickerNode from "../components/canvas/StickerNode";
 import {
+  getCanvasElementRefFromTarget,
+  OBJECT_HOVER_OUTLINE_NAME,
+  OBJECT_HOVER_STROKE,
+  OBJECT_HOVER_STROKE_WIDTH,
+} from "../components/canvas/canvasHover.js";
+import {
   applyPhotoEditorUpdates,
   clampPhotoContentRect,
   makeGroupProps,
   makePhotoControlProps,
-  renderBubbleNode,
   renderFooterNode,
   renderPhotoSlotNode,
   renderTextLabelNode,
@@ -268,6 +273,7 @@ export default function TemplateEditor() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [pageLayout, setPageLayout] = useState(null);
   const [selectedRefs, setSelectedRefs] = useState([]);
+  const [hoveredRef, setHoveredRef] = useState(null);
   const [isolationPath, setIsolationPath] = useState([]);
   const [marqueeGesture, setMarqueeGesture] = useState(null);
   const [transientTypographyScales, setTransientTypographyScales] = useState({});
@@ -312,6 +318,7 @@ export default function TemplateEditor() {
   }, []);
   const beginCanvasGesture = useCallback((kind) => {
     activeCanvasGestureRef.current = kind;
+    setHoveredRef(null);
   }, []);
   const endCanvasGesture = useCallback(() => {
     activeCanvasGestureRef.current = null;
@@ -319,6 +326,7 @@ export default function TemplateEditor() {
   const resetEditorView = useCallback(() => {
     activeCanvasGestureRef.current = null;
     setSelectedRefs([]);
+    setHoveredRef(null);
     setIsolationPath([]);
     setMarqueeGesture(null);
   }, []);
@@ -364,6 +372,10 @@ export default function TemplateEditor() {
   useEffect(() => {
     editorViewRef.current = { isolationPath, selectedRefs };
   }, [isolationPath, selectedRefs]);
+
+  useEffect(() => {
+    if (activeTool !== "select") setHoveredRef(null);
+  }, [activeTool]);
 
   useEffect(() => () => analysisRequestRef.current?.controller?.abort(), []);
 
@@ -567,7 +579,6 @@ export default function TemplateEditor() {
   const getElement = useCallback(({ type, id }, layout = pageLayout) => {
     if (!layout) return null;
     if (type === "photo")   return (layout.photo_slots || []).find(slot => String(slot.id) === String(id));
-    if (type === "bubble")  return (layout.text_bubbles || []).find(bubble => String(bubble.id) === String(id));
     if (type === "text")    return (layout.text_labels || []).find(label => String(label.id) === String(id));
     if (type === "sticker") return (layout.stickers || []).find(sticker => String(sticker.id) === String(id));
     return null;
@@ -1101,6 +1112,19 @@ export default function TemplateEditor() {
       : hits);
   }, [getPointerCoordinates, isolationGroupId, marqueeGesture, pageLayout]);
 
+  const handleStageHoverMove = useCallback((event) => {
+    if (activeTool !== "select" || activeCanvasGestureRef.current || !pageLayout) {
+      setHoveredRef(null);
+      return;
+    }
+
+    const hitRef = getCanvasElementRefFromTarget(event.target, event.target?.getStage?.());
+    const directRef = hitRef?.type === "group"
+      ? getScopeNodes(pageLayout, isolationGroupId).find(ref => sameRef(ref, hitRef)) ?? null
+      : resolveHitToDirectChild(pageLayout, isolationGroupId, hitRef);
+    setHoveredRef(current => (sameRef(current, directRef) ? current : directRef));
+  }, [activeTool, isolationGroupId, pageLayout]);
+
   const handleStagePointerUp = useCallback(() => {
     if (!marqueeGesture) return;
     if (marqueeGesture.active) suppressNextStageClickRef.current = true;
@@ -1170,27 +1194,6 @@ export default function TemplateEditor() {
       }));
       setIsolationPath([]);
       setSelectedElement({ type: "photo", id: newSlot.id });
-      return;
-    }
-
-    if (activeTool === "addBubble") {
-      const newBubble = {
-        id: generateElementId(),
-        x: realX, y: realY,
-        width: 180, height: 110,
-        shape: "ellipse", fill: "#FDED6E",
-        border_color: null, border_width: 0,
-        text: "{name}的描述文字", font_size: 20,
-        font_color: "#3B6B8C", line_height: 1.4,
-        font_family: "msjh", tail_side: "right",
-        z_index: getNextZIndex(pageLayout),
-      };
-      commitPageLayout(currentLayout => ({
-        ...currentLayout,
-        text_bubbles: [...currentLayout.text_bubbles, { ...newBubble, z_index: getNextZIndex(currentLayout) }],
-      }));
-      setIsolationPath([]);
-      setSelectedElement({ type: "bubble", id: newBubble.id });
       return;
     }
 
@@ -1317,6 +1320,7 @@ export default function TemplateEditor() {
   };
 
   const isRefSelected = ref => selectedRefs.some(selectedRef => sameRef(selectedRef, ref));
+  const isRefHovered = ref => hoveredRef != null && sameRef(hoveredRef, ref);
 
   const renderElementNode = (node, {
     disabled = false,
@@ -1326,6 +1330,7 @@ export default function TemplateEditor() {
     const { type, data, index: elemIndex } = node;
     const elementRef = { type, id: data.id };
     const isSelected = isRefSelected(elementRef);
+    const isHovered = !disabled && group == null && isRefHovered(elementRef);
 
     if (type === "photo") {
       const controlProps = makePhotoControlProps(data, canvasNodeContext);
@@ -1352,7 +1357,14 @@ export default function TemplateEditor() {
           },
         });
       }
-      return renderPhotoSlotNode(data, elemIndex, isSelected, controlProps, canvasNodeContext);
+      return renderPhotoSlotNode(
+        data,
+        elemIndex,
+        isSelected,
+        isHovered,
+        controlProps,
+        canvasNodeContext,
+      );
     }
 
     const groupProps = makeGroupProps(type, data, canvasNodeContext);
@@ -1380,23 +1392,18 @@ export default function TemplateEditor() {
       });
     }
 
-    if (type === "bubble") return renderBubbleNode(
-      data,
-      isSelected,
-      groupProps,
-      { suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
-    );
     if (type === "text") return renderTextLabelNode(
       data,
       isSelected,
       groupProps,
-      { suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
+      { isHovered, suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
     );
     if (type === "sticker") return (
       <StickerNode
         key={`sticker-${data.id}`}
         sticker={data}
         templateId={templateId}
+        isHovered={isHovered}
         isSelected={isSelected}
         suppressSelectedStroke={selectedRefs.length === 1}
         groupProps={groupProps}
@@ -1407,6 +1414,9 @@ export default function TemplateEditor() {
 
   const renderDirectGroupNode = (node) => {
     const group = node.data;
+    const groupRef = { type: "group", id: group.id };
+    const isSelected = isRefSelected(groupRef);
+    const isHovered = isRefHovered(groupRef);
     const bounds = getNodeBounds(pageLayout, { type: "group", id: group.id });
     const center = {
       x: toDisplayCoord(bounds.centerX),
@@ -1509,6 +1519,19 @@ export default function TemplateEditor() {
             }))}
           </KonvaGroup>
         </KonvaGroup>
+        {isHovered && !isSelected && (
+          <Rect
+            name={OBJECT_HOVER_OUTLINE_NAME}
+            x={-displayWidth / 2}
+            y={-displayHeight / 2}
+            width={displayWidth}
+            height={displayHeight}
+            fill="transparent"
+            stroke={OBJECT_HOVER_STROKE}
+            strokeWidth={OBJECT_HOVER_STROKE_WIDTH}
+            listening={false}
+          />
+        )}
       </KonvaGroup>
     );
   };
@@ -1739,8 +1762,12 @@ export default function TemplateEditor() {
               onClick={handleStageClick}
               onTap={handleStageClick}
               onMouseDown={handleStagePointerDown}
-              onMouseMove={handleStagePointerMove}
+              onMouseMove={(event) => {
+                handleStagePointerMove(event);
+                handleStageHoverMove(event);
+              }}
               onMouseUp={handleStagePointerUp}
+              onMouseLeave={() => setHoveredRef(null)}
               onTouchStart={handleStagePointerDown}
               onTouchMove={handleStagePointerMove}
               onTouchEnd={handleStagePointerUp}

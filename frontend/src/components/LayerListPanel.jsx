@@ -7,7 +7,6 @@ import {
   Group as GroupIcon,
   Image as ImageIcon,
   Layers,
-  MessageSquare,
   Square,
   Type as TypeIcon,
 } from "lucide-react";
@@ -26,11 +25,6 @@ const ELEMENT_TYPE_META = {
     label: "純文字",
     Icon: TypeIcon,
     className: "bg-indigo-50 text-indigo-600",
-  },
-  bubble: {
-    label: "氣泡框",
-    Icon: MessageSquare,
-    className: "bg-rose-50 text-rose-600",
   },
   sticker: {
     label: "貼圖",
@@ -105,7 +99,6 @@ export default function LayerListPanel({
   const pageElementCounts = {
     photo: pageLayout?.photo_slots?.length ?? 0,
     text: pageLayout?.text_labels?.length ?? 0,
-    bubble: pageLayout?.text_bubbles?.length ?? 0,
     sticker: pageLayout?.stickers?.length ?? 0,
   };
   const hasIsolation = isolationTrail.length > 0 || !!isolationGroup;
@@ -121,7 +114,6 @@ export default function LayerListPanel({
     const ordinal = getElementOrdinal(type, data.id);
     if (type === "photo") return ordinal ? `照片格 P${currentPageIndex + 1}·${ordinal}` : `照片格 ${data.id}`;
     if (type === "text") return truncatePreviewText(data.text, ordinal ? `純文字 ${ordinal}` : "純文字");
-    if (type === "bubble") return truncatePreviewText(data.text, ordinal ? `氣泡框 ${ordinal}` : "氣泡框");
     if (type === "sticker") return data.filename || (ordinal ? `貼圖 ${ordinal}` : "貼圖");
     return `元素 ${data.id}`;
   };
@@ -133,9 +125,6 @@ export default function LayerListPanel({
     }
     if (type === "text") {
       return isFillableTextLabel(data) ? "老師可填文字" : "固定文字";
-    }
-    if (type === "bubble") {
-      return data.shape ? `形狀：${data.shape}` : "文字氣泡";
     }
     if (type === "sticker") {
       return `${Math.round(data.width ?? 0)} x ${Math.round(data.height ?? 0)} px`;
@@ -161,11 +150,10 @@ export default function LayerListPanel({
           </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           {[
             ["photo", pageElementCounts.photo],
             ["text", pageElementCounts.text],
-            ["bubble", pageElementCounts.bubble],
             ["sticker", pageElementCounts.sticker],
           ].map(([type, count]) => {
             const meta = ELEMENT_TYPE_META[type];

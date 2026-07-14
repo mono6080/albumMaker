@@ -2,7 +2,6 @@ import {
   Group as GroupIcon,
   Image as ImageIcon,
   Layers,
-  MessageSquare,
   Square,
   Type as TypeIcon,
 } from "lucide-react";
@@ -19,16 +18,13 @@ export default function GroupSelectionPanel({
   const getItemIcon = (type) => {
     if (type === "text") return <TypeIcon className="h-3.5 w-3.5 text-indigo-500" />;
     if (type === "photo") return <ImageIcon className="h-3.5 w-3.5 text-amber-500" />;
-    if (type === "bubble") return <MessageSquare className="h-3.5 w-3.5 text-rose-500" />;
     if (type === "group") return <Layers className="h-3.5 w-3.5 text-violet-500" />;
     return <Square className="h-3.5 w-3.5 text-emerald-500" />;
   };
 
   const getItemLabel = (item) => {
     if (item.type === "group") return `群組 ${item.id}`;
-    if (item.type === "text" || item.type === "bubble") {
-      return item.data?.text || `${item.type === "text" ? "文字" : "氣泡框"} ${item.id}`;
-    }
+    if (item.type === "text") return item.data?.text || `文字 ${item.id}`;
     if (item.type === "photo") return `照片格 ${item.id}`;
     return item.data?.filename || `貼圖 ${item.id}`;
   };

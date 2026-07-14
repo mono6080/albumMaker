@@ -92,6 +92,124 @@ test("admin can create a template and place canvas elements", async ({ page }) =
 });
 
 
+test("select mode shows hover outlines for the current direct canvas object", async ({ page }) => {
+  const photo = {
+    id: 101,
+    x: 60,
+    y: 100,
+    width: 180,
+    height: 240,
+    rotation: 0,
+    border: false,
+    z_index: 0,
+  };
+  const text = {
+    id: 202,
+    x: 350,
+    y: 110,
+    width: 180,
+    height: 80,
+    rotation: 0,
+    text: "群組文字",
+    text_role: "fillable",
+    font_size: 24,
+    font_color: "#333333",
+    text_align: "center",
+    line_height: 1.4,
+    z_index: 1,
+  };
+  const sticker = {
+    id: 303,
+    path: "templates/missing/stickers/missing.png",
+    filename: "missing.png",
+    x: 360,
+    y: 260,
+    width: 140,
+    height: 100,
+    rotation: 0,
+    z_index: 2,
+  };
+  const group = {
+    id: 404,
+    z_index: 1,
+    selection_rotation: 0,
+    children: [{ type: "text", id: text.id }, { type: "sticker", id: sticker.id }],
+  };
+  const layout = {
+    canvas_width: 794,
+    canvas_height: 1123,
+    photo_slots: [photo],
+    text_labels: [text],
+    stickers: [sticker],
+    groups: [group],
+    group_contract: "nested-world-v2",
+    footer: null,
+    logo: null,
+  };
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E hover outline ${Date.now()}`,
+    layout,
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+
+  const canvas = page.locator(".konvajs-content canvas").first();
+  await expect(canvas).toBeVisible();
+  const toCanvasPosition = (x, y) => ({
+    x: Math.round(x * 530 / 794),
+    y: Math.round(y * 530 / 794),
+  });
+  const readHoverOutline = () => page.evaluate((photoId) => {
+    const stage = window.Konva?.stages?.find(candidate => candidate.findOne(`#photo-${photoId}`));
+    const outlines = stage?.find(".object-hover-outline") ?? [];
+    return {
+      count: outlines.length,
+      parentId: outlines[0]?.getParent()?.id() ?? null,
+    };
+  }, photo.id);
+  const readTextFrame = () => page.evaluate((textId) => {
+    const stage = window.Konva?.stages?.find(candidate => candidate.findOne(`#text-${textId}`));
+    const frame = stage?.findOne(`#text-${textId}`)?.getChildren()?.[0];
+    return frame ? {
+      stroke: frame.stroke(),
+      strokeWidth: frame.strokeWidth(),
+      dash: frame.dash(),
+    } : null;
+  }, text.id);
+
+  await expect.poll(readTextFrame).toEqual({ stroke: "transparent", strokeWidth: 0, dash: [] });
+
+  await canvas.hover({ position: toCanvasPosition(140, 180) });
+  await expect.poll(readHoverOutline).toEqual({ count: 1, parentId: `photo-${photo.id}` });
+
+  await page.getByRole("button", { name: /純文字/ }).click();
+  await expect.poll(readHoverOutline).toEqual({ count: 0, parentId: null });
+  await canvas.hover({ position: toCanvasPosition(140, 180) });
+  await expect.poll(readHoverOutline).toEqual({ count: 0, parentId: null });
+
+  await page.getByRole("button", { name: /選取/ }).click();
+  await canvas.hover({ position: toCanvasPosition(400, 150) });
+  await expect.poll(readHoverOutline).toEqual({ count: 1, parentId: `group-${group.id}` });
+
+  await canvas.click({ position: toCanvasPosition(400, 150) });
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+  await expect.poll(readHoverOutline).toEqual({ count: 0, parentId: null });
+  await page.getByRole("button", { name: "進入群組" }).click();
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+
+  await canvas.hover({ position: toCanvasPosition(400, 300) });
+  await expect.poll(readHoverOutline).toEqual({ count: 1, parentId: `sticker-${sticker.id}` });
+  await canvas.click({ position: toCanvasPosition(400, 300) });
+  await canvas.hover({ position: toCanvasPosition(400, 150) });
+  await expect.poll(readHoverOutline).toEqual({ count: 1, parentId: `text-${text.id}` });
+  await canvas.hover({ position: toCanvasPosition(700, 1000) });
+  await expect.poll(readHoverOutline).toEqual({ count: 0, parentId: null });
+});
+
+
 test("TemplateEditor browser canvas matches PIL preview in stable regions", async ({ page }) => {
   const layout = await loadFixtureLayout();
   const templateName = `E2E 視覺 ${Date.now()}`;
@@ -137,7 +255,6 @@ test("TemplateEditor browser canvas matches PIL preview in stable regions", asyn
 
     return {
       photoDiff: pixelDiff(readPixel(canvasContext, 55, 67), readPixel(previewContext, 55, 67)),
-      bubbleDiff: pixelDiff(readPixel(canvasContext, 308, 70), readPixel(previewContext, 308, 70)),
       canvasTextPixels: countNonWhite(canvasContext, { x: 58, y: 250, width: 300, height: 82 }),
       previewTextPixels: countNonWhite(previewContext, { x: 58, y: 250, width: 300, height: 82 }),
       canvasFooterPixels: countNonWhite(canvasContext, { x: 36, y: 1058, width: 250, height: 44 }),
@@ -146,7 +263,6 @@ test("TemplateEditor browser canvas matches PIL preview in stable regions", asyn
   }, `/api/templates/${templateId}/pages/${pageId}/preview`);
 
   expect(comparison.photoDiff).toBeLessThanOrEqual(14);
-  expect(comparison.bubbleDiff).toBeLessThanOrEqual(18);
   expect(comparison.canvasTextPixels).toBeGreaterThan(20);
   expect(comparison.previewTextPixels).toBeGreaterThan(20);
   expect(comparison.canvasFooterPixels).toBeGreaterThan(10);

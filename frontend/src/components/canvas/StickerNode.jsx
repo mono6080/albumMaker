@@ -4,10 +4,16 @@ import { useState, useEffect } from "react";
 import { Group, Image as KonvaImage, Rect } from "react-konva";
 
 import { buildStickerUrl } from "../../api/urls";
+import {
+  OBJECT_HOVER_OUTLINE_NAME,
+  OBJECT_HOVER_STROKE,
+  OBJECT_HOVER_STROKE_WIDTH,
+} from "./canvasHover.js";
 
 export default function StickerNode({
   sticker,
   templateId,
+  isHovered = false,
   isSelected,
   groupProps,
   suppressSelectedStroke = false,
@@ -15,6 +21,7 @@ export default function StickerNode({
   const [image, setImage] = useState(null);
   const displayW = groupProps.width;
   const displayH = groupProps.height;
+  const showHoverOutline = isHovered && !isSelected;
 
   useEffect(() => {
     const img = new window.Image();
@@ -28,11 +35,13 @@ export default function StickerNode({
       {image && (
         <KonvaImage image={image} width={displayW} height={displayH} listening={false} />
       )}
-      {isSelected && !suppressSelectedStroke && (
+      {(showHoverOutline || (isSelected && !suppressSelectedStroke)) && (
         <Rect
+          name={showHoverOutline ? OBJECT_HOVER_OUTLINE_NAME : undefined}
           width={displayW} height={displayH}
           fill="transparent"
-          stroke="#4F46E5" strokeWidth={2}
+          stroke={showHoverOutline ? OBJECT_HOVER_STROKE : "#4F46E5"}
+          strokeWidth={showHoverOutline ? OBJECT_HOVER_STROKE_WIDTH : 2}
           listening={false}
         />
       )}

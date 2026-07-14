@@ -108,38 +108,6 @@ function addPhotoSlot(layer, data, elemIndex, pageIndex) {
   layer.add(group);
 }
 
-function addBubble(layer, data) {
-  const model = buildRenderLayoutModel({ text_bubbles: [data] }).elements[0];
-  const group = makeGroup(model.box);
-  const radius = data.border_radius != null
-    ? toDisplayCoord(data.border_radius)
-    : Math.round(Math.min(model.box.width, model.box.height) / 5);
-
-  group.add(new Konva.Rect({
-    width: model.box.width,
-    height: model.box.height,
-    fill: model.fill,
-    stroke: data.border_color,
-    strokeWidth: model.borderWidth,
-    cornerRadius: radius,
-    listening: false,
-  }));
-  group.add(new Konva.Text({
-    x: 4,
-    y: 4,
-    width: model.box.width - 8,
-    height: model.box.height - 8,
-    text: model.text,
-    fontSize: model.fontSize,
-    fill: model.fontColor,
-    align: "center",
-    verticalAlign: "middle",
-    wrap: "word",
-    listening: false,
-  }));
-  layer.add(group);
-}
-
 function addTextLabel(layer, data) {
   const model = buildRenderLayoutModel({ text_labels: [data] }).elements[0];
   const group = makeGroup(model.box);
@@ -199,7 +167,6 @@ layer.add(new Konva.Rect({
 
 for (const { type, data, index } of getAllElementsSorted(layout)) {
   if (type === "photo") addPhotoSlot(layer, data, index, 0);
-  if (type === "bubble") addBubble(layer, data);
   if (type === "text") addTextLabel(layer, data);
 }
 addFooter(layer, layout.footer);
@@ -210,7 +177,6 @@ assert.equal(canvas.width, CANVAS_DISPLAY_WIDTH);
 assert.equal(canvas.height, CANVAS_DISPLAY_HEIGHT);
 
 assertPixelNear(canvas, 55, 67, "#EEEEEE");
-assertPixelNear(canvas, 308, 70, "#FDE68A");
 assert.ok(countNonWhitePixels(canvas, { x: 58, y: 250, width: 300, height: 82 }) > 20);
 assert.ok(countNonWhitePixels(canvas, { x: 36, y: 1058, width: 250, height: 44 }) > 10);
 

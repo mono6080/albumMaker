@@ -1,6 +1,7 @@
 # Illustrator 式通用巢狀群組與素材文字捷徑 v2 規格
 
-> 狀態：規格鎖定後實作。取代 v1 的「只允許一層 text/sticker 群組」限制；不做舊資料批次遷移。
+> 狀態：歷史實作基線。後續產品變更已移除 `bubble/text_bubbles`；本文保留當時的驗收契約，
+> 現行群組 leaf 僅為 `photo`、`text`、`sticker`。
 
 ## Verdict
 

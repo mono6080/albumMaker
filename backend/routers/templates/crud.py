@@ -179,7 +179,6 @@ def add_page(
         "canvas_height": CANVAS_HEIGHT,
         PHOTO_SLOT_DIMENSION_MODE_KEY: PHOTO_SLOT_CONTENT_BOX_MODE,
         "photo_slots": [],
-        "text_bubbles": [],
         "text_labels": [],
         "stickers": [],
         "footer": None,
@@ -207,6 +206,20 @@ def update_page_layout(
 ):
     """更新模板頁面的佈局 JSON。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
+    legacy_bubbles = layout.get("text_bubbles")
+    if legacy_bubbles not in (None, []):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "removed_layout_element",
+                "errors": [{
+                    "path": "text_bubbles",
+                    "message": "text_bubbles is no longer supported",
+                }],
+            },
+        )
+    layout = dict(layout)
+    layout.pop("text_bubbles", None)
     group_errors = validate_layout_groups(layout)
     if group_errors:
         raise HTTPException(

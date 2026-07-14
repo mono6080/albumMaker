@@ -118,7 +118,7 @@ def test_suggestion_echoes_token_and_does_not_mutate_media_or_layout(monkeypatch
         template_id, page_id = create_template_with_page(client)
         upload = client.post(
             f"/api/templates/{template_id}/stickers",
-            files={"file": ("bubble.png", data, "image/png")},
+            files={"file": ("material.png", data, "image/png")},
         )
         assert_status(upload, 200)
         uploaded = upload.json()

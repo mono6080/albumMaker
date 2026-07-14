@@ -37,7 +37,6 @@ def _layout_with_group() -> dict:
         "canvas_width": 160,
         "canvas_height": 120,
         "photo_slots": [],
-        "text_bubbles": [],
         "group_contract": "flat-world-v1",
         "groups": [
             {
@@ -188,6 +187,40 @@ def test_layout_save_rejects_invalid_groups_without_mutating_stored_layout():
         assert "groups" not in stored
 
 
+def test_layout_save_strips_empty_legacy_bubbles_and_rejects_nonempty_values():
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client)
+        layout = {
+            "canvas_width": 160,
+            "canvas_height": 120,
+            "photo_slots": [],
+            "text_labels": [],
+            "stickers": [],
+            "text_bubbles": [],
+        }
+
+        response = client.put(
+            f"/api/templates/{template_id}/pages/{page_id}/layout",
+            json=layout,
+        )
+        assert_status(response, 200)
+        db = SessionLocal()
+        try:
+            stored = json.loads(db.get(TemplatePage, page_id).layout_json)
+        finally:
+            db.close()
+        assert "text_bubbles" not in stored
+
+        layout["text_bubbles"] = [{"id": "legacy-bubble"}]
+        response = client.put(
+            f"/api/templates/{template_id}/pages/{page_id}/layout",
+            json=layout,
+        )
+        assert_status(response, 422)
+        assert response.json()["detail"]["code"] == "removed_layout_element"
+
+
 def test_grouped_and_flat_layout_render_identical_pixels(monkeypatch, tmp_path):
     use_tmp_uploads(monkeypatch, tmp_path)
     storage = get_storage()
@@ -293,7 +326,7 @@ def test_template_copy_preserves_group_refs_and_asset_revision_while_rewriting_p
 
 def test_group_traversal_participates_in_render_and_preview_cache_versions():
     assert "layout_groups.py" in {path.name for path in _RENDER_PIPELINE_FILES}
-    assert PREVIEW_CACHE_VERSION == "project-preview-v5-nested-groups"
+    assert PREVIEW_CACHE_VERSION == "project-preview-v6-no-bubbles"
 
 
 def test_unknown_contract_is_invalid_even_without_nonempty_groups():
@@ -401,9 +434,9 @@ def test_shared_nested_fixture_has_exact_backend_traversal_order():
     ] == [
         ("photo", "photo-root", 1),
         ("photo", "photo-inner", 0),
-        ("bubble", "bubble-inner", 0),
+        ("text", "text-inner", 0),
         ("sticker", "sticker-outer", 0),
-        ("text", "text-root", 0),
+        ("text", "text-root", 1),
     ]
 
 
@@ -416,10 +449,8 @@ def _nested_v2_layout() -> dict:
             {"id": "photo-root", "x": 0, "y": 0, "width": 40, "height": 30, "z_index": 0},
             {"id": "photo-child", "x": 50, "y": 0, "width": 40, "height": 30, "z_index": 1},
         ],
-        "text_bubbles": [
-            {"id": "bubble-1", "x": 0, "y": 40, "width": 40, "height": 30, "z_index": 2},
-        ],
         "text_labels": [
+            {"id": "text-outer", "x": 0, "y": 40, "width": 40, "height": 30, "z_index": 2},
             {"id": "text-1", "x": 50, "y": 40, "width": 40, "height": 30, "z_index": 3},
         ],
         "stickers": [
@@ -433,7 +464,7 @@ def _nested_v2_layout() -> dict:
                 "z_index": 10,
                 "selection_rotation": 0,
                 "children": [
-                    {"type": "bubble", "id": "bubble-1"},
+                    {"type": "text", "id": "text-outer"},
                     {"type": "group", "id": "inner"},
                     {"type": "photo", "id": "photo-child"},
                 ],
@@ -475,9 +506,9 @@ def test_v2_nested_tree_supports_all_leaf_types_and_preserves_photo_index():
     assert [node["type"] for node in tree[1]["children"][1]["children"]] == ["sticker", "text"]
     assert traversal == [
         ("photo", "photo-root", 0),
-        ("bubble", "bubble-1", 0),
+        ("text", "text-outer", 0),
         ("sticker", "sticker-1", 0),
-        ("text", "text-1", 0),
+        ("text", "text-1", 1),
         ("photo", "photo-child", 1),
     ]
 
@@ -564,7 +595,7 @@ def test_v2_malformed_links_do_not_flatten_valid_topology(caplog):
 
     assert traversal == [
         ("photo", "photo-root"),
-        ("bubble", "bubble-1"),
+        ("text", "text-outer"),
         ("sticker", "sticker-1"),
         ("text", "text-1"),
         ("photo", "photo-child"),
@@ -597,7 +628,6 @@ def test_v2_deep_graph_validation_and_traversal_are_iterative():
     layout = {
         "group_contract": "nested-world-v2",
         "photo_slots": [],
-        "text_bubbles": [],
         "stickers": [],
         "text_labels": [
             {"id": f"text-{index}", "z_index": index}

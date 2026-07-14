@@ -97,13 +97,6 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
     { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3 }
   ],
-  "text_bubbles": [             // 氣泡框：模板固定文字，不被覆蓋
-    { "id": 1, "x": 500, "y": 150, "width": 200, "height": 120,
-      "shape": "ellipse", "fill": "#FDED6E",
-      "border_color": "#888", "border_width": 2,
-      "text": "{name}正在進行飛機飛平衡！",
-      "font_size": 20, "font_color": "#3B6B8C" }
-  ],
   "text_labels": [              // 對應文字：可被專案/學生層覆蓋
     { "id": 1, "x": 80, "y": 820, "width": 640, "height": 80,
       "text": "{name}今天完成了平衡挑戰！",
@@ -121,7 +114,6 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
     { "id": "page-block", "z_index": 4, "selection_rotation": 0,
       "children": [
         { "type": "photo", "id": 1 },
-        { "type": "bubble", "id": 1 },
         { "type": "group", "id": "caption" }
       ] }
   ],
@@ -134,6 +126,8 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 
 - `{name}` 渲染時替換為學生姓名（變數處理見 `frontend/src/utils/textVariables.js`
   與後端渲染層）
+- 氣泡框元素已移除；`text_bubbles` 不屬於現行 layout schema。資料遷移只會自動清除空陣列，
+  非空舊資料會保留供人工檢查，儲存 API 會明確拒絕。
 - **photo_slots 尺寸模式**：現行為 `content-box-v1`（照片內容區與外框 insets 分離），
   由 `_migrate_photo_slots_to_content_box` 遷移既有資料並寫入備份表；
   幾何計算集中在 `services/photo_frame_geometry.py` 與前端
@@ -156,7 +150,8 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 - **SQLite ADD COLUMN 不支援非常數預設值**（如 `CURRENT_TIMESTAMP`）：
   先加無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填
 - **SQLite 舊版不支援 DROP COLUMN**：用「建新表 → 複製 → 刪舊 → 改名」流程，
-  期間暫時關閉外鍵約束（範例見 `_drop_bubble_texts_json_column`）
+  期間暫時關閉外鍵約束（範例見 `_drop_bubble_texts_json_column`；這是舊專案文字欄位的歷史遷移，
+  與已移除的 layout 氣泡框無關）
 - 大型資料遷移（如 content-box）先寫備份表
   （`template_page_layout_migration_backups`）再改寫
 - 首次啟動自動建立 admin 帳號，隨機初始密碼印在啟動日誌

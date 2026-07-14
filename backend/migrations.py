@@ -15,6 +15,7 @@ from template_periods import (
 PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode"
 PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1"
 PHOTO_SLOT_MIGRATION_NAME = "photo_slot_content_box_v1"
+REMOVE_EMPTY_TEXT_BUBBLES_MIGRATION_NAME = "remove_empty_text_bubbles_v1"
 
 
 def run_migrations():
@@ -38,6 +39,7 @@ def run_migrations():
         _add_template_periods_and_scope_columns(connection)
         _add_template_page_layout_migration_backups_table(connection)
         _migrate_photo_slots_to_content_box(connection)
+        _remove_empty_text_bubbles_from_template_pages(connection)
         _add_roster_children_and_backfill(connection)
         _add_project_completed_at_column(connection)
 
@@ -576,6 +578,60 @@ def _migrate_photo_slots_to_content_box(connection):
             f"[migrations] photo slot content-box migration: "
             f"updated_pages={updated_pages}, updated_slots={updated_slots}, "
             f"skipped_invalid_pages={skipped_invalid_pages}"
+        )
+    connection.commit()
+
+
+def _remove_empty_text_bubbles_from_template_pages(connection):
+    """移除已下架氣泡框留下的空 layout key；非空資料保留並要求人工處理。"""
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "template_pages" not in existing_tables:
+        return
+
+    rows = list(connection.execute(text(
+        "SELECT id, layout_json FROM template_pages ORDER BY id"
+    )))
+    updated_pages = 0
+    skipped_nonempty_pages = 0
+
+    for page_id, layout_json in rows:
+        try:
+            layout = json.loads(layout_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(layout, dict) or "text_bubbles" not in layout:
+            continue
+        if layout.get("text_bubbles") != []:
+            skipped_nonempty_pages += 1
+            continue
+
+        next_layout = dict(layout)
+        next_layout.pop("text_bubbles", None)
+        connection.execute(
+            text("""
+                INSERT OR IGNORE INTO template_page_layout_migration_backups
+                    (migration_name, template_page_id, layout_json)
+                VALUES (:migration_name, :template_page_id, :layout_json)
+            """),
+            {
+                "migration_name": REMOVE_EMPTY_TEXT_BUBBLES_MIGRATION_NAME,
+                "template_page_id": page_id,
+                "layout_json": layout_json or "{}",
+            },
+        )
+        connection.execute(
+            text("UPDATE template_pages SET layout_json = :layout_json WHERE id = :page_id"),
+            {"layout_json": json.dumps(next_layout, ensure_ascii=False), "page_id": page_id},
+        )
+        updated_pages += 1
+
+    if updated_pages or skipped_nonempty_pages:
+        print(
+            "[migrations] remove empty text_bubbles: "
+            f"updated_pages={updated_pages}, skipped_nonempty_pages={skipped_nonempty_pages}"
         )
     connection.commit()
 

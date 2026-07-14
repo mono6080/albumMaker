@@ -150,7 +150,6 @@ def smoke_layout() -> dict:
                 "border_width": 8,
             }
         ],
-        "text_bubbles": [],
         "text_labels": [
             {
                 "id": 1,

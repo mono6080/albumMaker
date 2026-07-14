@@ -17,10 +17,10 @@ export const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH;
 export const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_REAL_HEIGHT * CANVAS_SCALE);
 export const STICKER_DEFAULT_MAX_SIDE = 150;
 
-const Z_BASE = { photo: 0, bubble: 100, text: 200, sticker: 300 };
+const Z_BASE = { photo: 0, text: 200, sticker: 300 };
 
 // 元素類型 → layout_json 陣列 key 的對照（編輯器與圖層清單共用）
-export const ELEMENT_ARRAY_KEY = { photo: "photo_slots", bubble: "text_bubbles", text: "text_labels", sticker: "stickers" };
+export const ELEMENT_ARRAY_KEY = { photo: "photo_slots", text: "text_labels", sticker: "stickers" };
 
 export function toDisplayCoord(realValue) {
   return realValue * CANVAS_SCALE;
@@ -126,20 +126,6 @@ export function getPhotoSlotModel(data, elemIndex, pageIndex = 0, dimensionMode)
   };
 }
 
-export function getBubbleModel(data) {
-  return {
-    type: "bubble",
-    id: data.id,
-    box: getDisplayBox(data),
-    fill: data.fill ?? "#FDED6E",
-    borderColor: data.border_color,
-    borderWidth: (data.border_width ?? 0) > 0 ? toDisplayCoord(data.border_width) : 0,
-    text: (data.text ?? "").substring(0, 30),
-    fontColor: data.font_color ?? "#333333",
-    fontSize: Math.max(8, toDisplayCoord(data.font_size ?? 20)),
-  };
-}
-
 export function getTextLabelModel(data) {
   return {
     type: "text",
@@ -177,7 +163,6 @@ export function buildRenderLayoutModel(layout, pageIndex = 0, options) {
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
   const elements = getAllElementsSorted(layout, options).map(({ type, data, index }) => {
     if (type === "photo") return getPhotoSlotModel(data, index, pageIndex, photoSlotDimensionMode);
-    if (type === "bubble") return getBubbleModel(data);
     if (type === "text") return getTextLabelModel(data);
     return { type, id: data.id, box: getDisplayBox(data) };
   });

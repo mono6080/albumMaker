@@ -15,7 +15,6 @@ function baseLayout(overrides = {}) {
     canvas_width: 794,
     canvas_height: 1123,
     photo_slots: [],
-    text_bubbles: [],
     text_labels: [],
     stickers: [],
     footer: null,
@@ -86,25 +85,20 @@ test("nested isolation, Ctrl+G toggle and undo retain the deepest valid scope", 
     line_height: 1.4,
     z_index: 1,
   };
-  const bubble = {
+  const photo = {
     id: 303,
     x: 180,
     y: 350,
     width: 210,
     height: 120,
     rotation: 0,
-    text: "氣泡",
-    font_size: 20,
-    font_color: "#333333",
-    font_family: "msjh",
-    fill: "#FDED6E",
-    shape: "ellipse",
+    border: false,
     z_index: 2,
   };
   const { templateId } = await createTemplateWithLayout(
     page,
     `E2E nested groups ${Date.now()}`,
-    baseLayout({ stickers: [sticker], text_labels: [text], text_bubbles: [bubble] }),
+    baseLayout({ photo_slots: [photo], stickers: [sticker], text_labels: [text] }),
   );
   const canvas = await openEditor(page, templateId);
 
@@ -340,34 +334,31 @@ test("group corner resize preserves typography through transient commit undo and
   await expectTypography();
 });
 
-test("marquee selects any direct node type and a group without creating history", async ({ page }) => {
+test("marquee selects every supported direct node type and a group without creating history", async ({ page }) => {
   await loginViaApi(page);
   const layout = baseLayout({
-    photo_slots: [{
-      id: 11,
-      x: 90,
-      y: 100,
-      width: 140,
-      height: 110,
-      rotation: 12,
-      border: false,
-      z_index: 0,
-    }],
-    text_bubbles: [{
-      id: 22,
-      x: 320,
-      y: 110,
-      width: 150,
-      height: 90,
-      rotation: 0,
-      text: "框選氣泡",
-      font_size: 18,
-      font_color: "#333333",
-      font_family: "msjh",
-      fill: "#FDED6E",
-      shape: "ellipse",
-      z_index: 1,
-    }],
+    photo_slots: [
+      {
+        id: 11,
+        x: 90,
+        y: 100,
+        width: 140,
+        height: 110,
+        rotation: 12,
+        border: false,
+        z_index: 0,
+      },
+      {
+        id: 22,
+        x: 320,
+        y: 110,
+        width: 150,
+        height: 90,
+        rotation: 0,
+        border: false,
+        z_index: 1,
+      },
+    ],
     text_labels: [{
       id: 33,
       x: 90,
@@ -440,30 +431,25 @@ test("sticker analysis creates and linked text resets without changing topology 
     rotation: 12,
     z_index: 0,
   };
-  const bubble = {
+  const photo = {
     id: 302,
     x: 500,
     y: 520,
     width: 160,
     height: 90,
     rotation: 0,
-    text: "同層氣泡",
-    font_size: 18,
-    font_color: "#333333",
-    font_family: "msjh",
-    fill: "#FDED6E",
-    shape: "ellipse",
+    border: false,
     z_index: 1,
   };
   const initialLayout = baseLayout({
     group_contract: "nested-world-v2",
+    photo_slots: [photo],
     stickers: [originalSticker],
-    text_bubbles: [bubble],
     groups: [{
       id: 401,
       z_index: 0,
       selection_rotation: 37,
-      children: [{ type: "sticker", id: originalSticker.id }, { type: "bubble", id: bubble.id }],
+      children: [{ type: "sticker", id: originalSticker.id }, { type: "photo", id: photo.id }],
     }],
   });
   const putResponse = await page.request.put(`/api/templates/${templateId}/pages/${pageId}/layout`, {
@@ -483,7 +469,7 @@ test("sticker analysis creates and linked text resets without changing topology 
   expect(saved.groups).toHaveLength(1);
   expect(saved.groups[0]).toMatchObject({ id: 401, selection_rotation: 37 });
   expect(saved.groups[0]).not.toHaveProperty("links");
-  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "bubble"]);
+  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "photo"]);
   expect(saved.material_text_links).toHaveLength(1);
   expect(saved.stickers[0]).toMatchObject(originalSticker);
   const link = saved.material_text_links[0];
@@ -508,7 +494,7 @@ test("sticker analysis creates and linked text resets without changing topology 
   }
   expect(saved.stickers[0]).toMatchObject(originalSticker);
   expect(saved.groups).toEqual(groupsAfterCreate);
-  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "bubble"]);
+  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "photo"]);
   expect(saved.material_text_links).toEqual([link]);
 });
 
@@ -636,19 +622,14 @@ test("exact sticker and text shortcut links and fits without grouping or reorder
     line_height: 1.4,
     z_index: 1,
   };
-  const bubble = {
+  const photo = {
     id: 503,
     x: 300,
     y: 500,
     width: 180,
     height: 100,
     rotation: 0,
-    text: "第三個 direct node",
-    font_size: 18,
-    font_color: "#333333",
-    font_family: "msjh",
-    fill: "#FDED6E",
-    shape: "ellipse",
+    border: false,
     z_index: 2,
   };
   const group = {
@@ -658,15 +639,15 @@ test("exact sticker and text shortcut links and fits without grouping or reorder
     children: [
       { type: "sticker", id: sticker.id },
       { type: "text", id: text.id },
-      { type: "bubble", id: bubble.id },
+      { type: "photo", id: photo.id },
     ],
   };
   const response = await page.request.put(`/api/templates/${templateId}/pages/${pageId}/layout`, {
     data: baseLayout({
       group_contract: "nested-world-v2",
+      photo_slots: [photo],
       stickers: [sticker],
       text_labels: [text],
-      text_bubbles: [bubble],
       groups: [group],
     }),
   });

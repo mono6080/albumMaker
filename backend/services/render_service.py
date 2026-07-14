@@ -13,21 +13,6 @@ Layout JSON schema (per page):
       "border_width": 8
     }
   ],
-  "text_bubbles": [
-    {
-      "id": 1,
-      "x": 500, "y": 150, "width": 200, "height": 120,
-      "shape": "ellipse",       # ellipse | rect | speech_right | speech_left
-      "fill": "#FDED6E",
-      "border_color": "#888888",
-      "border_width": 2,
-      "text": "{name}正在進行飛機飛平衡！",
-      "font_size": 20,
-      "font_color": "#3B6B8C",
-      "line_height": 1.4,
-      "tail_side": "right"      # for speech bubbles
-    }
-  ],
   "footer": {
     "text": "情緒愉快微微笑，你是我的小寶貝",
     "x": 60, "y": 1070, "font_size": 22,
@@ -73,7 +58,6 @@ from services.draw_helpers import get_font, load_key
 from services.element_renderers import (
     render_photo_slot,
     render_sticker,
-    render_text_bubble,
     render_text_label,
 )
 from services.layout_groups import iter_layout_render_elements
@@ -146,9 +130,12 @@ def scale_layout(layout: dict, scale_x: float, scale_y: float | None = None, tar
     """Return a scaled copy of a layout while preserving non-geometric settings."""
     scale_y = scale_x if scale_y is None else scale_y
     if target_size is None and scale_x >= 0.999 and scale_y >= 0.999:
-        return deepcopy(layout)
+        scaled_layout = deepcopy(layout)
+        scaled_layout.pop("text_bubbles", None)
+        return scaled_layout
 
     scaled_layout = deepcopy(layout)
+    scaled_layout.pop("text_bubbles", None)
     scaled_layout["canvas_width"] = (
         int(target_size[0]) if target_size else max(1, int(round(layout.get("canvas_width", CANVAS_WIDTH) * scale_x)))
     )
@@ -156,7 +143,7 @@ def scale_layout(layout: dict, scale_x: float, scale_y: float | None = None, tar
         int(target_size[1]) if target_size else max(1, int(round(layout.get("canvas_height", CANVAS_HEIGHT) * scale_y)))
     )
 
-    for collection_key in ("photo_slots", "text_bubbles", "text_labels", "stickers"):
+    for collection_key in ("photo_slots", "text_labels", "stickers"):
         collection = layout.get(collection_key, [])
         scaled_layout[collection_key] = (
             [_scale_layout_item(item, scale_x, scale_y) for item in collection]
@@ -231,8 +218,6 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     for elem_type, elem_data, elem_index in iter_layout_render_elements(traversal_layout):
         if elem_type == "photo":
             render_photo_slot(canvas, elem_data, photos, page_index, slot_index=elem_index)
-        elif elem_type == "bubble":
-            render_text_bubble(canvas, elem_data, student_name)
         elif elem_type == "text":
             render_text_label(canvas, elem_data, label_texts, student_name)
         elif elem_type == "sticker":
