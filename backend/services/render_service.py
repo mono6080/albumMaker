@@ -75,6 +75,7 @@ from services.element_renderers import (
     render_text_bubble,
     render_text_label,
 )
+from services.layout_groups import iter_layout_render_elements
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -85,8 +86,6 @@ from services.photo_frame_geometry import (
 BACKEND_DIR = Path(__file__).parent.parent
 UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uploads"))
 
-# 各元素類型未設定 z_index 時的預設基底（維持向後相容的渲染順序）
-_TYPE_Z_BASE = {"photo": 0, "bubble": 100, "text": 200, "sticker": 300}
 _X_NUMERIC_KEYS = {
     "x",
     "width",
@@ -216,14 +215,8 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
         build_photo_frame_slot(slot, photo_slot_dimension_mode)
         for slot in layout.get("photo_slots", [])
     ]
-    elements_ordered = sorted([
-        *[("photo",   slot,    slot.get("z_index",    _TYPE_Z_BASE["photo"]   + i), i) for i, slot    in enumerate(photo_slots)],
-        *[("bubble",  bubble,  bubble.get("z_index",  _TYPE_Z_BASE["bubble"]  + i), 0) for i, bubble  in enumerate(layout.get("text_bubbles", []))],
-        *[("text",    label,   label.get("z_index",   _TYPE_Z_BASE["text"]    + i), 0) for i, label   in enumerate(layout.get("text_labels",  []))],
-        *[("sticker", sticker, sticker.get("z_index", _TYPE_Z_BASE["sticker"] + i), 0) for i, sticker in enumerate(layout.get("stickers",     []))],
-    ], key=lambda t: t[2])
-
-    for elem_type, elem_data, _, elem_index in elements_ordered:
+    traversal_layout = {**layout, "photo_slots": photo_slots}
+    for elem_type, elem_data, elem_index in iter_layout_render_elements(traversal_layout):
         if elem_type == "photo":
             render_photo_slot(canvas, elem_data, photos, page_index, slot_index=elem_index)
         elif elem_type == "bubble":

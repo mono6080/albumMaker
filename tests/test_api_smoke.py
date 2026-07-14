@@ -664,6 +664,9 @@ def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
         )
         assert_status(upload, 200)
         payload = upload.json()
+        asset_revision = payload.pop("asset_revision")
+        assert asset_revision.startswith("sha256:")
+        assert len(asset_revision) == len("sha256:") + 64
         assert payload == {
             "path": f"templates/tmpl{template_id}/stickers/wide.png",
             "filename": "wide.png",

@@ -81,7 +81,8 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/{id}/pages` | 新增頁 |
 | PUT / DELETE | `/{id}/pages/{page_id}/layout`、`…/pages/{page_id}` | 更新版型 / 刪頁 |
 | POST / GET | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖 |
-| POST / GET 🔓 | `/{id}/stickers`、`/{id}/stickers/{filename}` | 上傳 / 取得貼圖 |
+| POST / GET 🔓 | `/{id}/stickers`、`/{id}/stickers/{filename}` | 上傳 / 取得貼圖；上傳回傳 EXIF 校正後像素的 `asset_revision` |
+| POST | `/{id}/pages/{page_id}/material-text-box-suggestion` | admin/art_team 只讀分析貼圖，回傳一次性 normalized 文字框建議；不寫 DB/storage |
 | GET | `/{id}/pages/{page_id}/preview` | 單頁預覽 JPEG（姓名佔位） |
 | GET | `/{id}/spread-preview/{start_page_index}` | 雙頁跨頁預覽 |
 

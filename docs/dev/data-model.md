@@ -93,6 +93,7 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 {
   "canvas_width": 794,          // A4 直式 @96dpi
   "canvas_height": 1123,
+  "group_contract": "flat-world-v1",
   "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
     { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3 }
   ],
@@ -111,7 +112,13 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   ],
   "stickers": [
     { "id": 1, "path": "templates/tmpl1/stickers/star.png",
-      "filename": "star.png", "x": 10, "y": 10, "width": 60, "height": 60 }
+      "filename": "star.png", "asset_revision": "sha256:...",
+      "x": 10, "y": 10, "width": 60, "height": 60 }
+  ],
+  "groups": [                 // 結構群組；不保存自己的幾何
+    { "id": 9001, "z_index": 4, "selection_rotation": 0,
+      "children": [{ "type": "sticker", "id": 1 }, { "type": "text", "id": 1 }],
+      "links": [{ "kind": "material-text-v1", "material_id": 1, "text_id": 1 }] }
   ],
   "footer": { "text": "{name} · 2026年1月" }
 }
@@ -123,6 +130,13 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   由 `_migrate_photo_slots_to_content_box` 遷移既有資料並寫入備份表；
   幾何計算集中在 `services/photo_frame_geometry.py` 與前端
   `utils/photoFrameGeometry.js`，兩邊必須同步修改
+- **結構群組**：children 仍留在 `text_labels[]` / `stickers[]`，其 world
+  `x/y/width/height/rotation` 是唯一幾何權威；`groups[]` 只保存 membership、順序與 optional link。
+  Group bounds 每次由 children 推導，禁止持久化 `x/y/width/height/scale/matrix`。
+- `material-text-v1` 只表示素材與普通文字框的關聯；沒有安全區或持續同步 constraint。
+  圖片分析只在使用者明確執行時建立／重設文字框幾何，結果不寫入 layout。
+- 本功能沒有 startup migration；沒有 `groups` 的舊 layout 繼續走既有 flat traversal，舊資料配對
+  延後到群組功能驗收後另案處理。
 
 ## Migrations 規則（`backend/migrations.py`）
 

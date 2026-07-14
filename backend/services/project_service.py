@@ -228,6 +228,7 @@ def get_template_page_layouts(project: Project) -> list[dict]:
 _SERVICES_DIR = Path(__file__).resolve().parent
 _RENDER_PIPELINE_FILES = (
     _SERVICES_DIR / "render_service.py",
+    _SERVICES_DIR / "layout_groups.py",
     _SERVICES_DIR / "element_renderers.py",
     _SERVICES_DIR / "draw_helpers.py",
     _SERVICES_DIR / "photo_frame_geometry.py",

@@ -17,9 +17,8 @@ from services.storage import get_storage
 logger = logging.getLogger(__name__)
 
 PREVIEW_JPEG_QUALITY = 80
-# v3：payload 移除 project/student updated_at（改為純內容定址＋照片版本欄位），
-# 單一學生的編輯不再作廢全班快取
-PREVIEW_CACHE_VERSION = "project-preview-v3"
+# v4：延續純內容定址，並納入 flat-world group traversal 版本。
+PREVIEW_CACHE_VERSION = "project-preview-v4-groups"
 
 
 def preview_scale_key(scale: float) -> str:
