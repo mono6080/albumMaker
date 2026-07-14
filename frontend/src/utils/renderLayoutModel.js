@@ -1,4 +1,5 @@
 import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
+import { buildRootRenderNodes, getFlattenedRenderElements } from "./layoutGroups.js";
 
 import { DESIGN_TOKENS } from "../constants/designTokens.js";
 import {
@@ -40,40 +41,21 @@ export function getInitialStickerSize(imageWidth, imageHeight, maxSide = STICKER
   };
 }
 
-export function getAllElementsSorted(layout) {
+export function getAllElementsSorted(layout, options) {
   if (!layout) return [];
-  return [
-    ...(layout.photo_slots || []).map((data, index) => ({
-      type: "photo",
-      data,
-      index,
-      zDefault: Z_BASE.photo + index,
-    })),
-    ...(layout.text_bubbles || []).map((data, index) => ({
-      type: "bubble",
-      data,
-      index,
-      zDefault: Z_BASE.bubble + index,
-    })),
-    ...(layout.text_labels || []).map((data, index) => ({
-      type: "text",
-      data,
-      index,
-      zDefault: Z_BASE.text + index,
-    })),
-    ...(layout.stickers || []).map((data, index) => ({
-      type: "sticker",
-      data,
-      index,
-      zDefault: Z_BASE.sticker + index,
-    })),
-  ].sort((a, b) => (a.data.z_index ?? a.zDefault) - (b.data.z_index ?? b.zDefault));
+  return getFlattenedRenderElements(layout, options).map(node => ({
+    type: node.type,
+    data: node.data,
+    index: node.index,
+    zDefault: node.zDefault ?? Z_BASE[node.type] + node.index,
+    groupId: node.groupId ?? null,
+  }));
 }
 
-export function getNextZIndex(layout) {
-  const all = getAllElementsSorted(layout);
-  if (all.length === 0) return 0;
-  return Math.max(...all.map(element => element.data.z_index ?? element.zDefault)) + 1;
+export function getNextZIndex(layout, options) {
+  const roots = buildRootRenderNodes(layout || {}, options);
+  if (roots.length === 0) return 0;
+  return Math.max(...roots.map(node => node.zIndex)) + 1;
 }
 
 export function applyElementsToLayout(layout, sortedElements) {
@@ -191,9 +173,9 @@ export function getFooterModel(footer) {
   };
 }
 
-export function buildRenderLayoutModel(layout, pageIndex = 0) {
+export function buildRenderLayoutModel(layout, pageIndex = 0, options) {
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(layout);
-  const elements = getAllElementsSorted(layout).map(({ type, data, index }) => {
+  const elements = getAllElementsSorted(layout, options).map(({ type, data, index }) => {
     if (type === "photo") return getPhotoSlotModel(data, index, pageIndex, photoSlotDimensionMode);
     if (type === "bubble") return getBubbleModel(data);
     if (type === "text") return getTextLabelModel(data);
