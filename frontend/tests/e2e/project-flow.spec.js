@@ -19,7 +19,7 @@ import {
 test("admin can create a project and batch students from the browser", async ({ page }) => {
   const layout = await loadFixtureLayout();
   const templateName = `E2E 專案模板 ${Date.now()}`;
-  const projectSuffix = `蘋果班 ${Date.now()}`;
+  const projectSuffix = "東區校-十階A";
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
@@ -27,7 +27,11 @@ test("admin can create a project and batch students from the browser", async ({ 
   await page.goto("/projects");
   await page.getByRole("button", { name: "新建專案" }).click();
   await page.getByLabel("選擇模板").selectOption(String(templateId));
-  await page.getByPlaceholder("例：東區校 10階A").fill(projectSuffix);
+  const customNameInput = page.getByLabel("自訂名稱");
+  await expect(customNameInput).toHaveAttribute("placeholder", "例：東區校-十階A");
+  await expect(page.getByText("接在模板名稱後，格式：分校-班級")).toBeVisible();
+  await customNameInput.fill(projectSuffix);
+  await expect(page.getByText(`專案全名：${templateName} ${projectSuffix}`)).toBeVisible();
   await page.getByRole("button", { name: "建立專案" }).click();
 
   // 建立成功後直接導向班級總覽（工作台），空狀態指向名單 CTA

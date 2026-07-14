@@ -140,10 +140,10 @@ export default function CreateProjectModal({ isOpen, onClose, templates, departm
               ))}
             </select>
           </FormField>
-          <FormField label="自訂名稱" hint="接在模板名稱後，例：分校或班級">
+          <FormField label="自訂名稱" hint="接在模板名稱後，格式：分校-班級">
             <input
               className={fieldControlClass}
-              placeholder="例：東區校 10階A"
+              placeholder="例：東區校-十階A"
               value={form.customName}
               onChange={e => setForm(f => ({ ...f, customName: e.target.value }))}
             />
