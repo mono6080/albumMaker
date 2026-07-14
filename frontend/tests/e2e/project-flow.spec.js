@@ -45,7 +45,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   await projectSearch.fill("沒有這個專案");
   await expect(page.getByText(`沒有符合「沒有這個專案」的專案`)).toBeVisible();
   await expect(page.getByText(projectName)).toHaveCount(0);
-  await projectSearch.fill(projectSuffix);
+  await projectSearch.fill(projectName);
   await expect(page.getByText(projectName)).toBeVisible();
   await expect(page.getByText(/找到 1 \/ \d+ 個專案/)).toBeVisible();
   await page.getByRole("button", { name: "清除搜尋" }).click();
