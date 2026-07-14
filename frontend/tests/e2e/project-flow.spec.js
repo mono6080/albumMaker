@@ -31,7 +31,7 @@ test("admin can create a project and batch students from the browser", async ({ 
   await expect(customNameInput).toHaveAttribute("placeholder", "例：東區校-十階A");
   await expect(page.getByText("接在模板名稱後，格式：分校-班級")).toBeVisible();
   await customNameInput.fill(projectSuffix);
-  await expect(page.getByText(`專案全名：${templateName} ${projectSuffix}`)).toBeVisible();
+  await expect(page.getByText(`${templateName} ${projectSuffix}`, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "建立專案" }).click();
 
   // 建立成功後直接導向班級總覽（工作台），空狀態指向名單 CTA
