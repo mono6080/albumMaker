@@ -1,7 +1,16 @@
 // 模板編輯器右側閒置面板：目前頁面統計 + 圖層清單（純顯示）
 // 從 TemplateEditor 抽出；點擊圖層以 onSelectElement 回呼選取元素
 
-import { Image as ImageIcon, Layers, MessageSquare, Square, Type as TypeIcon } from "lucide-react";
+import { useEffect, useRef } from "react";
+import {
+  ChevronLeft,
+  Group as GroupIcon,
+  Image as ImageIcon,
+  Layers,
+  MessageSquare,
+  Square,
+  Type as TypeIcon,
+} from "lucide-react";
 
 import { getPhotoContentRect } from "../utils/photoFrameGeometry.js";
 import { ELEMENT_ARRAY_KEY } from "../utils/renderLayoutModel";
@@ -28,6 +37,11 @@ const ELEMENT_TYPE_META = {
     Icon: Square,
     className: "bg-emerald-50 text-emerald-600",
   },
+  group: {
+    label: "群組",
+    Icon: GroupIcon,
+    className: "bg-violet-50 text-violet-600",
+  },
 };
 
 function truncatePreviewText(value, fallback = "未設定文字") {
@@ -43,14 +57,56 @@ export default function LayerListPanel({
   photoSlotDimensionMode,
   backgroundUrl,
   onSelectElement,
+  rootRenderNodes = null,
+  isolationGroup = null,
+  selectedRefs = [],
+  onSelectGroup,
+  onEnterGroup,
+  onExitGroup,
 }) {
-  const layerPanelItems = [...sortedPageElements].reverse();
+  const groupClickTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (groupClickTimerRef.current) window.clearTimeout(groupClickTimerRef.current);
+  }, []);
+
+  const handleGroupClick = (groupId) => {
+    if (groupClickTimerRef.current) window.clearTimeout(groupClickTimerRef.current);
+    groupClickTimerRef.current = window.setTimeout(() => {
+      groupClickTimerRef.current = null;
+      onSelectGroup?.(groupId);
+    }, 220);
+  };
+
+  const handleGroupDoubleClick = (groupId) => {
+    if (groupClickTimerRef.current) {
+      window.clearTimeout(groupClickTimerRef.current);
+      groupClickTimerRef.current = null;
+    }
+    onEnterGroup?.(groupId);
+  };
+
+  const selectedKeys = new Set(selectedRefs.map(ref => `${ref.type}-${ref.id}`));
+  const rootItems = rootRenderNodes ?? sortedPageElements.map(item => ({
+    kind: "element",
+    type: item.type,
+    id: item.data.id,
+    data: item.data,
+    index: item.index,
+  }));
+  const layerPanelItems = isolationGroup
+    ? [...(isolationGroup.children || [])].reverse()
+    : [...rootItems].reverse();
   const pageElementCounts = {
     photo: pageLayout?.photo_slots?.length ?? 0,
     text: pageLayout?.text_labels?.length ?? 0,
     bubble: pageLayout?.text_bubbles?.length ?? 0,
     sticker: pageLayout?.stickers?.length ?? 0,
   };
+  const isolationGroupData = isolationGroup?.data ?? isolationGroup;
+  const isolationGroupTitle = (isolationGroupData?.links || []).some(link => link.kind === "material-text-v1")
+    ? "文字＋圖片群組"
+    : "物件群組";
 
   const getElementOrdinal = (type, elementId) => {
     const arrayKey = ELEMENT_ARRAY_KEY[type];
@@ -94,7 +150,7 @@ export default function LayerListPanel({
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-gray-800">目前頁面</h2>
               <p className="mt-0.5 text-xs text-gray-400">
-                第 {currentPageIndex + 1} 頁 · {sortedPageElements.length} 個元素
+                 第 {currentPageIndex + 1} 頁 · {rootItems.length} 個根圖層
               </p>
             </div>
           </div>
@@ -127,9 +183,26 @@ export default function LayerListPanel({
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-gray-800">圖層清單</h3>
+          {isolationGroup ? (
+            <button
+              type="button"
+              onClick={onExitGroup}
+              className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-700 hover:underline"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              離開群組
+            </button>
+          ) : (
+            <h3 className="text-sm font-semibold text-gray-800">圖層清單</h3>
+          )}
           <span className="text-xs text-gray-400">上方為最上層</span>
         </div>
+
+        {isolationGroup && (
+          <div className="mb-3 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700">
+            圖層 › {isolationGroupTitle}
+          </div>
+        )}
 
         {layerPanelItems.length === 0 ? (
           <div className="rounded-lg border border-dashed border-gray-200 py-8 text-center text-sm text-gray-400">
@@ -137,15 +210,51 @@ export default function LayerListPanel({
           </div>
         ) : (
           <div className="space-y-2">
-            {layerPanelItems.map(({ type, data }) => {
+            {layerPanelItems.map((item) => {
+              if (item.kind === "group") {
+                const groupData = item.data ?? item;
+                const childCount = item.children?.length ?? groupData.children?.length ?? 0;
+                const groupTitle = (groupData.links || []).some(link => link.kind === "material-text-v1")
+                  ? "文字＋圖片群組"
+                  : "物件群組";
+                const meta = ELEMENT_TYPE_META.group;
+                const Icon = meta.Icon;
+                return (
+                  <button
+                    key={`group-${item.id}`}
+                    type="button"
+                    onClick={() => handleGroupClick(item.id)}
+                    onDoubleClick={() => handleGroupDoubleClick(item.id)}
+                    className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
+                      selectedKeys.has(`group-${item.id}`)
+                        ? "border-indigo-400 bg-indigo-50"
+                        : "border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/40"
+                    }`}
+                  >
+                    <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-gray-800">{groupTitle}</span>
+                      <span className="block truncate text-xs text-gray-400">{childCount} 個子物件 · 雙擊進入</span>
+                    </span>
+                  </button>
+                );
+              }
+
+              const { type, data } = item;
               const meta = ELEMENT_TYPE_META[type] ?? ELEMENT_TYPE_META.text;
               const Icon = meta.Icon;
               return (
                 <button
                   key={`${type}-${data.id}`}
                   type="button"
-                  onClick={() => onSelectElement(type, data.id)}
-                  className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 text-left transition-colors hover:border-indigo-200 hover:bg-indigo-50/40"
+                  onClick={event => onSelectElement(type, data.id, { additive: event.shiftKey })}
+                  className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
+                    selectedKeys.has(`${type}-${data.id}`)
+                      ? "border-indigo-400 bg-indigo-50"
+                      : "border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/40"
+                  }`}
                 >
                   <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
                     <Icon className="h-4 w-4" />

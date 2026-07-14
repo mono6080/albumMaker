@@ -5,7 +5,13 @@ import { Group, Image as KonvaImage, Rect } from "react-konva";
 
 import { buildStickerUrl } from "../../api/urls";
 
-export default function StickerNode({ sticker, templateId, isSelected, groupProps }) {
+export default function StickerNode({
+  sticker,
+  templateId,
+  isSelected,
+  groupProps,
+  suppressSelectedStroke = false,
+}) {
   const [image, setImage] = useState(null);
   const displayW = groupProps.width;
   const displayH = groupProps.height;
@@ -22,7 +28,7 @@ export default function StickerNode({ sticker, templateId, isSelected, groupProp
       {image && (
         <KonvaImage image={image} width={displayW} height={displayH} listening={false} />
       )}
-      {isSelected && (
+      {isSelected && !suppressSelectedStroke && (
         <Rect
           width={displayW} height={displayH}
           fill="transparent"

@@ -59,7 +59,13 @@ export function applyPhotoEditorUpdates(slot, updates, dimensionMode) {
 
 // ── 元素 Group 共用 Konva 屬性 ──────────────────────────────────────────────
 
-export function makeGroupProps(type, data, { isSelectMode, updateElement, setSelectedElement }) {
+export function makeGroupProps(type, data, {
+  isSelectMode,
+  updateElement,
+  setSelectedElement,
+  onSelectElement,
+  onActivateElement,
+}) {
   const displayX = toDisplayCoord(data.x);
   const displayY = toDisplayCoord(data.y);
   const displayW = toDisplayCoord(data.width);
@@ -103,7 +109,23 @@ export function makeGroupProps(type, data, { isSelectMode, updateElement, setSel
     },
     onClick: (e) => {
       e.cancelBubble = true;
-      setSelectedElement({ type, id: data.id });
+      const element = { type, id: data.id };
+      if (onSelectElement) {
+        onSelectElement(element, {
+          additive: !!e.evt?.shiftKey,
+          sourceEvent: e.evt,
+        });
+      } else {
+        setSelectedElement?.(element);
+      }
+    },
+    onDblClick: (e) => {
+      e.cancelBubble = true;
+      onActivateElement?.({ type, id: data.id }, { sourceEvent: e.evt });
+    },
+    onDblTap: (e) => {
+      e.cancelBubble = true;
+      onActivateElement?.({ type, id: data.id }, { sourceEvent: e.evt });
     },
   };
 }
@@ -326,7 +348,12 @@ export function renderBubbleNode(data, isSelected, groupProps) {
   );
 }
 
-export function renderTextLabelNode(data, isSelected, groupProps) {
+export function renderTextLabelNode(
+  data,
+  isSelected,
+  groupProps,
+  { suppressSelectedStroke = false } = {},
+) {
   const displayW = toDisplayCoord(data.width);
   const displayH = toDisplayCoord(data.height);
   const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
@@ -336,8 +363,10 @@ export function renderTextLabelNode(data, isSelected, groupProps) {
       <Rect
         width={displayW} height={displayH}
         fill="transparent"
-        stroke={isSelected ? "#4F46E5" : isFillable ? "#AAAAAA" : "#6B7280"}
-        strokeWidth={isSelected ? 2 : 1}
+        stroke={isSelected && suppressSelectedStroke
+          ? "transparent"
+          : isSelected ? "#4F46E5" : isFillable ? "#AAAAAA" : "#6B7280"}
+        strokeWidth={isSelected && suppressSelectedStroke ? 0 : isSelected ? 2 : 1}
         dash={isSelected ? [] : isFillable ? [4, 3] : []}
         listening={false}
       />

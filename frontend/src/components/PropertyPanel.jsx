@@ -143,11 +143,124 @@ function TextShadowControls({ elementData, onPropertyChange }) {
   );
 }
 
-export default function PropertyPanel({ selectedElement, elementData, onPropertyChange, onLayerChange }) {
+function GroupPropertyPanel({
+  group,
+  bounds,
+  children,
+  isAnalyzingMaterial,
+  onLayerChange,
+  onEnterGroup,
+  onUngroup,
+  onAnalyzeMaterial,
+}) {
+  const stickerCount = children.filter(child => child.type === "sticker").length;
+  const hasMaterialTextLink = (group?.links || []).some(link => link.kind === "material-text-v1");
+  const canAnalyzeMaterial = hasMaterialTextLink || stickerCount === 1;
+  return (
+    <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
+      <div>
+        <h3 className="font-semibold">▣ {hasMaterialTextLink ? "文字＋圖片群組" : "物件群組"}</h3>
+        <p className="mt-1 text-xs leading-relaxed text-gray-500">
+          外層操作整組；雙擊畫布或進入群組後，可分別編輯文字與圖片。
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 rounded bg-gray-50 p-2 text-xs text-gray-600">
+        <span>X {Math.round(bounds?.x ?? 0)}</span>
+        <span>Y {Math.round(bounds?.y ?? 0)}</span>
+        <span>寬 {Math.round(bounds?.width ?? 0)}</span>
+        <span>高 {Math.round(bounds?.height ?? 0)}</span>
+      </div>
+
+      <div>
+        <span className="text-xs text-gray-500 block mb-1">群組層次</span>
+        <div className="flex gap-1">
+          {[
+            { dir: "bottom", label: "⬇ 最底" },
+            { dir: "down", label: "↓ 下移" },
+            { dir: "up", label: "↑ 上移" },
+            { dir: "top", label: "⬆ 最頂" },
+          ].map(({ dir, label }) => (
+            <button
+              key={dir}
+              type="button"
+              onClick={() => onLayerChange?.(dir)}
+              className="flex-1 px-1 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onEnterGroup?.(group?.id)}
+        className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+      >
+        進入群組
+      </button>
+
+      {canAnalyzeMaterial && (
+        <button
+          type="button"
+          disabled={isAnalyzingMaterial}
+          onClick={() => onAnalyzeMaterial?.(group)}
+          className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isAnalyzingMaterial
+            ? "分析圖片中…"
+            : hasMaterialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
+        </button>
+      )}
+
+      <button
+        type="button"
+        onClick={() => onUngroup?.(group?.id)}
+        className="w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+      >
+        解除群組
+      </button>
+    </div>
+  );
+}
+
+export default function PropertyPanel({
+  selectedElement,
+  elementData,
+  onPropertyChange,
+  onLayerChange,
+  selectionScope = "root",
+  selectedGroup = null,
+  groupChildren = [],
+  isAnalyzingMaterial = false,
+  onEnterGroup,
+  onExitGroup,
+  onUngroup,
+  onAnalyzeMaterial,
+}) {
+  if (selectedElement.type === "group") {
+    return (
+      <GroupPropertyPanel
+        group={selectedGroup ?? elementData}
+        bounds={elementData}
+        children={groupChildren}
+        isAnalyzingMaterial={isAnalyzingMaterial}
+        onLayerChange={onLayerChange}
+        onEnterGroup={onEnterGroup}
+        onUngroup={onUngroup}
+        onAnalyzeMaterial={onAnalyzeMaterial}
+      />
+    );
+  }
+
   const isPhotoSlot = selectedElement.type === "photo";
   const isBubble = selectedElement.type === "bubble";
   const isTextLabel = selectedElement.type === "text";
   const isSticker = selectedElement.type === "sticker";
+  const isolationGroupLabel = (selectedGroup?.links || []).some(link => link.kind === "material-text-v1")
+    ? "文字＋圖片群組"
+    : "物件群組";
 
   const panelTitle = isPhotoSlot ? "📷 照片格屬性"
     : isSticker ? "🖼️ 貼圖素材屬性"
@@ -156,7 +269,32 @@ export default function PropertyPanel({ selectedElement, elementData, onProperty
 
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
+      {selectionScope === "isolation" && (
+        <div className="flex items-center gap-2 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700">
+          <button
+            type="button"
+            onClick={onExitGroup}
+            aria-label="離開群組"
+            className="font-medium hover:underline"
+          >
+            {isolationGroupLabel}
+          </button>
+          <span aria-hidden="true">›</span>
+          <span>{isSticker ? "圖片" : isTextLabel ? "文字" : "子物件"}</span>
+        </div>
+      )}
       <h3 className="font-semibold">{panelTitle}</h3>
+
+      {isSticker && (
+        <button
+          type="button"
+          disabled={isAnalyzingMaterial}
+          onClick={() => onAnalyzeMaterial?.({ type: "sticker", id: selectedElement.id })}
+          className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isAnalyzingMaterial ? "分析圖片中…" : "分析圖片並建立／重設文字框"}
+        </button>
+      )}
 
       {/* 通用：層次控制 */}
       <div>

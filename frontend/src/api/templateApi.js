@@ -103,4 +103,21 @@ export const uploadSticker = (templateId, stickerFile) => {
   return apiClient.post(`/templates/${templateId}/stickers`, formData);
 };
 
+/** 分析目前貼圖內容，回傳可直接建立／重設文字框的正規化建議。 */
+export const suggestMaterialTextBox = (
+  templateId,
+  pageId,
+  { stickerId, path, sourceRevision = null, requestToken },
+  { signal } = {},
+) => apiClient.post(
+  `/templates/${templateId}/pages/${pageId}/material-text-box-suggestion`,
+  {
+    sticker_id: stickerId,
+    path,
+    source_revision: sourceRevision,
+    request_token: requestToken,
+  },
+  { signal },
+);
+
 export default apiClient;
