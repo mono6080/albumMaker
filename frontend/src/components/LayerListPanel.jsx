@@ -58,11 +58,14 @@ export default function LayerListPanel({
   backgroundUrl,
   onSelectElement,
   rootRenderNodes = null,
+  scopeRenderNodes = null,
   isolationGroup = null,
+  isolationTrail = [],
   selectedRefs = [],
   onSelectGroup,
   onEnterGroup,
   onExitGroup,
+  onNavigateIsolation,
 }) {
   const groupClickTimerRef = useRef(null);
 
@@ -70,11 +73,11 @@ export default function LayerListPanel({
     if (groupClickTimerRef.current) window.clearTimeout(groupClickTimerRef.current);
   }, []);
 
-  const handleGroupClick = (groupId) => {
+  const handleGroupClick = (groupId, options = {}) => {
     if (groupClickTimerRef.current) window.clearTimeout(groupClickTimerRef.current);
     groupClickTimerRef.current = window.setTimeout(() => {
       groupClickTimerRef.current = null;
-      onSelectGroup?.(groupId);
+      onSelectGroup?.(groupId, options);
     }, 220);
   };
 
@@ -94,19 +97,18 @@ export default function LayerListPanel({
     data: item.data,
     index: item.index,
   }));
-  const layerPanelItems = isolationGroup
-    ? [...(isolationGroup.children || [])].reverse()
-    : [...rootItems].reverse();
+  const layerPanelItems = scopeRenderNodes
+    ? [...scopeRenderNodes].reverse()
+    : isolationGroup
+      ? [...(isolationGroup.children || [])].reverse()
+      : [...rootItems].reverse();
   const pageElementCounts = {
     photo: pageLayout?.photo_slots?.length ?? 0,
     text: pageLayout?.text_labels?.length ?? 0,
     bubble: pageLayout?.text_bubbles?.length ?? 0,
     sticker: pageLayout?.stickers?.length ?? 0,
   };
-  const isolationGroupData = isolationGroup?.data ?? isolationGroup;
-  const isolationGroupTitle = (isolationGroupData?.links || []).some(link => link.kind === "material-text-v1")
-    ? "文字＋圖片群組"
-    : "物件群組";
+  const hasIsolation = isolationTrail.length > 0 || !!isolationGroup;
 
   const getElementOrdinal = (type, elementId) => {
     const arrayKey = ELEMENT_ARRAY_KEY[type];
@@ -183,7 +185,7 @@ export default function LayerListPanel({
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          {isolationGroup ? (
+          {hasIsolation ? (
             <button
               type="button"
               onClick={onExitGroup}
@@ -198,9 +200,24 @@ export default function LayerListPanel({
           <span className="text-xs text-gray-400">上方為最上層</span>
         </div>
 
-        {isolationGroup && (
-          <div className="mb-3 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700">
-            圖層 › {isolationGroupTitle}
+        {hasIsolation && (
+          <div className="mb-3 flex flex-wrap items-center gap-1 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700" data-guide="isolation-breadcrumb">
+            <button type="button" onClick={() => onNavigateIsolation?.(-1)} className="font-medium hover:underline">
+              圖層
+            </button>
+            {(isolationTrail.length ? isolationTrail : [{ id: isolationGroup?.id, label: "群組 1" }]).map((trailItem, index) => (
+              <span key={`layer-trail-${trailItem.id}`} className="inline-flex items-center gap-1">
+                <span aria-hidden="true">›</span>
+                <button
+                  type="button"
+                  onClick={() => onNavigateIsolation?.(index)}
+                  aria-current={index === isolationTrail.length - 1 ? "location" : undefined}
+                  className="font-medium hover:underline"
+                >
+                  {trailItem.label || `群組 ${index + 1}`}
+                </button>
+              </span>
+            ))}
           </div>
         )}
 
@@ -211,19 +228,17 @@ export default function LayerListPanel({
         ) : (
           <div className="space-y-2">
             {layerPanelItems.map((item) => {
-              if (item.kind === "group") {
+              if (item.kind === "group" || item.type === "group") {
                 const groupData = item.data ?? item;
                 const childCount = item.children?.length ?? groupData.children?.length ?? 0;
-                const groupTitle = (groupData.links || []).some(link => link.kind === "material-text-v1")
-                  ? "文字＋圖片群組"
-                  : "物件群組";
+                const groupTitle = "物件群組";
                 const meta = ELEMENT_TYPE_META.group;
                 const Icon = meta.Icon;
                 return (
                   <button
                     key={`group-${item.id}`}
                     type="button"
-                    onClick={() => handleGroupClick(item.id)}
+                    onClick={event => handleGroupClick(item.id, { additive: event.shiftKey })}
                     onDoubleClick={() => handleGroupDoubleClick(item.id)}
                     className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
                       selectedKeys.has(`group-${item.id}`)

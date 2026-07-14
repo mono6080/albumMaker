@@ -63,24 +63,34 @@ import {
 import { TEXT_LABEL_ROLES } from "../utils/textLabelRoles";
 import { startProductGuide } from "../utils/productGuide";
 import {
-  addElementToGroup,
   buildRootRenderNodes,
   deleteLayoutElement,
   deleteLayoutGroup,
+  flattenRenderNodes,
+  getDescendantLeafRefs,
+  getGroupAncestorPath,
   getGroupBounds,
   getGroupById,
-  getGroupForElement,
+  getMaterialTextLinkForNode,
+  getNodeBounds,
+  getNodeParent,
+  getScopeNodes,
   groupElements,
+  insertNodeInScope,
   linkMaterialText,
-  moveGroup,
-  normalizeRootZIndices,
   projectNormalizedBoxToSticker,
-  reorderGroupChild,
-  reorderRootNode,
-  rotateGroup,
-  scaleGroupUniform,
+  removeInvalidMaterialTextLinks,
+  reorderNode,
+  resolveHitToDirectChild,
+  transformGroup,
   ungroupElements,
+  validateLayoutGroups,
 } from "../utils/layoutGroups";
+import {
+  getMarqueeSelectableRefs,
+  normalizeSelectionRect,
+  pointIsInsideOrientedBounds,
+} from "../utils/marqueeSelection";
 
 const EDITOR_GUIDE_STEPS = [
   {
@@ -160,6 +170,30 @@ function sameRef(left, right) {
   return refKey(left) === refKey(right);
 }
 
+function uniqueRefs(refs) {
+  const seen = new Set();
+  return (refs || []).filter((ref) => {
+    const key = refKey(ref);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function findRenderNode(nodes, ref) {
+  const stack = [...(nodes || [])].reverse();
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.type === ref?.type && String(node.id) === String(ref.id)) return node;
+    if (node.kind === "group") {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        stack.push(node.children[index]);
+      }
+    }
+  }
+  return null;
+}
+
 function normalizeDegrees(value) {
   const normalized = ((Number(value) || 0) + 180) % 360;
   return (normalized < 0 ? normalized + 360 : normalized) - 180;
@@ -180,15 +214,6 @@ function getStickerAnalysisSignature(sticker) {
     width: sticker.width,
     height: sticker.height,
     rotation: sticker.rotation ?? 0,
-  });
-}
-
-function getGroupAnalysisSignature(group) {
-  if (!group) return null;
-  return JSON.stringify({
-    id: group.id,
-    children: group.children || [],
-    links: group.links || [],
   });
 }
 
@@ -243,7 +268,9 @@ export default function TemplateEditor() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [pageLayout, setPageLayout] = useState(null);
   const [selectedRefs, setSelectedRefs] = useState([]);
-  const [isolationGroupId, setIsolationGroupId] = useState(null);
+  const [isolationPath, setIsolationPath] = useState([]);
+  const [marqueeGesture, setMarqueeGesture] = useState(null);
+  const [transientTypographyScales, setTransientTypographyScales] = useState({});
   const [analyzingTargetKey, setAnalyzingTargetKey] = useState(null);
   const [backgroundUrl, setBackgroundUrl] = useState(null);
   const [bgImage, setBgImage] = useState(null);
@@ -258,9 +285,13 @@ export default function TemplateEditor() {
   const transformerRef = useRef(null);
   const stickerFileInputRef = useRef(null);
   const pageLayoutRef = useRef(null);
+  const editorViewRef = useRef({ isolationPath: [], selectedRefs: [] });
+  const activeCanvasGestureRef = useRef(null);
   const analysisRequestRef = useRef(null);
   const activePageSessionIdRef = useRef(null);
+  const suppressNextStageClickRef = useRef(false);
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
+  const isolationGroupId = isolationPath.length ? isolationPath[isolationPath.length - 1] : null;
   const selectedElement = selectedRefs.length === 1 ? selectedRefs[0] : null;
 
   const setSelectedElement = useCallback((nextSelection) => {
@@ -278,7 +309,36 @@ export default function TemplateEditor() {
   // ── 分頁草稿與復原/重做歷史（useLayoutHistory）─────────────────────────────
   const clearSelection = useCallback(() => {
     setSelectedRefs([]);
-    setIsolationGroupId(null);
+  }, []);
+  const beginCanvasGesture = useCallback((kind) => {
+    activeCanvasGestureRef.current = kind;
+  }, []);
+  const endCanvasGesture = useCallback(() => {
+    activeCanvasGestureRef.current = null;
+  }, []);
+  const resetEditorView = useCallback(() => {
+    activeCanvasGestureRef.current = null;
+    setSelectedRefs([]);
+    setIsolationPath([]);
+    setMarqueeGesture(null);
+  }, []);
+  const reconcileRestoredEditorView = useCallback((restoredLayout) => {
+    const previousView = editorViewRef.current;
+    let nextPath = [];
+    for (let index = previousView.isolationPath.length - 1; index >= 0; index -= 1) {
+      const candidateId = previousView.isolationPath[index];
+      if (getGroupById(restoredLayout, candidateId)) {
+        nextPath = getGroupAncestorPath(restoredLayout, candidateId);
+        break;
+      }
+    }
+    const nextScopeId = nextPath.length ? nextPath[nextPath.length - 1] : null;
+    const directKeys = new Set(getScopeNodes(restoredLayout, nextScopeId).map(refKey));
+    const nextSelection = previousView.selectedRefs.filter(ref => directKeys.has(refKey(ref)));
+    editorViewRef.current = { isolationPath: nextPath, selectedRefs: nextSelection };
+    setIsolationPath(nextPath);
+    setSelectedRefs(nextSelection);
+    setMarqueeGesture(null);
   }, []);
   const {
     draftLayouts,
@@ -290,11 +350,20 @@ export default function TemplateEditor() {
     undoLayout,
     redoLayout,
     saveDirtyLayouts,
-  } = useLayoutHistory({ currentPage, pageLayout, setPageLayout, onLayoutRestored: clearSelection });
+  } = useLayoutHistory({
+    currentPage,
+    pageLayout,
+    setPageLayout,
+    onLayoutRestored: reconcileRestoredEditorView,
+  });
 
   useEffect(() => {
     pageLayoutRef.current = pageLayout;
   }, [pageLayout]);
+
+  useEffect(() => {
+    editorViewRef.current = { isolationPath, selectedRefs };
+  }, [isolationPath, selectedRefs]);
 
   useEffect(() => () => analysisRequestRef.current?.controller?.abort(), []);
 
@@ -312,7 +381,10 @@ export default function TemplateEditor() {
     const tr = transformerRef.current;
     if (!tr || !stageRef.current) return;
     const nodes = selectedRefs
-      .map(ref => stageRef.current.findOne(`#${ref.type}-${ref.id}`))
+      .map(ref => {
+        const nodeId = `${ref.type}-${ref.id}`;
+        return stageRef.current.findOne(node => node.id() === nodeId);
+      })
       .filter(Boolean);
     tr.nodes(nodes);
     tr.getLayer()?.batchDraw();
@@ -349,8 +421,8 @@ export default function TemplateEditor() {
     setAnalyzingTargetKey(null);
     activePageSessionIdRef.current = nextPage.id;
     applyPageDisplay(nextPage);
-    clearSelection();
-  }, [currentPageIndex, template, applyPageDisplay, clearSelection]);
+    resetEditorView();
+  }, [currentPageIndex, template, applyPageDisplay, resetEditorView]);
 
   useEffect(() => {
     if (!template) {
@@ -368,6 +440,21 @@ export default function TemplateEditor() {
 
   const handleSaveLayout = async ({ showToast = true } = {}) => {
     if (!template) return false;
+    for (const [pageId, draftLayout] of Object.entries(draftLayouts.current)) {
+      const draftValidation = validateLayoutGroups(draftLayout);
+      if (draftValidation.valid) continue;
+      const pageIndex = template.pages.findIndex(page => String(page.id) === String(pageId));
+      const pageLabel = pageIndex >= 0 ? `第 ${pageIndex + 1} 頁` : "其他頁面";
+      toast.error(draftValidation.topologyValid
+        ? `${pageLabel}仍有失效素材連結，請先清除`
+        : `${pageLabel}的群組資料格式不正確`);
+      return false;
+    }
+    const currentValidation = validateLayoutGroups(pageLayoutRef.current || {});
+    if (currentValidation.topologyValid && !currentValidation.linkValid) {
+      toast.error("請先清除失效素材連結再儲存");
+      return false;
+    }
     setIsSaving(true);
     try {
       const savedLayouts = await saveDirtyLayouts(
@@ -467,7 +554,7 @@ export default function TemplateEditor() {
         ...currentLayout,
         stickers: [...(currentLayout.stickers || []), newSticker],
       }));
-      setIsolationGroupId(null);
+      setIsolationPath([]);
       setSelectedElement({ type: "sticker", id: newSticker.id });
       toast.success("貼圖已上傳");
     } catch {
@@ -486,96 +573,95 @@ export default function TemplateEditor() {
     return null;
   }, [pageLayout]);
 
-  const handleSelectElement = useCallback((elementRef, { additive = false } = {}) => {
-    if (!pageLayout || !elementRef) return;
-
-    if (isolationGroupId != null) {
-      const isolatedGroup = getGroupById(pageLayout, isolationGroupId);
-      if (!isolatedGroup?.children?.some(childRef => sameRef(childRef, elementRef))) return;
-      setSelectedRefs([elementRef]);
+  const handleSelectDirectRef = useCallback((directRef, { additive = false } = {}) => {
+    if (!pageLayout || !directRef) return;
+    const directKeys = new Set(getScopeNodes(pageLayout, isolationGroupId).map(refKey));
+    if (!directKeys.has(refKey(directRef))) return;
+    if (!additive) {
+      setSelectedRefs([directRef]);
       return;
     }
-
-    const containingGroup = getGroupForElement(pageLayout, elementRef);
-    if (containingGroup) {
-      setSelectedRefs([{ type: "group", id: containingGroup.id }]);
-      return;
-    }
-
-    if (!additive || !["text", "sticker"].includes(elementRef.type)) {
-      setSelectedRefs([elementRef]);
-      return;
-    }
-
     setSelectedRefs(currentRefs => {
-      const currentCanJoin = currentRefs.every(ref => (
-        ["text", "sticker"].includes(ref.type) && !getGroupForElement(pageLayout, ref)
-      ));
-      const baseRefs = currentCanJoin ? currentRefs : [];
-      const alreadySelected = baseRefs.some(ref => sameRef(ref, elementRef));
-      return alreadySelected
-        ? baseRefs.filter(ref => !sameRef(ref, elementRef))
-        : [...baseRefs, elementRef];
+      const baseRefs = currentRefs.filter(ref => directKeys.has(refKey(ref)));
+      return baseRefs.some(ref => sameRef(ref, directRef))
+        ? baseRefs.filter(ref => !sameRef(ref, directRef))
+        : [...baseRefs, directRef];
     });
   }, [isolationGroupId, pageLayout]);
 
-  const handleSelectGroup = useCallback((groupId) => {
-    setIsolationGroupId(null);
-    setSelectedRefs([{ type: "group", id: groupId }]);
-  }, []);
+  const handleSelectElement = useCallback((elementRef, options = {}) => {
+    if (!pageLayout || !elementRef) return;
+    const directRef = resolveHitToDirectChild(pageLayout, isolationGroupId, elementRef);
+    if (directRef) handleSelectDirectRef(directRef, options);
+  }, [handleSelectDirectRef, isolationGroupId, pageLayout]);
 
-  const enterGroup = useCallback((groupId, preferredChild = null) => {
-    const group = getGroupById(pageLayout, groupId);
+  const handleSelectGroup = useCallback((groupId, options = {}) => {
+    handleSelectDirectRef({ type: "group", id: groupId }, options);
+  }, [handleSelectDirectRef]);
+
+  const enterGroup = useCallback((groupId, preferredHit = null) => {
+    if (!pageLayout) return;
+    const groupRef = { type: "group", id: groupId };
+    const isDirect = getScopeNodes(pageLayout, isolationGroupId).some(ref => sameRef(ref, groupRef));
+    const group = isDirect ? getGroupById(pageLayout, groupId) : null;
     if (!group) return;
-    const nextChild = preferredChild && group.children.some(ref => sameRef(ref, preferredChild))
-      ? preferredChild
-      : group.children[0] ?? null;
-    setIsolationGroupId(group.id);
+    let nextChild = null;
+    if (preferredHit?.type === "group") {
+      nextChild = group.children.find(ref => sameRef(ref, preferredHit)) ?? null;
+    } else if (preferredHit) {
+      nextChild = resolveHitToDirectChild(pageLayout, group.id, preferredHit);
+    }
+    nextChild ??= group.children[0] ?? null;
+    setIsolationPath(getGroupAncestorPath(pageLayout, group.id));
     setSelectedRefs(nextChild ? [nextChild] : []);
-  }, [pageLayout]);
-
-  const exitGroup = useCallback(() => {
-    const group = getGroupById(pageLayout, isolationGroupId);
-    setIsolationGroupId(null);
-    setSelectedRefs(group ? [{ type: "group", id: group.id }] : []);
   }, [isolationGroupId, pageLayout]);
 
-  const handleActivateElement = useCallback((elementRef) => {
-    const group = getGroupForElement(pageLayout, elementRef);
-    if (group) enterGroup(group.id, elementRef);
-  }, [enterGroup, pageLayout]);
+  const exitGroup = useCallback(() => {
+    if (!isolationPath.length) return;
+    const exitedGroupId = isolationPath[isolationPath.length - 1];
+    setIsolationPath(currentPath => currentPath.slice(0, -1));
+    setSelectedRefs([{ type: "group", id: exitedGroupId }]);
+  }, [isolationPath]);
 
-  const handleCreateGroup = useCallback(({ linkMaterialText: shouldLinkMaterialText = false } = {}) => {
+  const navigateIsolation = useCallback((pathIndex) => {
+    if (!isolationPath.length) return;
+    const nextLength = Math.max(0, Math.min(isolationPath.length, pathIndex + 1));
+    if (nextLength === isolationPath.length) return;
+    const exitedDirectGroupId = isolationPath[nextLength];
+    setIsolationPath(isolationPath.slice(0, nextLength));
+    setSelectedRefs(exitedDirectGroupId == null
+      ? []
+      : [{ type: "group", id: exitedDirectGroupId }]);
+  }, [isolationPath]);
+
+  const handleActivateElement = useCallback((elementRef) => {
+    if (!pageLayout || !elementRef) return;
+    const directRef = resolveHitToDirectChild(pageLayout, isolationGroupId, elementRef);
+    if (directRef?.type === "group") enterGroup(directRef.id, elementRef);
+  }, [enterGroup, isolationGroupId, pageLayout]);
+
+  const handleCreateGroup = useCallback(() => {
     if (selectedRefs.length < 2) return;
     let createdGroupId = null;
     try {
       commitPageLayout(currentLayout => {
         createdGroupId = getUniqueGroupId(currentLayout);
-        if (shouldLinkMaterialText && selectedRefs.length === 2) {
-          const textRef = selectedRefs.find(ref => ref.type === "text");
-          const stickerRef = selectedRefs.find(ref => ref.type === "sticker");
-          if (textRef && stickerRef) {
-            return linkMaterialText(currentLayout, {
-              materialId: stickerRef.id,
-              textId: textRef.id,
-              groupId: createdGroupId,
-            });
-          }
-        }
-        return groupElements(currentLayout, selectedRefs, { groupId: createdGroupId });
+        return groupElements(currentLayout, selectedRefs, {
+          groupId: createdGroupId,
+          parentGroupId: isolationGroupId,
+        });
       });
-      if (createdGroupId != null) handleSelectGroup(createdGroupId);
+      if (createdGroupId != null) setSelectedRefs([{ type: "group", id: createdGroupId }]);
     } catch (error) {
-      toast.error(error?.message || "無法建立群組，請確認物件圖層相鄰");
+      toast.error(error?.message || "無法建立群組");
     }
-  }, [commitPageLayout, handleSelectGroup, selectedRefs]);
+  }, [commitPageLayout, isolationGroupId, selectedRefs]);
 
   const handleUngroup = useCallback((groupId) => {
     const group = getGroupById(pageLayout, groupId);
     if (!group) return;
     try {
       commitPageLayout(currentLayout => ungroupElements(currentLayout, groupId));
-      setIsolationGroupId(null);
       setSelectedRefs(group.children.map(child => ({ ...child })));
     } catch (error) {
       toast.error(error?.message || "無法解除群組");
@@ -621,31 +707,19 @@ export default function TemplateEditor() {
     if (!selectedElement) return;
     try {
       commitPageLayout(currentLayout => {
-        if (isolationGroupId != null && selectedElement.type !== "group") {
-          const group = getGroupById(currentLayout, isolationGroupId);
-          const selectedIndex = group?.children?.findIndex(ref => sameRef(ref, selectedElement)) ?? -1;
-          if (selectedIndex < 0) return currentLayout;
-          const targetIndex = direction === "top" ? group.children.length - 1
-            : direction === "bottom" ? 0
-              : direction === "up" ? Math.min(group.children.length - 1, selectedIndex + 1)
-                : Math.max(0, selectedIndex - 1);
-          return targetIndex === selectedIndex
-            ? currentLayout
-            : reorderGroupChild(currentLayout, group.id, selectedElement, targetIndex);
-        }
-
-        const rootNodes = buildRootRenderNodes(currentLayout);
-        const selectedIndex = rootNodes.findIndex(node => (
-          node.type === selectedElement.type && String(node.id) === String(selectedElement.id)
-        ));
+        const scopeNodes = getScopeNodes(currentLayout, isolationGroupId);
+        const selectedIndex = scopeNodes.findIndex(ref => sameRef(ref, selectedElement));
         if (selectedIndex < 0) return currentLayout;
-        const targetIndex = direction === "top" ? rootNodes.length - 1
-          : direction === "bottom" ? 0
-            : direction === "up" ? Math.min(rootNodes.length - 1, selectedIndex + 1)
-              : Math.max(0, selectedIndex - 1);
+        const targetIndex = direction === "top" ? scopeNodes.length - 1
+            : direction === "bottom" ? 0
+              : direction === "up" ? Math.min(scopeNodes.length - 1, selectedIndex + 1)
+                : Math.max(0, selectedIndex - 1);
         return targetIndex === selectedIndex
           ? currentLayout
-          : reorderRootNode(currentLayout, selectedElement, targetIndex);
+          : reorderNode(currentLayout, selectedElement, {
+            parentGroupId: isolationGroupId,
+            toIndex: targetIndex,
+          });
       });
     } catch (error) {
       toast.error(error?.message || "無法調整圖層");
@@ -654,28 +728,38 @@ export default function TemplateEditor() {
 
   useEffect(() => {
     if (!pageLayout) return;
-    const isolatedGroup = isolationGroupId == null ? null : getGroupById(pageLayout, isolationGroupId);
-    if (isolationGroupId != null && !isolatedGroup) {
-      setIsolationGroupId(null);
-      setSelectedRefs([]);
+    const deepestSurvivingId = [...isolationPath].reverse().find(id => getGroupById(pageLayout, id));
+    const canonicalPath = deepestSurvivingId == null
+      ? []
+      : getGroupAncestorPath(pageLayout, deepestSurvivingId);
+    if (canonicalPath.length !== isolationPath.length
+      || canonicalPath.some((id, index) => String(id) !== String(isolationPath[index]))) {
+      setIsolationPath(canonicalPath);
       return;
     }
+    const directKeys = new Set(getScopeNodes(pageLayout, isolationGroupId).map(refKey));
     setSelectedRefs(currentRefs => {
-      const survivingRefs = currentRefs.filter(ref => (
-        ref.type === "group"
-          ? !!getGroupById(pageLayout, ref.id)
-          : isolationGroupId != null
-            ? isolatedGroup.children.some(child => sameRef(child, ref)) && !!getElement(ref, pageLayout)
-            : !!getElement(ref, pageLayout) && !getGroupForElement(pageLayout, ref)
-      ));
+      const survivingRefs = currentRefs.filter(ref => directKeys.has(refKey(ref)));
       return survivingRefs.length === currentRefs.length ? currentRefs : survivingRefs;
     });
-  }, [getElement, isolationGroupId, pageLayout]);
+  }, [isolationGroupId, isolationPath, pageLayout]);
 
   // Delete / Backspace / Undo / Redo / 群組導覽與方向鍵
   useEffect(() => {
     const handleKeyDown = (keyEvent) => {
       const isInputTarget = isKeyboardInputTarget(document.activeElement);
+      const normalizedKey = keyEvent.key.toLowerCase();
+      const isModifiedEditorCommand = (keyEvent.ctrlKey || keyEvent.metaKey)
+        && ["g", "y", "z"].includes(normalizedKey);
+      const isUnmodifiedEditorCommand = [
+        "Escape", "Enter", "Delete", "Backspace",
+        "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+      ].includes(keyEvent.key);
+      if (activeCanvasGestureRef.current
+        && (isModifiedEditorCommand || isUnmodifiedEditorCommand)) {
+        keyEvent.preventDefault();
+        return;
+      }
       if (keyEvent.key === "Escape") {
         if (isolationGroupId != null) {
           keyEvent.preventDefault();
@@ -702,6 +786,19 @@ export default function TemplateEditor() {
         redoLayout();
         return;
       }
+      const isGroupShortcut = (keyEvent.ctrlKey || keyEvent.metaKey)
+        && normalizedKey === "g";
+      const canToggleGroup = selectedRefs.length >= 2
+        || (selectedRefs.length === 1 && selectedRefs[0].type === "group");
+      if (isGroupShortcut && canToggleGroup) {
+        keyEvent.preventDefault();
+        if (keyEvent.repeat) return;
+        if (selectedRefs.length >= 2) handleCreateGroup();
+        else if (selectedRefs.length === 1 && selectedRefs[0].type === "group") {
+          handleUngroup(selectedRefs[0].id);
+        }
+        return;
+      }
       if (keyEvent.key === "Enter" && selectedElement?.type === "group") {
         keyEvent.preventDefault();
         enterGroup(selectedElement.id);
@@ -714,7 +811,7 @@ export default function TemplateEditor() {
         const dy = keyEvent.key === "ArrowUp" ? -step : keyEvent.key === "ArrowDown" ? step : 0;
         try {
           commitPageLayout(currentLayout => selectedRefs.reduce((nextLayout, ref) => {
-            if (ref.type === "group") return moveGroup(nextLayout, ref.id, { dx, dy });
+            if (ref.type === "group") return transformGroup(nextLayout, ref.id, { dx, dy });
             const arrayKey = ELEMENT_ARRAY_KEY[ref.type];
             if (!arrayKey) return nextLayout;
             return {
@@ -743,6 +840,8 @@ export default function TemplateEditor() {
     deleteSelectedElement,
     enterGroup,
     exitGroup,
+    handleCreateGroup,
+    handleUngroup,
     isolationGroupId,
     redoLayout,
     selectedElement,
@@ -753,26 +852,22 @@ export default function TemplateEditor() {
   const handleAnalyzeMaterial = useCallback(async (target) => {
     const layoutSnapshot = pageLayoutRef.current;
     if (!layoutSnapshot || !currentPage) return;
-
-    const explicitGroupId = target?.type === "group"
-      ? target.id
-      : target?.children ? target.id : null;
-    const explicitStickerRef = target?.type === "sticker" ? target : null;
-    const targetGroup = explicitGroupId != null
-      ? getGroupById(layoutSnapshot, explicitGroupId)
-      : explicitStickerRef ? getGroupForElement(layoutSnapshot, explicitStickerRef) : null;
-    const materialLink = targetGroup?.links?.find(link => link.kind === "material-text-v1") ?? null;
-    const stickerRef = explicitStickerRef ?? (
-      materialLink
-        ? { type: "sticker", id: materialLink.material_id }
-        : targetGroup?.children?.find(ref => ref.type === "sticker")
-    );
+    const currentValidation = validateLayoutGroups(layoutSnapshot);
+    if (currentValidation.topologyValid && !currentValidation.linkValid) {
+      toast.error("請先清除失效素材連結");
+      return;
+    }
+    const stickerRef = target?.type === "sticker" ? { type: "sticker", id: target.id } : null;
     const sticker = stickerRef ? getElement(stickerRef, layoutSnapshot) : null;
 
     if (!sticker?.path) {
       toast.error("找不到可分析的圖片素材");
       return;
     }
+    const existingLink = getMaterialTextLinkForNode(layoutSnapshot, stickerRef);
+    const requestedTextId = target?.textId ?? existingLink?.text_id ?? null;
+    const parentGroupId = getNodeParent(layoutSnapshot, stickerRef)?.id ?? null;
+    const scopeSignature = JSON.stringify(getScopeNodes(layoutSnapshot, parentGroupId));
     analysisRequestRef.current?.controller?.abort();
     const controller = new AbortController();
     const request = {
@@ -783,12 +878,13 @@ export default function TemplateEditor() {
       sourceRevision: sticker.asset_revision ?? null,
       geometrySignature: getStickerAnalysisSignature(sticker),
       requestToken: createRequestToken(),
-      groupId: targetGroup?.id ?? null,
-      groupSignature: getGroupAnalysisSignature(targetGroup),
-      linkedTextId: materialLink?.text_id ?? null,
+      parentGroupId,
+      scopeSignature,
+      textId: requestedTextId,
+      hadExistingLink: !!existingLink,
     };
     analysisRequestRef.current = request;
-    setAnalyzingTargetKey(targetGroup ? `group:${targetGroup.id}` : `sticker:${sticker.id}`);
+    setAnalyzingTargetKey(`sticker:${sticker.id}`);
 
     try {
       const response = await suggestMaterialTextBox(
@@ -808,23 +904,21 @@ export default function TemplateEditor() {
 
       const currentLayout = pageLayoutRef.current;
       const currentSticker = getElement({ type: "sticker", id: request.stickerId }, currentLayout);
-      const currentGroup = currentSticker
-        ? getGroupForElement(currentLayout, { type: "sticker", id: currentSticker.id })
+      const currentParentId = currentSticker
+        ? getNodeParent(currentLayout, { type: "sticker", id: currentSticker.id })?.id ?? null
         : null;
-      const groupIsCurrent = String(currentGroup?.id ?? "") === String(request.groupId ?? "");
-      const groupStructureIsCurrent = getGroupAnalysisSignature(currentGroup) === request.groupSignature;
       const responseMatches = suggestion?.request_token === request.requestToken;
       const sourceMatches = request.sourceRevision == null
         || suggestion?.source_revision === request.sourceRevision;
       if (
         !currentSticker
-        || !groupIsCurrent
-        || !groupStructureIsCurrent
+        || String(currentParentId ?? "") !== String(request.parentGroupId ?? "")
+        || JSON.stringify(getScopeNodes(currentLayout, currentParentId)) !== request.scopeSignature
         || !responseMatches
         || !sourceMatches
         || getStickerAnalysisSignature(currentSticker) !== request.geometrySignature
       ) {
-        toast.error("圖片或群組已變更，分析結果未套用，請重新分析");
+        toast.error("圖片或圖層已變更，分析結果未套用，請重新分析");
         return;
       }
 
@@ -838,34 +932,44 @@ export default function TemplateEditor() {
         return;
       }
 
-      let resultGroupId = request.groupId;
+      let resultTextId = request.textId;
+      let resultIsolationPath = [];
       let didApply = false;
       commitPageLayout(baseLayout => {
         if (String(activePageSessionIdRef.current) !== String(request.pageId)) return baseLayout;
         const latestStickerRef = { type: "sticker", id: request.stickerId };
         const latestSticker = getElement(latestStickerRef, baseLayout);
-        const latestGroup = latestSticker ? getGroupForElement(baseLayout, latestStickerRef) : null;
+        const latestParentId = latestSticker
+          ? getNodeParent(baseLayout, latestStickerRef)?.id ?? null
+          : null;
         if (
           !latestSticker
-          || String(latestGroup?.id ?? "") !== String(request.groupId ?? "")
-          || getGroupAnalysisSignature(latestGroup) !== request.groupSignature
+          || String(latestParentId ?? "") !== String(request.parentGroupId ?? "")
+          || JSON.stringify(getScopeNodes(baseLayout, latestParentId)) !== request.scopeSignature
           || getStickerAnalysisSignature(latestSticker) !== request.geometrySignature
         ) return baseLayout;
 
         const nextGeometry = projectNormalizedBoxToSticker(latestSticker, suggestion.normalized_box);
-        const latestLink = latestGroup?.links?.find(link => (
-          link.kind === "material-text-v1"
-          && String(link.material_id) === String(latestSticker.id)
-        ));
-        if (latestLink) {
-          if (request.linkedTextId != null && String(latestLink.text_id) !== String(request.linkedTextId)) {
+        const latestLink = getMaterialTextLinkForNode(baseLayout, latestStickerRef);
+        if (request.textId != null) {
+          if (request.hadExistingLink && String(latestLink?.text_id ?? "") !== String(request.textId)) {
             return baseLayout;
           }
-          const linkedText = getElement({ type: "text", id: latestLink.text_id }, baseLayout);
+          if (!request.hadExistingLink && latestLink) return baseLayout;
+          const linkedTextRef = { type: "text", id: request.textId };
+          const linkedText = getElement(linkedTextRef, baseLayout);
           if (!linkedText) return baseLayout;
+          if (!request.hadExistingLink) {
+            const textParentId = getNodeParent(baseLayout, linkedTextRef)?.id ?? null;
+            if (String(textParentId ?? "") !== String(latestParentId ?? "")) return baseLayout;
+          }
           didApply = true;
-          resultGroupId = latestGroup.id;
-          return {
+          resultTextId = linkedText.id;
+          const textParentId = getNodeParent(baseLayout, linkedTextRef)?.id ?? null;
+          resultIsolationPath = textParentId == null
+            ? []
+            : getGroupAncestorPath(baseLayout, textParentId);
+          const withGeometry = {
             ...baseLayout,
             text_labels: (baseLayout.text_labels || []).map(textLabel => (
               String(textLabel.id) === String(linkedText.id)
@@ -873,6 +977,10 @@ export default function TemplateEditor() {
                 : textLabel
             )),
           };
+          return linkMaterialText(withGeometry, {
+            materialId: latestSticker.id,
+            textId: linkedText.id,
+          });
         }
 
         const newTextId = getUniqueElementId(baseLayout);
@@ -893,37 +1001,28 @@ export default function TemplateEditor() {
           ...baseLayout,
           text_labels: [...(baseLayout.text_labels || []), newTextLabel],
         };
-
-        if (latestGroup) {
-          resultGroupId = latestGroup.id;
-          nextLayout = addElementToGroup(nextLayout, latestGroup.id, newTextRef, {
-            afterRef: latestStickerRef,
-          });
-        } else {
-          nextLayout = normalizeRootZIndices(nextLayout);
-          resultGroupId = getUniqueGroupId(nextLayout);
-          const rootsWithText = buildRootRenderNodes(nextLayout);
-          const stickerRootIndex = rootsWithText.findIndex(node => (
-            node.type === "sticker" && String(node.id) === String(latestSticker.id)
-          ));
-          nextLayout = reorderRootNode(nextLayout, newTextRef, stickerRootIndex + 1);
-        }
-
+        nextLayout = insertNodeInScope(nextLayout, newTextRef, {
+          parentGroupId: latestParentId,
+          afterRef: latestStickerRef,
+        });
         nextLayout = linkMaterialText(nextLayout, {
           materialId: latestSticker.id,
           textId: newTextId,
-          groupId: resultGroupId,
         });
+        resultTextId = newTextId;
+        resultIsolationPath = latestParentId == null
+          ? []
+          : getGroupAncestorPath(nextLayout, latestParentId);
         didApply = true;
         return nextLayout;
       });
 
       if (didApply) {
-        setIsolationGroupId(null);
-        setSelectedRefs([{ type: "group", id: resultGroupId }]);
-        toast.success(request.linkedTextId != null ? "已重設文字框" : "已建立文字框");
+        setIsolationPath(resultIsolationPath);
+        setSelectedRefs([{ type: "text", id: resultTextId }]);
+        toast.success(request.textId != null ? "已重設文字框" : "已建立文字框");
       } else {
-        toast.error("圖片或群組已變更，分析結果未套用，請重新分析");
+        toast.error("圖片或圖層已變更，分析結果未套用，請重新分析");
       }
     } catch (error) {
       if (error?.code !== "ERR_CANCELED" && error?.name !== "AbortError") {
@@ -941,13 +1040,108 @@ export default function TemplateEditor() {
     }
   }, [commitPageLayout, currentPage, getElement, templateId]);
 
+  const handleLinkSelectedMaterialText = useCallback(() => {
+    const stickerRef = selectedRefs.find(ref => ref.type === "sticker");
+    const textRef = selectedRefs.find(ref => ref.type === "text");
+    if (selectedRefs.length !== 2 || !stickerRef || !textRef) return;
+    handleAnalyzeMaterial({ ...stickerRef, textId: textRef.id });
+  }, [handleAnalyzeMaterial, selectedRefs]);
+
   // ── Konva Stage 事件：放置元素 or 取消選取 ───────────────────────────────
+
+  const getPointerCoordinates = useCallback(() => {
+    const position = stageRef.current?.getPointerPosition();
+    if (!position) return null;
+    return {
+      display: position,
+      real: { x: toRealCoord(position.x), y: toRealCoord(position.y) },
+    };
+  }, []);
+
+  const handleStagePointerDown = useCallback((event) => {
+    if (activeTool !== "select" || event.target !== event.target.getStage()) return;
+    if (event.evt?.button != null && event.evt.button !== 0) return;
+    const pointer = getPointerCoordinates();
+    if (!pointer) return;
+    setMarqueeGesture({
+      startDisplay: pointer.display,
+      currentDisplay: pointer.display,
+      startReal: pointer.real,
+      currentReal: pointer.real,
+      additive: !!event.evt?.shiftKey,
+      baseSelection: event.evt?.shiftKey ? [...selectedRefs] : [],
+      active: false,
+    });
+    beginCanvasGesture("marquee");
+  }, [activeTool, beginCanvasGesture, getPointerCoordinates, selectedRefs]);
+
+  const handleStagePointerMove = useCallback(() => {
+    if (!marqueeGesture || !pageLayout) return;
+    const pointer = getPointerCoordinates();
+    if (!pointer) return;
+    const distance = Math.hypot(
+      pointer.display.x - marqueeGesture.startDisplay.x,
+      pointer.display.y - marqueeGesture.startDisplay.y,
+    );
+    const active = marqueeGesture.active || distance > 4;
+    const nextGesture = {
+      ...marqueeGesture,
+      currentDisplay: pointer.display,
+      currentReal: pointer.real,
+      active,
+    };
+    setMarqueeGesture(nextGesture);
+    if (!active) return;
+    const selectionRect = normalizeSelectionRect(nextGesture.startReal, nextGesture.currentReal);
+    const hits = getMarqueeSelectableRefs(pageLayout, selectionRect, {
+      parentGroupId: isolationGroupId,
+    });
+    setSelectedRefs(nextGesture.additive
+      ? uniqueRefs([...nextGesture.baseSelection, ...hits])
+      : hits);
+  }, [getPointerCoordinates, isolationGroupId, marqueeGesture, pageLayout]);
+
+  const handleStagePointerUp = useCallback(() => {
+    if (!marqueeGesture) return;
+    if (marqueeGesture.active) suppressNextStageClickRef.current = true;
+    setMarqueeGesture(null);
+    endCanvasGesture();
+  }, [endCanvasGesture, marqueeGesture]);
+
+  useEffect(() => {
+    if (!marqueeGesture) return undefined;
+    window.addEventListener("mouseup", handleStagePointerUp);
+    window.addEventListener("touchend", handleStagePointerUp);
+    window.addEventListener("touchcancel", handleStagePointerUp);
+    return () => {
+      window.removeEventListener("mouseup", handleStagePointerUp);
+      window.removeEventListener("touchend", handleStagePointerUp);
+      window.removeEventListener("touchcancel", handleStagePointerUp);
+    };
+  }, [handleStagePointerUp, marqueeGesture]);
+
+  const handleStageDoubleClick = useCallback((event) => {
+    if (activeTool !== "select" || isolationGroupId == null) return;
+    if (event.target !== event.target.getStage()) return;
+    const pointer = getPointerCoordinates();
+    if (!pointer) return;
+    const currentBounds = getGroupBounds(pageLayoutRef.current, isolationGroupId);
+    if (!pointIsInsideOrientedBounds(pointer.real, currentBounds)) {
+      event.cancelBubble = true;
+      exitGroup();
+    }
+  }, [activeTool, exitGroup, getPointerCoordinates, isolationGroupId]);
 
   const handleStageClick = (e) => {
     if (!pageLayout) return;
-    const pos = stageRef.current.getPointerPosition();
-    const realX = toRealCoord(pos.x);
-    const realY = toRealCoord(pos.y);
+    if (suppressNextStageClickRef.current) {
+      suppressNextStageClickRef.current = false;
+      return;
+    }
+    const pointer = getPointerCoordinates();
+    if (!pointer) return;
+    const realX = pointer.real.x;
+    const realY = pointer.real.y;
 
     if (activeTool === "addPhotoPortrait" || activeTool === "addPhotoLandscape") {
       // 新照片格一律固定比例：3:4 直式或 4:3 橫式
@@ -974,7 +1168,7 @@ export default function TemplateEditor() {
         ...currentLayout,
         photo_slots: [...currentLayout.photo_slots, { ...newSlot, z_index: getNextZIndex(currentLayout) }],
       }));
-      setIsolationGroupId(null);
+      setIsolationPath([]);
       setSelectedElement({ type: "photo", id: newSlot.id });
       return;
     }
@@ -995,7 +1189,7 @@ export default function TemplateEditor() {
         ...currentLayout,
         text_bubbles: [...currentLayout.text_bubbles, { ...newBubble, z_index: getNextZIndex(currentLayout) }],
       }));
-      setIsolationGroupId(null);
+      setIsolationPath([]);
       setSelectedElement({ type: "bubble", id: newBubble.id });
       return;
     }
@@ -1019,13 +1213,13 @@ export default function TemplateEditor() {
         ...currentLayout,
         text_labels: [...(currentLayout.text_labels || []), { ...newTextLabel, z_index: getNextZIndex(currentLayout) }],
       }));
-      setIsolationGroupId(null);
+      setIsolationPath([]);
       setSelectedElement({ type: "text", id: newTextLabel.id });
       return;
     }
 
     // 選取模式：點擊空白處取消選取
-    if (e.target === stageRef.current) {
+    if (e.target === stageRef.current && !e.evt?.shiftKey) {
       setSelectedElement(null);
     }
   };
@@ -1053,9 +1247,6 @@ export default function TemplateEditor() {
     onWarning: warning => console.warn("[TemplateEditor] invalid layout groups; using flat render", warning),
   });
   const isolationGroup = isolationGroupId == null ? null : getGroupById(pageLayout, isolationGroupId);
-  const isolationRenderNode = isolationGroup
-    ? rootRenderNodes.find(node => node.kind === "group" && String(node.id) === String(isolationGroup.id))
-    : null;
   const selectedGroup = selectedElement?.type === "group"
     ? getGroupById(pageLayout, selectedElement.id)
     : isolationGroup;
@@ -1067,12 +1258,50 @@ export default function TemplateEditor() {
     : selectedElement?.type === "photo"
       ? getPhotoEditorElementData(selectedItem, photoSlotDimensionMode)
       : selectedItem;
-  const selectedGroupChildren = (selectedGroup?.children || []).map(ref => ({
-    ...ref,
-    data: getElement(ref),
-  })).filter(item => item.data);
-  const selectedItems = selectedRefs.map(ref => ({ ...ref, data: getElement(ref) })).filter(item => item.data);
+  const getNodeData = ref => (
+    ref?.type === "group" ? getGroupById(pageLayout, ref.id) : getElement(ref)
+  );
+  const selectedItems = selectedRefs.map(ref => ({ ...ref, data: getNodeData(ref) })).filter(item => item.data);
+  const activeScopeRefs = getScopeNodes(pageLayout, isolationGroupId);
+  const activeScopeRenderNodes = activeScopeRefs
+    .map(ref => findRenderNode(rootRenderNodes, ref))
+    .filter(Boolean);
+  const flattenedSceneLeaves = flattenRenderNodes(rootRenderNodes);
+  const activeLeafKeys = new Set(
+    isolationGroupId == null
+      ? []
+      : getDescendantLeafRefs(pageLayout, isolationGroupId).map(refKey),
+  );
+  const activeLeafIndices = flattenedSceneLeaves
+    .map((node, index) => (activeLeafKeys.has(refKey(node)) ? index : -1))
+    .filter(index => index >= 0);
+  const activeSceneStart = activeLeafIndices.length ? activeLeafIndices[0] : 0;
+  const activeSceneEnd = activeLeafIndices.length
+    ? activeLeafIndices[activeLeafIndices.length - 1]
+    : -1;
+  const passiveSceneBefore = isolationGroupId == null
+    ? []
+    : flattenedSceneLeaves.slice(0, activeSceneStart);
+  const passiveSceneAfter = isolationGroupId == null
+    ? []
+    : flattenedSceneLeaves.slice(activeSceneEnd + 1);
+  const isolationTrail = isolationPath.map((groupId, index) => ({
+    id: groupId,
+    label: `群組 ${index + 1}`,
+    data: getGroupById(pageLayout, groupId),
+  }));
   const sortedPageElements = getAllElementsSorted(pageLayout);
+  const selectedMaterialLink = selectedElement
+    ? getMaterialTextLinkForNode(pageLayout, selectedElement)
+    : null;
+  const selectedAnalysisStickerId = selectedElement?.type === "sticker"
+    ? selectedElement.id
+    : selectedMaterialLink?.material_id ?? null;
+  const marqueeDisplayRect = marqueeGesture?.active
+    ? normalizeSelectionRect(marqueeGesture.startDisplay, marqueeGesture.currentDisplay)
+    : null;
+  const layoutValidation = validateLayoutGroups(pageLayout || {});
+  const hasRepairableMaterialLinks = layoutValidation.topologyValid && !layoutValidation.linkValid;
 
   // 傳給 Konva 節點渲染函式的頁面 state（見 components/canvas/pageElementNodes）
   const canvasNodeContext = {
@@ -1083,6 +1312,8 @@ export default function TemplateEditor() {
     setSelectedElement,
     onSelectElement: handleSelectElement,
     onActivateElement: handleActivateElement,
+    onGestureStart: beginCanvasGesture,
+    onGestureEnd: endCanvasGesture,
   };
 
   const isRefSelected = ref => selectedRefs.some(selectedRef => sameRef(selectedRef, ref));
@@ -1090,7 +1321,7 @@ export default function TemplateEditor() {
   const renderElementNode = (node, {
     disabled = false,
     group = null,
-    groupCenter = null,
+    typographyScale = 1,
   } = {}) => {
     const { type, data, index: elemIndex } = node;
     const elementRef = { type, id: data.id };
@@ -1099,22 +1330,44 @@ export default function TemplateEditor() {
     if (type === "photo") {
       const controlProps = makePhotoControlProps(data, canvasNodeContext);
       if (disabled) Object.assign(controlProps, { draggable: false, listening: false });
+      if (group) {
+        Object.assign(controlProps, {
+          draggable: false,
+          listening: activeTool === "select" && !disabled,
+          onClick: (event) => {
+            event.cancelBubble = true;
+            handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          },
+          onTap: (event) => {
+            event.cancelBubble = true;
+            handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+          },
+          onDblClick: (event) => {
+            event.cancelBubble = true;
+            enterGroup(group.id, elementRef);
+          },
+          onDblTap: (event) => {
+            event.cancelBubble = true;
+            enterGroup(group.id, elementRef);
+          },
+        });
+      }
       return renderPhotoSlotNode(data, elemIndex, isSelected, controlProps, canvasNodeContext);
     }
 
     const groupProps = makeGroupProps(type, data, canvasNodeContext);
     if (disabled) Object.assign(groupProps, { draggable: false, listening: false });
-    if (groupCenter) {
-      groupProps.x -= groupCenter.x;
-      groupProps.y -= groupCenter.y;
-    }
     if (group) {
       Object.assign(groupProps, {
         draggable: false,
         listening: activeTool === "select" && !disabled,
         onClick: (event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id);
+          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+        },
+        onTap: (event) => {
+          event.cancelBubble = true;
+          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         },
         onDblClick: (event) => {
           event.cancelBubble = true;
@@ -1127,12 +1380,17 @@ export default function TemplateEditor() {
       });
     }
 
-    if (type === "bubble") return renderBubbleNode(data, isSelected, groupProps);
+    if (type === "bubble") return renderBubbleNode(
+      data,
+      isSelected,
+      groupProps,
+      { suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
+    );
     if (type === "text") return renderTextLabelNode(
       data,
       isSelected,
       groupProps,
-      { suppressSelectedStroke: selectedRefs.length === 1 },
+      { suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
     );
     if (type === "sticker") return (
       <StickerNode
@@ -1147,31 +1405,27 @@ export default function TemplateEditor() {
     return null;
   };
 
-  const renderGroupNode = (node) => {
+  const renderDirectGroupNode = (node) => {
     const group = node.data;
-    const isIsolatedGroup = isolationGroupId != null && String(group.id) === String(isolationGroupId);
-    if (isolationGroupId != null) {
-      return (
-        <KonvaGroup
-          key={`group-visual-${group.id}`}
-          opacity={isIsolatedGroup ? 1 : 0.25}
-          listening={isIsolatedGroup && activeTool === "select"}
-        >
-          {node.children.map(childNode => renderElementNode(childNode, { disabled: !isIsolatedGroup }))}
-        </KonvaGroup>
-      );
-    }
-
-    const bounds = getGroupBounds(pageLayout, group.id);
+    const bounds = getNodeBounds(pageLayout, { type: "group", id: group.id });
     const center = {
       x: toDisplayCoord(bounds.centerX),
       y: toDisplayCoord(bounds.centerY),
     };
+    const displayWidth = toDisplayCoord(bounds.width);
+    const displayHeight = toDisplayCoord(bounds.height);
     const baseRotation = bounds.rotation ?? group.selection_rotation ?? 0;
+    const typographyScale = transientTypographyScales[String(group.id)] ?? 1;
     const resetTransientTransform = (konvaNode) => {
       konvaNode.position(center);
       konvaNode.rotation(baseRotation);
       konvaNode.scale({ x: 1, y: 1 });
+      setTransientTypographyScales(current => {
+        if (current[String(group.id)] == null) return current;
+        const next = { ...current };
+        delete next[String(group.id)];
+        return next;
+      });
     };
     const commitGroupTransform = (konvaNode, { includeScaleAndRotation }) => {
       const dx = toRealCoord(konvaNode.x() - center.x);
@@ -1184,17 +1438,16 @@ export default function TemplateEditor() {
         : 0;
       resetTransientTransform(konvaNode);
       try {
-        commitPageLayout(currentLayout => {
-          let nextLayout = currentLayout;
-          if (Math.abs(scale - 1) > 0.0001) nextLayout = scaleGroupUniform(nextLayout, group.id, scale);
-          if (Math.abs(rotationDelta) > 0.0001) nextLayout = rotateGroup(nextLayout, group.id, rotationDelta);
-          if (Math.abs(dx) > 0.0001 || Math.abs(dy) > 0.0001) {
-            nextLayout = moveGroup(nextLayout, group.id, { dx, dy });
-          }
-          return nextLayout;
-        });
+        commitPageLayout(currentLayout => transformGroup(currentLayout, group.id, {
+          dx,
+          dy,
+          rotationDelta,
+          scale,
+        }));
       } catch (error) {
         toast.error(error?.message || "無法變形群組");
+      } finally {
+        endCanvasGesture();
       }
     };
 
@@ -1204,36 +1457,71 @@ export default function TemplateEditor() {
         id={`group-${group.id}`}
         x={center.x}
         y={center.y}
+        width={displayWidth}
+        height={displayHeight}
         rotation={baseRotation}
         draggable={activeTool === "select"}
         listening={activeTool === "select"}
         onClick={(event) => {
           event.cancelBubble = true;
-          handleSelectGroup(group.id);
+          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
         }}
+        onTap={(event) => {
+          event.cancelBubble = true;
+          handleSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
+        }}
+        onDblClick={(event) => {
+          event.cancelBubble = true;
+          enterGroup(group.id);
+        }}
+        onDblTap={(event) => {
+          event.cancelBubble = true;
+          enterGroup(group.id);
+        }}
+        onDragStart={() => beginCanvasGesture("group-drag")}
         onDragEnd={event => commitGroupTransform(event.currentTarget, { includeScaleAndRotation: false })}
+        onTransformStart={() => beginCanvasGesture("group-transform")}
+        onTransform={(event) => {
+          const nodeScale = (
+            Math.abs(event.currentTarget.scaleX()) + Math.abs(event.currentTarget.scaleY())
+          ) / 2;
+          const safeScale = Number.isFinite(nodeScale) && nodeScale > 0 ? nodeScale : 1;
+          setTransientTypographyScales(current => (
+            current[String(group.id)] === safeScale
+              ? current
+              : { ...current, [String(group.id)]: safeScale }
+          ));
+        }}
         onTransformEnd={event => commitGroupTransform(event.currentTarget, { includeScaleAndRotation: true })}
       >
+        <Rect
+          x={-displayWidth / 2}
+          y={-displayHeight / 2}
+          width={displayWidth}
+          height={displayHeight}
+          fill="rgba(255,255,255,0.001)"
+        />
         <KonvaGroup rotation={-baseRotation}>
-          {node.children.map(childNode => renderElementNode(childNode, {
-            group,
-            groupCenter: center,
-          }))}
+          <KonvaGroup x={-center.x} y={-center.y}>
+            {flattenRenderNodes([node]).map(childNode => renderElementNode(childNode, {
+              group,
+              typographyScale,
+            }))}
+          </KonvaGroup>
         </KonvaGroup>
       </KonvaGroup>
     );
   };
 
-  const renderRootNode = (node) => {
-    if (node.kind === "group") return renderGroupNode(node);
-    const renderedNode = renderElementNode(node, { disabled: isolationGroupId != null });
-    if (isolationGroupId == null) return renderedNode;
-    return (
-      <KonvaGroup key={`isolated-dim-${node.type}-${node.id}`} opacity={0.25} listening={false}>
-        {renderedNode}
-      </KonvaGroup>
-    );
-  };
+  const renderActiveScopeNode = (node) => (
+    node.kind === "group" ? renderDirectGroupNode(node) : renderElementNode(node)
+  );
+
+  const renderPassiveLeaf = (node) => (
+    <KonvaGroup key={`passive-${node.type}-${node.id}`} opacity={0.25} listening={false}>
+      {renderElementNode(node, { disabled: true })}
+    </KonvaGroup>
+  );
 
   return (
     <div className="flex flex-col">
@@ -1315,7 +1603,8 @@ export default function TemplateEditor() {
           )}
           <button
             onClick={handleSaveLayout}
-            disabled={isSaving}
+            disabled={isSaving || hasRepairableMaterialLinks}
+            title={hasRepairableMaterialLinks ? "請先清除失效素材連結" : undefined}
             data-guide="save-template"
             className="px-4 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
@@ -1323,6 +1612,19 @@ export default function TemplateEditor() {
           </button>
         </div>
       </div>
+
+      {hasRepairableMaterialLinks && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+          <span>此頁含失效或重複的素材文字連結；版面仍可檢視，但建議先清理。</span>
+          <button
+            type="button"
+            onClick={() => commitPageLayout(currentLayout => removeInvalidMaterialTextLinks(currentLayout))}
+            className="flex-shrink-0 rounded border border-amber-400 bg-white px-3 py-1.5 font-medium hover:bg-amber-100"
+          >
+            清除失效素材連結
+          </button>
+        </div>
+      )}
 
       {/* 背景裁切 Modal */}
       {bgCropFile && (
@@ -1435,6 +1737,15 @@ export default function TemplateEditor() {
               width={CANVAS_DISPLAY_WIDTH}
               height={CANVAS_DISPLAY_HEIGHT}
               onClick={handleStageClick}
+              onTap={handleStageClick}
+              onMouseDown={handleStagePointerDown}
+              onMouseMove={handleStagePointerMove}
+              onMouseUp={handleStagePointerUp}
+              onTouchStart={handleStagePointerDown}
+              onTouchMove={handleStagePointerMove}
+              onTouchEnd={handleStagePointerUp}
+              onDblClick={handleStageDoubleClick}
+              onDblTap={handleStageDoubleClick}
             >
               <Layer>
                 {/* 白色底色 */}
@@ -1468,8 +1779,16 @@ export default function TemplateEditor() {
                   />
                 )}
 
-                {/* root 只畫 standalone 或 group；grouped child 不會重複渲染 */}
-                {rootRenderNodes.map(renderRootNode)}
+                {/* 只讓目前 scope 的 direct nodes 可互動；隔離外葉節點維持原 z-slot 並淡化。 */}
+                {isolationGroupId == null ? (
+                  activeScopeRenderNodes.map(renderActiveScopeNode)
+                ) : (
+                  <>
+                    {passiveSceneBefore.map(renderPassiveLeaf)}
+                    {activeScopeRenderNodes.map(renderActiveScopeNode)}
+                    {passiveSceneAfter.map(renderPassiveLeaf)}
+                  </>
+                )}
 
                 {renderFooterNode(pageLayout?.footer)}
 
@@ -1506,6 +1825,20 @@ export default function TemplateEditor() {
                     return newBox;
                   }}
                 />
+
+                {marqueeDisplayRect && (
+                  <Rect
+                    x={marqueeDisplayRect.x}
+                    y={marqueeDisplayRect.y}
+                    width={marqueeDisplayRect.width}
+                    height={marqueeDisplayRect.height}
+                    fill="rgba(79,70,229,0.08)"
+                    stroke="#4F46E5"
+                    strokeWidth={1}
+                    dash={[5, 3]}
+                    listening={false}
+                  />
+                )}
               </Layer>
             </Stage>
           </div>
@@ -1521,6 +1854,8 @@ export default function TemplateEditor() {
             <GroupSelectionPanel
               items={selectedItems}
               onGroup={handleCreateGroup}
+              onLinkMaterialText={handleLinkSelectedMaterialText}
+              materialActionsDisabled={hasRepairableMaterialLinks}
             />
           ) : selectedElement && selectedPanelItem ? (
             <PropertyPanel
@@ -1528,14 +1863,11 @@ export default function TemplateEditor() {
               elementData={selectedPanelItem}
               selectionScope={isolationGroupId == null ? "root" : "isolation"}
               selectedGroup={selectedGroup}
-              groupChildren={selectedGroupChildren}
-              isAnalyzingMaterial={analyzingTargetKey === (
-                selectedElement.type === "group"
-                  ? `group:${selectedElement.id}`
-                  : selectedElement.type === "sticker" && selectedGroup
-                    ? `group:${selectedGroup.id}`
-                  : `sticker:${selectedElement.id}`
-              )}
+              isolationTrail={isolationTrail}
+              materialTextLink={selectedMaterialLink}
+              materialActionsDisabled={hasRepairableMaterialLinks}
+              isAnalyzingMaterial={selectedAnalysisStickerId != null
+                && analyzingTargetKey === `sticker:${selectedAnalysisStickerId}`}
               onPropertyChange={(updates) => {
                 if (selectedElement.type === "group") return;
                 if (selectedElement.type === "photo") {
@@ -1546,16 +1878,27 @@ export default function TemplateEditor() {
               }}
               onLayerChange={handleLayerChange}
               onEnterGroup={enterGroup}
-              onExitGroup={exitGroup}
+              onNavigateIsolation={navigateIsolation}
               onUngroup={handleUngroup}
-              onAnalyzeMaterial={handleAnalyzeMaterial}
+              onAnalyzeMaterial={(target) => {
+                if (target?.type === "text" && selectedMaterialLink) {
+                  handleAnalyzeMaterial({
+                    type: "sticker",
+                    id: selectedMaterialLink.material_id,
+                    textId: target.id,
+                  });
+                  return;
+                }
+                handleAnalyzeMaterial(target);
+              }}
             />
           ) : (
             <LayerListPanel
               pageLayout={pageLayout}
               sortedPageElements={sortedPageElements}
               rootRenderNodes={rootRenderNodes}
-              isolationGroup={isolationRenderNode}
+              scopeRenderNodes={activeScopeRenderNodes}
+              isolationTrail={isolationTrail}
               selectedRefs={selectedRefs}
               currentPageIndex={currentPageIndex}
               photoSlotDimensionMode={photoSlotDimensionMode}
@@ -1564,6 +1907,7 @@ export default function TemplateEditor() {
               onSelectGroup={handleSelectGroup}
               onEnterGroup={enterGroup}
               onExitGroup={exitGroup}
+              onNavigateIsolation={navigateIsolation}
             />
           )}
         </div>

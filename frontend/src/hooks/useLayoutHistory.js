@@ -22,7 +22,7 @@ function getPageHistory(historyStore, pageId) {
   return historyStore[pageId];
 }
 
-// onLayoutRestored：undo/redo 套用歷史版面後呼叫（編輯器用來清除選取）
+// onLayoutRestored：undo/redo 套用歷史版面後呼叫；編輯器可依快照校正隔離與選取。
 export default function useLayoutHistory({ currentPage, pageLayout, setPageLayout, onLayoutRestored }) {
   const draftLayouts = useRef({});
   const layoutHistories = useRef({});
@@ -81,7 +81,7 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     const previousSnapshot = cloneLayout(previousLayout);
     draftLayouts.current[currentPage.id] = previousSnapshot;
     setPageLayout(previousSnapshot);
-    onLayoutRestored?.();
+    onLayoutRestored?.(previousSnapshot, { kind: "undo" });
     refreshHistoryAvailability(currentPage.id);
   }, [currentPage, pageLayout, setPageLayout, onLayoutRestored, refreshHistoryAvailability]);
 
@@ -95,7 +95,7 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     const nextSnapshot = cloneLayout(nextLayout);
     draftLayouts.current[currentPage.id] = nextSnapshot;
     setPageLayout(nextSnapshot);
-    onLayoutRestored?.();
+    onLayoutRestored?.(nextSnapshot, { kind: "redo" });
     refreshHistoryAvailability(currentPage.id);
   }, [currentPage, pageLayout, setPageLayout, onLayoutRestored, refreshHistoryAvailability]);
 

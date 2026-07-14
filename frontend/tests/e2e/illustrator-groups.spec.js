@@ -36,27 +36,49 @@ async function openEditor(page, templateId) {
   return canvas;
 }
 
-test("group, isolation, free child ratio, undo and reload keep one structural group", async ({ page }) => {
+async function dragCanvas(page, canvas, from, to, { additive = false } = {}) {
+  const box = await canvas.boundingBox();
+  const start = canvasPoint(from.x, from.y);
+  const end = canvasPoint(to.x, to.y);
+  if (additive) await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + start.x, box.y + start.y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + end.x, box.y + end.y, { steps: 8 });
+  await page.mouse.up();
+  if (additive) await page.keyboard.up("Shift");
+}
+
+async function uploadMaterial(page, templateId, filename = "material.png") {
+  const response = await page.request.post(`/api/templates/${templateId}/stickers`, {
+    multipart: {
+      file: { name: filename, mimeType: "image/png", buffer: redPng },
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+}
+
+test("nested isolation, Ctrl+G toggle and undo retain the deepest valid scope", async ({ page }) => {
   await loginViaApi(page);
   const sticker = {
     id: 101,
     path: "templates/tmpl0/stickers/missing.png",
     filename: "missing.png",
     x: 80,
-    y: 150,
-    width: 180,
+    y: 140,
+    width: 160,
     height: 100,
     rotation: 0,
     z_index: 0,
   };
   const text = {
     id: 202,
-    x: 340,
-    y: 160,
+    x: 330,
+    y: 150,
     width: 220,
     height: 80,
     rotation: 0,
-    text: "群組示範文字",
+    text: "巢狀群組文字",
     text_role: "static",
     font_size: 24,
     font_color: "#333333",
@@ -64,79 +86,348 @@ test("group, isolation, free child ratio, undo and reload keep one structural gr
     line_height: 1.4,
     z_index: 1,
   };
+  const bubble = {
+    id: 303,
+    x: 180,
+    y: 350,
+    width: 210,
+    height: 120,
+    rotation: 0,
+    text: "氣泡",
+    font_size: 20,
+    font_color: "#333333",
+    font_family: "msjh",
+    fill: "#FDED6E",
+    shape: "ellipse",
+    z_index: 2,
+  };
   const { templateId } = await createTemplateWithLayout(
     page,
-    `E2E Illustrator group ${Date.now()}`,
-    baseLayout({ stickers: [sticker], text_labels: [text] }),
+    `E2E nested groups ${Date.now()}`,
+    baseLayout({ stickers: [sticker], text_labels: [text], text_bubbles: [bubble] }),
   );
   const canvas = await openEditor(page, templateId);
 
-  await canvas.click({ position: canvasPoint(110, 175) });
+  await canvas.click({ position: canvasPoint(120, 180) });
   await page.keyboard.down("Shift");
-  await canvas.click({ position: canvasPoint(390, 185) });
+  await canvas.click({ position: canvasPoint(390, 180) });
+  await canvas.click({ position: canvasPoint(240, 390) });
+  await page.keyboard.up("Shift");
+  await expect(page.getByText("已選取 3 個物件")).toBeVisible();
+  await page.keyboard.press("Control+g");
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await canvas.click({ position: canvasPoint(120, 180) });
+  await page.keyboard.down("Shift");
+  await canvas.click({ position: canvasPoint(390, 180) });
   await page.keyboard.up("Shift");
   await expect(page.getByText("已選取 2 個物件")).toBeVisible();
-  await expect(page.getByRole("button", { name: "建立群組", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "群組並連結文字＋圖片" })).toBeVisible();
+  await page.keyboard.press("Control+g");
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "建立群組", exact: true }).click();
-  await expect(page.getByText("物件群組")).toBeVisible();
-  await saveTemplateLayout(page);
-  let layout = await fetchTemplatePageLayout(page, templateId);
-  expect(layout.groups).toHaveLength(1);
-  expect(layout.groups[0].links).toEqual([]);
-  expect(layout.stickers[0]).toMatchObject(sticker);
-  expect(layout.text_labels[0]).toMatchObject(text);
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"] button')).toHaveCount(3);
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-guide="isolation-breadcrumb"] button')).toHaveCount(2);
 
-  await page.getByRole("button", { name: "進入群組" }).click();
-  await expect(page.getByText("貼圖素材屬性")).toBeVisible();
-  const sizeInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
-  await sizeInputs.nth(2).fill("300");
-  await sizeInputs.nth(2).evaluate(input => input.blur());
-  await page.keyboard.press("ArrowRight");
-  await page.getByRole("button", { name: "離開群組" }).click();
-  await expect(page.getByText("物件群組")).toBeVisible();
-
-  await page.getByRole("button", { name: "解除群組" }).click();
+  await page.keyboard.press("Control+g");
   await expect(page.getByText("已選取 2 個物件")).toBeVisible();
   await page.getByRole("button", { name: "復原" }).click();
-  await page.getByRole("button", { name: /物件群組/ }).click();
-  await saveTemplateLayout(page);
-
-  layout = await fetchTemplatePageLayout(page, templateId);
-  expect(layout.groups).toHaveLength(1);
-  expect(layout.stickers[0].width).toBe(300);
-  expect(layout.stickers[0].height).toBe(100);
-  expect(layout.stickers[0].x).toBe(81);
-  expect(layout.text_labels[0]).toMatchObject(text);
-
-  await page.reload();
-  await expect(page.getByText("模板編輯器")).toBeVisible();
-  await page.getByRole("button", { name: /物件群組/ }).dblclick();
   await expect(page.getByRole("button", { name: "離開群組" })).toBeVisible();
-  await expect(page.getByText("貼圖素材屬性")).toBeVisible();
-  await expect(page.getByText("物件群組", { exact: true })).toBeVisible();
-  const reloadedSizeInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
-  await reloadedSizeInputs.nth(2).focus();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "離開群組" })).toHaveCount(0);
-  await expect(page.getByText("物件群組")).toBeVisible();
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(page.getByRole("button", { name: /物件群組/ })).toBeVisible();
+
+  await saveTemplateLayout(page);
+  const layout = await fetchTemplatePageLayout(page, templateId);
+  expect(layout.group_contract).toBe("nested-world-v2");
+  expect(layout.groups).toHaveLength(2);
+  expect(layout.groups.some(group => group.children.some(child => child.type === "group"))).toBeTruthy();
 });
 
-test("image analysis creates then resets a normal linked text box without changing media", async ({ page }) => {
+test("group corner resize preserves typography through transient commit undo and reload", async ({ page }) => {
   await loginViaApi(page);
   const { templateId, pageId } = await createTemplateWithLayout(
     page,
-    `E2E material text box ${Date.now()}`,
+    `E2E group transformer typography ${Date.now()}`,
     baseLayout(),
   );
-  const uploadResponse = await page.request.post(`/api/templates/${templateId}/stickers`, {
-    multipart: {
-      file: { name: "material.png", mimeType: "image/png", buffer: redPng },
-    },
+  const uploaded = await uploadMaterial(page, templateId, "transformer.png");
+  const sticker = {
+    id: 111,
+    path: uploaded.path,
+    filename: uploaded.filename,
+    asset_revision: uploaded.asset_revision,
+    x: 120,
+    y: 170,
+    width: 210,
+    height: 140,
+    rotation: 0,
+    z_index: 0,
+  };
+  const text = {
+    id: 222,
+    x: 390,
+    y: 330,
+    width: 230,
+    height: 110,
+    rotation: 0,
+    text: "四角縮放保留完整文字",
+    text_role: "static",
+    font_size: 33,
+    font_color: "#123456",
+    font_family: "msjh",
+    text_align: "center",
+    line_height: 1.7,
+    letter_spacing: 4,
+    z_index: 1,
+  };
+  const group = {
+    id: 333,
+    z_index: 0,
+    selection_rotation: 0,
+    children: [{ type: "sticker", id: sticker.id }, { type: "text", id: text.id }],
+  };
+  const putResponse = await page.request.put(`/api/templates/${templateId}/pages/${pageId}/layout`, {
+    data: baseLayout({
+      group_contract: "nested-world-v2",
+      stickers: [sticker],
+      text_labels: [text],
+      groups: [group],
+    }),
   });
-  expect(uploadResponse.ok()).toBeTruthy();
-  const uploaded = await uploadResponse.json();
+  expect(putResponse.ok()).toBeTruthy();
+
+  const canvas = await openEditor(page, templateId);
+  await canvas.click({ position: canvasPoint(200, 220) });
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+
+  const readTransformerScene = () => page.evaluate(({ groupId, textId }) => {
+    const stage = window.Konva?.stages?.find(candidate => candidate.findOne(`#group-${groupId}`));
+    const groupNode = stage?.findOne(`#group-${groupId}`);
+    const textNode = stage?.findOne(`#text-${textId}`)?.findOne(".typography-content");
+    const transformer = stage?.findOne("Transformer");
+    const anchor = transformer?.findOne(".bottom-right");
+    if (!groupNode || !textNode || !anchor?.visible()) return null;
+    const anchorPosition = anchor.getAbsolutePosition();
+    return {
+      group: {
+        scaleX: groupNode.scaleX(),
+        scaleY: groupNode.scaleY(),
+        width: groupNode.width(),
+        height: groupNode.height(),
+      },
+      text: {
+        fontSize: textNode.fontSize(),
+        lineHeight: textNode.lineHeight(),
+        letterSpacing: textNode.letterSpacing(),
+        content: textNode.text(),
+      },
+      anchor: { x: anchorPosition.x, y: anchorPosition.y },
+    };
+  }, { groupId: group.id, textId: text.id });
+
+  await expect.poll(async () => (await readTransformerScene())?.anchor ?? null).not.toBeNull();
+  const before = await readTransformerScene();
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Template canvas has no bounding box");
+  const dragX = 65;
+  const dragY = dragX * before.group.height / before.group.width;
+  await page.mouse.move(canvasBox.x + before.anchor.x, canvasBox.y + before.anchor.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    canvasBox.x + before.anchor.x + dragX,
+    canvasBox.y + before.anchor.y + dragY,
+    { steps: 12 },
+  );
+  await expect.poll(async () => (await readTransformerScene())?.group.scaleX ?? 1).toBeGreaterThan(1.2);
+  const transient = await readTransformerScene();
+  const transientScale = (transient.group.scaleX + transient.group.scaleY) / 2;
+  expect(transient.group.scaleX).toBeCloseTo(transient.group.scaleY, 4);
+  expect(transient.text.fontSize * transientScale).toBeCloseTo(before.text.fontSize, 1);
+  expect(transient.text.letterSpacing * transientScale).toBeCloseTo(before.text.letterSpacing, 1);
+  expect(transient.text.lineHeight).toBe(before.text.lineHeight);
+  expect(transient.text.content).toBe(before.text.content);
+  await page.mouse.up();
+
+  await expect.poll(async () => (await readTransformerScene())?.group.scaleX ?? 0).toBeCloseTo(1, 4);
+  await expect(page.getByRole("button", { name: "復原" })).toBeEnabled();
+  await saveTemplateLayout(page);
+
+  const scaledLayout = await fetchTemplatePageLayout(page, templateId);
+  expect(scaledLayout.groups).toHaveLength(1);
+  expect(scaledLayout.groups[0].children).toEqual(group.children);
+  const scaledSticker = scaledLayout.stickers[0];
+  const scaledText = scaledLayout.text_labels[0];
+  const scale = scaledSticker.width / sticker.width;
+  expect(scale).toBeGreaterThan(1.2);
+  expect(scaledSticker.height / sticker.height).toBeCloseTo(scale, 3);
+  expect(scaledText.width / text.width).toBeCloseTo(scale, 3);
+  expect(scaledText.height / text.height).toBeCloseTo(scale, 3);
+  expect((scaledText.x + scaledText.width / 2) - (scaledSticker.x + scaledSticker.width / 2))
+    .toBeCloseTo(((text.x + text.width / 2) - (sticker.x + sticker.width / 2)) * scale, 2);
+  expect((scaledText.y + scaledText.height / 2) - (scaledSticker.y + scaledSticker.height / 2))
+    .toBeCloseTo(((text.y + text.height / 2) - (sticker.y + sticker.height / 2)) * scale, 2);
+  expect(scaledSticker).toMatchObject({
+    path: sticker.path,
+    filename: sticker.filename,
+    asset_revision: sticker.asset_revision,
+  });
+  expect(scaledText).toMatchObject({
+    text: text.text,
+    font_size: text.font_size,
+    line_height: text.line_height,
+    letter_spacing: text.letter_spacing,
+  });
+
+  await page.getByRole("button", { name: "進入群組" }).click();
+  await canvas.click({
+    position: canvasPoint(
+      scaledText.x + scaledText.width / 2,
+      scaledText.y + scaledText.height / 2,
+    ),
+  });
+  await expect(page.getByText("純文字屬性")).toBeVisible();
+  const positionInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
+  const fontSizeInput = page.locator("label").filter({ hasText: "字級（pt）" }).locator('input[type="number"]');
+  const lineHeightInput = page.locator("label").filter({ hasText: "行距" }).locator('input[type="number"]');
+  const letterSpacingInput = page.locator("label").filter({ hasText: "字間距（px）" }).locator('input[type="number"]');
+  const expectTypography = async () => {
+    await expect(page.locator("textarea").first()).toHaveValue(text.text);
+    await expect(fontSizeInput).toHaveValue(String(text.font_size));
+    await expect(lineHeightInput).toHaveValue(String(text.line_height));
+    await expect(letterSpacingInput).toHaveValue(String(text.letter_spacing));
+  };
+  await expectTypography();
+
+  await page.getByRole("button", { name: "復原" }).click();
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(positionInputs.nth(0)).toHaveValue(String(text.x));
+  await expect(positionInputs.nth(1)).toHaveValue(String(text.y));
+  await expect(positionInputs.nth(2)).toHaveValue(String(text.width));
+  await expect(positionInputs.nth(3)).toHaveValue(String(text.height));
+  await expectTypography();
+
+  await page.getByRole("button", { name: "重做" }).click();
+  await expect(page.locator('[data-guide="isolation-breadcrumb"]')).toContainText("群組 1");
+  await expect(positionInputs.nth(2)).toHaveValue(String(scaledText.width));
+  await expect(positionInputs.nth(3)).toHaveValue(String(scaledText.height));
+  await expectTypography();
+  await saveTemplateLayout(page);
+
+  await page.reload();
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+  await expect(canvas).toBeVisible();
+  const reloadedLayout = await fetchTemplatePageLayout(page, templateId);
+  expect(reloadedLayout.groups).toEqual(scaledLayout.groups);
+  expect(reloadedLayout.stickers[0]).toMatchObject(scaledSticker);
+  expect(reloadedLayout.text_labels[0]).toMatchObject(scaledText);
+  await canvas.click({
+    position: canvasPoint(
+      scaledSticker.x + scaledSticker.width / 2,
+      scaledSticker.y + scaledSticker.height / 2,
+    ),
+  });
+  await page.getByRole("button", { name: "進入群組" }).click();
+  await canvas.click({
+    position: canvasPoint(
+      scaledText.x + scaledText.width / 2,
+      scaledText.y + scaledText.height / 2,
+    ),
+  });
+  await expect(page.getByText("純文字屬性")).toBeVisible();
+  await expectTypography();
+});
+
+test("marquee selects any direct node type and a group without creating history", async ({ page }) => {
+  await loginViaApi(page);
+  const layout = baseLayout({
+    photo_slots: [{
+      id: 11,
+      x: 90,
+      y: 100,
+      width: 140,
+      height: 110,
+      rotation: 12,
+      border: false,
+      z_index: 0,
+    }],
+    text_bubbles: [{
+      id: 22,
+      x: 320,
+      y: 110,
+      width: 150,
+      height: 90,
+      rotation: 0,
+      text: "框選氣泡",
+      font_size: 18,
+      font_color: "#333333",
+      font_family: "msjh",
+      fill: "#FDED6E",
+      shape: "ellipse",
+      z_index: 1,
+    }],
+    text_labels: [{
+      id: 33,
+      x: 90,
+      y: 400,
+      width: 160,
+      height: 70,
+      rotation: -8,
+      text: "框選文字",
+      text_role: "static",
+      font_size: 22,
+      font_color: "#333333",
+      text_align: "center",
+      line_height: 1.4,
+      z_index: 2,
+    }],
+    stickers: [{
+      id: 44,
+      path: "templates/tmpl0/stickers/missing.png",
+      filename: "missing.png",
+      x: 340,
+      y: 390,
+      width: 150,
+      height: 100,
+      rotation: 7,
+      z_index: 3,
+    }],
+  });
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E marquee ${Date.now()}`,
+    layout,
+  );
+  const canvas = await openEditor(page, templateId);
+  const undoButton = page.getByRole("button", { name: "復原" });
+  await expect(undoButton).toBeDisabled();
+
+  await dragCanvas(page, canvas, { x: 45, y: 60 }, { x: 510, y: 260 });
+  await expect(page.getByText("已選取 2 個物件")).toBeVisible();
+  await expect(undoButton).toBeDisabled();
+
+  await dragCanvas(page, canvas, { x: 45, y: 350 }, { x: 540, y: 540 }, { additive: true });
+  await expect(page.getByText("已選取 4 個物件")).toBeVisible();
+  await expect(undoButton).toBeDisabled();
+
+  await page.keyboard.press("Control+g");
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "圖層清單" })).toBeVisible();
+  await dragCanvas(page, canvas, { x: 45, y: 70 }, { x: 105, y: 135 });
+  await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
+});
+
+test("sticker analysis creates and linked text resets without changing topology or typography", async ({ page }) => {
+  await loginViaApi(page);
+  const { templateId, pageId } = await createTemplateWithLayout(
+    page,
+    `E2E material create reset ${Date.now()}`,
+    baseLayout(),
+  );
+  const uploaded = await uploadMaterial(page, templateId);
   const originalSticker = {
     id: 301,
     path: uploaded.path,
@@ -149,108 +440,88 @@ test("image analysis creates then resets a normal linked text box without changi
     rotation: 12,
     z_index: 0,
   };
-  const existingText = {
+  const bubble = {
     id: 302,
     x: 500,
-    y: 420,
-    width: 180,
-    height: 60,
+    y: 520,
+    width: 160,
+    height: 90,
     rotation: 0,
-    text: "既有群組文字",
-    text_role: "static",
-    font_size: 20,
+    text: "同層氣泡",
+    font_size: 18,
     font_color: "#333333",
-    text_align: "center",
-    line_height: 1.4,
+    font_family: "msjh",
+    fill: "#FDED6E",
+    shape: "ellipse",
     z_index: 1,
   };
-  const putResponse = await page.request.put(
-    `/api/templates/${templateId}/pages/${pageId}/layout`,
-    {
-      data: baseLayout({
-        group_contract: "flat-world-v1",
-        stickers: [originalSticker],
-        text_labels: [existingText],
-        groups: [{
-          id: 401,
-          z_index: 0,
-          selection_rotation: 37,
-          children: [{ type: "sticker", id: originalSticker.id }, { type: "text", id: existingText.id }],
-          links: [],
-        }],
-      }),
-    },
-  );
+  const initialLayout = baseLayout({
+    group_contract: "nested-world-v2",
+    stickers: [originalSticker],
+    text_bubbles: [bubble],
+    groups: [{
+      id: 401,
+      z_index: 0,
+      selection_rotation: 37,
+      children: [{ type: "sticker", id: originalSticker.id }, { type: "bubble", id: bubble.id }],
+    }],
+  });
+  const putResponse = await page.request.put(`/api/templates/${templateId}/pages/${pageId}/layout`, {
+    data: initialLayout,
+  });
   expect(putResponse.ok()).toBeTruthy();
 
   const canvas = await openEditor(page, templateId);
-  await canvas.click({ position: canvasPoint(200, 260) });
-  await expect(page.getByText("物件群組")).toBeVisible();
+  await canvas.click({ position: canvasPoint(210, 270) });
+  await page.getByRole("button", { name: "進入群組" }).click();
+  await canvas.click({ position: canvasPoint(210, 270) });
   await page.getByRole("button", { name: "分析圖片並建立文字框" }).click();
   await expect(page.getByText("已建立文字框")).toBeVisible();
   await saveTemplateLayout(page);
 
-  let layout = await fetchTemplatePageLayout(page, templateId);
-  expect(layout.groups).toHaveLength(1);
-  expect(layout.groups[0].links).toHaveLength(1);
-  expect(layout.groups[0].selection_rotation).toBe(37);
-  expect(layout.stickers[0]).toMatchObject(originalSticker);
-  const { z_index: savedExistingZ, ...savedExistingText } = layout.text_labels.find(label => label.id === existingText.id);
-  const { z_index: originalExistingZ, ...originalExistingText } = existingText;
-  expect(savedExistingZ).toBeGreaterThanOrEqual(0);
-  expect(originalExistingZ).toBe(1);
-  expect(savedExistingText).toMatchObject(originalExistingText);
-  expect(layout).not.toHaveProperty("normalized_box");
-  const materialLink = layout.groups[0].links[0];
-  const initialText = { ...layout.text_labels.find(label => String(label.id) === String(materialLink.text_id)) };
+  let saved = await fetchTemplatePageLayout(page, templateId);
+  expect(saved.groups).toHaveLength(1);
+  expect(saved.groups[0]).toMatchObject({ id: 401, selection_rotation: 37 });
+  expect(saved.groups[0]).not.toHaveProperty("links");
+  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "bubble"]);
+  expect(saved.material_text_links).toHaveLength(1);
+  expect(saved.stickers[0]).toMatchObject(originalSticker);
+  const link = saved.material_text_links[0];
+  const createdText = { ...saved.text_labels.find(item => String(item.id) === String(link.text_id)) };
+  const groupsAfterCreate = JSON.parse(JSON.stringify(saved.groups));
 
-  await page.getByRole("button", { name: "進入群組" }).click();
-  const textCenter = canvasPoint(
-    initialText.x + initialText.width / 2,
-    initialText.y + initialText.height / 2,
-  );
-  await canvas.click({ position: textCenter });
-  await expect(page.getByText("純文字屬性")).toBeVisible();
   await page.locator("textarea").first().fill("保留這段文字");
   const fontSizeNumber = page.locator("label").filter({ hasText: "字級（pt）" }).locator('input[type="number"]');
   await fontSizeNumber.fill("36");
   const positionInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
-  await positionInputs.nth(0).fill(String(initialText.x + 40));
-  await page.getByRole("button", { name: "離開群組" }).click();
-
+  await positionInputs.nth(0).fill(String(createdText.x + 40));
   await page.getByRole("button", { name: "重新分析並重設文字框" }).click();
   await expect(page.getByText("已重設文字框")).toBeVisible();
   await saveTemplateLayout(page);
-  layout = await fetchTemplatePageLayout(page, templateId);
-  const resetText = layout.text_labels.find(label => String(label.id) === String(materialLink.text_id));
+
+  saved = await fetchTemplatePageLayout(page, templateId);
+  const resetText = saved.text_labels.find(item => String(item.id) === String(link.text_id));
   expect(resetText.text).toBe("保留這段文字");
   expect(resetText.font_size).toBe(36);
   for (const field of ["x", "y", "width", "height", "rotation"]) {
-    expect(resetText[field]).toBe(initialText[field]);
+    expect(resetText[field]).toBe(createdText[field]);
   }
-  expect(layout.stickers[0]).toMatchObject(originalSticker);
-  expect(layout.groups[0].links).toEqual([{
-    kind: "material-text-v1",
-    material_id: originalSticker.id,
-    text_id: resetText.id,
-  }]);
-  expect(layout.groups[0].selection_rotation).toBe(37);
+  expect(saved.stickers[0]).toMatchObject(originalSticker);
+  expect(saved.groups).toEqual(groupsAfterCreate);
+  expect(saved.groups[0].children.map(child => child.type)).toEqual(["sticker", "text", "bubble"]);
+  expect(saved.material_text_links).toEqual([link]);
 });
 
-test("pending image analysis is discarded when the editor changes page", async ({ page }) => {
+test("pending root sticker analysis is discarded on page change without groups or media mutation", async ({ page }) => {
   await loginViaApi(page);
   const { templateId, pageId: firstPageId } = await createTemplateWithLayout(
     page,
     `E2E stale material analysis ${Date.now()}`,
     baseLayout(),
   );
-  const uploadResponse = await page.request.post(`/api/templates/${templateId}/stickers`, {
-    multipart: { file: { name: "shared.png", mimeType: "image/png", buffer: redPng } },
-  });
-  expect(uploadResponse.ok()).toBeTruthy();
-  const uploaded = await uploadResponse.json();
+  const uploaded = await uploadMaterial(page, templateId, "shared.png");
   const sharedSticker = {
-    id: 501,
+    id: 451,
     path: uploaded.path,
     filename: uploaded.filename,
     asset_revision: uploaded.asset_revision,
@@ -261,19 +532,23 @@ test("pending image analysis is discarded when the editor changes page", async (
     rotation: 0,
     z_index: 0,
   };
-  for (const targetPageId of [firstPageId]) {
-    const response = await page.request.put(
-      `/api/templates/${templateId}/pages/${targetPageId}/layout`,
-      { data: baseLayout({ stickers: [sharedSticker] }) },
-    );
-    expect(response.ok()).toBeTruthy();
-  }
+  const initialLayout = baseLayout({
+    group_contract: "nested-world-v2",
+    stickers: [sharedSticker],
+    groups: [],
+  });
+  const firstLayoutResponse = await page.request.put(
+    `/api/templates/${templateId}/pages/${firstPageId}/layout`,
+    { data: initialLayout },
+  );
+  expect(firstLayoutResponse.ok()).toBeTruthy();
+
   const secondPageResponse = await page.request.post(`/api/templates/${templateId}/pages`);
   expect(secondPageResponse.ok()).toBeTruthy();
   const secondPage = await secondPageResponse.json();
   const secondLayoutResponse = await page.request.put(
     `/api/templates/${templateId}/pages/${secondPage.id}/layout`,
-    { data: baseLayout({ stickers: [sharedSticker] }) },
+    { data: initialLayout },
   );
   expect(secondLayoutResponse.ok()).toBeTruthy();
 
@@ -288,18 +563,187 @@ test("pending image analysis is discarded when the editor changes page", async (
     try {
       await route.fulfill({ response });
     } catch {
-      // Page switching aborts the pending browser request; that is the expected path.
+      // Switching pages aborts the pending browser request; this is the expected path.
     }
   });
 
   const canvas = await openEditor(page, templateId);
+  const undoButton = page.getByRole("button", { name: "復原" });
   await canvas.click({ position: canvasPoint(200, 260) });
-  await page.getByRole("button", { name: "分析圖片並建立／重設文字框" }).click();
+  await expect(page.getByText("貼圖素材屬性")).toBeVisible();
+  await page.getByRole("button", { name: "分析圖片並建立文字框" }).click();
   await intercepted;
+
   await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
   releaseResponse();
   await expect(page.getByRole("button", { name: "第 2 頁", exact: true })).toHaveClass(/bg-indigo-600/);
   await canvas.click({ position: canvasPoint(200, 260) });
   await expect(page.getByText("貼圖素材屬性")).toBeVisible();
-  await expect(page.getByText("文字＋圖片群組")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "分析圖片並建立文字框" })).toBeEnabled();
+  await expect(undoButton).toBeDisabled();
+  await expect(page.getByText("已建立文字框")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "第 1 頁", exact: true }).click();
+  await expect(page.getByRole("button", { name: "第 1 頁", exact: true })).toHaveClass(/bg-indigo-600/);
+  await canvas.click({ position: canvasPoint(200, 260) });
+  await expect(page.getByText("貼圖素材屬性")).toBeVisible();
+  await expect(page.getByRole("button", { name: "分析圖片並建立文字框" })).toBeEnabled();
+  await expect(undoButton).toBeDisabled();
+
+  const detailResponse = await page.request.get(`/api/templates/${templateId}`);
+  expect(detailResponse.ok()).toBeTruthy();
+  const detail = await detailResponse.json();
+  for (const templatePage of detail.pages) {
+    expect(templatePage.layout.groups ?? []).toEqual([]);
+    expect(templatePage.layout.material_text_links ?? []).toEqual([]);
+    expect(templatePage.layout.text_labels ?? []).toEqual([]);
+    expect(templatePage.layout.stickers).toEqual([sharedSticker]);
+  }
+});
+
+test("exact sticker and text shortcut links and fits without grouping or reordering", async ({ page }) => {
+  await loginViaApi(page);
+  const { templateId, pageId } = await createTemplateWithLayout(
+    page,
+    `E2E material pair ${Date.now()}`,
+    baseLayout(),
+  );
+  const uploaded = await uploadMaterial(page, templateId, "pair.png");
+  const sticker = {
+    id: 501,
+    path: uploaded.path,
+    filename: uploaded.filename,
+    asset_revision: uploaded.asset_revision,
+    x: 120,
+    y: 190,
+    width: 300,
+    height: 150,
+    rotation: 0,
+    z_index: 0,
+  };
+  const text = {
+    id: 502,
+    x: 480,
+    y: 210,
+    width: 190,
+    height: 70,
+    rotation: 0,
+    text: "既有文字",
+    text_role: "static",
+    font_size: 26,
+    font_color: "#123456",
+    text_align: "center",
+    line_height: 1.4,
+    z_index: 1,
+  };
+  const bubble = {
+    id: 503,
+    x: 300,
+    y: 500,
+    width: 180,
+    height: 100,
+    rotation: 0,
+    text: "第三個 direct node",
+    font_size: 18,
+    font_color: "#333333",
+    font_family: "msjh",
+    fill: "#FDED6E",
+    shape: "ellipse",
+    z_index: 2,
+  };
+  const group = {
+    id: 601,
+    z_index: 0,
+    selection_rotation: 0,
+    children: [
+      { type: "sticker", id: sticker.id },
+      { type: "text", id: text.id },
+      { type: "bubble", id: bubble.id },
+    ],
+  };
+  const response = await page.request.put(`/api/templates/${templateId}/pages/${pageId}/layout`, {
+    data: baseLayout({
+      group_contract: "nested-world-v2",
+      stickers: [sticker],
+      text_labels: [text],
+      text_bubbles: [bubble],
+      groups: [group],
+    }),
+  });
+  expect(response.ok()).toBeTruthy();
+
+  const canvas = await openEditor(page, templateId);
+  await canvas.click({ position: canvasPoint(180, 240) });
+  await page.getByRole("button", { name: "進入群組" }).click();
+  await canvas.click({ position: canvasPoint(180, 240) });
+  await page.keyboard.down("Shift");
+  await canvas.click({ position: canvasPoint(530, 240) });
+  await page.keyboard.up("Shift");
+  await expect(page.getByRole("button", { name: "建立群組", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "符合素材並連結文字框" }).click();
+  await expect(page.getByText("已重設文字框")).toBeVisible();
+  await saveTemplateLayout(page);
+
+  const saved = await fetchTemplatePageLayout(page, templateId);
+  expect(saved.groups).toHaveLength(1);
+  expect(saved.groups[0].children).toEqual(group.children);
+  expect(saved.material_text_links).toEqual([{
+    kind: "material-text-v1",
+    material_id: sticker.id,
+    text_id: text.id,
+  }]);
+  expect(saved.stickers[0]).toMatchObject(sticker);
+  const fittedText = saved.text_labels[0];
+  expect(fittedText.text).toBe(text.text);
+  expect(fittedText.font_size).toBe(text.font_size);
+  expect(fittedText.font_color).toBe(text.font_color);
+});
+
+test("invalid layout-level material links show one-click repair", async ({ page }) => {
+  await loginViaApi(page);
+  const sticker = {
+    id: 701,
+    path: "templates/tmpl0/stickers/missing.png",
+    filename: "missing.png",
+    x: 120,
+    y: 160,
+    width: 180,
+    height: 100,
+    rotation: 0,
+    z_index: 0,
+  };
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E invalid material link ${Date.now()}`,
+    baseLayout({ stickers: [sticker] }),
+  );
+  const templateRoute = `**/api/templates/${templateId}`;
+  await page.route(templateRoute, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const detail = await response.json();
+    detail.pages[0].layout = {
+      ...detail.pages[0].layout,
+      group_contract: "nested-world-v2",
+      material_text_links: [{
+        kind: "material-text-v1",
+        material_id: 701,
+        text_id: 999999,
+      }],
+    };
+    await route.fulfill({ response, json: detail });
+  });
+  await openEditor(page, templateId);
+  await expect(page.getByRole("button", { name: "清除失效素材連結" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "儲存" })).toBeDisabled();
+  await page.getByRole("button", { name: "清除失效素材連結" }).click();
+  await expect(page.getByRole("button", { name: "清除失效素材連結" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "復原" })).toBeEnabled();
+  await page.unroute(templateRoute);
+  await saveTemplateLayout(page);
+  const saved = await fetchTemplatePageLayout(page, templateId);
+  expect(saved).not.toHaveProperty("material_text_links");
 });

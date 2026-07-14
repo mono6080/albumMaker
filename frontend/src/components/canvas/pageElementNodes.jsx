@@ -65,6 +65,8 @@ export function makeGroupProps(type, data, {
   setSelectedElement,
   onSelectElement,
   onActivateElement,
+  onGestureStart,
+  onGestureEnd,
 }) {
   const displayX = toDisplayCoord(data.x);
   const displayY = toDisplayCoord(data.y);
@@ -84,30 +86,52 @@ export function makeGroupProps(type, data, {
     scaleY: 1,
     draggable: isSelectMode,
     listening: isSelectMode,
+    onDragStart: () => onGestureStart?.("element-drag"),
     onDragEnd: (e) => {
-      const node = e.target;
-      updateElement(type, data.id, {
-        x: clampValue(toRealCoord(node.x() - node.offsetX()), 0, CANVAS_REAL_WIDTH - data.width),
-        y: clampValue(toRealCoord(node.y() - node.offsetY()), 0, CANVAS_REAL_HEIGHT - data.height),
-      });
+      try {
+        const node = e.target;
+        updateElement(type, data.id, {
+          x: clampValue(toRealCoord(node.x() - node.offsetX()), 0, CANVAS_REAL_WIDTH - data.width),
+          y: clampValue(toRealCoord(node.y() - node.offsetY()), 0, CANVAS_REAL_HEIGHT - data.height),
+        });
+      } finally {
+        onGestureEnd?.();
+      }
     },
+    onTransformStart: () => onGestureStart?.("element-transform"),
     onTransformEnd: (e) => {
-      const node = e.target;
-      const newDisplayW = Math.max(toDisplayCoord(60), node.width() * Math.abs(node.scaleX()));
-      const newDisplayH = Math.max(toDisplayCoord(40), node.height() * Math.abs(node.scaleY()));
-      // 正規化 scale 並更新 offset，保持中心旋轉軸正確
-      node.scaleX(1); node.scaleY(1);
-      node.offsetX(newDisplayW / 2); node.offsetY(newDisplayH / 2);
-      node.width(newDisplayW); node.height(newDisplayH);
-      updateElement(type, data.id, {
-        x: toRealCoord(node.x() - node.offsetX()),
-        y: toRealCoord(node.y() - node.offsetY()),
-        width: Math.max(60, toRealCoord(newDisplayW)),
-        height: Math.max(40, toRealCoord(newDisplayH)),
-        rotation: node.rotation(),
-      });
+      try {
+        const node = e.target;
+        const newDisplayW = Math.max(toDisplayCoord(60), node.width() * Math.abs(node.scaleX()));
+        const newDisplayH = Math.max(toDisplayCoord(40), node.height() * Math.abs(node.scaleY()));
+        // 正規化 scale 並更新 offset，保持中心旋轉軸正確
+        node.scaleX(1); node.scaleY(1);
+        node.offsetX(newDisplayW / 2); node.offsetY(newDisplayH / 2);
+        node.width(newDisplayW); node.height(newDisplayH);
+        updateElement(type, data.id, {
+          x: toRealCoord(node.x() - node.offsetX()),
+          y: toRealCoord(node.y() - node.offsetY()),
+          width: Math.max(60, toRealCoord(newDisplayW)),
+          height: Math.max(40, toRealCoord(newDisplayH)),
+          rotation: node.rotation(),
+        });
+      } finally {
+        onGestureEnd?.();
+      }
     },
     onClick: (e) => {
+      e.cancelBubble = true;
+      const element = { type, id: data.id };
+      if (onSelectElement) {
+        onSelectElement(element, {
+          additive: !!e.evt?.shiftKey,
+          sourceEvent: e.evt,
+        });
+      } else {
+        setSelectedElement?.(element);
+      }
+    },
+    onTap: (e) => {
       e.cancelBubble = true;
       const element = { type, id: data.id };
       if (onSelectElement) {
@@ -130,7 +154,16 @@ export function makeGroupProps(type, data, {
   };
 }
 
-export function makePhotoControlProps(data, { isSelectMode, photoSlotDimensionMode, updateElement, setSelectedElement }) {
+export function makePhotoControlProps(data, {
+  isSelectMode,
+  photoSlotDimensionMode,
+  updateElement,
+  setSelectedElement,
+  onSelectElement,
+  onActivateElement,
+  onGestureStart,
+  onGestureEnd,
+}) {
   const frameRect = getPhotoFrameRect(data, { dimensionMode: photoSlotDimensionMode });
   const contentRect = getPhotoContentRect(data, { dimensionMode: photoSlotDimensionMode });
   const insets = getPhotoFrameInsets(data);
@@ -150,76 +183,115 @@ export function makePhotoControlProps(data, { isSelectMode, photoSlotDimensionMo
     scaleY: 1,
     draggable: isSelectMode,
     listening: isSelectMode,
+    onDragStart: () => onGestureStart?.("photo-drag"),
     onDragEnd: (e) => {
-      const node = e.target;
-      const nextSlot = applyPhotoEditorUpdates(data, {
-        x: toRealCoord(node.x() - node.offsetX()),
-        y: toRealCoord(node.y() - node.offsetY()),
-      }, photoSlotDimensionMode);
-      updateElement("photo", data.id, {
-        x: nextSlot.x,
-        y: nextSlot.y,
-        width: nextSlot.width,
-        height: nextSlot.height,
-      });
+      try {
+        const node = e.target;
+        const nextSlot = applyPhotoEditorUpdates(data, {
+          x: toRealCoord(node.x() - node.offsetX()),
+          y: toRealCoord(node.y() - node.offsetY()),
+        }, photoSlotDimensionMode);
+        updateElement("photo", data.id, {
+          x: nextSlot.x,
+          y: nextSlot.y,
+          width: nextSlot.width,
+          height: nextSlot.height,
+        });
+      } finally {
+        onGestureEnd?.();
+      }
     },
+    onTransformStart: () => onGestureStart?.("photo-transform"),
     onTransformEnd: (e) => {
-      const node = e.target;
-      const scaleX = node.scaleX();
-      const scaleY = node.scaleY();
-      // 觸及最小尺寸時等比放大兩邊，維持照片格長寬比例不變
-      let newDisplayW = node.width() * Math.abs(scaleX);
-      let newDisplayH = node.height() * Math.abs(scaleY);
-      const minRatioScale = Math.max(
-        toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH) / newDisplayW,
-        toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT) / newDisplayH,
-        1,
-      );
-      newDisplayW *= minRatioScale;
-      newDisplayH *= minRatioScale;
-      // 標準比例照片格縮放後 snap 回整數精確的 3:4 / 4:3，避免捨入誤差累積
-      let nextRealW = toRealCoord(newDisplayW);
-      let nextRealH = toRealCoord(newDisplayH);
-      const snapped = snapPhotoSlotStandardRatio(data.width, data.height, "width", nextRealW);
-      if (snapped) ({ width: nextRealW, height: nextRealH } = snapped);
-      const nextSlot = applyPhotoEditorUpdates(data, {
-        x: toRealCoord(node.x() - node.offsetX() * scaleX),
-        y: toRealCoord(node.y() - node.offsetY() * scaleY),
-        width: nextRealW,
-        height: nextRealH,
-        rotation: node.rotation(),
-      }, photoSlotDimensionMode);
+      try {
+        const node = e.target;
+        const scaleX = node.scaleX();
+        const scaleY = node.scaleY();
+        // 觸及最小尺寸時等比放大兩邊，維持照片格長寬比例不變
+        let newDisplayW = node.width() * Math.abs(scaleX);
+        let newDisplayH = node.height() * Math.abs(scaleY);
+        const minRatioScale = Math.max(
+          toDisplayCoord(PHOTO_CONTENT_MIN_WIDTH) / newDisplayW,
+          toDisplayCoord(PHOTO_CONTENT_MIN_HEIGHT) / newDisplayH,
+          1,
+        );
+        newDisplayW *= minRatioScale;
+        newDisplayH *= minRatioScale;
+        // 標準比例照片格縮放後 snap 回整數精確的 3:4 / 4:3，避免捨入誤差累積
+        let nextRealW = toRealCoord(newDisplayW);
+        let nextRealH = toRealCoord(newDisplayH);
+        const snapped = snapPhotoSlotStandardRatio(data.width, data.height, "width", nextRealW);
+        if (snapped) ({ width: nextRealW, height: nextRealH } = snapped);
+        const nextSlot = applyPhotoEditorUpdates(data, {
+          x: toRealCoord(node.x() - node.offsetX() * scaleX),
+          y: toRealCoord(node.y() - node.offsetY() * scaleY),
+          width: nextRealW,
+          height: nextRealH,
+          rotation: node.rotation(),
+        }, photoSlotDimensionMode);
 
-      node.scaleX(1); node.scaleY(1);
-      node.width(newDisplayW); node.height(newDisplayH);
-      updateElement("photo", data.id, {
-        x: nextSlot.x,
-        y: nextSlot.y,
-        width: nextSlot.width,
-        height: nextSlot.height,
-        rotation: nextSlot.rotation,
-      });
+        node.scaleX(1); node.scaleY(1);
+        node.width(newDisplayW); node.height(newDisplayH);
+        updateElement("photo", data.id, {
+          x: nextSlot.x,
+          y: nextSlot.y,
+          width: nextSlot.width,
+          height: nextSlot.height,
+          rotation: nextSlot.rotation,
+        });
+      } finally {
+        onGestureEnd?.();
+      }
     },
     onClick: (e) => {
       e.cancelBubble = true;
-      setSelectedElement({ type: "photo", id: data.id });
+      const element = { type: "photo", id: data.id };
+      if (onSelectElement) {
+        onSelectElement(element, {
+          additive: !!e.evt?.shiftKey,
+          sourceEvent: e.evt,
+        });
+      } else {
+        setSelectedElement?.(element);
+      }
+    },
+    onTap: (e) => {
+      e.cancelBubble = true;
+      const element = { type: "photo", id: data.id };
+      if (onSelectElement) {
+        onSelectElement(element, {
+          additive: !!e.evt?.shiftKey,
+          sourceEvent: e.evt,
+        });
+      } else {
+        setSelectedElement?.(element);
+      }
+    },
+    onDblClick: (e) => {
+      e.cancelBubble = true;
+      onActivateElement?.({ type: "photo", id: data.id }, { sourceEvent: e.evt });
+    },
+    onDblTap: (e) => {
+      e.cancelBubble = true;
+      onActivateElement?.({ type: "photo", id: data.id }, { sourceEvent: e.evt });
     },
   };
 }
 
 // ── 各元素節點渲染 ──────────────────────────────────────────────────────────
 
-export function getTextShadowProps(data) {
+export function getTextShadowProps(data, typographyScale = 1) {
   const shadowEnabled = !!(data.text_shadow_enabled ?? false);
   if (!shadowEnabled) return {};
+  const safeScale = Number.isFinite(typographyScale) && typographyScale > 0 ? typographyScale : 1;
 
   return {
     shadowEnabled: true,
     shadowColor: data.text_shadow_color ?? "#000000",
     shadowOpacity: (data.text_shadow_opacity ?? 120) / 255,
-    shadowOffsetX: toDisplayCoord(data.text_shadow_offset_x ?? 3),
-    shadowOffsetY: toDisplayCoord(data.text_shadow_offset_y ?? 3),
-    shadowBlur: toDisplayCoord(data.text_shadow_blur ?? 4) * 1.74,
+    shadowOffsetX: toDisplayCoord(data.text_shadow_offset_x ?? 3) / safeScale,
+    shadowOffsetY: toDisplayCoord(data.text_shadow_offset_y ?? 3) / safeScale,
+    shadowBlur: toDisplayCoord(data.text_shadow_blur ?? 4) * 1.74 / safeScale,
   };
 }
 
@@ -300,16 +372,25 @@ export function renderPhotoSlotNode(data, elemIndex, isSelected, controlProps, {
   );
 }
 
-export function renderBubbleNode(data, isSelected, groupProps) {
+export function renderBubbleNode(
+  data,
+  isSelected,
+  groupProps,
+  { suppressSelectedStroke = false, typographyScale = 1 } = {},
+) {
   const displayW = toDisplayCoord(data.width);
   const displayH = toDisplayCoord(data.height);
+  const safeTypographyScale = Number.isFinite(typographyScale) && typographyScale > 0
+    ? typographyScale
+    : 1;
   const displayBorderRadius = data.border_radius != null
-    ? toDisplayCoord(data.border_radius)
+    ? toDisplayCoord(data.border_radius) / safeTypographyScale
     : Math.round(Math.min(displayW, displayH) / 5);
   const displayBorderWidth = (data.border_width ?? 0) > 0
-    ? toDisplayCoord(data.border_width)
+    ? toDisplayCoord(data.border_width) / safeTypographyScale
     : 0;
-  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20));
+  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 20)) / safeTypographyScale;
+  const textInset = 4 / safeTypographyScale;
   return (
     <Group key={`bubble-${data.id}`} {...groupProps}>
       <BubbleKonvaShape
@@ -321,8 +402,10 @@ export function renderBubbleNode(data, isSelected, groupProps) {
         borderRadius={displayBorderRadius}
       />
       <KonvaText
-        x={4} y={4}
-        width={displayW - 8} height={displayH - 8}
+        name="typography-content"
+        x={textInset} y={textInset}
+        width={Math.max(1, displayW - textInset * 2)}
+        height={Math.max(1, displayH - textInset * 2)}
         text={(data.text ?? "").substring(0, 30)}
         fontSize={fontSize}
         fill={data.font_color ?? "#333333"}
@@ -331,10 +414,12 @@ export function renderBubbleNode(data, isSelected, groupProps) {
         align="center"
         verticalAlign="middle"
         wrap="word"
-        {...getTextShadowProps(data)}
+        letterSpacing={toDisplayCoord(data.letter_spacing ?? 0) / safeTypographyScale}
+        lineHeight={data.line_height ?? 1.4}
+        {...getTextShadowProps(data, safeTypographyScale)}
         listening={false}
       />
-      {isSelected && (
+      {isSelected && !suppressSelectedStroke && (
         <Rect
           width={displayW} height={displayH}
           fill="transparent"
@@ -352,11 +437,15 @@ export function renderTextLabelNode(
   data,
   isSelected,
   groupProps,
-  { suppressSelectedStroke = false } = {},
+  { suppressSelectedStroke = false, typographyScale = 1 } = {},
 ) {
   const displayW = toDisplayCoord(data.width);
   const displayH = toDisplayCoord(data.height);
-  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24));
+  const safeTypographyScale = Number.isFinite(typographyScale) && typographyScale > 0
+    ? typographyScale
+    : 1;
+  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24)) / safeTypographyScale;
+  const textInset = 4 / safeTypographyScale;
   const isFillable = isFillableTextLabel(data);
   return (
     <Group key={`text-${data.id}`} {...groupProps}>
@@ -371,8 +460,9 @@ export function renderTextLabelNode(
         listening={false}
       />
       <KonvaText
-        x={4} y={0}
-        width={displayW - 8} height={displayH}
+        name="typography-content"
+        x={textInset} y={0}
+        width={Math.max(1, displayW - textInset * 2)} height={displayH}
         text={(data.text ?? "").substring(0, 60)}
         fontSize={fontSize}
         fill={data.font_color ?? "#333333"}
@@ -382,8 +472,8 @@ export function renderTextLabelNode(
         verticalAlign="middle"
         wrap="word"
         lineHeight={data.line_height ?? 1.4}
-        letterSpacing={toDisplayCoord(data.letter_spacing ?? 0)}
-        {...getTextShadowProps(data)}
+        letterSpacing={toDisplayCoord(data.letter_spacing ?? 0) / safeTypographyScale}
+        {...getTextShadowProps(data, safeTypographyScale)}
         listening={false}
       />
       {/* 透明點擊感應區 */}

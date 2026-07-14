@@ -143,25 +143,57 @@ function TextShadowControls({ elementData, onPropertyChange }) {
   );
 }
 
+function IsolationBreadcrumb({ trail, onNavigate, tailLabel }) {
+  if (!trail?.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700" data-guide="isolation-breadcrumb">
+      <button
+        type="button"
+        onClick={() => onNavigate?.(-1)}
+        aria-label="回到根圖層"
+        className="font-medium hover:underline"
+      >
+        圖層
+      </button>
+      {trail.map((trailItem, index) => (
+        <span key={`property-trail-${trailItem.id}`} className="inline-flex items-center gap-1">
+          <span aria-hidden="true">›</span>
+          <button
+            type="button"
+            onClick={() => onNavigate?.(index)}
+            aria-current={index === trail.length - 1 ? "location" : undefined}
+            className="font-medium hover:underline"
+          >
+            {trailItem.label || `群組 ${index + 1}`}
+          </button>
+        </span>
+      ))}
+      {tailLabel && <span aria-hidden="true">›</span>}
+      {tailLabel && <span>{tailLabel}</span>}
+    </div>
+  );
+}
+
 function GroupPropertyPanel({
   group,
   bounds,
-  children,
-  isAnalyzingMaterial,
+  isolationTrail,
+  onNavigateIsolation,
   onLayerChange,
   onEnterGroup,
   onUngroup,
-  onAnalyzeMaterial,
 }) {
-  const stickerCount = children.filter(child => child.type === "sticker").length;
-  const hasMaterialTextLink = (group?.links || []).some(link => link.kind === "material-text-v1");
-  const canAnalyzeMaterial = hasMaterialTextLink || stickerCount === 1;
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
+      <IsolationBreadcrumb
+        trail={isolationTrail}
+        onNavigate={onNavigateIsolation}
+        tailLabel="子群組"
+      />
       <div>
-        <h3 className="font-semibold">▣ {hasMaterialTextLink ? "文字＋圖片群組" : "物件群組"}</h3>
+        <h3 className="font-semibold">▣ 物件群組</h3>
         <p className="mt-1 text-xs leading-relaxed text-gray-500">
-          外層操作整組；雙擊畫布或進入群組後，可分別編輯文字與圖片。
+          外層操作整組；雙擊畫布或進入群組後，可分別編輯每個子物件。
         </p>
       </div>
 
@@ -201,19 +233,6 @@ function GroupPropertyPanel({
         進入群組
       </button>
 
-      {canAnalyzeMaterial && (
-        <button
-          type="button"
-          disabled={isAnalyzingMaterial}
-          onClick={() => onAnalyzeMaterial?.(group)}
-          className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isAnalyzingMaterial
-            ? "分析圖片中…"
-            : hasMaterialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
-        </button>
-      )}
-
       <button
         type="button"
         onClick={() => onUngroup?.(group?.id)}
@@ -232,10 +251,12 @@ export default function PropertyPanel({
   onLayerChange,
   selectionScope = "root",
   selectedGroup = null,
-  groupChildren = [],
+  isolationTrail = [],
+  materialTextLink = null,
+  materialActionsDisabled = false,
   isAnalyzingMaterial = false,
   onEnterGroup,
-  onExitGroup,
+  onNavigateIsolation,
   onUngroup,
   onAnalyzeMaterial,
 }) {
@@ -244,12 +265,11 @@ export default function PropertyPanel({
       <GroupPropertyPanel
         group={selectedGroup ?? elementData}
         bounds={elementData}
-        children={groupChildren}
-        isAnalyzingMaterial={isAnalyzingMaterial}
+        isolationTrail={isolationTrail}
+        onNavigateIsolation={onNavigateIsolation}
         onLayerChange={onLayerChange}
         onEnterGroup={onEnterGroup}
         onUngroup={onUngroup}
-        onAnalyzeMaterial={onAnalyzeMaterial}
       />
     );
   }
@@ -258,10 +278,6 @@ export default function PropertyPanel({
   const isBubble = selectedElement.type === "bubble";
   const isTextLabel = selectedElement.type === "text";
   const isSticker = selectedElement.type === "sticker";
-  const isolationGroupLabel = (selectedGroup?.links || []).some(link => link.kind === "material-text-v1")
-    ? "文字＋圖片群組"
-    : "物件群組";
-
   const panelTitle = isPhotoSlot ? "📷 照片格屬性"
     : isSticker ? "🖼️ 貼圖素材屬性"
     : isTextLabel ? "Ａ 純文字屬性"
@@ -270,29 +286,24 @@ export default function PropertyPanel({
   return (
     <div className="bg-white border rounded-lg p-4 space-y-4" data-guide="property-panel">
       {selectionScope === "isolation" && (
-        <div className="flex items-center gap-2 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700">
-          <button
-            type="button"
-            onClick={onExitGroup}
-            aria-label="離開群組"
-            className="font-medium hover:underline"
-          >
-            {isolationGroupLabel}
-          </button>
-          <span aria-hidden="true">›</span>
-          <span>{isSticker ? "圖片" : isTextLabel ? "文字" : "子物件"}</span>
-        </div>
+        <IsolationBreadcrumb
+          trail={isolationTrail}
+          onNavigate={onNavigateIsolation}
+          tailLabel={isSticker ? "圖片" : isTextLabel ? "文字" : "子物件"}
+        />
       )}
       <h3 className="font-semibold">{panelTitle}</h3>
 
-      {isSticker && (
+      {!materialActionsDisabled && (isSticker || (isTextLabel && materialTextLink)) && (
         <button
           type="button"
           disabled={isAnalyzingMaterial}
-          onClick={() => onAnalyzeMaterial?.({ type: "sticker", id: selectedElement.id })}
+          onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
           className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isAnalyzingMaterial ? "分析圖片中…" : "分析圖片並建立／重設文字框"}
+          {isAnalyzingMaterial
+            ? "分析圖片中…"
+            : materialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
         </button>
       )}
 
