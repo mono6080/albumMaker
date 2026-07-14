@@ -18,9 +18,9 @@
 
 ## 開放設計問題
 
-- **舊資料群組 migration 尚未實作**：Illustrator 式結構群組 v1 已完成，契約詳見
-  [Illustrator 式群組 v1 規格](../specs/illustrator-style-groups-v1.md)；現有舊 layout 不會依位置猜配對，
-  自動群組 migration 明確延後到功能驗收後另案設計
+- **舊資料群組 migration 尚未實作**：通用巢狀群組 v2 契約詳見
+  [Illustrator 式通用巢狀群組 v2 規格](../specs/illustrator-style-nested-groups-v2.md)；v1 保持可讀，但
+  現有未群組 layout 不會依位置猜配對，自動群組 migration 明確延後到功能驗收後另案設計
 
 - **多 worker 下的並發**：`render_album` 是純 PIL（無共享 mutable state），
   但 uvicorn workers > 1 時 SQLite 寫入會搶鎖。目前單 worker、低並發沒事

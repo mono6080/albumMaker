@@ -113,13 +113,17 @@ legacy leaf type rank／原 collection index／group registry index。Structural
 
 ### Validation 與 graph invariants
 
-- 有非空 `groups[]` 或 `material_text_links[]` 時必須有 contract。`flat-world-v1` 只允許 v1 group-local
-  links；top-level links 必須是 `nested-world-v2`。兩個 arrays 都空／缺少時可省略 contract；最後一個
-  group 消失但仍有 top-level link 時只移除 `groups`，保留 v2 marker。兩者都消失才移除 marker。
+- 有非空 `groups[]` 或 `material_text_links[]` 時必須有 contract。只要 `group_contract` 欄位存在，值就
+  必須是已知的 `flat-world-v1` 或 `nested-world-v2`，即使兩個 arrays 都空／缺少也不得接受未知 marker。
+  `flat-world-v1` 只允許 v1 group-local links；top-level links 必須是 `nested-world-v2`。兩個 arrays 都
+  空／缺少時可省略 contract；最後一個 group 消失但仍有 top-level link 時只移除 `groups`，保留 v2
+  marker。兩者都消失才移除 marker；讀取時仍接受沒有資料的已知 orphan marker。
 - v2 child type 只能是 `photo|bubble|text|sticker|group`；leaf ref 必須存在於對應 collection，group ref
   必須存在於 registry。
-- Leaf ID 在自己的 type collection canonicalize 後唯一；group ID canonicalize 後唯一。`1` 與 `"1"`
-  視為同 ID，boolean、空字串、NaN、Infinity 非法；原始 ID 型別不被改寫。
+- Leaf ID 在自己的 type collection canonicalize 後唯一；group ID canonicalize 後唯一。`1`、`1.0` 與
+  `"1"` 視為同 ID；數字 ID 必須是 JavaScript safe integer（`±(2^53-1)`），boolean、空字串、NaN、
+  Infinity 或超出 safe range 的數字非法；非空字串 ID 視為 opaque token，不受數字範圍限制，原始
+  型別不改寫。
 - 每個 ref 最多出現在一個 group 的 direct children；同 group 不可重複 ref。每個 persisted group 至少
   兩個 direct children。
 - Group 不可引用自己；整張 graph 必須 acyclic。Validator、traversal、flatten、bounds、descendant query
@@ -160,6 +164,10 @@ Scope 是 `root` 或某個 group 的 direct children。建組只接受同一 sco
    `selection_rotation = 0`，group id 必須頁內唯一。
 5. 整個 operation 一筆 history；除必要 `z_index` metadata 外，所有 descendant leaf geometry、style、
    path、revision 與 ID 不變。
+
+若目前 isolation group 的所有 direct children 都被選取再建組，舊 parent 會只剩新 group 一個 child；
+同一 command 必須立即以新 group 取代舊 parent 並刪除舊 group ID，isolation path 依一般 history/view
+reconciliation 回到仍存在的 parent scope，不保存只有一個 child 的暫態群組。
 
 Ungroup 只解除所選的完整 direct group：在 parent `children[]` 同一 slot 以該 group 的 direct children
 依序取代；root ungroup 同理插回 group 的 root slot並正規化 z。Leaves、nested child groups、geometry
@@ -265,9 +273,10 @@ normalized box、digest、token。Backend 只使用 `StorageAdapter.open_image()
 寫入，不改 ACL、metadata、公開狀態、URL 或 media bytes。既有 admin/art_team auth、namespace、404、
 409、422 與 stale response 規則全部保留。
 
-捷徑不是 topology command，不會自動建組、解除群組或改變 z-order。UI 建立既有 pair 時只接受同一
-current scope 的 ordinary `sticker` leaf 與 `text` leaf；已存在的 layout-level link 可在 endpoints
-之後被任意 regroup／ungroup 後繼續重設：
+捷徑不是 topology command，不會自動建組、解除群組或搬動既有 node。只有「從素材建立文字」會新增
+一個 ordinary text node，並把它插在素材正上一層；所有原有 nodes 的 parent 與彼此相對順序不變。
+UI 建立既有 pair 時只接受同一 current scope 的 ordinary `sticker` leaf 與 `text` leaf；已存在的
+layout-level link 可在 endpoints 之後被任意 regroup／ungroup 後繼續重設：
 
 - 「從素材建立文字」：分析 sticker，在 sticker 的 current direct scope 新增 ordinary text leaf，以
   suggestion 投影所得 `x/y/width/height/rotation` 建框；文字放在 sticker 的正上一層並保存 layout-level

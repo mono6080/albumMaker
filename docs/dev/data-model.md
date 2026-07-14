@@ -93,7 +93,7 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
 {
   "canvas_width": 794,          // A4 直式 @96dpi
   "canvas_height": 1123,
-  "group_contract": "flat-world-v1",
+  "group_contract": "nested-world-v2",
   "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
     { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3 }
   ],
@@ -115,10 +115,18 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
       "filename": "star.png", "asset_revision": "sha256:...",
       "x": 10, "y": 10, "width": 60, "height": 60 }
   ],
-  "groups": [                 // 結構群組；不保存自己的幾何
-    { "id": 9001, "z_index": 4, "selection_rotation": 0,
-      "children": [{ "type": "sticker", "id": 1 }, { "type": "text", "id": 1 }],
-      "links": [{ "kind": "material-text-v1", "material_id": 1, "text_id": 1 }] }
+  "groups": [                 // flat registry；以 group ref 表達任意深度巢狀
+    { "id": "caption", "z_index": 0, "selection_rotation": 0,
+      "children": [{ "type": "sticker", "id": 1 }, { "type": "text", "id": 1 }] },
+    { "id": "page-block", "z_index": 4, "selection_rotation": 0,
+      "children": [
+        { "type": "photo", "id": 1 },
+        { "type": "bubble", "id": 1 },
+        { "type": "group", "id": "caption" }
+      ] }
+  ],
+  "material_text_links": [   // 與 group topology 無關的一次性重設捷徑
+    { "kind": "material-text-v1", "material_id": 1, "text_id": 1 }
   ],
   "footer": { "text": "{name} · 2026年1月" }
 }
@@ -130,13 +138,15 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   由 `_migrate_photo_slots_to_content_box` 遷移既有資料並寫入備份表；
   幾何計算集中在 `services/photo_frame_geometry.py` 與前端
   `utils/photoFrameGeometry.js`，兩邊必須同步修改
-- **結構群組**：children 仍留在 `text_labels[]` / `stickers[]`，其 world
-  `x/y/width/height/rotation` 是唯一幾何權威；`groups[]` 只保存 membership、順序與 optional link。
-  Group bounds 每次由 children 推導，禁止持久化 `x/y/width/height/scale/matrix`。
+- **通用巢狀群組**：四種 leaves 仍留在原 arrays，以 world `x/y/width/height/rotation` 作為唯一幾何
+  權威；`groups[]` 只保存 direct membership、scope order 與 selection axis，group child 可再引用 group。
+  Group bounds 每次由所有 descendant leaves 推導，禁止持久化 `x/y/width/height/scale/matrix`。群組
+  縮放會改 leaf 外框，但文字的字級、字距、行高與內容不跟著縮放。
 - `material-text-v1` 只表示素材與普通文字框的關聯；沒有安全區或持續同步 constraint。
-  圖片分析只在使用者明確執行時建立／重設文字框幾何，結果不寫入 layout。
-- 本功能沒有 startup migration；沒有 `groups` 的舊 layout 繼續走既有 flat traversal，舊資料配對
-  延後到群組功能驗收後另案處理。
+  圖片分析只在使用者明確執行時建立／重設文字框幾何，不建立特殊群組，也不修改圖片幾何。
+- `flat-world-v1` 保持可讀；第一次 structural／素材文字操作才以同一筆 history commit 升級 v2。
+  本功能沒有 startup migration；沒有 `groups` 的舊 layout 繼續走既有 flat traversal，舊資料配對延後
+  到群組功能驗收後另案處理。
 
 ## Migrations 規則（`backend/migrations.py`）
 

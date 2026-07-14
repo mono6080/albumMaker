@@ -42,11 +42,13 @@ npm run build                # production bundle（改前端後必跑）
     （防跨語言鏡像靜默漂移，規則見 [conventions.md](conventions.md#跨模組-invariants)）
   - `conftest.py` 把測試 DB 指到 repo 內 `.tmp/pytest`
     （可用 `ALBUM_MAKER_TEST_TMPDIR` 覆寫），不污染 `backend/album_maker.db`
-  - `test_layout_groups.py`：group schema、canonical refs、render traversal 與 malformed fallback
+  - `test_layout_groups.py`：v1/v2 group schema、safe canonical refs、任意深度 traversal、cycle 與
+    malformed topology/link fallback
   - `test_material_text_box.py`：素材分析授權、namespace/revision、零寫入與 normalized box 契約
 - **前端**：lint / unit / render-parity / Playwright E2E；無 vitest / RTL 元件測試。
-  `tests/e2e/illustrator-groups.spec.js` 在 Chromium/WebKit 覆蓋群組、isolation、child 自由比例、
-  undo、save/hard reload，以及分析建立／重設文字框與跨頁 stale response guard。
+  `tests/e2e/illustrator-groups.spec.js` 在 Chromium/WebKit 覆蓋通用／巢狀群組、逐層 isolation、marquee、
+  Ctrl/Cmd+G、固定 typography、isolation 內 undo，以及分析建立／重設普通文字框、不改 topology、
+  invalid-link 修復與跨頁 stale response guard。
 - **pre-commit**：`.pre-commit-config.yaml`（ruff check/format + mypy）；
   是否已在本機 install 不由 repo 保證
 - `pyproject.toml` 關閉 pytest cache provider（本 repo 的 Windows ACL 對

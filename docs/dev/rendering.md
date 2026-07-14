@@ -52,15 +52,15 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)）：
   photo → `photo_slots`、text → `text_labels`、bubble → `text_bubbles`（自訂
   `BubbleKonvaShape`）、sticker → `stickers`（`StickerNode`）
-- **Illustrator 式結構群組**：`groups[]` 只引用既有 text/sticker child，不是第五種可繪製物件。
-  Root renderer 以 group 當一個 stacking block，group 內按 `children[]` 畫；grouped child 不再從
-  root 重複畫。前端 traversal 在 `utils/layoutGroups.js`，後端 traversal 在
+- **Illustrator 式通用巢狀群組**：`groups[]` 可引用 photo/bubble/text/sticker/group，但不是第五種
+  可繪製物件。Renderer 以每個 group subtree 當 stacking block，依 scope `children[]` 遞迴展平；
+  grouped leaf 不再從 root 重複畫。前端 traversal 在 `utils/layoutGroups.js`，後端 traversal 在
   `services/layout_groups.py`；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy
   flat traversal，確保每個元素仍只畫一次。
-- Root 選取群組時可移動、旋轉、四角等比縮放；雙擊或 Enter 進 isolation 後，children 才能分別
-  編輯，sticker 可自由改比例。Group bounds 由 children world geometry 即時計算，不存入 layout。
-  Group/link 本身不改 child 幾何；圖片分析也只建立或重設普通 linked text box，絕不為了文字 fit
-  拉伸圖片、縮字或改內容。
+- 任一 scope 的 direct group 可移動、旋轉、四角等比縮放；雙擊或 Enter 每次進一層 isolation 後，
+  direct children 才能分別編輯。Group bounds 由 descendant world geometry 即時計算，不存入 layout；
+  group scale 改 leaf frame，但 text/bubble typography 在即時預覽與 commit 後皆保持原值。素材文字 link
+  不參與 traversal；圖片分析只建立或重設普通文字框，絕不為了文字 fit 拉伸圖片、縮字或改內容。
 - **照片格固定比例（UI 層限制）**：新增工具只提供 3:4 直式與 4:3 橫式兩種；
   縮放時 Transformer 對照片格 `keepRatio` 且只留四角把手，屬性面板寬高輸入
   等比連動。底層 `photo_slots` 資料結構不變（仍存任意 width/height，
