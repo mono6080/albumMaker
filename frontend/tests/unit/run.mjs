@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   buildDownloadAllImagesZipUrl,
@@ -40,15 +41,19 @@ import {
 } from "../../src/utils/renderLayoutModel.js";
 import {
   GROUP_CONTRACT,
+  NESTED_GROUP_CONTRACT,
   LayoutGroupError,
   addElementToGroup,
   buildRootRenderNodes,
   deleteLayoutElement,
   deleteLayoutGroup,
+  getAncestorGroupIds,
+  getDescendantLeafRefs,
   getFlattenedRenderElements,
   getGroupById,
   getGroupBounds,
   getGroupForElement,
+  getScopeNodes,
   groupElements,
   linkMaterialText,
   moveGroup,
@@ -56,11 +61,14 @@ import {
   reorderGroupChild,
   reorderRootNode,
   rotateGroup,
+  removeInvalidMaterialTextLinks,
+  resolveHitToDirectChild,
   scaleGroupUniform,
   ungroupElements,
   unlinkMaterialText,
   validateLayoutGroups,
 } from "../../src/utils/layoutGroups.js";
+import { getMarqueeSelectableRefs } from "../../src/utils/marqueeSelection.js";
 import { insertTextToken } from "../../src/utils/textVariables.js";
 import {
   DEFAULT_UI_FONT_SCALE,
@@ -679,14 +687,59 @@ test("group and ungroup preserve child geometry, style, path, and effective stac
     stickers: [{ id: "sticker", z_index: 0 }],
   };
   const nonAdjacentOriginal = structuredClone(nonAdjacent);
-  assert.throws(
-    () => groupElements(nonAdjacent, [
-      { type: "sticker", id: "sticker" },
-      { type: "text", id: "text" },
-    ], { groupId: "group" }),
-    /不相鄰/,
+  const nonAdjacentGrouped = groupElements(nonAdjacent, [
+    { type: "text", id: "text" },
+    { type: "sticker", id: "sticker" },
+  ], { groupId: "group" });
+  assert.deepEqual(nonAdjacentGrouped.groups[0].children, [
+    { type: "sticker", id: "sticker" },
+    { type: "text", id: "text" },
+  ]);
+  assert.equal(nonAdjacentGrouped.groups[0].z_index, 1);
+  assert.deepEqual(
+    buildRootRenderNodes(nonAdjacentGrouped).map(node => `${node.type}:${node.id}`),
+    ["photo:between", "group:group"],
   );
   assert.deepEqual(nonAdjacent, nonAdjacentOriginal);
+});
+
+
+test("non-adjacent grouping uses the topmost selected slot and preserves unselected root order", () => {
+  const layout = {
+    photo_slots: [
+      { id: "photo-low", z_index: 1 },
+      { id: "photo-high", z_index: 5 },
+    ],
+    text_bubbles: [{ id: "bubble", z_index: 3 }],
+    text_labels: [{ id: "selected-text", z_index: 4 }],
+    stickers: [
+      { id: "selected-sticker", z_index: 0 },
+      { id: "plain-sticker", z_index: 2 },
+    ],
+  };
+  const original = structuredClone(layout);
+
+  const grouped = groupElements(layout, [
+    { type: "text", id: "selected-text" },
+    { type: "sticker", id: "selected-sticker" },
+  ], { groupId: "group" });
+
+  assert.deepEqual(grouped.groups[0].children, [
+    { type: "sticker", id: "selected-sticker" },
+    { type: "text", id: "selected-text" },
+  ]);
+  assert.equal(grouped.groups[0].z_index, 3);
+  assert.deepEqual(
+    buildRootRenderNodes(grouped).map(node => `${node.type}:${node.id}`),
+    [
+      "photo:photo-low",
+      "sticker:plain-sticker",
+      "bubble:bubble",
+      "group:group",
+      "photo:photo-high",
+    ],
+  );
+  assert.deepEqual(layout, original);
 });
 
 
@@ -738,17 +791,22 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
     return stable;
   };
 
-  const linked = linkMaterialText(layout, {
+  const relationOnly = linkMaterialText(layout, {
     materialId: "sticker",
     textId: "text",
-    groupId: "group",
   });
   assert.deepEqual(layout, original);
-  assert.deepEqual(linked.groups[0].links, [{
+  assert.equal(relationOnly.groups, undefined);
+  assert.equal(relationOnly.group_contract, NESTED_GROUP_CONTRACT);
+  assert.deepEqual(relationOnly.material_text_links, [{
     kind: "material-text-v1",
     material_id: "sticker",
     text_id: "text",
   }]);
+  const linked = groupElements(relationOnly, [
+    { type: "sticker", id: "sticker" },
+    { type: "text", id: "text" },
+  ], { groupId: "group" });
   assert.deepEqual(
     buildRootRenderNodes(linked).map(node => node.type + ":" + node.id),
     ["photo:photo", "group:group", "bubble:bubble"],
@@ -778,7 +836,7 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
     { type: "text", id: "text" },
     { type: "sticker", id: "sticker" },
   ]);
-  assert.deepEqual(childReordered.groups[0].links, rootReordered.groups[0].links);
+  assert.deepEqual(childReordered.material_text_links, rootReordered.material_text_links);
   assert.deepEqual(
     getFlattenedRenderElements(childReordered).map(node => node.type + ":" + node.id),
     ["photo:photo", "bubble:bubble", "text:text", "sticker:sticker"],
@@ -790,7 +848,7 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
     materialId: "sticker",
     textId: "text",
   });
-  assert.deepEqual(unlinked.groups[0].links, []);
+  assert.equal(unlinked.material_text_links, undefined);
   assert.deepEqual(unlinked.groups[0].children, childReordered.groups[0].children);
   assert.deepEqual(unlinked.stickers, childReordered.stickers);
   assert.deepEqual(unlinked.text_labels, childReordered.text_labels);
@@ -798,7 +856,7 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
     materialId: "sticker",
     textId: "text",
   });
-  assert.equal(relinked.groups[0].links.length, 1);
+  assert.equal(relinked.material_text_links.length, 1);
   assert.deepEqual(relinked.stickers, unlinked.stickers);
   assert.deepEqual(relinked.text_labels, unlinked.text_labels);
 
@@ -871,7 +929,7 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
     { type: "sticker", id: "sticker" },
     { type: "text", id: "survivor" },
   ]);
-  assert.deepEqual(afterLinkedTextDelete.groups[0].links, []);
+  assert.equal(afterLinkedTextDelete.material_text_links, undefined);
   assert.deepEqual(afterLinkedTextDelete.stickers[0], stickerBeforeDelete);
   assert.deepEqual(afterLinkedTextDelete.text_labels[0], survivorBeforeDelete);
   assert.equal(validateLayoutGroups(afterLinkedTextDelete).valid, true);
@@ -904,7 +962,10 @@ test("adding a child to an existing group preserves its selection axis and metad
   });
   assert.deepEqual(layout, original);
   assert.deepEqual(next.groups[0], {
-    ...layout.groups[0],
+    id: "group",
+    z_index: 4,
+    selection_rotation: 37,
+    custom_metadata: { keep: true },
     children: [
       { type: "sticker", id: "sticker" },
       { type: "text", id: "new" },
@@ -1064,12 +1125,16 @@ test("group move, rotate, and uniform scale are immutable and use the derived pi
     freeRatioLayout.stickers[0].width / freeRatioLayout.stickers[0].height,
   );
   assert.equal(scaled.stickers[0].path, freeRatioLayout.stickers[0].path);
-  assert.equal(scaled.text_labels[0].font_size, 30);
-  assert.equal(scaled.text_labels[0].letter_spacing, 1.8);
+  assert.equal(scaled.text_labels[0].x, 130);
+  assert.equal(scaled.text_labels[0].y, -7.5);
+  assert.equal(scaled.text_labels[0].width, 120);
+  assert.equal(scaled.text_labels[0].height, 45);
+  assert.equal(scaled.text_labels[0].font_size, 20);
+  assert.equal(scaled.text_labels[0].letter_spacing, 1.2);
   assert.equal(scaled.text_labels[0].line_height, 1.4);
-  assert.equal(scaled.text_labels[0].text_shadow_offset_x, 3);
-  assert.equal(scaled.text_labels[0].text_shadow_offset_y, -4.5);
-  assert.equal(scaled.text_labels[0].text_shadow_blur, 6);
+  assert.equal(scaled.text_labels[0].text_shadow_offset_x, 2);
+  assert.equal(scaled.text_labels[0].text_shadow_offset_y, -3);
+  assert.equal(scaled.text_labels[0].text_shadow_blur, 4);
   assert.deepEqual(freeRatioLayout.stickers[0], {
     ...layout.stickers[0],
     width: 120,
@@ -1078,7 +1143,7 @@ test("group move, rotate, and uniform scale are immutable and use the derived pi
 });
 
 
-test("group scale preserves null and empty legacy style values while scaling numeric lengths", () => {
+test("group scale preserves all typography and legacy style values", () => {
   const layout = {
     group_contract: GROUP_CONTRACT,
     stickers: [{
@@ -1117,10 +1182,14 @@ test("group scale preserves null and empty legacy style values while scaling num
   };
   const original = structuredClone(layout);
   const scaled = scaleGroupUniform(layout, "group", 1.5);
-  assert.equal(scaled.text_labels[0].font_size, 30);
+  assert.equal(scaled.text_labels[0].x, 125);
+  assert.equal(scaled.text_labels[0].y, -10);
+  assert.equal(scaled.text_labels[0].width, 150);
+  assert.equal(scaled.text_labels[0].height, 60);
+  assert.equal(scaled.text_labels[0].font_size, 20);
   assert.equal(scaled.text_labels[0].letter_spacing, null);
   assert.equal(scaled.text_labels[0].text_shadow_offset_x, "");
-  assert.equal(scaled.text_labels[0].text_shadow_offset_y, 3);
+  assert.equal(scaled.text_labels[0].text_shadow_offset_y, 2);
   assert.equal(scaled.text_labels[0].text_shadow_blur, null);
   assert.equal(scaled.text_labels[0].line_height, 1.4);
   assert.deepEqual(layout, original);
@@ -1220,6 +1289,422 @@ test("UI font scale settings clamp to the supported range", () => {
   assert.equal(normalizeUiFontScale(0.5), UI_FONT_SCALE_MIN);
   assert.equal(normalizeUiFontScale(2), UI_FONT_SCALE_MAX);
   assert.equal(normalizeUiFontScale(1.126), 1.13);
+});
+
+
+test("shared nested fixture traverses and scopes every leaf exactly once", () => {
+  const layout = JSON.parse(readFileSync(
+    new URL("../../../tests/fixtures/nested_group_layout.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(validateLayoutGroups(layout).valid, true);
+  assert.deepEqual(
+    buildRootRenderNodes(layout).map(node => node.type + ":" + node.id),
+    ["photo:photo-root", "group:outer", "text:text-root"],
+  );
+  assert.deepEqual(
+    getFlattenedRenderElements(layout).map(node => node.type + ":" + node.id),
+    [
+      "photo:photo-root",
+      "photo:photo-inner",
+      "bubble:bubble-inner",
+      "sticker:sticker-outer",
+      "text:text-root",
+    ],
+  );
+  assert.deepEqual(getScopeNodes(layout, "outer"), [
+    { type: "group", id: "inner" },
+    { type: "sticker", id: "sticker-outer" },
+  ]);
+  assert.deepEqual(
+    getAncestorGroupIds(layout, { type: "bubble", id: "bubble-inner" }),
+    ["outer", "inner"],
+  );
+  assert.deepEqual(getDescendantLeafRefs(layout, "outer"), [
+    { type: "photo", id: "photo-inner" },
+    { type: "bubble", id: "bubble-inner" },
+    { type: "sticker", id: "sticker-outer" },
+  ]);
+  assert.deepEqual(
+    resolveHitToDirectChild(layout, null, { type: "bubble", id: "bubble-inner" }),
+    { type: "group", id: "outer" },
+  );
+  assert.deepEqual(
+    getMarqueeSelectableRefs(layout, { x: 50, y: 50, width: 320, height: 500 }),
+    [{ type: "group", id: "outer" }],
+  );
+  assert.deepEqual(
+    getMarqueeSelectableRefs(
+      layout,
+      { x: 50, y: 50, width: 320, height: 500 },
+      { parentGroupId: "outer" },
+    ),
+    [{ type: "group", id: "inner" }],
+  );
+});
+
+
+test("nested non-adjacent grouping occupies the topmost selected direct-node slot", () => {
+  const layout = JSON.parse(readFileSync(
+    new URL("../../../tests/fixtures/nested_group_layout.json", import.meta.url),
+    "utf8",
+  ));
+  layout.text_labels.push({
+    id: "text-nested-selected",
+    x: 200,
+    y: 500,
+    width: 180,
+    height: 60,
+    text: "nested selected",
+    z_index: 20,
+  });
+  layout.text_bubbles.push({
+    id: "bubble-nested-above",
+    x: 230,
+    y: 570,
+    width: 190,
+    height: 70,
+    text: "nested above",
+    z_index: 21,
+  });
+  getGroupById(layout, "outer").children = [
+    { type: "group", id: "inner" },
+    { type: "sticker", id: "sticker-outer" },
+    { type: "text", id: "text-nested-selected" },
+    { type: "bubble", id: "bubble-nested-above" },
+  ];
+  const original = structuredClone(layout);
+
+  const grouped = groupElements(layout, [
+    { type: "text", id: "text-nested-selected" },
+    { type: "group", id: "inner" },
+  ], {
+    groupId: "nested-selection",
+    parentGroupId: "outer",
+  });
+
+  assert.deepEqual(getGroupById(grouped, "outer").children, [
+    { type: "sticker", id: "sticker-outer" },
+    { type: "group", id: "nested-selection" },
+    { type: "bubble", id: "bubble-nested-above" },
+  ]);
+  assert.deepEqual(getGroupById(grouped, "nested-selection").children, [
+    { type: "group", id: "inner" },
+    { type: "text", id: "text-nested-selected" },
+  ]);
+  assert.deepEqual(
+    buildRootRenderNodes(grouped).map(node => node.type + ":" + node.id),
+    ["photo:photo-root", "group:outer", "text:text-root"],
+  );
+  assert.equal(validateLayoutGroups(grouped).valid, true);
+  assert.deepEqual(layout, original);
+});
+
+
+test("nested reorder and rotation preserve graph semantics", () => {
+  const layout = JSON.parse(readFileSync(
+    new URL("../../../tests/fixtures/nested_group_layout.json", import.meta.url),
+    "utf8",
+  ));
+  const original = structuredClone(layout);
+
+  const reordered = reorderGroupChild(
+    layout,
+    "outer",
+    { type: "sticker", id: "sticker-outer" },
+    0,
+  );
+  assert.deepEqual(getScopeNodes(reordered, "outer"), [
+    { type: "sticker", id: "sticker-outer" },
+    { type: "group", id: "inner" },
+  ]);
+  assert.deepEqual(getScopeNodes(reordered, "inner"), [
+    { type: "photo", id: "photo-inner" },
+    { type: "bubble", id: "bubble-inner" },
+  ]);
+
+  const rotated = rotateGroup(reordered, "outer", 30);
+  assert.deepEqual(getScopeNodes(rotated, "outer"), getScopeNodes(reordered, "outer"));
+  assert.deepEqual(getScopeNodes(rotated, "inner"), getScopeNodes(reordered, "inner"));
+  assert.deepEqual(
+    getFlattenedRenderElements(rotated).map(node => node.type + ":" + node.id),
+    [
+      "photo:photo-root",
+      "sticker:sticker-outer",
+      "photo:photo-inner",
+      "bubble:bubble-inner",
+      "text:text-root",
+    ],
+  );
+  assert.equal(getGroupById(rotated, "outer").selection_rotation, 30);
+  assert.equal(getGroupById(rotated, "inner").selection_rotation, 30);
+  assert.equal(rotated.stickers.find(item => item.id === "sticker-outer").rotation, 34);
+  assert.equal(rotated.photo_slots.find(item => item.id === "photo-inner").rotation, 38);
+  assert.equal(rotated.text_bubbles.find(item => item.id === "bubble-inner").rotation, 24);
+  assert.deepEqual(
+    rotated.photo_slots.find(item => item.id === "photo-root"),
+    original.photo_slots.find(item => item.id === "photo-root"),
+  );
+  assert.deepEqual(
+    rotated.text_labels.find(item => item.id === "text-root"),
+    original.text_labels.find(item => item.id === "text-root"),
+  );
+  assert.deepEqual(rotated.material_text_links, original.material_text_links);
+  assert.equal(validateLayoutGroups(rotated).valid, true);
+  assert.deepEqual(layout, original);
+});
+
+
+test("deleting a nested group recursively removes its subtree and related material links", () => {
+  const layout = {
+    group_contract: NESTED_GROUP_CONTRACT,
+    photo_slots: [
+      { id: "photo-inside", x: 0, y: 0, width: 100, height: 80, z_index: 0 },
+    ],
+    text_bubbles: [],
+    text_labels: [
+      { id: "text-inside", x: 10, y: 10, width: 80, height: 30, z_index: 1 },
+      { id: "text-outside", x: 200, y: 10, width: 80, height: 30, z_index: 1 },
+      { id: "text-keep", x: 200, y: 60, width: 80, height: 30, z_index: 2 },
+    ],
+    stickers: [
+      { id: "material-inside", x: 0, y: 100, width: 100, height: 50, z_index: 2 },
+      { id: "material-outside", x: 200, y: 100, width: 100, height: 50, z_index: 3 },
+      { id: "material-keep", x: 200, y: 170, width: 100, height: 50, z_index: 4 },
+    ],
+    groups: [
+      {
+        id: "deep",
+        z_index: 0,
+        selection_rotation: 0,
+        children: [
+          { type: "sticker", id: "material-inside" },
+          { type: "text", id: "text-inside" },
+        ],
+      },
+      {
+        id: "target",
+        z_index: 0,
+        selection_rotation: 0,
+        children: [
+          { type: "group", id: "deep" },
+          { type: "photo", id: "photo-inside" },
+        ],
+      },
+      {
+        id: "outer",
+        z_index: 0,
+        selection_rotation: 0,
+        children: [
+          { type: "group", id: "target" },
+          { type: "sticker", id: "material-outside" },
+          { type: "sticker", id: "material-keep" },
+        ],
+      },
+    ],
+    material_text_links: [
+      {
+        kind: "material-text-v1",
+        material_id: "material-inside",
+        text_id: "text-outside",
+      },
+      {
+        kind: "material-text-v1",
+        material_id: "material-outside",
+        text_id: "text-inside",
+      },
+      {
+        kind: "material-text-v1",
+        material_id: "material-keep",
+        text_id: "text-keep",
+      },
+    ],
+  };
+  const original = structuredClone(layout);
+  assert.equal(validateLayoutGroups(layout).valid, true);
+
+  const deleted = deleteLayoutGroup(layout, "target");
+
+  assert.equal(getGroupById(deleted, "target"), null);
+  assert.equal(getGroupById(deleted, "deep"), null);
+  assert.deepEqual(deleted.photo_slots, []);
+  assert.deepEqual(deleted.stickers.map(item => item.id), ["material-outside", "material-keep"]);
+  assert.deepEqual(deleted.text_labels.map(item => item.id), ["text-outside", "text-keep"]);
+  assert.deepEqual(getGroupById(deleted, "outer").children, [
+    { type: "sticker", id: "material-outside" },
+    { type: "sticker", id: "material-keep" },
+  ]);
+  assert.deepEqual(deleted.material_text_links, [{
+    kind: "material-text-v1",
+    material_id: "material-keep",
+    text_id: "text-keep",
+  }]);
+  assert.deepEqual(
+    getFlattenedRenderElements(deleted).map(node => node.type + ":" + node.id),
+    [
+      "sticker:material-outside",
+      "sticker:material-keep",
+      "text:text-outside",
+      "text:text-keep",
+    ],
+  );
+  assert.equal(validateLayoutGroups(deleted).valid, true);
+  assert.deepEqual(layout, original);
+});
+
+
+test("nested select-all grouping collapses its old parent and delete collapses one-child ancestors", () => {
+  const layout = JSON.parse(readFileSync(
+    new URL("../../../tests/fixtures/nested_group_layout.json", import.meta.url),
+    "utf8",
+  ));
+  const regrouped = groupElements(layout, getScopeNodes(layout, "outer"), {
+    groupId: "replacement",
+    parentGroupId: "outer",
+  });
+  assert.equal(getGroupById(regrouped, "outer"), null);
+  assert.deepEqual(getGroupById(regrouped, "replacement").children, [
+    { type: "group", id: "inner" },
+    { type: "sticker", id: "sticker-outer" },
+  ]);
+  assert.deepEqual(
+    buildRootRenderNodes(regrouped).map(node => node.type + ":" + node.id),
+    ["photo:photo-root", "group:replacement", "text:text-root"],
+  );
+
+  const deleted = deleteLayoutElement(layout, { type: "bubble", id: "bubble-inner" });
+  assert.equal(getGroupById(deleted, "inner"), null);
+  assert.deepEqual(getGroupById(deleted, "outer").children, [
+    { type: "photo", id: "photo-inner" },
+    { type: "sticker", id: "sticker-outer" },
+  ]);
+  assert.equal(validateLayoutGroups(deleted).valid, true);
+});
+
+
+test("iterative validation and traversal handle deep forests and cycles without recursion", () => {
+  const depth = 300;
+  const stickers = Array.from({ length: depth + 1 }, (_, id) => ({ id: "leaf-" + id }));
+  const groups = Array.from({ length: depth }, (_, index) => ({
+    id: "g-" + index,
+    z_index: index,
+    selection_rotation: 0,
+    children: index === depth - 1
+      ? [{ type: "sticker", id: "leaf-" + index }, { type: "sticker", id: "leaf-" + depth }]
+      : [{ type: "sticker", id: "leaf-" + index }, { type: "group", id: "g-" + (index + 1) }],
+  }));
+  const layout = {
+    group_contract: NESTED_GROUP_CONTRACT,
+    stickers,
+    groups,
+  };
+  assert.equal(validateLayoutGroups(layout).valid, true);
+  assert.equal(getFlattenedRenderElements(layout).length, depth + 1);
+  const cyclic = structuredClone(layout);
+  cyclic.groups[depth - 1].children[1] = { type: "group", id: "g-0" };
+  const result = validateLayoutGroups(cyclic);
+  assert.equal(result.topologyValid, false);
+  assert.ok(result.errors.some(error => error.message === "group cycle detected"));
+});
+
+
+test("v1 transforms upgrade and hoist links while preserving typography", () => {
+  const layout = {
+    group_contract: GROUP_CONTRACT,
+    stickers: [{ id: "s", x: 0, y: 0, width: 120, height: 80, z_index: 0 }],
+    text_labels: [{
+      id: "t", x: 120, y: 0, width: 100, height: 80, z_index: 1,
+      font_size: 20, line_height: 1.4,
+    }],
+    groups: [{
+      id: "g", z_index: 0, selection_rotation: 0,
+      children: [{ type: "sticker", id: "s" }, { type: "text", id: "t" }],
+      links: [{ kind: "material-text-v1", material_id: "s", text_id: "t" }],
+    }],
+  };
+  const moved = moveGroup(layout, "g", { dx: 10, dy: 5 });
+  assert.equal(moved.group_contract, NESTED_GROUP_CONTRACT);
+  assert.equal(Object.hasOwn(moved.groups[0], "links"), false);
+  assert.equal(moved.material_text_links.length, 1);
+  assert.equal(moved.text_labels[0].font_size, 20);
+  assert.equal(moved.text_labels[0].x, 130);
+  assert.deepEqual(layout.groups[0].links.length, 1);
+});
+
+
+test("link-only corruption is repairable and photo group scale uses visible frames", () => {
+  const layout = JSON.parse(readFileSync(
+    new URL("../../../tests/fixtures/nested_group_layout.json", import.meta.url),
+    "utf8",
+  ));
+  layout.material_text_links.push(
+    null,
+    { kind: "material-text-v1", material_id: "missing", text_id: "text-root" },
+    { kind: "material-text-v1", material_id: "sticker-outer", text_id: "missing" },
+  );
+  const invalid = validateLayoutGroups(layout);
+  assert.equal(invalid.topologyValid, true);
+  assert.equal(invalid.linkValid, false);
+  assert.equal(buildRootRenderNodes(layout).some(node => node.type === "group"), true);
+  const repaired = removeInvalidMaterialTextLinks(layout);
+  assert.equal(repaired.material_text_links.length, 1);
+  assert.equal(validateLayoutGroups(repaired).valid, true);
+
+  const original = structuredClone(repaired);
+  const scaled = scaleGroupUniform(repaired, "outer", 1.2);
+  assert.equal(scaled.text_bubbles[0].font_size, 18);
+  assert.ok(scaled.photo_slots[0].width > repaired.photo_slots[0].width);
+  assert.throws(() => scaleGroupUniform(repaired, "outer", 0.1), LayoutGroupError);
+  assert.deepEqual(repaired, original);
+});
+
+
+test("legacy ungrouped and v1 pages tolerate unaddressable photo/bubble IDs", () => {
+  const legacy = { photo_slots: [{}], text_bubbles: [{ id: false }] };
+  assert.deepEqual(buildRootRenderNodes(legacy).map(node => node.type), ["photo", "bubble"]);
+  const v1 = {
+    ...legacy,
+    group_contract: GROUP_CONTRACT,
+    stickers: [{ id: "s", z_index: 0 }],
+    text_labels: [{ id: "t", z_index: 1 }],
+    groups: [{
+      id: "g", z_index: 2, selection_rotation: 0,
+      children: [{ type: "sticker", id: "s" }, { type: "text", id: "t" }],
+      links: [],
+    }],
+  };
+  assert.equal(validateLayoutGroups(v1).valid, true);
+  assert.deepEqual(buildRootRenderNodes(v1).map(node => node.type), ["photo", "group", "bubble"]);
+});
+
+
+test("unsupported orphan markers and unsafe numeric IDs are rejected", () => {
+  for (const layout of [
+    { group_contract: "bogus-contract" },
+    { group_contract: "bogus-contract", groups: [] },
+  ]) {
+    const result = validateLayoutGroups(layout);
+    assert.equal(result.topologyValid, false);
+    assert.ok(result.errors.some(error => error.path === "group_contract"));
+  }
+  assert.equal(validateLayoutGroups({ group_contract: GROUP_CONTRACT, groups: [] }).valid, true);
+  assert.equal(validateLayoutGroups({ group_contract: NESTED_GROUP_CONTRACT }).valid, true);
+  const unsafe = validateLayoutGroups({
+    group_contract: NESTED_GROUP_CONTRACT,
+    stickers: [{ id: Number.MAX_SAFE_INTEGER + 1 }],
+    text_labels: [{ id: "t" }],
+    groups: [{
+      id: "g",
+      z_index: 0,
+      selection_rotation: 0,
+      children: [
+        { type: "sticker", id: Number.MAX_SAFE_INTEGER + 1 },
+        { type: "text", id: "t" },
+      ],
+    }],
+  });
+  assert.equal(unsafe.valid, false);
+  assert.ok(unsafe.errors.some(error => error.path === "stickers[0].id"));
 });
 
 

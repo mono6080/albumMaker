@@ -9,6 +9,26 @@ export const PHOTO_SLOT_DIMENSION_MODE_KEY = "photo_slot_dimension_mode";
 export const PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1";
 // 照片格內容最小寬度：TemplateEditor 縮放下限與標準比例 snap 下限共用
 export const PHOTO_CONTENT_MIN_WIDTH = DESIGN_TOKENS.photo_frame.content_min_width;
+export const PHOTO_CONTENT_MIN_HEIGHT = 40;
+
+export function buildPhotoSlotFromFrameRect(slot = {}, frameRect = {}, options = {}) {
+  const dimensionSource = options.dimensionMode ? { dimensionMode: options.dimensionMode } : slot;
+  const frame = {
+    x: toFiniteNumber(frameRect.x, 0),
+    y: toFiniteNumber(frameRect.y, 0),
+    width: Math.max(1, toFiniteNumber(frameRect.width, 1)),
+    height: Math.max(1, toFiniteNumber(frameRect.height, 1)),
+  };
+  if (!isPhotoContentBoxMode(dimensionSource)) return { ...slot, ...frame };
+  const insets = getPhotoFrameInsets(slot);
+  return {
+    ...slot,
+    x: frame.x + insets.left,
+    y: frame.y + insets.top,
+    width: frame.width - insets.left - insets.right,
+    height: frame.height - insets.top - insets.bottom,
+  };
+}
 
 function toFiniteNumber(value, fallback = 0) {
   const number = Number(value);
