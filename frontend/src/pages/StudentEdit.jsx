@@ -7,7 +7,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { fetchStudentEditor, batchUpdateStudentTexts, setStudentPageSkip } from "../api/projectApi";
-import { fetchTemplateCached } from "../api/templateApi";
+import { fetchProjectTemplatePair } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
@@ -28,6 +28,7 @@ import StudentTextPanel from "../components/StudentTextPanel";
 import { Badge, Button, PageHeader } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
+import { handleApiError, isProjectTemplateRevisionError } from "../utils/apiError";
 
 
 // ── 主頁面元件 ────────────────────────────────────────────────────────────────
@@ -66,7 +67,17 @@ export default function StudentEdit() {
         payload[pageIndex] = labels;
       });
       // 帶 abort signal：新的儲存會取消還在路上的舊請求，避免舊值後到蓋掉新值
-      await batchUpdateStudentTexts(projectId, { students: { [studentId]: payload } }, signal);
+      try {
+        await batchUpdateStudentTexts(
+          projectId,
+          project?.template_revision,
+          { students: { [studentId]: payload } },
+          signal,
+        );
+      } catch (error) {
+        if (isProjectTemplateRevisionError(error)) handleApiError(error);
+        throw error;
+      }
       // 更新所有有文字資料的頁面時間戳
       const now = Date.now();
       setPageTimestamps(prev => ({
@@ -84,8 +95,12 @@ export default function StudentEdit() {
 
   const loadStudentData = useCallback(async () => {
     try {
-      const editorResponse = await fetchStudentEditor(projectId, studentId);
-      const { project: projectData, student: foundStudent } = editorResponse.data;
+      const { projectResponse: editorResponse, projectData, templateResponse } =
+        await fetchProjectTemplatePair(
+          () => fetchStudentEditor(projectId, studentId),
+          (responseData) => responseData.project,
+        );
+      const { student: foundStudent } = editorResponse.data;
       setProject(projectData);
       setStudent(foundStudent);
       // 預覽 URL 版本戳跟著 updated_at 走，內容沒變時瀏覽器快取可命中
@@ -93,8 +108,8 @@ export default function StudentEdit() {
         setPreviewTimestampSeed(new Date(foundStudent.updated_at).getTime() || Date.now());
       }
 
-      // 切學生時模板不變：走 5 分鐘快取，省掉每次重抓數百 KB 的模板 JSON
-      const templateResponse = await fetchTemplateCached(projectData.template_id);
+      // 切學生時模板走 revision cache；若兩次 GET 間剛好同步升版，
+      // 共用 loader 會重抓到一致的 project/template pair。
       setTemplate(templateResponse.data);
       setProjectLabelTexts(projectData.label_texts || {});
 
@@ -146,7 +161,7 @@ export default function StudentEdit() {
 
   const handlePageSkip = async (pageIndex, skip) => {
     try {
-      await setStudentPageSkip(projectId, studentId, pageIndex, skip);
+      await setStudentPageSkip(projectId, project.template_revision, studentId, pageIndex, skip);
       setSkippedPages(prev => {
         const next = new Set(prev);
         if (skip) next.add(pageIndex); else next.delete(pageIndex);
@@ -162,8 +177,8 @@ export default function StudentEdit() {
           if (!skippedPages.has(i)) { setActivePage(i); return; }
         }
       }
-    } catch {
-      toast.error("操作失敗");
+    } catch (error) {
+      handleApiError(error, "操作失敗");
     }
   };
 
@@ -254,8 +269,8 @@ export default function StudentEdit() {
       navigate(target == null
         ? `/projects/${projectId}/edit`
         : `/projects/${projectId}/students/${target}/edit`);
-    } catch {
-      toast.error("切換前儲存失敗");
+    } catch (error) {
+      if (!isProjectTemplateRevisionError(error)) toast.error("切換前儲存失敗");
     } finally {
       setIsSwitchingStudent(false);
     }
@@ -388,6 +403,7 @@ export default function StudentEdit() {
             studentId={studentId}
             pageTimestamps={pageTimestamps}
             timestampSeed={previewTimestampSeed}
+            templateRevision={project.template_revision}
             isCurrentPageSkipped={isCurrentPageSkipped}
             onPageSkip={handlePageSkip}
             onRefresh={refreshPreview}
@@ -399,6 +415,7 @@ export default function StudentEdit() {
         <div className={`lg:block lg:col-start-2 lg:row-start-1 lg:min-w-0 xl:col-start-2 ${mobileTab === "photo" ? "block" : "hidden lg:block"}`}>
           <PhotoManager
             projectId={projectId}
+            templateRevision={project.template_revision}
             studentId={studentId}
             pages={templatePages}
             student={student}
@@ -407,6 +424,7 @@ export default function StudentEdit() {
             activePage={activePage}
             onPageFocus={setActivePage}
             onSaveStateChange={setIsPhotoSaving}
+            onTemplateRevisionChanged={loadStudentData}
             onPhotoSaved={() => { refreshAllPreviews(); }}
           />
         </div>

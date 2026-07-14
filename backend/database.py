@@ -94,6 +94,9 @@ class Template(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
+    # 每次會影響專案內容／畫面的模板儲存都遞增；用來防止舊編輯器覆寫新版，
+    # 也供專案端立即換掉模板與預覽快取。
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime, default=utc_now)
     period = relationship("TemplatePeriod", back_populates="templates")
     pages = relationship("TemplatePage", back_populates="template", cascade="all, delete-orphan", order_by="TemplatePage.page_number")
@@ -117,6 +120,9 @@ class Project(Base):
     template_id = Column(Integer, ForeignKey("templates.id"), nullable=False)
     department = Column(String, nullable=True)
     template_period_id = Column(Integer, ForeignKey("template_periods.id"), nullable=True)
+    # 此專案已同步到的模板版本。專案仍 live-reference Template，這個欄位是
+    # 同步完成／快取 bust 的明確水位，而不是另一份模板快照。
+    template_revision = Column(Integer, nullable=False, default=1, server_default="1")
     # 專案所有者（帶班老師或 admin），nullable 以相容歷史資料
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=utc_now)
@@ -160,6 +166,26 @@ class Student(Base):
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     project = relationship("Project", back_populates="students")
     roster_child = relationship("RosterChild", back_populates="students")
+
+
+class TemplateProjectSyncBackup(Base):
+    """模板結構同步前的 DB JSON 備份。
+
+    照片檔本身不會因頁面重排／刪除而搬移或刪除；這裡保存 binding 與舊模板
+    快照，讓誤刪頁面仍可人工復原，而不會只剩無法判讀的 storage key。
+    """
+    __tablename__ = "template_project_sync_backups"
+    id = Column(Integer, primary_key=True)
+    sync_id = Column(String, nullable=False)
+    template_id = Column(Integer, nullable=False)
+    project_id = Column(Integer, nullable=True)
+    old_revision = Column(Integer, nullable=False)
+    old_pages_json = Column(Text, nullable=False)
+    new_page_ids_json = Column(Text, nullable=False)
+    project_completed_at = Column(DateTime, nullable=True)
+    project_label_texts_json = Column(Text, nullable=True)
+    students_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class ProjectComment(Base):

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { completeProject, fetchProject as getProject, renderStudent, reopenProject } from "../api/projectApi";
-import { fetchTemplateCached as getTemplate } from "../api/templateApi";
+import { fetchProjectTemplatePair } from "../api/templateApi";
 import {
+  appendPreviewCacheVersion,
   buildStudentPagePreviewUrl as previewUrl,
   buildDownloadPdfUrl as downloadPdf,
   buildDownloadImagesZipUrl as downloadImagesZip,
@@ -137,12 +138,13 @@ export default function ProjectReview() {
 
   const loadProject = useCallback(async () => {
     try {
-      const projectResponse = await getProject(id);
-      setProject(projectResponse.data);
+      const { projectData, templateResponse } = await fetchProjectTemplatePair(
+        () => getProject(id),
+      );
+      setProject(projectData);
       // 預覽 URL 的版本戳跟著 updated_at 走：內容沒變就沿用同一組 URL，
       // 瀏覽器快取（後端已改為 private, max-age）能吃到，來回切頁不重載縮圖牆
-      setTs(new Date(projectResponse.data.updated_at).getTime() || Date.now());
-      const templateResponse = await getTemplate(projectResponse.data.template_id);
+      setTs(new Date(projectData.updated_at).getTime() || Date.now());
       setTemplate(templateResponse.data);
       setImageShareDrafts({});
       setAllImagesShareDraft(null);
@@ -196,7 +198,11 @@ export default function ProjectReview() {
       for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
         const { blob } = await fetchApiBlob(
           renderClient,
-          `${previewUrl(id, studentRecord.id, pageIndex)}?t=${requestTs}`,
+          appendPreviewCacheVersion(
+            previewUrl(id, studentRecord.id, pageIndex),
+            requestTs,
+            project.template_revision,
+          ),
         );
         const file = createFileFromBlob(
           blob,
@@ -786,7 +792,11 @@ export default function ProjectReview() {
               </IconButton>
             </div>
             <img
-              src={`${previewUrl(id, preview.studentId, preview.pageIndex)}?t=${ts}`}
+              src={appendPreviewCacheVersion(
+                previewUrl(id, preview.studentId, preview.pageIndex),
+                ts,
+                project.template_revision,
+              )}
               alt="preview"
               className="w-full"
             />
@@ -876,6 +886,7 @@ export default function ProjectReview() {
               projectId={id}
               pageCount={pageCount}
               ts={ts}
+              templateRevision={project.template_revision}
               canEditCurrentProject={canEditCurrentProject}
               photoProgress={photoProgressByStudentId.get(student.id)}
               isRendering={rendering[student.id]}

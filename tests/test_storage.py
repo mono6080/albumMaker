@@ -4,9 +4,13 @@
 import io
 import os
 import uuid
+from datetime import datetime
 
 import pytest
 
+from database import Student
+from services.file_service import ProcessedImageUpload, content_versioned_filename
+from services.student_pages import apply_photo_to_page
 from services.storage import LocalStorageAdapter, R2StorageAdapter, _validate_r2_serve_mode
 from services.project_service import _clear_student_render_outputs
 
@@ -17,6 +21,46 @@ class FakeClientError(Exception):
             "Error": {"Code": code},
             "ResponseMetadata": {"HTTPStatusCode": status_code},
         }
+
+
+def test_content_versioned_filename_preserves_hash_after_long_original_name():
+    first = content_versioned_filename("a" * 240 + ".png", "1" * 64, "image")
+    second = content_versioned_filename("a" * 240 + ".png", "2" * 64, "image")
+
+    assert len(first) <= 180
+    assert first.endswith("_" + "1" * 16 + ".png")
+    assert second.endswith("_" + "2" * 16 + ".png")
+    assert first != second
+
+
+def test_reordered_page_photo_replacement_never_overwrites_other_page_asset(tmp_path):
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    other_page_key = "projects/proj1/photos/student1/p0_slot1_IMG.jpg"
+    replaced_page_key = "projects/proj1/photos/student1/p1_slot1_IMG.jpg"
+    storage.put(other_page_key, b"original-page-zero")
+    storage.put(replaced_page_key, b"original-page-one")
+    pages_data = [
+        {"page_index": 0, "photos": {"1": {"path": replaced_page_key}}, "label_texts": {}},
+        {"page_index": 1, "photos": {"1": {"path": other_page_key}}, "label_texts": {}},
+    ]
+    student = Student(id=1, project_id=1, name="孩子", pages_data_json="[]")
+
+    new_key = apply_photo_to_page(
+        pages_data,
+        student,
+        project_id=1,
+        page_index=0,
+        slot_id=1,
+        processed_upload=ProcessedImageUpload(data=b"new-photo", filename="IMG.jpg"),
+        storage=storage,
+        now=datetime(2026, 7, 15),
+    )
+
+    assert new_key not in {other_page_key, replaced_page_key}
+    assert storage.get_bytes(new_key) == b"new-photo"
+    assert storage.get_bytes(other_page_key) == b"original-page-zero"
+    assert storage.exists(replaced_page_key) is False
+    assert pages_data[1]["photos"]["1"]["path"] == other_page_key
 
 
 class FakePaginator:

@@ -15,6 +15,7 @@ export default function StudentPreviewPanel({
   onPageSkip,
   onRefresh,
   timestampSeed = 0,
+  templateRevision = null,
   // 專案完成鎖定：頁面刪除/還原屬內容修改，鎖定時停用
   isLocked = false,
 }) {
@@ -41,6 +42,7 @@ export default function StudentPreviewPanel({
           studentId={studentId}
           pageIndex={activePage}
           timestamp={pageTimestamps[activePage] ?? timestampSeed}
+          templateRevision={templateRevision}
         />
         {isCurrentPageSkipped && (
           <div className="absolute inset-0 flex items-center justify-center">

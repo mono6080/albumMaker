@@ -77,8 +77,12 @@ export const deleteStudent = (projectId, studentId) =>
   apiClient.delete(`/projects/${projectId}/students/${studentId}`);
 
 /** 設定或取消學生某頁的跳過旗標 */
-export const setStudentPageSkip = (projectId, studentId, pageIndex, skip) =>
-  apiClient.patch(`/projects/${projectId}/students/${studentId}/pages/${pageIndex}/skip`, { skip });
+export const setStudentPageSkip = (projectId, expectedTemplateRevision, studentId, pageIndex, skip) =>
+  apiClient.patch(
+    `/projects/${projectId}/students/${studentId}/pages/${pageIndex}/skip`,
+    { skip },
+    { params: { expected_template_revision: expectedTemplateRevision } },
+  );
 
 // ── 照片管理 ──────────────────────────────────────────────────────────────────
 
@@ -86,7 +90,9 @@ export const setStudentPageSkip = (projectId, studentId, pageIndex, skip) =>
 const UPLOAD_TIMEOUT_MS = 120000;
 
 /** 上傳學生照片至指定頁面欄位，onProgress(0~100) 可選 */
-export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, onProgress) => {
+export const uploadPhoto = (
+  projectId, expectedTemplateRevision, studentId, pageIndex, slotId, photoFile, onProgress,
+) => {
   const formData = new FormData();
   formData.append("file", photoFile);
   return apiClient.post(
@@ -94,13 +100,16 @@ export const uploadPhoto = (projectId, studentId, pageIndex, slotId, photoFile, 
     formData,
     {
       timeout: UPLOAD_TIMEOUT_MS,
+      params: { expected_template_revision: expectedTemplateRevision },
       ...(onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}),
     }
   );
 };
 
 /** 上傳專案共用照片，套用到所有學生同一頁同一照片格 */
-export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile, onProgress) => {
+export const uploadSharedProjectPhoto = (
+  projectId, expectedTemplateRevision, pageIndex, slotId, photoFile, onProgress,
+) => {
   const formData = new FormData();
   formData.append("file", photoFile);
   return apiClient.post(
@@ -108,6 +117,7 @@ export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile
     formData,
     {
       timeout: UPLOAD_TIMEOUT_MS,
+      params: { expected_template_revision: expectedTemplateRevision },
       ...(onProgress ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) } : {}),
     }
   );
@@ -121,7 +131,7 @@ export const uploadSharedProjectPhoto = (projectId, pageIndex, slotId, photoFile
  * 回傳格式：{ ok, page_index, slot_id, succeeded[], failed[], skipped[] }
  */
 export const batchUploadPhotos = (
-  projectId, pageIndex, slotId,
+  projectId, expectedTemplateRevision, pageIndex, slotId,
   assignments,
   options = {},
   onProgress,
@@ -139,6 +149,7 @@ export const batchUploadPhotos = (
     formData,
     {
       timeout: UPLOAD_TIMEOUT_MS,
+      params: { expected_template_revision: expectedTemplateRevision },
       ...(onProgress
         ? { onUploadProgress: e => onProgress(Math.round(e.loaded * 100 / (e.total || 1))) }
         : {}),
@@ -150,10 +161,11 @@ export const batchUploadPhotos = (
  * 更新照片欄位對應關係（支援重新排列與清除）。
  * pagesMapping 格式：{"0": {"1": "/path", "2": null}, ...}
  */
-export const updatePhotoMapping = (projectId, studentId, pagesMapping) =>
+export const updatePhotoMapping = (projectId, expectedTemplateRevision, studentId, pagesMapping) =>
   apiClient.put(
     `/projects/${projectId}/students/${studentId}/photos/mapping`,
-    { pages: pagesMapping }
+    { pages: pagesMapping },
+    { params: { expected_template_revision: expectedTemplateRevision } },
   );
 
 // ── 對應文字 ──────────────────────────────────────────────────────────────────
@@ -163,12 +175,18 @@ export const fetchProjectLabelTexts = (projectId) =>
   apiClient.get(`/projects/${projectId}/label_texts`);
 
 /** 更新專案層級的對應文字設定（signal 供自動儲存取消過時請求） */
-export const updateProjectLabelTexts = (projectId, labelTextsPayload, signal) =>
-  apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload, { signal });
+export const updateProjectLabelTexts = (projectId, expectedTemplateRevision, labelTextsPayload, signal) =>
+  apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload, {
+    signal,
+    params: { expected_template_revision: expectedTemplateRevision },
+  });
 
 /** 批次更新多位學生的對應文字（signal 供自動儲存取消過時請求） */
-export const batchUpdateStudentTexts = (projectId, studentsPayload, signal) =>
-  apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload, { signal });
+export const batchUpdateStudentTexts = (projectId, expectedTemplateRevision, studentsPayload, signal) =>
+  apiClient.put(`/projects/${projectId}/batch/texts`, studentsPayload, {
+    signal,
+    params: { expected_template_revision: expectedTemplateRevision },
+  });
 
 // ── 渲染 ──────────────────────────────────────────────────────────────────────
 

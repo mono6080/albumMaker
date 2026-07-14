@@ -1,10 +1,11 @@
 # 專案與學生 CRUD 路由
 # 處理專案建立/讀取/修改/刪除，以及學生的批次新增、改名、刪除與頁面跳過
 
+import logging
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, Query
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -13,9 +14,18 @@ from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, ProjectComment, Student, Template, User, get_db, utc_now
 from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
-from services.project_service import purge_expired_archived_projects
+from services.project_service import (
+    clear_student_render_outputs,
+    purge_expired_archived_projects,
+)
+from services.project_template_revision import lock_project_template_revision
 from services.storage import get_storage
-from services.student_pages import ensure_page_entry, mutate_student_pages
+from services.student_pages import (
+    ensure_page_entry,
+    lock_student_page_writes,
+    mutate_student_pages,
+)
+from services.template_sync_locks import lock_project_content_writes, lock_template_write
 from template_periods import department_label
 
 from ._helpers import (
@@ -38,6 +48,39 @@ from .schemas import (
 
 router = APIRouter()
 PROJECT_ARCHIVE_DAYS = 30
+logger = logging.getLogger(__name__)
+
+
+def _clear_student_outputs_best_effort(
+    storage,
+    project_id: int,
+    project_name: str,
+    student_name: str,
+    output_filename: str | None,
+) -> None:
+    """DB mutation 已提交後，輸出清理失敗只留紀錄，不把成功操作偽裝成失敗。"""
+    try:
+        clear_student_render_outputs(
+            storage,
+            project_id,
+            project_name,
+            student_name,
+            output_filename,
+        )
+    except Exception:
+        logger.exception(
+            "學生輸出清理失敗 project_id=%s student_name=%s",
+            project_id,
+            student_name,
+        )
+
+
+def _delete_storage_prefix_best_effort(storage, prefix: str) -> None:
+    """刪除已失去 DB binding 的 storage namespace；失敗時保留可追查日誌。"""
+    try:
+        storage.delete_prefix(prefix)
+    except Exception:
+        logger.exception("Storage prefix 清理失敗 prefix=%s", prefix)
 
 
 @router.get("/", response_model=list[ProjectSummary])
@@ -78,38 +121,44 @@ def create_project(
     current_user: User = Depends(require_role("admin", "teacher", "supervisor")),
 ):
     """建立新專案，需指定使用的模板，自動設定所有者為當前使用者。"""
-    template = db.query(Template).filter(Template.id == template_id).first()
-    if not template:
-        raise HTTPException(status_code=404, detail="找不到模板")
+    # 與模板 snapshot 共用同一把鎖：若剛好同步中，等同步完成後以最新 revision
+    # 建立；不會落在 project 掃描之後、commit 之前而漏掉同步。
+    with lock_template_write(template_id):
+        db.rollback()
+        db.expire_all()
+        template = db.query(Template).filter(Template.id == template_id).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="找不到模板")
 
-    project_department = department
-    project_period_id = template_period_id
-    if template.period:
-        if department and department != template.period.department:
-            raise HTTPException(status_code=400, detail="模板不屬於所選部門")
-        if template_period_id and template_period_id != template.period.id:
-            raise HTTPException(status_code=400, detail="模板不屬於所選期別")
-        if template.period.status != "active":
-            raise HTTPException(status_code=400, detail="只能使用「使用中」期別的模板建立專案")
-        project_department = template.period.department
-        project_period_id = template.period.id
+        project_department = department
+        project_period_id = template_period_id
+        if template.period:
+            if department and department != template.period.department:
+                raise HTTPException(status_code=400, detail="模板不屬於所選部門")
+            if template_period_id and template_period_id != template.period.id:
+                raise HTTPException(status_code=400, detail="模板不屬於所選期別")
+            if template.period.status != "active":
+                raise HTTPException(status_code=400, detail="只能使用「使用中」期別的模板建立專案")
+            project_department = template.period.department
+            project_period_id = template.period.id
 
-    new_project = Project(
-        name=name,
-        template_id=template_id,
-        owner_id=current_user.id,
-        department=project_department,
-        template_period_id=project_period_id,
-    )
-    db.add(new_project)
-    db.commit()
-    db.refresh(new_project)
-    return {
-        "id": new_project.id,
-        "name": new_project.name,
-        "department": new_project.department,
-        "template_period_id": new_project.template_period_id,
-    }
+        new_project = Project(
+            name=name,
+            template_id=template_id,
+            template_revision=template.revision,
+            owner_id=current_user.id,
+            department=project_department,
+            template_period_id=project_period_id,
+        )
+        db.add(new_project)
+        db.commit()
+        db.refresh(new_project)
+        return {
+            "id": new_project.id,
+            "name": new_project.name,
+            "department": new_project.department,
+            "template_period_id": new_project.template_period_id,
+        }
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
@@ -125,6 +174,7 @@ def get_project(
         "id": project.id,
         "name": project.name,
         "template_id": project.template_id,
+        "template_revision": project.template_revision,
         "department": project.department,
         "department_label": department_label(project.department),
         "template_period_id": project.template_period_id,
@@ -172,6 +222,7 @@ def get_student_editor_detail(
             "id": project.id,
             "name": project.name,
             "template_id": project.template_id,
+            "template_revision": project.template_revision,
             "owner_id": project.owner_id,
             "completed_at": project.completed_at,
             "label_texts": _parse_json_field(project.label_texts_json or "{}", "label_texts_json"),
@@ -201,8 +252,36 @@ def rename_project(
     """修改專案名稱（行內編輯）。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    project.name = name.strip()
-    db.commit()
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_writable(project, current_user)
+        normalized_name = name.strip()
+        if project.name == normalized_name:
+            db.rollback()
+            return {"ok": True}
+
+        previous_name = project.name
+        output_states = [
+            (student.name, student.output_filename)
+            for student in project.students
+        ]
+        project.name = normalized_name
+        project.updated_at = utc_now()
+        for student in project.students:
+            student.output_filename = None
+        db.commit()
+
+        storage = get_storage()
+        for student_name, output_filename in output_states:
+            _clear_student_outputs_best_effort(
+                storage,
+                project_id,
+                previous_name,
+                student_name,
+                output_filename,
+            )
     return {"ok": True}
 
 
@@ -215,17 +294,22 @@ def delete_project(
     """將指定專案封存 30 天，期限內可復原。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    now = utc_now()
-    project.deleted_at = now
-    project.archive_expires_at = now + timedelta(days=PROJECT_ARCHIVE_DAYS)
-    project.updated_at = now
-    db.commit()
-    db.refresh(project)
-    return {
-        "ok": True,
-        "deleted_at": project.deleted_at,
-        "archive_expires_at": project.archive_expires_at,
-    }
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_writable(project, current_user)
+        now = utc_now()
+        project.deleted_at = now
+        project.archive_expires_at = now + timedelta(days=PROJECT_ARCHIVE_DAYS)
+        project.updated_at = now
+        db.commit()
+        db.refresh(project)
+        return {
+            "ok": True,
+            "deleted_at": project.deleted_at,
+            "archive_expires_at": project.archive_expires_at,
+        }
 
 
 @router.post("/{project_id}/restore")
@@ -237,17 +321,28 @@ def restore_project(
     """復原 30 天封存期限內的專案。"""
     project = get_project_or_404(project_id, db, include_archived=True)
     assert_project_writable(project, current_user)
-    if project.deleted_at is None:
-        return {"ok": True}
-    now = utc_now()
-    if project.archive_expires_at and project.archive_expires_at <= now:
+    expired_at_lock = False
+    now = None
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db, include_archived=True)
+        assert_project_writable(project, current_user)
+        # 可能曾等待模板同步／其他專案寫入；到期判斷必須使用拿到鎖後的時間。
+        now = utc_now()
+        if project.deleted_at is None:
+            return {"ok": True}
+        if project.archive_expires_at and project.archive_expires_at <= now:
+            expired_at_lock = True
+        else:
+            project.deleted_at = None
+            project.archive_expires_at = None
+            project.updated_at = now
+            db.commit()
+            return {"ok": True}
+    if expired_at_lock:
         purge_expired_archived_projects(db, now)
-        raise HTTPException(status_code=404, detail="專案不存在或已清除")
-    project.deleted_at = None
-    project.archive_expires_at = None
-    project.updated_at = now
-    db.commit()
-    return {"ok": True}
+    raise HTTPException(status_code=404, detail="專案不存在或已清除")
 
 
 @router.post("/{project_id}/complete")
@@ -259,13 +354,18 @@ def complete_project(
     """標記全班完成：內容鎖定（名單/照片/文字），需主管或 admin 退回才能再修改。"""
     project = get_project_or_404(project_id, db)
     assert_project_writable(project, current_user)
-    # 空專案沒有「完成」可言，擋下誤觸（一鎖名單就什麼都動不了）
-    if not project.students:
-        raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
-    if project.completed_at is None:
-        project.completed_at = utc_now()
-        db.commit()
-    return {"ok": True, "completed_at": project.completed_at}
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_writable(project, current_user)
+        # 空專案沒有「完成」可言，擋下誤觸（一鎖名單就什麼都動不了）
+        if not project.students:
+            raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
+        if project.completed_at is None:
+            project.completed_at = utc_now()
+            db.commit()
+        return {"ok": True, "completed_at": project.completed_at}
 
 
 @router.post("/{project_id}/reopen")
@@ -277,9 +377,14 @@ def reopen_project(
     """退回「全班完成」標記，恢復可編輯（限管轄該老師的主管或 admin）。"""
     project = get_project_or_404(project_id, db)
     assert_project_completion_revertible(project, current_user, db)
-    project.completed_at = None
-    db.commit()
-    return {"ok": True}
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_completion_revertible(project, current_user, db)
+        project.completed_at = None
+        db.commit()
+        return {"ok": True}
 
 
 def _visible_projects_query(db: Session, current_user: User):
@@ -341,39 +446,44 @@ def batch_add_students(
     """批次新增多位學生，自動跳過空白名稱與重複名稱。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
+    with lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_content_writable(project, current_user)
 
-    existing_names = {student.name for student in project.students}
-    created_names = []
-    skipped_names = []
-    names_seen_in_batch = set()
-    next_order_index = max(
-        (student.order_index for student in project.students),
-        default=-1
-    ) + 1
+        existing_names = {student.name for student in project.students}
+        created_names = []
+        skipped_names = []
+        names_seen_in_batch = set()
+        next_order_index = max(
+            (student.order_index for student in project.students),
+            default=-1
+        ) + 1
 
-    for raw_name in names:
-        student_name = raw_name.strip()
-        if not student_name:
-            continue
-        if student_name in existing_names or student_name in names_seen_in_batch:
-            skipped_names.append(student_name)
-            continue
+        for raw_name in names:
+            student_name = raw_name.strip()
+            if not student_name:
+                continue
+            if student_name in existing_names or student_name in names_seen_in_batch:
+                skipped_names.append(student_name)
+                continue
 
-        names_seen_in_batch.add(student_name)
-        new_student = Student(
-            project_id=project_id,
-            name=student_name,
-            order_index=next_order_index,
-            pages_data_json="[]",
-            # 自動連結名冊：同名唯一則連既有孩子、查無自動建立、歧義留 None 待確認
-            roster_child_id=resolve_roster_child_id(db, student_name),
-        )
-        db.add(new_student)
-        created_names.append(student_name)
-        next_order_index += 1
+            names_seen_in_batch.add(student_name)
+            new_student = Student(
+                project_id=project_id,
+                name=student_name,
+                order_index=next_order_index,
+                pages_data_json="[]",
+                # 自動連結名冊：同名唯一則連既有孩子、查無自動建立、歧義留 None 待確認
+                roster_child_id=resolve_roster_child_id(db, student_name),
+            )
+            db.add(new_student)
+            created_names.append(student_name)
+            next_order_index += 1
 
-    db.commit()
-    return {"created": created_names, "skipped": skipped_names}
+        db.commit()
+        return {"created": created_names, "skipped": skipped_names}
 
 
 @router.post("/{project_id}/students/copy", response_model=BatchAddResult)
@@ -391,32 +501,39 @@ def copy_students_from_project(
     assert_project_content_writable(project, current_user)
     source_project = get_project_or_404(payload.source_project_id, db)
     assert_project_readable(source_project, current_user, db)
+    with lock_project_content_writes([project_id, payload.source_project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_content_writable(project, current_user)
+        source_project = get_project_or_404(payload.source_project_id, db)
+        assert_project_readable(source_project, current_user, db)
 
-    existing_names = {student.name for student in project.students}
-    created_names = []
-    skipped_names = []
-    next_order_index = max(
-        (student.order_index for student in project.students),
-        default=-1
-    ) + 1
+        existing_names = {student.name for student in project.students}
+        created_names = []
+        skipped_names = []
+        next_order_index = max(
+            (student.order_index for student in project.students),
+            default=-1
+        ) + 1
 
-    for source_student in source_project.students:
-        if source_student.name in existing_names:
-            skipped_names.append(source_student.name)
-            continue
-        existing_names.add(source_student.name)
-        db.add(Student(
-            project_id=project_id,
-            name=source_student.name,
-            order_index=next_order_index,
-            pages_data_json="[]",
-            roster_child_id=source_student.roster_child_id,
-        ))
-        created_names.append(source_student.name)
-        next_order_index += 1
+        for source_student in source_project.students:
+            if source_student.name in existing_names:
+                skipped_names.append(source_student.name)
+                continue
+            existing_names.add(source_student.name)
+            db.add(Student(
+                project_id=project_id,
+                name=source_student.name,
+                order_index=next_order_index,
+                pages_data_json="[]",
+                roster_child_id=source_student.roster_child_id,
+            ))
+            created_names.append(source_student.name)
+            next_order_index += 1
 
-    db.commit()
-    return {"created": created_names, "skipped": skipped_names}
+        db.commit()
+        return {"created": created_names, "skipped": skipped_names}
 
 
 @router.put("/{project_id}/students/{student_id}")
@@ -430,16 +547,42 @@ def update_student(
     """更新學生基本資料（目前支援修改姓名）。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
-    if name:
+    get_student_or_404(student_id, project_id, db)
+    with (
+        lock_project_content_writes([project_id]),
+        lock_student_page_writes([student_id]),
+    ):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_content_writable(project, current_user)
+        student = get_student_or_404(student_id, project_id, db)
+        if not name or student.name == name:
+            db.rollback()
+            return {"ok": True}
+
+        previous_name = student.name
+        previous_output_filename = student.output_filename
         previous_child_id = student.roster_child_id
+        now = utc_now()
         student.name = name
+        student.output_filename = None
+        student.updated_at = now
+        project.updated_at = now
         # 改名後重新解析名冊連結（改回同名孩子或成為新孩子），舊名冊項變孤兒則清掉
         student.roster_child_id = resolve_roster_child_id(db, name)
         if previous_child_id != student.roster_child_id:
             db.flush()
             delete_roster_child_if_orphaned(db, previous_child_id)
-    db.commit()
+        db.commit()
+
+        _clear_student_outputs_best_effort(
+            get_storage(),
+            project_id,
+            project.name,
+            previous_name,
+            previous_output_filename,
+        )
     return {"ok": True}
 
 
@@ -453,13 +596,39 @@ def delete_student(
     """刪除指定學生及其所有資料與照片檔案。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
-    previous_child_id = student.roster_child_id
-    db.delete(student)
-    db.flush()
-    delete_roster_child_if_orphaned(db, previous_child_id)
-    db.commit()
-    get_storage().delete_prefix(f"projects/proj{project_id}/photos/student{student_id}")
+    get_student_or_404(student_id, project_id, db)
+    storage = get_storage()
+    with (
+        lock_project_content_writes([project_id]),
+        lock_student_page_writes([student_id]),
+    ):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_content_writable(project, current_user)
+        student = get_student_or_404(student_id, project_id, db)
+        previous_name = student.name
+        previous_output_filename = student.output_filename
+        previous_child_id = student.roster_child_id
+        project.updated_at = utc_now()
+        db.delete(student)
+        db.flush()
+        delete_roster_child_if_orphaned(db, previous_child_id)
+        db.commit()
+
+        _clear_student_outputs_best_effort(
+            storage,
+            project_id,
+            project.name,
+            previous_name,
+            previous_output_filename,
+        )
+        # 保持 project lock 到舊照片 namespace 清除完成，避免 SQLite 重用剛刪除的
+        # 最大 student id 後，舊請求誤刪新學生剛上傳的照片。
+        _delete_storage_prefix_best_effort(
+            storage,
+            f"projects/proj{project_id}/photos/student{student_id}",
+        )
     return {"ok": True}
 
 
@@ -471,17 +640,20 @@ def set_page_skip(
     student_id: int,
     page_index: int,
     payload: PageSkipPayload,
+    expected_template_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """設定或取消學生某頁的跳過旗標（渲染時略過此頁）。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
+    with lock_project_template_revision(db, project, expected_template_revision):
+        assert_project_content_writable(project, current_user)
+        student = get_student_or_404(student_id, project_id, db)
 
-    # 進學生寫鎖：與照片上傳/文字儲存併發打同一學生時不互相蓋寫 pages_data
-    def _mutate(pages_data) -> None:
-        ensure_page_entry(pages_data, page_index)["skip"] = payload.skip
+        # 進學生寫鎖：與照片上傳/文字儲存併發打同一學生時不互相蓋寫 pages_data
+        def _mutate(pages_data) -> None:
+            ensure_page_entry(pages_data, page_index)["skip"] = payload.skip
 
-    mutate_student_pages(db, student, _mutate)
+        mutate_student_pages(db, student, _mutate)
     return {"ok": True}

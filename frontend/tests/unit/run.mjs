@@ -15,6 +15,8 @@ import {
   buildTemplatePagePreviewUrl,
   buildTemplateSpreadPreviewUrl,
 } from "../../src/api/urls.js";
+import { apiClient } from "../../src/api/authApi.js";
+import { fetchProjectTemplatePair } from "../../src/api/templateApi.js";
 import { getCanvasElementRefFromTarget } from "../../src/components/canvas/canvasHover.js";
 import { getApiPath, getFilenameFromDisposition, isMobileDevice } from "../../src/utils/browserFiles.js";
 import { buildItems, clampPan, getPhotoCropBox, normalizePhotoData, photoDims } from "../../src/utils/photoUtils.js";
@@ -154,6 +156,36 @@ test("API URL builders keep route contracts stable", () => {
   assert.equal(buildDownloadAllZipUrl(3, "screen"), "/api/projects/3/download/all?mode=screen");
   assert.equal(buildDownloadAllImagesZipUrl(3), "/api/projects/3/download/all/images?mode=print");
   assert.equal(buildDownloadAllImagesZipUrl(3, "screen"), "/api/projects/3/download/all/images?mode=screen");
+});
+
+
+test("project/template pair loader retries a revision split without poisoning cache", async () => {
+  const originalGet = apiClient.get;
+  let projectFetchCount = 0;
+  let templateFetchCount = 0;
+  apiClient.get = async (path) => {
+    assert.equal(path, "/templates/987654321");
+    templateFetchCount += 1;
+    return { data: { id: 987654321, revision: 2, pages: [] } };
+  };
+  try {
+    const result = await fetchProjectTemplatePair(async () => {
+      projectFetchCount += 1;
+      return {
+        data: {
+          id: 123456789,
+          template_id: 987654321,
+          template_revision: projectFetchCount === 1 ? 1 : 2,
+        },
+      };
+    });
+    assert.equal(result.projectData.template_revision, 2);
+    assert.equal(result.templateResponse.data.revision, 2);
+    assert.equal(projectFetchCount, 2);
+    assert.equal(templateFetchCount, 2);
+  } finally {
+    apiClient.get = originalGet;
+  }
 });
 
 
@@ -2499,7 +2531,7 @@ test("unsupported orphan markers and unsafe numeric IDs are rejected", () => {
 let failures = 0;
 for (const { name, fn } of tests) {
   try {
-    fn();
+    await fn();
     console.log(`ok - ${name}`);
   } catch (error) {
     failures += 1;

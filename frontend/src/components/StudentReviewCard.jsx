@@ -3,7 +3,10 @@
 
 import { Link } from "react-router-dom";
 import { Download, ImageDown, Loader2, Pencil } from "lucide-react";
-import { buildStudentPagePreviewUrl as previewUrl } from "../api/urls";
+import {
+  appendPreviewCacheVersion,
+  buildStudentPagePreviewUrl as previewUrl,
+} from "../api/urls";
 import { IconButton, Surface } from "./ui";
 import ReviewPreviewImage from "./ReviewPreviewImage";
 
@@ -12,6 +15,7 @@ export default function StudentReviewCard({
   projectId,
   pageCount,
   ts,
+  templateRevision,
   canEditCurrentProject,
   photoProgress,
   isRendering,
@@ -65,7 +69,11 @@ export default function StudentReviewCard({
               className="flex-shrink-0 w-20 rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition-all group"
             >
               <ReviewPreviewImage
-                src={`${previewUrl(projectId, student.id, i, 0.4)}&t=${ts}`}
+                src={appendPreviewCacheVersion(
+                  previewUrl(projectId, student.id, i, 0.4),
+                  ts,
+                  templateRevision,
+                )}
                 alt={`p${i + 1}`}
                 className="w-full h-24 object-cover"
               />

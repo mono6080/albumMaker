@@ -4,7 +4,7 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
@@ -12,6 +12,7 @@ from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db, utc_now
 
 from services.student_pages import ensure_page_entry, mutate_student_pages
+from services.project_template_revision import lock_project_template_revision
 
 from ._helpers import (
     LabelTextsPayload,
@@ -40,15 +41,18 @@ def get_project_label_texts(
 def update_project_label_texts(
     project_id: int,
     payload: dict[str, Any],
+    expected_template_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """更新專案層級的對應文字設定。格式：{page_index: {label_id: text}}"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    project.label_texts_json = json.dumps(payload)
-    project.updated_at = utc_now()
-    db.commit()
+    with lock_project_template_revision(db, project, expected_template_revision):
+        assert_project_content_writable(project, current_user)
+        project.label_texts_json = json.dumps(payload)
+        project.updated_at = utc_now()
+        db.commit()
     return {"ok": True}
 
 
@@ -58,22 +62,25 @@ def update_student_label_texts(
     student_id: int,
     page_index: int,
     texts: LabelTextsPayload,
+    expected_template_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """更新學生指定頁面的個人對應文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
+    with lock_project_template_revision(db, project, expected_template_revision):
+        assert_project_content_writable(project, current_user)
+        student = get_student_or_404(student_id, project_id, db)
 
-    # 進學生寫鎖：文字自動儲存與照片上傳併發打同一學生時不互相蓋寫 pages_data
-    def _mutate(pages_data) -> None:
-        ensure_page_entry(pages_data, page_index)["label_texts"] = texts
-        now = utc_now()
-        student.updated_at = now
-        project.updated_at = now
+        # 進學生寫鎖：文字自動儲存與照片上傳併發打同一學生時不互相蓋寫 pages_data
+        def _mutate(pages_data) -> None:
+            ensure_page_entry(pages_data, page_index)["label_texts"] = texts
+            now = utc_now()
+            student.updated_at = now
+            project.updated_at = now
 
-    mutate_student_pages(db, student, _mutate)
+        mutate_student_pages(db, student, _mutate)
     return {"ok": True}
 
 
@@ -81,31 +88,34 @@ def update_student_label_texts(
 def batch_update_texts(
     project_id: int,
     payload: BatchTextsPayload,
+    expected_template_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """批次更新多位學生的對應文字。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    students_payload = payload.students
-    now = utc_now()
+    with lock_project_template_revision(db, project, expected_template_revision):
+        assert_project_content_writable(project, current_user)
+        students_payload = payload.students
+        now = utc_now()
 
-    # 逐學生進寫鎖並 commit（交易粒度從整批一次變逐學生一次，
-    # 換取與照片上傳併發時不互相蓋寫 pages_data）
-    for student in project.students:
-        student_id_str = str(student.id)
-        if student_id_str not in students_payload:
-            continue
+        # 逐學生進寫鎖並 commit（交易粒度從整批一次變逐學生一次，
+        # 換取與照片上傳併發時不互相蓋寫 pages_data）
+        for student in project.students:
+            student_id_str = str(student.id)
+            if student_id_str not in students_payload:
+                continue
 
-        def _mutate(pages_data, student=student, payload_pages=students_payload[student_id_str]) -> None:
-            for page_index_str, label_texts in payload_pages.items():
-                ensure_page_entry(pages_data, int(page_index_str))["label_texts"] = label_texts
-            student.updated_at = now
-            project.updated_at = now
+            def _mutate(pages_data, student=student, payload_pages=students_payload[student_id_str]) -> None:
+                for page_index_str, label_texts in payload_pages.items():
+                    ensure_page_entry(pages_data, int(page_index_str))["label_texts"] = label_texts
+                student.updated_at = now
+                project.updated_at = now
 
-        mutate_student_pages(db, student, _mutate)
+            mutate_student_pages(db, student, _mutate)
 
-    # 沒有任何學生命中 payload 時仍維持舊行為：更新專案時間戳
-    project.updated_at = now
-    db.commit()
+        # 沒有任何學生命中 payload 時仍維持舊行為：更新專案時間戳
+        project.updated_at = now
+        db.commit()
     return {"ok": True}

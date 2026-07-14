@@ -4,13 +4,15 @@
 
 import json
 import logging
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
 from crud.template_crud import get_period_or_404, get_template_or_404, get_template_page_or_404
-from database import Project, Template, TemplatePage, TemplatePeriod, User, get_db
+from database import Project, Student, Template, TemplatePeriod, User, get_db
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -118,9 +120,26 @@ def get_template(
 ):
     """回傳模板詳細資訊，包含所有頁面的佈局資料。"""
     template = get_template_or_404(template_id, db)
+    usage = (
+        db.query(
+            func.count(func.distinct(Project.id)).label("project_count"),
+            func.count(Student.id).label("student_count"),
+            func.count(func.distinct(case(
+                (Project.completed_at.isnot(None), Project.id),
+            ))).label("completed_project_count"),
+            func.count(func.distinct(case(
+                (Project.deleted_at.isnot(None), Project.id),
+            ))).label("archived_project_count"),
+        )
+        .select_from(Project)
+        .outerjoin(Student, Student.project_id == Project.id)
+        .filter(Project.template_id == template_id)
+        .one()
+    )
     return {
         "id": template.id,
         "name": template.name,
+        "revision": template.revision,
         "created_at": template.created_at,
         "photo_count": _count_template_photo_slots(template),
         "period_id": template.period_id,
@@ -129,6 +148,10 @@ def get_template(
         "period_status_label": period_status_label(template.period.status) if template.period else None,
         "department": template.period.department if template.period else None,
         "department_label": department_label(template.period.department) if template.period else None,
+        "project_count": usage.project_count,
+        "student_count": usage.student_count,
+        "completed_project_count": usage.completed_project_count,
+        "archived_project_count": usage.archived_project_count,
         "pages": [
             {
                 "id": page.id,
@@ -176,9 +199,12 @@ def replace_pages_snapshot(
         payload.expected_page_ids,
         [page.model_dump() for page in payload.pages],
         db,
+        expected_revision=payload.expected_revision,
+        confirm_project_sync=payload.confirm_project_sync,
+        project_sync_change_hash=payload.project_sync_change_hash,
     )
 
-@router.post("/{template_id}/pages")
+@router.post("/{template_id}/pages", deprecated=True)
 def add_page(
     template_id: int,
     db: Session = Depends(get_db),
@@ -186,12 +212,6 @@ def add_page(
 ):
     """在模板末尾新增一頁，並初始化空白佈局。"""
     template = get_template_or_404(template_id, db)
-
-    # 計算下一頁的頁碼（接在現有最大頁碼後）
-    next_page_number = max(
-        (page.page_number for page in template.pages),
-        default=-1
-    ) + 1
 
     # 初始化空白頁佈局
     blank_layout = {
@@ -205,18 +225,25 @@ def add_page(
         "logo": None,
     }
 
-    new_page = TemplatePage(
-        template_id=template_id,
-        page_number=next_page_number,
-        layout_json=json.dumps(blank_layout),
+    client_id = f"legacy-add-{uuid4().hex}"
+    result = replace_template_pages_snapshot(
+        template,
+        [page.id for page in template.pages],
+        [
+            *[
+                {"id": page.id, "client_id": None, "layout": json.loads(page.layout_json)}
+                for page in template.pages
+            ],
+            {"id": None, "client_id": client_id, "layout": blank_layout},
+        ],
+        db,
+        expected_revision=template.revision,
     )
-    db.add(new_page)
-    db.commit()
-    db.refresh(new_page)
-    return {"id": new_page.id, "page_number": new_page.page_number}
+    new_page = next(page for page in result["pages"] if page["client_id"] == client_id)
+    return {"id": new_page["id"], "page_number": new_page["page_number"]}
 
 
-@router.put("/{template_id}/pages/{page_id}/layout")
+@router.put("/{template_id}/pages/{page_id}/layout", deprecated=True)
 def update_page_layout(
     template_id: int,
     page_id: int,
@@ -225,13 +252,27 @@ def update_page_layout(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """更新模板頁面的佈局 JSON。"""
-    template_page = get_template_page_or_404(page_id, template_id, db)
-    template_page.layout_json = json.dumps(normalize_template_page_layout(layout))
-    db.commit()
+    template = get_template_or_404(template_id, db)
+    get_template_page_or_404(page_id, template_id, db)
+    normalized_layout = normalize_template_page_layout(layout)
+    replace_template_pages_snapshot(
+        template,
+        [page.id for page in template.pages],
+        [
+            {
+                "id": page.id,
+                "client_id": None,
+                "layout": normalized_layout if page.id == page_id else json.loads(page.layout_json),
+            }
+            for page in template.pages
+        ],
+        db,
+        expected_revision=template.revision,
+    )
     return {"ok": True}
 
 
-@router.delete("/{template_id}/pages/{page_id}")
+@router.delete("/{template_id}/pages/{page_id}", deprecated=True)
 def delete_page(
     template_id: int,
     page_id: int,
@@ -239,9 +280,17 @@ def delete_page(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """刪除指定模板頁面，並清除對應的背景圖檔案。"""
-    template_page = get_template_page_or_404(page_id, template_id, db)
-    if template_page.background_filename:
-        get_storage().delete(template_page.background_filename)
-    db.delete(template_page)
-    db.commit()
+    template = get_template_or_404(template_id, db)
+    get_template_page_or_404(page_id, template_id, db)
+    replace_template_pages_snapshot(
+        template,
+        [page.id for page in template.pages],
+        [
+            {"id": page.id, "client_id": None, "layout": json.loads(page.layout_json)}
+            for page in template.pages
+            if page.id != page_id
+        ],
+        db,
+        expected_revision=template.revision,
+    )
     return {"ok": True}

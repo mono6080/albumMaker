@@ -7,7 +7,9 @@ import io
 import json
 import logging
 import re
+import threading
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -28,6 +30,8 @@ from services.render_service import (
     save_album_images,
 )
 from services.storage import get_storage
+from services.student_pages import lock_student_page_writes
+from services.template_sync_locks import lock_project_content_writes
 from services.zip_stream import open_zip_stream
 
 logger = logging.getLogger(__name__)
@@ -36,28 +40,48 @@ logger = logging.getLogger(__name__)
 def purge_expired_archived_projects(db, now: datetime | None = None) -> list[int]:
     """刪除超過復原期限的專案與整個 storage namespace。"""
     cutoff = now or utc_now()
-    expired_projects = (
-        db.query(Project)
-        .filter(
-            Project.deleted_at.isnot(None),
-            Project.archive_expires_at.isnot(None),
-            Project.archive_expires_at <= cutoff,
+    expired_project_ids = [
+        project_id
+        for project_id, in (
+            db.query(Project.id)
+            .filter(
+                Project.deleted_at.isnot(None),
+                Project.archive_expires_at.isnot(None),
+                Project.archive_expires_at <= cutoff,
+            )
+            .all()
         )
-        .all()
-    )
-    storage = get_storage()
-    purged_project_ids = []
-    for project in expired_projects:
-        try:
-            storage.delete_prefix(f"projects/proj{project.id}")
-        except Exception as storage_error:
-            logger.error("過期專案 storage 清理失敗 project_id=%s: %s", project.id, storage_error)
-            continue
-        purged_project_ids.append(project.id)
-        db.delete(project)
-    if purged_project_ids:
-        db.commit()
-        logger.info("已清理過期封存專案 project_ids=%s", purged_project_ids)
+    ]
+    if not expired_project_ids:
+        return []
+
+    with lock_project_content_writes(expired_project_ids):
+        # 初查與拿到鎖之間可能剛被復原；鎖內重新查詢才是刪除依據。
+        db.rollback()
+        db.expire_all()
+        expired_projects = (
+            db.query(Project)
+            .filter(
+                Project.id.in_(expired_project_ids),
+                Project.deleted_at.isnot(None),
+                Project.archive_expires_at.isnot(None),
+                Project.archive_expires_at <= cutoff,
+            )
+            .all()
+        )
+        storage = get_storage()
+        purged_project_ids = []
+        for project in expired_projects:
+            try:
+                storage.delete_prefix(f"projects/proj{project.id}")
+            except Exception as storage_error:
+                logger.error("過期專案 storage 清理失敗 project_id=%s: %s", project.id, storage_error)
+                continue
+            purged_project_ids.append(project.id)
+            db.delete(project)
+        if purged_project_ids:
+            db.commit()
+            logger.info("已清理過期封存專案 project_ids=%s", purged_project_ids)
     return purged_project_ids
 
 
@@ -250,12 +274,45 @@ def _render_pipeline_fingerprint(paths: tuple[Path, ...] = _RENDER_PIPELINE_FILE
 
 _RENDER_PIPELINE_VERSION = _render_pipeline_fingerprint()
 
+_student_render_locks: dict[int, threading.Lock] = {}
+_student_render_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _lock_student_render(student_id: int):
+    """同一位學生一次只允許一個完整渲染，避免較早開始的工作晚到覆蓋。"""
+    with _student_render_locks_guard:
+        render_lock = _student_render_locks.setdefault(student_id, threading.Lock())
+    with render_lock:
+        yield
+
 
 def _clear_student_render_outputs(storage, output_prefix: str, combined_stem: str) -> None:
     """只清除指定學生的兩份 PDF 與專屬頁面圖／render state。"""
     storage.delete(f"{output_prefix}/{combined_stem}.pdf")
     storage.delete(f"{output_prefix}/{combined_stem}_screen.pdf")
     storage.delete_prefix(f"{output_prefix}/{combined_stem}")
+
+
+def clear_student_render_outputs(
+    storage,
+    project_id: int,
+    project_name: str,
+    student_name: str,
+    output_filename: str | None,
+) -> None:
+    """依既有 DB key 與姓名清除單一學生的 canonical render outputs。"""
+    output_targets = {
+        (
+            get_project_output_prefix(project_id),
+            build_combined_stem(project_name, student_name),
+        )
+    }
+    if output_filename:
+        output_path = PurePosixPath(output_filename)
+        output_targets.add((str(output_path.parent), output_path.stem))
+    for output_prefix, combined_stem in output_targets:
+        _clear_student_render_outputs(storage, output_prefix, combined_stem)
 
 
 def _album_render_hash(page_layouts: list[dict], student_name: str, student_pages_data: list) -> str:
@@ -278,86 +335,187 @@ def _album_render_hash(page_layouts: list[dict], student_name: str, student_page
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _capture_student_render_input(project_id: int, student_id: int, db) -> dict:
+    """在短鎖內取得同一版本的模板、專案文字與學生資料，慢渲染不持鎖。"""
+    with lock_project_content_writes([project_id]), lock_student_page_writes([student_id]):
+        # 路由通常已讀過 ORM 物件；先結束舊 read transaction，才能看見剛完成的模板同步。
+        db.rollback()
+        db.expire_all()
+        current_project = db.get(Project, project_id)
+        current_student = db.get(Student, student_id)
+        if current_project is None or current_student is None or current_student.project_id != project_id:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail={
+                "code": "render_input_changed",
+                "message": "相本內容已變更，請重新產生。",
+            })
+
+        page_layouts = get_template_page_layouts(current_project)
+        if not page_layouts:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="模板尚未建立任何頁面")
+
+        project_label_texts_raw = current_project.label_texts_json or "{}"
+        student_pages_data_raw = current_student.pages_data_json
+        project_label_texts = json.loads(project_label_texts_raw)
+        student_pages_data = merge_project_label_texts_into_pages(
+            json.loads(student_pages_data_raw),
+            project_label_texts,
+            page_layouts,
+        )
+        template_revision = int(current_project.template_revision or 1)
+        render_input = {
+            "project_name": current_project.name,
+            "student_name": current_student.name,
+            "page_layouts": page_layouts,
+            "student_pages_data": student_pages_data,
+            "template_revision": template_revision,
+            "state_token": (
+                current_project.template_id,
+                template_revision,
+                int(current_project.template.revision or 1),
+                current_project.created_at,
+                current_student.created_at,
+                current_project.name,
+                project_label_texts_raw,
+                current_student.name,
+                student_pages_data_raw,
+            ),
+        }
+        # 不讓 read transaction 橫跨 PIL 渲染；模板儲存可在此期間立即完成。
+        db.rollback()
+        return render_input
+
+
+def _current_student_render_token(project_id: int, student_id: int, db) -> tuple | None:
+    """publish 前重新讀取 CAS token；None 表示專案／學生已不存在或換綁。"""
+    db.rollback()
+    db.expire_all()
+    current_project = db.get(Project, project_id)
+    current_student = db.get(Student, student_id)
+    if current_project is None or current_student is None or current_student.project_id != project_id:
+        return None
+    return (
+        current_project.template_id,
+        int(current_project.template_revision or 1),
+        int(current_project.template.revision or 1),
+        current_project.created_at,
+        current_student.created_at,
+        current_project.name,
+        current_project.label_texts_json or "{}",
+        current_student.name,
+        current_student.pages_data_json,
+    )
+
+
+def _raise_render_input_changed(captured_revision: int, current_token: tuple | None) -> None:
+    from fastapi import HTTPException
+    current_revision = current_token[1] if current_token is not None else None
+    raise HTTPException(status_code=409, detail={
+        "code": "render_input_changed",
+        "message": "模板或相本內容已在產生期間更新，請重新產生。",
+        "captured_revision": captured_revision,
+        "current_revision": current_revision,
+    })
+
+
 def render_and_save_student_album(
     project: Project,
     student: Student,
     project_id: int,
     db,
-    page_layouts: list[dict] | None = None,
 ) -> dict:
     """
     渲染單一學生的相冊頁面並儲存為 PDF 與頁面圖片。
 
     流程：
-      1. 讀取模板佈局（可由外部傳入，批次渲染時共用避免重複查詢）
+      1. 在短鎖內捕捉模板 revision、佈局與學生內容
       2. 將專案對應文字合併入學生頁面資料
       3. 內容指紋與上次相同且輸出還在 ⇒ 直接跳過（全班重渲只重做有改過的學生）
       4. 呼叫渲染引擎產生列印圖，螢幕圖由列印圖降採樣
-      5. 儲存列印用 PDF、螢幕用 PDF、單頁圖片與指紋標記
-      6. 更新學生的輸出路徑記錄
+      5. publish 前以相同內容鎖重讀並比對 revision／內容 token
+      6. CAS 通過後才儲存 PDF、單頁圖片、指紋並更新輸出路徑
 
     回傳：包含 pdf 路徑與頁數的 dict（跳過時 skipped=True）。
     """
-    if page_layouts is None:
-        page_layouts = get_template_page_layouts(project)
-    if not page_layouts:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="模板尚未建立任何頁面")
+    student_id = student.id
+    with _lock_student_render(student_id):
+        render_input = _capture_student_render_input(project_id, student_id, db)
+        page_layouts = render_input["page_layouts"]
+        student_name = render_input["student_name"]
+        student_pages_data = render_input["student_pages_data"]
+        combined_stem = build_combined_stem(render_input["project_name"], student_name)
+        output_prefix = get_project_output_prefix(project_id)
+        print_key = f"{output_prefix}/{combined_stem}.pdf"
+        screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
+        render_hash_key = f"{output_prefix}/{combined_stem}/.render_state"
 
-    project_label_texts = json.loads(project.label_texts_json or "{}")
-    student_pages_data = merge_project_label_texts_into_pages(
-        json.loads(student.pages_data_json),
-        project_label_texts,
-        page_layouts,
-    )
+        storage = get_storage()
+        render_hash = _album_render_hash(page_layouts, student_name, student_pages_data)
+        data_map = {page.get("page_index"): page for page in student_pages_data}
+        page_count = sum(
+            1 for page_index in range(len(page_layouts))
+            if not data_map.get(page_index, {}).get("skip")
+        )
 
-    combined_stem = build_combined_stem(project.name, student.name)
-    output_prefix = get_project_output_prefix(project_id)
-    print_key = f"{output_prefix}/{combined_stem}.pdf"
-    screen_key = f"{output_prefix}/{combined_stem}_screen.pdf"
-    render_hash_key = f"{output_prefix}/{combined_stem}/.render_state"
+        # dirty-skip 也必須走 publish CAS；否則同步剛失效輸出時，舊工作會把路徑寫回。
+        try:
+            previous_hash = storage.get_bytes(render_hash_key).decode("utf-8").strip()
+        except FileNotFoundError:
+            previous_hash = None
+        if previous_hash == render_hash and storage.exists(print_key):
+            with lock_project_content_writes([project_id]), lock_student_page_writes([student_id]):
+                current_token = _current_student_render_token(project_id, student_id, db)
+                if current_token != render_input["state_token"]:
+                    _raise_render_input_changed(render_input["template_revision"], current_token)
+                current_student = db.get(Student, student_id)
+                if current_student.output_filename != print_key:
+                    current_student.output_filename = print_key
+                    db.commit()
+                else:
+                    db.rollback()
+            return {"pdf": print_key, "pages": page_count, "skipped": True}
 
-    storage = get_storage()
-    render_hash = _album_render_hash(page_layouts, student.name, student_pages_data)
+        rendered_print_images = render_album(
+            page_layouts,
+            student_name,
+            student_pages_data,
+            output_size=PRINT_OUTPUT_SIZE,
+        )
+        # 轉檔同樣在鎖外完成；publish 區段只做 storage 寫入與 DB CAS。
+        rendered_screen_images = derive_screen_images(rendered_print_images)
+        print_pdf_bytes = save_album_pdf(rendered_print_images, mode="print")
+        screen_pdf_bytes = save_album_pdf(rendered_screen_images, mode="screen")
+        print_image_bytes = save_album_images(rendered_print_images, combined_stem, mode="print")
+        screen_image_bytes = save_album_images(rendered_screen_images, combined_stem, mode="screen")
 
-    # dirty-skip：指紋一致且 PDF 還在就不重渲（指紋檔最後寫入，存在即代表輸出完整）
-    try:
-        previous_hash = storage.get_bytes(render_hash_key).decode("utf-8").strip()
-    except FileNotFoundError:
-        previous_hash = None
-    data_map = {p.get("page_index"): p for p in student_pages_data}
-    page_count = sum(
-        1 for i in range(len(page_layouts)) if not data_map.get(i, {}).get("skip")
-    )
-    if previous_hash == render_hash and storage.exists(print_key):
-        if student.output_filename != print_key:
-            student.output_filename = print_key
+        with lock_project_content_writes([project_id]), lock_student_page_writes([student_id]):
+            current_token = _current_student_render_token(project_id, student_id, db)
+            if current_token != render_input["state_token"]:
+                _raise_render_input_changed(render_input["template_revision"], current_token)
+
+            # CAS 通過前完全不碰 canonical keys；舊 render 晚到時因此不會覆寫 PDF/JPG/hash。
+            _clear_student_render_outputs(storage, output_prefix, combined_stem)
+            storage.put(print_key, print_pdf_bytes)
+            storage.put(screen_key, screen_pdf_bytes)
+            for filename, image_bytes in print_image_bytes.items():
+                storage.put(
+                    f"{output_prefix}/{combined_stem}/images/print/{filename}",
+                    image_bytes,
+                )
+            for filename, image_bytes in screen_image_bytes.items():
+                storage.put(
+                    f"{output_prefix}/{combined_stem}/images/screen/{filename}",
+                    image_bytes,
+                )
+            # 指紋最後寫，存在即代表此 revision 的整組輸出已 publish 完整。
+            storage.put(render_hash_key, render_hash.encode("utf-8"))
+
+            current_student = db.get(Student, student_id)
+            current_student.output_filename = print_key
             db.commit()
-        return {"pdf": print_key, "pages": page_count, "skipped": True}
 
-    rendered_print_images = render_album(
-        page_layouts,
-        student.name,
-        student_pages_data,
-        output_size=PRINT_OUTPUT_SIZE,
-    )
-    # 螢幕版由列印版降採樣，省下整輪第二次渲染
-    rendered_screen_images = derive_screen_images(rendered_print_images)
-
-    # 清除該學生舊的輸出（PDF + 頁面圖），避免無限累積
-    _clear_student_render_outputs(storage, output_prefix, combined_stem)
-    storage.put(print_key, save_album_pdf(rendered_print_images, mode="print"))
-    storage.put(screen_key, save_album_pdf(rendered_screen_images, mode="screen"))
-    for filename, img_bytes in save_album_images(rendered_print_images, combined_stem, mode="print").items():
-        storage.put(f"{output_prefix}/{combined_stem}/images/print/{filename}", img_bytes)
-    for filename, img_bytes in save_album_images(rendered_screen_images, combined_stem, mode="screen").items():
-        storage.put(f"{output_prefix}/{combined_stem}/images/screen/{filename}", img_bytes)
-    storage.put(render_hash_key, render_hash.encode("utf-8"))
-
-    student.output_filename = print_key
-    db.commit()
-
-    return {"pdf": print_key, "pages": len(rendered_print_images)}
+        return {"pdf": print_key, "pages": len(rendered_print_images)}
 
 
 # ── ZIP 封裝 ───────────────────────────────────────────────────────────────────

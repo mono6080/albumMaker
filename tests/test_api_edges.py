@@ -13,12 +13,15 @@ from tests.helpers import (
     create_template_with_page,
     jpeg_bytes,
     login,
+    revisioned_project_url,
     started_client,
+    template_revision,
     unique_name,
     use_tmp_uploads,
 )
 
 from database import SessionLocal, Student
+from services.storage import get_storage
 
 
 def create_student(client: TestClient, project_id: int, name: str = "Edge Student") -> int:
@@ -101,6 +104,9 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
         project_id = create_project(client, template_id)
         student_id = create_student(client, project_id)
         photo_url = f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+        photo_write_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+        )
 
         missing_photo = client.get(photo_url)
         assert_status(missing_photo, 404)
@@ -108,25 +114,27 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
         assert_status(missing_thumbnail, 404)
 
         unsupported_type = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("note.txt", b"not an image", "text/plain")},
         )
         assert_status(unsupported_type, 415)
 
         spoofed_type = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("fake.jpg", b"not an image", "image/jpeg")},
         )
         assert_status(spoofed_type, 415)
 
         invalid_slot = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/999",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/999"
+            ),
             files={"file": ("valid.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(invalid_slot, 404)
 
         oversized_photo = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("too-large.jpg", large_jpeg_bytes(), "image/jpeg")},
         )
         assert_status(oversized_photo, 200)
@@ -138,7 +146,7 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
             assert compressed_image.format == "JPEG"
 
         heic_upload = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("edge.heic", heif_bytes(), "image/heic")},
         )
         assert_status(heic_upload, 200)
@@ -149,17 +157,19 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
             assert converted_image.format == "JPEG"
 
         valid_upload = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("edge.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(valid_upload, 200)
 
         sanitized_upload = client.post(
-            photo_url,
+            photo_write_url,
             files={"file": ("../../escaped.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(sanitized_upload, 200)
-        assert sanitized_upload.json()["path"].endswith("/p0_slot1_escaped.jpg")
+        sanitized_filename = sanitized_upload.json()["path"].rsplit("/", 1)[-1]
+        assert sanitized_filename.startswith("p0_slot1_escaped_")
+        assert sanitized_filename.endswith(".jpg")
 
         client.cookies.clear()
         assert_status(client.get(photo_url), 401)
@@ -213,6 +223,7 @@ def test_template_in_use_cannot_be_deleted(monkeypatch, tmp_path):
         template_id, page_id = create_template_with_page(client)
         background_upload = client.post(
             f"/api/templates/{template_id}/pages/{page_id}/background",
+            params={"expected_revision": template_revision(client, template_id)},
             files={"file": ("keep.png", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(background_upload, 200)
@@ -222,6 +233,70 @@ def test_template_in_use_cannot_be_deleted(monkeypatch, tmp_path):
         assert_status(blocked_delete, 409)
         assert_status(client.get(f"/api/templates/{template_id}"), 200)
         assert_status(client.get(f"/api/templates/{template_id}/pages/{page_id}/background"), 200)
+
+
+def test_background_upload_stale_revision_has_zero_storage_or_database_writes(
+    monkeypatch,
+    tmp_path,
+):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client)
+        project_id = create_project(client, template_id, name=unique_name("background_cas"))
+        initial_revision = template_revision(client, template_id)
+        upload_url = f"/api/templates/{template_id}/pages/{page_id}/background"
+
+        storage = get_storage()
+        original_put = storage.put
+        put_keys = []
+
+        def track_put(key: str, data: bytes) -> None:
+            put_keys.append(key)
+            original_put(key, data)
+
+        monkeypatch.setattr(storage, "put", track_put)
+
+        before_missing_template = client.get(f"/api/templates/{template_id}").json()
+        before_missing_project = client.get(f"/api/projects/{project_id}").json()
+        missing_revision = client.post(
+            upload_url,
+            files={"file": ("missing.jpg", jpeg_bytes((20, 40, 60)), "image/jpeg")},
+        )
+        assert_status(missing_revision, 422)
+        assert put_keys == []
+        assert client.get(f"/api/templates/{template_id}").json() == before_missing_template
+        assert client.get(f"/api/projects/{project_id}").json() == before_missing_project
+
+        first_upload = client.post(
+            upload_url,
+            params={"expected_revision": initial_revision},
+            files={"file": ("first.jpg", jpeg_bytes((80, 100, 120)), "image/jpeg")},
+        )
+        assert_status(first_upload, 200)
+        current_revision = first_upload.json()["revision"]
+        assert current_revision == initial_revision + 1
+        assert len(put_keys) == 1
+
+        put_keys.clear()
+        before_stale_template = client.get(f"/api/templates/{template_id}").json()
+        before_stale_project = client.get(f"/api/projects/{project_id}").json()
+        before_stale_keys = storage.list_keys(f"templates/tmpl{template_id}/backgrounds/")
+
+        stale_upload = client.post(
+            upload_url,
+            params={"expected_revision": initial_revision},
+            files={"file": ("stale.jpg", jpeg_bytes((180, 40, 60)), "image/jpeg")},
+        )
+        assert_status(stale_upload, 409)
+        detail = stale_upload.json()["detail"]
+        assert detail["code"] == "template_revision_changed"
+        assert detail["current_revision"] == current_revision
+        assert put_keys == []
+        assert storage.list_keys(f"templates/tmpl{template_id}/backgrounds/") == before_stale_keys
+        assert client.get(f"/api/templates/{template_id}").json() == before_stale_template
+        assert client.get(f"/api/projects/{project_id}").json() == before_stale_project
 
 
 def test_deleting_comment_author_transfers_comments_to_admin():
@@ -258,15 +333,21 @@ def test_project_mutation_role_edges(monkeypatch, tmp_path):
         teacher, teacher_password = create_user(client, "teacher", supervisor_id=supervisor["id"])
         art_team, art_team_password = create_user(client, "art_team")
 
+        teacher_photo_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+        )
+        teacher_text_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/label_texts"
+        )
         client.cookies.clear()
         login(client, teacher["username"], teacher_password)
         teacher_upload_admin_project = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            teacher_photo_url,
             files={"file": ("blocked.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(teacher_upload_admin_project, 403)
         teacher_batch_admin_project = client.put(
-            f"/api/projects/{project_id}/label_texts",
+            teacher_text_url,
             json={"0": {"1": "blocked"}},
         )
         assert_status(teacher_batch_admin_project, 403)
@@ -296,21 +377,27 @@ def test_photo_mapping_swap_keeps_both_files(monkeypatch, tmp_path):
         student_id = create_student(client, project_id)
 
         first_upload = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+            ),
             files={"file": ("first.jpg", jpeg_bytes((240, 72, 72)), "image/jpeg")},
         )
         assert_status(first_upload, 200)
         first_path = first_upload.json()["path"]
 
         second_upload = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2"
+            ),
             files={"file": ("second.jpg", jpeg_bytes((72, 120, 240)), "image/jpeg")},
         )
         assert_status(second_upload, 200)
         second_path = second_upload.json()["path"]
 
         swap_response = client.put(
-            f"/api/projects/{project_id}/students/{student_id}/photos/mapping",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/photos/mapping"
+            ),
             json={
                 "pages": {
                     "0": {
@@ -348,24 +435,40 @@ def test_photo_mapping_rejects_foreign_storage_path(monkeypatch, tmp_path):
         second_student_id = create_student(client, second_project_id, "Second Student")
 
         first_upload = client.post(
-            f"/api/projects/{first_project_id}/students/{first_student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                first_project_id,
+                f"/api/projects/{first_project_id}/students/{first_student_id}/pages/0/photos/1",
+            ),
             files={"file": ("first.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(first_upload, 200)
         second_upload = client.post(
-            f"/api/projects/{second_project_id}/students/{second_student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                second_project_id,
+                f"/api/projects/{second_project_id}/students/{second_student_id}/pages/0/photos/1",
+            ),
             files={"file": ("second.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(second_upload, 200)
 
         foreign_mapping = client.put(
-            f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            revisioned_project_url(
+                client,
+                first_project_id,
+                f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            ),
             json={"pages": {"0": {"1": {"path": second_upload.json()["path"]}}}},
         )
         assert_status(foreign_mapping, 400)
 
         own_mapping = client.put(
-            f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            revisioned_project_url(
+                client,
+                first_project_id,
+                f"/api/projects/{first_project_id}/students/{first_student_id}/photos/mapping",
+            ),
             json={"pages": {"0": {"1": {"path": first_upload.json()["path"]}}}},
         )
         assert_status(own_mapping, 200)

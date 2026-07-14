@@ -19,13 +19,14 @@ teacher_supervisors (teacher_id, supervisor_id)   — 一位老師可有多位�
 TemplatePeriod (id, department, name, status, created_at)   — 期別；狀態掛在期別上
   └─ templates → Template.period_id
 
-Template (id, name, period_id FK→TemplatePeriod, created_at)
+Template (id, name, period_id FK→TemplatePeriod, revision, created_at)
   └─ pages → TemplatePage[]（cascade delete-orphan，order_by page_number）
 
 TemplatePage (id, template_id FK, page_number, background_filename, layout_json TEXT)
   └─ UNIQUE(template_id, page_number)
 
 Project (id, name, template_id FK, department, template_period_id FK,
+         template_revision,                   ← 已同步的 live template 版本
          owner_id FK→User, created_at, updated_at,
          deleted_at, archive_expires_at,      ← 軟刪除：封存 30 天後到期
          completed_at,                        ← 全班完成：非 NULL 內容鎖定（主管/admin 可退回）
@@ -42,6 +43,10 @@ RosterChild (id, name〔正規化後、不設 UNIQUE〕, created_at)   — 園�
   └─ students → Student.roster_child_id
 
 ProjectComment (id, project_id FK, author_id FK, content, created_at)
+
+TemplateProjectSyncBackup (id, sync_id, template_id, project_id nullable,
+         old_revision, old_pages_json, new_page_ids_json,
+         project_completed_at, project_label_texts_json, students_json, created_at)
 ```
 
 - SQLite 連線啟用 `PRAGMA foreign_keys=ON`；`check_same_thread=False`
@@ -84,6 +89,23 @@ ProjectComment (id, project_id FK, author_id FK, content, created_at)
   （`{page_index: {label_id: text}}`），端點必須宣告 `dict[str, Any]` —
   Pydantic v2 的 `dict[str, str]` 在 lax mode 也會拒絕 value 為 dict 的資料（422）。
   學生／單頁層級是平坦 `{label_id: text}`，用 `dict[str, str]` 即可
+
+## Live template revision 與頁面結構同步
+
+- Project 直接引用 live `Template`；版面微調在模板明確按「儲存」後套用到所有關聯專案。
+  `Template.revision` 每次模板像素／結構儲存遞增，`Project.template_revision` 只在同一筆
+  同步 transaction 完成後前進。
+- `TemplatePage.id` 是頁面穩定 identity，`page_number`／`page_index` 只是目前顯示順序。
+  結構同步依 page id 重排 `Project.label_texts_json` 與 `Student.pages_data_json`；同步後學生
+  page entry 會帶 `template_page_id`，照片的 storage path 不因重排而改名。
+- 結構變更會先回傳影響摘要與內容綁定的 confirmation hash；確認後才在單一 transaction
+  更新模板、既有專案、學生資料、revision、同步前備份與輸出失效。已被舊版流程留下的
+  超界頁資料會進同步備份，不會阻擋模板或靜默套到別頁。
+- 專案完成／封存、學生增刪與內容寫入都使用同一組依 ID 排序的 project locks；同步在鎖內
+  第二次讀取 confirmation 內容，避免狀態或名單插入確認與 commit 之間。
+- 任何會新增可見照片格的同步會把已完成專案退回可編輯；有關聯專案的模板不可刪到零頁。
+- `TemplateProjectSyncBackup` 保存 DB binding、舊頁面快照與同步前的專案完成時間，供稽核／人工救援；資產 retention
+  規則見 [storage.md 的 Storage key 格式](storage.md#storage-key-格式)。
 
 ## layout_json 格式
 

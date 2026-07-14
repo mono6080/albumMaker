@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 
 class TemplatePageSnapshotItem(BaseModel):
@@ -15,4 +15,7 @@ class TemplatePageSnapshotRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_page_ids: list[StrictInt]
+    expected_revision: StrictInt = Field(ge=1)
+    confirm_project_sync: StrictBool = False
+    project_sync_change_hash: StrictStr | None = Field(default=None, min_length=16, max_length=128)
     pages: list[TemplatePageSnapshotItem]

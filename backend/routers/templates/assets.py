@@ -3,12 +3,13 @@
 # 路由層僅負責 HTTP 接收與回應，storage key 計算委派給 services/file_service
 
 import io
+import hashlib
 import json
+import logging
 import re
-import time
 from pathlib import PurePosixPath
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy.orm import Session
@@ -16,7 +17,12 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from crud.template_crud import get_template_page_or_404
 from database import User, get_db
-from services.file_service import get_background_key, get_sticker_key, read_and_validate_image
+from services.file_service import (
+    content_versioned_filename,
+    get_background_key,
+    get_sticker_key,
+    read_and_validate_image,
+)
 from services.layout_groups import canonical_id
 from services.material_text_box import (
     analyze_material_text_box,
@@ -24,8 +30,11 @@ from services.material_text_box import (
     rgba_asset_revision,
 )
 from services.storage import get_storage
+from services.template_project_sync_service import commit_direct_template_render_change
+from services.template_sync_locks import lock_template_write
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class MaterialTextBoxSuggestionRequest(BaseModel):
@@ -47,31 +56,73 @@ async def upload_background(
     template_id: int,
     page_id: int,
     file: UploadFile = File(...),
+    expected_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
     file_bytes = await read_and_validate_image(file, max_mb=20)
 
-    template_page = get_template_page_or_404(page_id, template_id, db)
     storage = get_storage()
+    content_revision = hashlib.sha256(file_bytes).hexdigest()
+    versioned_filename = content_versioned_filename(
+        file.filename,
+        content_revision,
+        "background",
+    )
+    key = get_background_key(template_id, page_id, versioned_filename)
+    old_key = None
 
-    # 若已有舊背景檔（且與新上傳檔名不同），先刪除以避免殘留
-    old_key = template_page.background_filename
-    key = get_background_key(template_id, page_id, file.filename)
-    if old_key and old_key != key:
-        storage.delete(old_key)
+    with lock_template_write(template_id):
+        # 內容定址的新 key 先寫 storage；DB commit 成功前不碰舊 key，避免 transaction
+        # rollback 後資料列仍指向已被刪除／覆寫的背景。
+        db.rollback()
+        db.expire_all()
+        template_page = get_template_page_or_404(page_id, template_id, db)
+        template = template_page.template
+        if template.revision != expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "template_revision_changed",
+                    "message": "模板已被其他操作更新，請重新整理後再試",
+                    "current_revision": template.revision,
+                },
+            )
+        old_key = template_page.background_filename
+        storage.put(key, file_bytes)
+        try:
+            def apply_background_change() -> None:
+                current_page = get_template_page_or_404(page_id, template_id, db)
+                current_page.background_filename = key
+                page_layout = json.loads(current_page.layout_json)
+                page_layout["background_filename"] = key
+                page_layout["background_version"] = f"sha256:{content_revision}"
+                current_page.layout_json = json.dumps(page_layout)
 
-    storage.put(key, file_bytes)
-    template_page.background_filename = key
-    page_layout = json.loads(template_page.layout_json)
-    page_layout["background_filename"] = key
-    # 同檔名重傳 key 不變：蓋版本戳讓相冊渲染的 dirty-skip 能察覺背景已換
-    page_layout["background_version"] = int(time.time())
-    template_page.layout_json = json.dumps(page_layout)
-    db.commit()
+            sync_result = commit_direct_template_render_change(
+                template,
+                db,
+                expected_revision=expected_revision,
+                apply_template_change=apply_background_change,
+            )
+        except Exception:
+            db.rollback()
+            if key != old_key:
+                try:
+                    storage.delete(key)
+                except Exception as storage_error:
+                    logger.warning("背景 DB rollback 後清理新檔失敗 key=%s: %s", key, storage_error)
+            raise
 
-    return {"filename": key}
+    # 舊背景採延遲 GC：可能仍被 in-flight render 或結構備份引用，不能在
+    # request commit 後立刻刪除。
+
+    return {
+        "filename": key,
+        "revision": template.revision,
+        "sync": sync_result,
+    }
 
 
 @router.get("/{template_id}/pages/{page_id}/background")
@@ -112,11 +163,18 @@ async def upload_sticker(
     except UnidentifiedImageError:
         raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
 
-    key = get_sticker_key(template_id, file.filename)
+    # 貼圖採內容版本 key：同名新檔不再覆寫已被既有模板 layout 引用的像素。
+    # 真正套用新版本要等編輯器按「儲存」把新 path 寫進 snapshot。
+    versioned_filename = content_versioned_filename(
+        file.filename,
+        asset_revision,
+        "sticker",
+    )
+    key = get_sticker_key(template_id, versioned_filename)
     get_storage().put(key, file_bytes)
     return {
         "path": key,
-        "filename": file.filename,
+        "filename": PurePosixPath(key).name,
         "width": image_width,
         "height": image_height,
         "asset_revision": asset_revision,

@@ -55,14 +55,38 @@ def _is_supported_photo_upload(file: UploadFile) -> bool:
     return file.content_type in _ALLOWED_PHOTO_IMAGE_TYPES or _is_heif_upload(file)
 
 
-def sanitize_upload_filename(original_filename: str | None, fallback: str = "upload") -> str:
-    """只保留檔名本身，避免客戶端檔名改寫其他 storage namespace。"""
+def _normalized_upload_filename(original_filename: str | None, fallback: str) -> str:
     normalized = (original_filename or fallback).replace("\\", "/")
     filename = PurePosixPath(normalized).name.strip()
     filename = "".join(character for character in filename if ord(character) >= 32)
     if filename in {"", ".", ".."}:
         filename = fallback
+    return filename
+
+
+def sanitize_upload_filename(original_filename: str | None, fallback: str = "upload") -> str:
+    """只保留檔名本身，避免客戶端檔名改寫其他 storage namespace。"""
+    filename = _normalized_upload_filename(original_filename, fallback)
     return filename[:180]
+
+
+def content_versioned_filename(
+    original_filename: str | None,
+    content_revision: str,
+    fallback: str,
+) -> str:
+    """產生保證保留內容 hash 與副檔名的安全檔名（上限 180 字元）。
+
+    不能先拼 hash 再整串截斷：超長原檔名會把 hash 截掉，讓不同內容重新撞 key。
+    """
+    safe_filename = _normalized_upload_filename(original_filename, fallback)
+    path = PurePosixPath(safe_filename)
+    revision = content_revision.removeprefix("sha256:")[:16]
+    suffix = path.suffix[:20]
+    reserved_length = len(revision) + len(suffix) + 1
+    stem_budget = max(1, 180 - reserved_length)
+    stem = (path.stem or fallback)[:stem_budget]
+    return f"{stem}_{revision}{suffix}"
 
 
 def _assert_image_dimensions(image: Image.Image) -> None:
@@ -89,14 +113,19 @@ def get_photo_key(
     student_id: int,
     page_index: int,
     slot_id: int,
-    original_filename: str
+    original_filename: str,
+    content_revision: str | None = None,
 ) -> str:
     """
     計算學生照片的 storage key。
 
     格式：projects/proj{project_id}/photos/student{student_id}/p{page_index}_slot{slot_id}_{filename}
     """
-    safe_filename = sanitize_upload_filename(original_filename, "photo")
+    safe_filename = (
+        content_versioned_filename(original_filename, content_revision, "photo")
+        if content_revision
+        else sanitize_upload_filename(original_filename, "photo")
+    )
     filename = f"p{page_index}_slot{slot_id}_{safe_filename}"
     return f"projects/proj{project_id}/photos/student{student_id}/{filename}"
 

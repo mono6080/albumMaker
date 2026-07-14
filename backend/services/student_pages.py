@@ -8,7 +8,9 @@
 # 多 worker 的開放問題見 known-issues.md）。
 
 import json
+import hashlib
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -25,6 +27,23 @@ _student_write_locks_guard = threading.Lock()
 def _student_write_lock(student_id: int) -> threading.Lock:
     with _student_write_locks_guard:
         return _student_write_locks.setdefault(student_id, threading.Lock())
+
+
+@contextmanager
+def lock_student_page_writes(student_ids):
+    """依固定順序鎖住多位學生，供模板結構同步做單一 transaction。
+
+    一般照片／文字寫入只拿一把鎖；批次同步固定由小到大取得、反向釋放，
+    避免不同模板／請求在多學生情境互相死鎖。
+    """
+    locks = [_student_write_lock(student_id) for student_id in sorted(set(student_ids))]
+    for lock in locks:
+        lock.acquire()
+    try:
+        yield
+    finally:
+        for lock in reversed(locks):
+            lock.release()
 
 
 # ── pages_data 基本操作（空頁 schema 與雙形態相容的唯一真相來源） ──────────────
@@ -105,11 +124,24 @@ def apply_photo_to_page(
 
     slot_id_str = str(slot_id)
     old_key = photo_record_key(page_entry.get("photos", {}).get(slot_id_str))
-    if old_key:
+    content_revision = hashlib.sha256(processed_upload.data).hexdigest()
+    key = get_photo_key(
+        project_id,
+        student.id,
+        page_index,
+        slot_id,
+        processed_upload.filename,
+        content_revision,
+    )
+    old_key_is_shared = any(
+        photo_record_key(record) == old_key
+        for existing_page in pages_data
+        for existing_slot_id, record in (existing_page.get("photos") or {}).items()
+        if not (existing_page is page_entry and str(existing_slot_id) == slot_id_str)
+    )
+    if old_key and old_key != key and not old_key_is_shared:
         delete_photo_thumbnails(storage, old_key)
         storage.delete(old_key)
-
-    key = get_photo_key(project_id, student.id, page_index, slot_id, processed_upload.filename)
     if source_key and source_key != key:
         storage.copy(source_key, key)
     else:
@@ -119,7 +151,7 @@ def apply_photo_to_page(
         "scale": 1.0,
         "offset_x": 0.0,
         "offset_y": 0.0,
-        # 上傳版本（毫秒）：同名重傳時 key 不變、bytes 會變，預覽快取靠這個欄位換 hash
+        # 上傳版本（毫秒）：即使相同 bytes/key 再次上傳，也讓前端立即刷新。
         "v": int(now.timestamp() * 1000),
     }
     student.updated_at = now
@@ -168,14 +200,25 @@ def apply_photo_mapping(pages_data: list, all_pages: dict, storage) -> None:
                 photo_path = {**photo_path, "v": photo_version_by_path[photo_path["path"]]}
             page_entry["photos"][slot_id_str] = photo_path
 
-    # 第二步：所有頁面的 null 項目統一清除，只刪除未被移走的檔案
+    # 第二步：先清除全部 null binding，再以「清除後仍被引用嗎」決定實體刪檔。
+    # 同一路徑可能因跨頁 mapping／歷史 remap 被多格引用，不能看到一筆 null 就刪。
+    candidate_delete_keys: set[str] = set()
     for page_index_str, slot_updates in all_pages.items():
         page_index = int(page_index_str)
         for slot_id_str, photo_path in slot_updates.items():
             if photo_path is not None:
                 continue
             old_key = photo_record_key(pages_data[page_index]["photos"].get(slot_id_str))
-            if old_key and old_key not in incoming_paths:
-                delete_photo_thumbnails(storage, old_key)
-                storage.delete(old_key)
+            if old_key:
+                candidate_delete_keys.add(old_key)
             pages_data[page_index]["photos"].pop(slot_id_str, None)
+
+    remaining_paths = {
+        photo_record_key(record)
+        for page in pages_data
+        for record in (page.get("photos") or {}).values()
+        if photo_record_key(record)
+    }
+    for old_key in candidate_delete_keys - incoming_paths - remaining_paths:
+        delete_photo_thumbnails(storage, old_key)
+        storage.delete(old_key)

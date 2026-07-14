@@ -44,6 +44,7 @@ class ProjectDetail(BaseModel):
     id: int
     name: str
     template_id: int
+    template_revision: int
     department: Optional[str] = None
     department_label: Optional[str] = None
     template_period_id: Optional[int] = None
@@ -72,6 +73,7 @@ class StudentEditorProject(BaseModel):
     id: int
     name: str
     template_id: int
+    template_revision: int
     owner_id: Optional[int] = None
     completed_at: Optional[datetime] = None
     label_texts: Any

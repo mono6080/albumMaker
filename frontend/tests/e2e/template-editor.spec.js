@@ -557,12 +557,14 @@ test("page edits and structural mutations stay local until reload or save", asyn
   await page.goto(`/templates/${templateId}/edit`);
   await expect(page.getByText("模板編輯器")).toBeVisible();
 
+  const initialPersisted = await fetchTemplateDetail(page, templateId);
+
   const mutationRequests = [];
   const recordMutation = (request) => {
     const pathname = new URL(request.url()).pathname;
-    if (["PUT", "POST", "DELETE"].includes(request.method())
-      && (pathname === `/api/templates/${templateId}/pages`
-        || pathname.startsWith(`/api/templates/${templateId}/pages/`))) {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())
+      && (pathname === `/api/templates/${templateId}`
+        || pathname.startsWith(`/api/templates/${templateId}/`))) {
       mutationRequests.push({ method: request.method(), pathname });
     }
   };
@@ -583,8 +585,11 @@ test("page edits and structural mutations stay local until reload or save", asyn
     .locator("button")
     .filter({ hasText: localNewPageText })).toBeVisible();
 
+  // 明確跨過一般防抖儲存時窗，避免延遲寫入在斷言後才發生。
+  await page.waitForTimeout(750);
   expect(mutationRequests).toHaveLength(0);
   let persisted = await fetchTemplateDetail(page, templateId);
+  expect(persisted.revision).toBe(initialPersisted.revision);
   expect(persisted.pages.map(item => item.id)).toEqual([firstPageId, secondPage.id]);
   expect(persisted.pages[0].layout.text_labels[0].text).toBe(firstText.value);
   expect(persisted.pages[1].layout.text_labels[0].text).toBe(secondText.value);
@@ -598,6 +603,7 @@ test("page edits and structural mutations stay local until reload or save", asyn
   await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
   const restoredSecondTextarea = await selectTextLayer(page, secondText.id, secondText.value);
   await expect(restoredSecondTextarea).toHaveValue(secondText.value);
+  await page.waitForTimeout(750);
   expect(mutationRequests).toHaveLength(0);
   page.off("request", recordMutation);
 

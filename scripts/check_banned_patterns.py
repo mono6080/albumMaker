@@ -12,8 +12,14 @@ REPO_ROOT = Path(__file__).parent.parent
 RULES = [
     (
         re.compile(r"\.pages_data_json\s*=[^=]"),
-        # test_api_edges 刻意寫壞 JSON 驗 422 路徑，屬測試種資料的合法直寫
-        {"backend/services/student_pages.py", "tests/test_api_edges.py"},
+        # 模板同步已同時持有 template→project→student locks，必須在單一 transaction
+        # 直接重排所有學生；兩個測試檔則刻意種入舊版／損壞 JSON 驗證復原路徑。
+        {
+            "backend/services/student_pages.py",
+            "backend/services/template_project_sync_service.py",
+            "tests/test_api_edges.py",
+            "tests/test_template_project_sync.py",
+        },
         "pages_data_json 是 read-modify-write，寫入必須走 mutate_student_pages()（學生寫鎖），"
         "繞過會重現照片/文字互相蓋寫的併發 bug",
     ),

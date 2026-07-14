@@ -9,6 +9,16 @@ const appendCacheVersion = (url, version) =>
     ? url
     : `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 
+/** 專案預覽的瀏覽器快取版本：內容時間戳 + 模板版本。 */
+export const appendPreviewCacheVersion = (url, timestamp, templateRevision = null) => {
+  const timestampedUrl = timestamp === undefined || timestamp === null || timestamp === ""
+    ? url
+    : `${url}${url.includes("?") ? "&" : "?"}t=${encodeURIComponent(timestamp)}`;
+  return templateRevision === undefined || templateRevision === null || templateRevision === ""
+    ? timestampedUrl
+    : `${timestampedUrl}${timestampedUrl.includes("?") ? "&" : "?"}template_revision=${encodeURIComponent(templateRevision)}`;
+};
+
 // ── 模板相關 URL ──────────────────────────────────────────────────────────────
 
 /** 模板頁面背景圖的預覽端點 URL */

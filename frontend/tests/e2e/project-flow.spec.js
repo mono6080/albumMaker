@@ -200,8 +200,8 @@ test("project shared photo upload applies one slot to every student", async ({ p
   }, { timeout: 20_000 }).toBe(2);
 
   expect(sharedPaths[0]).toContain("student");
-  expect(sharedPaths[0]).toContain("p0_slot2_group.png");
-  expect(sharedPaths[1]).toContain("p0_slot2_group.png");
+  expect(sharedPaths[0]).toMatch(/p0_slot2_group_[0-9a-f]{16}\.png$/);
+  expect(sharedPaths[1]).toMatch(/p0_slot2_group_[0-9a-f]{16}\.png$/);
   expect(sharedPaths[0]).not.toBe(sharedPaths[1]);
 
   const detail = await fetchProjectDetail(page, project.id);
@@ -211,7 +211,7 @@ test("project shared photo upload applies one slot to every student", async ({ p
     const slot = page.locator('[data-guide="student-photo-cell"][data-slot-id="2"]');
     await expect(slot.locator('[data-guide="photo-slot-image"]')).toHaveAttribute(
       "src",
-      /\/photos\/2\/thumbnail\?v=.*group\.png/,
+      /\/photos\/2\/thumbnail\?v=.*group_[0-9a-f]{16}\.png/,
     );
   }
 });

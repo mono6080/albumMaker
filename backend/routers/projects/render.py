@@ -200,16 +200,13 @@ def render_all_students(
     t_all = time.monotonic()
     logger.info("開始批次渲染 project_id=%s 共 %s 位學生", project_id, len(project.students))
 
-    # 迴圈外預先讀取模板佈局，避免每個學生重複查詢 N×1
-    shared_page_layouts = get_template_page_layouts(project)
-
     skipped_count = 0
     for student in project.students:
         t0 = time.monotonic()
         try:
             # 逐位取槽（而非整班佔住），其他老師的單本渲染可交錯進行
             with album_render_limiter.acquire_blocking():
-                result = render_and_save_student_album(project, student, project_id, db, shared_page_layouts)
+                result = render_and_save_student_album(project, student, project_id, db)
             render_results.append({"student": student.name, "pdf": result["pdf"]})
             if result.get("skipped"):
                 skipped_count += 1

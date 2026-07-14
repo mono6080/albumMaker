@@ -21,7 +21,7 @@ import {
   assignFile, clearAssignment, emptyMatch, matchByName, matchByNamePageSlot,
   matchByNameSlotSequence, matchBySequence, swapAssignments,
 } from "../utils/photoMatcher";
-import { handleApiError } from "../utils/apiError";
+import { getApiErrorMessage, handleApiError } from "../utils/apiError";
 import useDialogA11y from "../hooks/useDialogA11y";
 import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 
@@ -69,8 +69,8 @@ function mergeBatchOutcome(target, source) {
 const CHUNK_MAX_ATTEMPTS = 3; // 每個 chunk 最多嘗試次數（含第一次）
 
 function chunkFailureReason(error) {
-  const detail = error?.response?.data?.detail;
-  if (typeof detail === "string" && detail) return detail;
+  const detailMessage = getApiErrorMessage(error, "");
+  if (detailMessage) return detailMessage;
   if (error?.code === "ECONNABORTED") return "連線逾時（伺服器可能仍在處理，補傳時會自動略過或覆蓋）";
   return "上傳失敗";
 }
@@ -163,6 +163,7 @@ function ProgressDots({ step, scope }) {
 export default function BatchPhotoWizard({
   isOpen,
   projectId,
+  templateRevision,
   template,
   students,
   scope = "slot",
@@ -318,6 +319,7 @@ export default function BatchPhotoWizard({
             updateAggregateStatus("uploading", attempt > 1, chunk);
             response = await batchUploadPhotos(
               projectId,
+              templateRevision,
               chunk.pageIndex,
               chunk.slotId,
               chunk.assignments,

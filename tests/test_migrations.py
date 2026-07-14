@@ -4,8 +4,9 @@
 # DB 路徑來自 conftest 設定的 tmp 檔案，不會碰到 backend/album_maker.db
 
 import json
+import sqlite3
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 
 def test_migrations_idempotent():
@@ -66,12 +67,32 @@ def test_migrations_idempotent():
         assert "users" in tables
         assert "projects" in tables
         assert "teacher_supervisors" in tables
+        assert "template_project_sync_backups" in tables
         user_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
         assert "ui_font_scale" in user_columns
         assert "auth_version" in user_columns
+        template_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(templates)"))}
+        assert "revision" in template_columns
         project_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
         assert "deleted_at" in project_columns
         assert "archive_expires_at" in project_columns
+        assert "template_revision" in project_columns
+        backup_columns = {
+            row[1]
+            for row in conn.execute(text(
+                "PRAGMA table_info(template_project_sync_backups)"
+            ))
+        }
+        assert "project_completed_at" in backup_columns
+        backup_indexes = {
+            row[1]
+            for row in conn.execute(text("PRAGMA index_list(template_project_sync_backups)"))
+        }
+        assert {
+            "idx_template_sync_backups_sync_id",
+            "idx_template_sync_backups_template_id",
+            "idx_template_sync_backups_project_id",
+        } <= backup_indexes
 
         migrated_layouts = [
             json.loads(row[0])
@@ -95,3 +116,112 @@ def test_migrations_idempotent():
         """)).fetchone()
         assert migrated_assignment is not None
         assert migrated_assignment[0] == supervisor_id
+
+
+def test_template_revision_migration_upgrades_nonempty_legacy_database(tmp_path, monkeypatch):
+    """舊資料與遷移後新資料都必須取得整數型別的 revision 預設值。"""
+    import migrations
+
+    legacy_database_path = tmp_path / "legacy-template-revision.db"
+    with sqlite3.connect(legacy_database_path) as connection:
+        connection.executescript("""
+            CREATE TABLE templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR NOT NULL,
+                created_at DATETIME
+            );
+            CREATE TABLE template_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL REFERENCES templates(id),
+                page_number INTEGER NOT NULL,
+                background_filename VARCHAR,
+                layout_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR NOT NULL,
+                template_id INTEGER NOT NULL REFERENCES templates(id),
+                created_at DATETIME
+            );
+            CREATE TABLE students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                name VARCHAR NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                pages_data_json TEXT NOT NULL DEFAULT '[]',
+                output_filename VARCHAR
+            );
+            INSERT INTO templates (name) VALUES ('Legacy template');
+            INSERT INTO template_pages (template_id, page_number) VALUES (1, 0);
+            INSERT INTO projects (name, template_id) VALUES ('Legacy project', 1);
+            INSERT INTO students (project_id, name) VALUES (1, 'Legacy student');
+        """)
+        template_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(templates)")
+        }
+        project_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(projects)")
+        }
+        assert "revision" not in template_columns
+        assert "template_revision" not in project_columns
+
+    legacy_engine = create_engine(f"sqlite:///{legacy_database_path.as_posix()}")
+    monkeypatch.setattr(migrations, "engine", legacy_engine)
+    try:
+        migrations.run_migrations()
+        migrations.run_migrations()
+    finally:
+        legacy_engine.dispose()
+
+    with sqlite3.connect(legacy_database_path) as connection:
+        existing_template_revision = connection.execute(
+            "SELECT revision, typeof(revision) FROM templates WHERE name = 'Legacy template'"
+        ).fetchone()
+        existing_project_revision = connection.execute(
+            "SELECT template_revision, typeof(template_revision) "
+            "FROM projects WHERE name = 'Legacy project'"
+        ).fetchone()
+        assert existing_template_revision == (1, "integer")
+        assert existing_project_revision == (1, "integer")
+
+        new_template_id = connection.execute(
+            "INSERT INTO templates (name) VALUES ('Post-migration template')"
+        ).lastrowid
+        connection.execute(
+            "INSERT INTO projects (name, template_id) VALUES ('Post-migration project', ?)",
+            (new_template_id,),
+        )
+        new_template_revision = connection.execute(
+            "SELECT revision, typeof(revision) FROM templates WHERE id = ?",
+            (new_template_id,),
+        ).fetchone()
+        new_project_revision = connection.execute(
+            "SELECT template_revision, typeof(template_revision) "
+            "FROM projects WHERE name = 'Post-migration project'"
+        ).fetchone()
+        assert new_template_revision == (1, "integer")
+        assert new_project_revision == (1, "integer")
+
+        backup_table = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'template_project_sync_backups'"
+        ).fetchone()
+        assert backup_table == ("template_project_sync_backups",)
+        backup_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(template_project_sync_backups)"
+            )
+        }
+        assert "project_completed_at" in backup_columns
+        backup_indexes = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA index_list(template_project_sync_backups)"
+            )
+        }
+        assert {
+            "idx_template_sync_backups_sync_id",
+            "idx_template_sync_backups_template_id",
+            "idx_template_sync_backups_project_id",
+        } <= backup_indexes

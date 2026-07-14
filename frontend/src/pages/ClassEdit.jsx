@@ -7,8 +7,8 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { fetchProject, updateProjectLabelTexts, uploadSharedProjectPhoto } from "../api/projectApi";
-import { fetchTemplateCached } from "../api/templateApi";
-import { buildProjectPagePreviewUrl } from "../api/urls";
+import { fetchProjectTemplatePair } from "../api/templateApi";
+import { appendPreviewCacheVersion, buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
@@ -40,7 +40,7 @@ import PagePreview from "../components/PagePreview";
 import { Badge, Button, IconButton, PageHeader } from "../components/ui";
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { getPhotoCropBox } from "../utils/photoUtils";
-import { handleApiError } from "../utils/apiError";
+import { handleApiError, isProjectTemplateRevisionError } from "../utils/apiError";
 import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts, getFillableTextLabels } from "../utils/textLabelRoles";
@@ -107,7 +107,12 @@ export default function ClassEdit() {
         payload[String(pageIndex)] = labels;
       });
       // 帶 abort signal：新的儲存會取消還在路上的舊請求，避免舊值後到蓋掉新值
-      await updateProjectLabelTexts(projectId, payload, signal);
+      try {
+        await updateProjectLabelTexts(projectId, project?.template_revision, payload, signal);
+      } catch (error) {
+        if (isProjectTemplateRevisionError(error)) handleApiError(error);
+        throw error;
+      }
       setPreviewTimestamp(Date.now());
     },
     600
@@ -124,21 +129,23 @@ export default function ClassEdit() {
 
   const loadProjectData = useCallback(async () => {
     try {
-      const projectResponse = await fetchProject(projectId);
-      setProject(projectResponse.data);
+      const { projectData, templateResponse } = await fetchProjectTemplatePair(
+        () => fetchProject(projectId),
+      );
+      setProject(projectData);
       // 預覽 URL 版本戳跟著 updated_at 走，內容沒變時瀏覽器快取可命中
-      if (projectResponse.data.updated_at) {
-        setPreviewTimestamp(new Date(projectResponse.data.updated_at).getTime() || Date.now());
+      if (projectData.updated_at) {
+        setPreviewTimestamp(new Date(projectData.updated_at).getTime() || Date.now());
       }
 
-      // 全班↔個別編輯互切時模板不變：走 5 分鐘快取
-      const templateResponse = await fetchTemplateCached(projectResponse.data.template_id);
+      // 全班↔個別編輯互切時模板走 revision cache；若兩次 GET 間剛好
+      // 同步升版，共用 loader 會重抓到一致的 project/template pair。
       setTemplate(templateResponse.data);
 
       // 初始化共用文字狀態：只保存專案覆寫；未覆寫時由預覽/渲染使用模板預設。
       // 有未儲存的文字編輯（照片上傳後的重載會經過這裡）時不得用伺服器舊值蓋掉
       if (!["pending", "saving"].includes(saveStatusRef.current)) {
-        const savedProjectLabelTexts = projectResponse.data.label_texts || {};
+        const savedProjectLabelTexts = projectData.label_texts || {};
         const initialLabelTexts = {};
         templateResponse.data.pages.forEach((templatePage, pageIndex) => {
           initialLabelTexts[pageIndex] = filterFillableLabelTexts(
@@ -203,6 +210,7 @@ export default function ClassEdit() {
     try {
       const response = await uploadSharedProjectPhoto(
         projectId,
+        project.template_revision,
         activePage,
         selectedSharedPhotoSlotId,
         sharedPhotoFile,
@@ -232,8 +240,8 @@ export default function ClassEdit() {
     try {
       await flushSave();
       navigate(`/projects/${projectId}/students/${targetStudentId}/edit`);
-    } catch {
-      toast.error("切換前儲存失敗");
+    } catch (error) {
+      if (!isProjectTemplateRevisionError(error)) toast.error("切換前儲存失敗");
     }
   };
 
@@ -350,7 +358,11 @@ export default function ClassEdit() {
       <PagePreview
         pageIndex={activePage}
         timestamp={previewTimestamp}
-        src={`${buildProjectPagePreviewUrl(projectId, activePage)}?t=${previewTimestamp}`}
+        src={appendPreviewCacheVersion(
+          buildProjectPagePreviewUrl(projectId, activePage),
+          previewTimestamp,
+          project.template_revision,
+        )}
       />
       <div className="flex items-center justify-center gap-2">
         <Button
@@ -565,6 +577,7 @@ export default function ClassEdit() {
       <BatchPhotoWizard
         isOpen={isBatchWizardOpen}
         projectId={projectId}
+        templateRevision={project.template_revision}
         template={template}
         students={project.students}
         scope="slot"
@@ -584,6 +597,7 @@ export default function ClassEdit() {
       <BatchPhotoWizard
         isOpen={isFilenameBatchWizardOpen}
         projectId={projectId}
+        templateRevision={project.template_revision}
         template={template}
         students={project.students}
         scope="filename"

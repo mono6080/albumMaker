@@ -40,7 +40,10 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
   const cachedPreview = await fetchStudentPreview(page, project.id, student.id);
   expect(cachedPreview.headers()["x-preview-cache"]).toBe("HIT");
 
-  const swapResponse = await page.request.put(`/api/projects/${project.id}/students/${student.id}/photos/mapping`, {
+  const swapResponse = await page.request.put(
+    `/api/projects/${project.id}/students/${student.id}/photos/mapping`
+      + `?expected_template_revision=${detail.template_revision}`,
+    {
     data: {
       pages: {
         "0": {
@@ -49,7 +52,8 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
         },
       },
     },
-  });
+    },
+  );
   expect(swapResponse.ok()).toBeTruthy();
   const swapPayload = await swapResponse.json();
   expect(swapPayload.renames).toEqual({});
@@ -85,6 +89,59 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
   await page.context().clearCookies();
   const anonymousMedia = await page.request.get(protectedMediaUrl);
   expect(anonymousMedia.status()).toBe(401);
+});
+
+
+test("student photo manager keeps a pending file while refreshing a newer template revision", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  const templateName = `E2E 照片 revision 模板 ${Date.now()}`;
+  const projectName = `E2E 照片 revision 專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId, pageId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Revision Alice"]);
+
+  const initialDetail = await fetchProjectDetail(page, project.id);
+  const student = initialDetail.students.find(item => item.name === "Revision Alice");
+  expect(student).toBeTruthy();
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+
+  const backgroundResponse = await page.request.post(
+    `/api/templates/${templateId}/pages/${pageId}/background`
+      + `?expected_revision=${initialDetail.template_revision}`,
+    {
+      multipart: {
+        file: {
+          name: "revision-background.png",
+          mimeType: "image/png",
+          buffer: bluePng,
+        },
+      },
+    },
+  );
+  expect(backgroundResponse.ok()).toBeTruthy();
+
+  const staleUpload = page.waitForResponse(response => (
+    response.url().includes(`/students/${student.id}/pages/0/photos/1`)
+    && response.request().method() === "POST"
+    && response.status() === 409
+  ));
+  await page
+    .locator('[data-guide="student-photo-cell"][data-slot-id="1"] input[type="file"]:not([multiple])')
+    .setInputFiles({ name: "retained-after-revision.png", mimeType: "image/png", buffer: redPng });
+  const staleResponse = await staleUpload;
+  expect((await staleResponse.json()).detail.code).toBe("project_template_revision_changed");
+
+  await expect.poll(async () => {
+    const detail = await fetchProjectDetail(page, project.id);
+    return detail.students.find(item => item.id === student.id)?.pages_data?.[0]?.photos?.["1"]?.path ?? "";
+  }, { timeout: 20_000 }).toMatch(/retained-after-revision_[0-9a-f]{16}\.png$/);
+  await expect(
+    page.locator('[data-guide="student-photo-cell"][data-slot-id="1"] [data-guide="photo-slot-image"]'),
+  ).toHaveAttribute("src", /retained-after-revision_[0-9a-f]{16}\.png/);
 });
 
 
@@ -127,9 +184,9 @@ test("student multi-select upload only fills remaining empty slots", async ({ pa
     );
   }, { timeout: 20_000 }).toEqual({
     "1": existingPhoto.path,
-    "2": expect.stringContaining("p0_slot2_multi-1.png"),
-    "3": expect.stringContaining("p0_slot3_multi-2.png"),
-    "4": expect.stringContaining("p0_slot4_multi-3.png"),
+    "2": expect.stringMatching(/p0_slot2_multi-1_[0-9a-f]{16}\.png$/),
+    "3": expect.stringMatching(/p0_slot3_multi-2_[0-9a-f]{16}\.png$/),
+    "4": expect.stringMatching(/p0_slot4_multi-3_[0-9a-f]{16}\.png$/),
   });
 
   await expect(page.locator('[data-guide="student-photo-grid"] img')).toHaveCount(4);
@@ -168,7 +225,7 @@ test("student photo manager keeps thumbnails fresh after same-name replacement",
 
   const updatedSrc = await image.getAttribute("src");
   expect(updatedSrc).toContain("/thumbnail?v=");
-  expect(updatedSrc).toContain("same-name.png");
+  expect(updatedSrc).toMatch(/same-name_[0-9a-f]{16}\.png/);
 });
 
 
@@ -212,8 +269,8 @@ test("student photo manager resyncs slot URLs after drag swap", async ({ page })
 
   const firstSrc = await firstCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
   const secondSrc = await secondCell.locator('[data-guide="photo-slot-image"]').getAttribute("src");
-  expect(firstSrc).toContain("p0_slot2_second.png");
-  expect(secondSrc).toContain("p0_slot1_first.png");
+  expect(firstSrc).toMatch(/p0_slot2_second_[0-9a-f]{16}\.png/);
+  expect(secondSrc).toMatch(/p0_slot1_first_[0-9a-f]{16}\.png/);
 
   const swappedDetail = await fetchProjectDetail(page, project.id);
   const photos = swappedDetail.students.find(item => item.id === student.id).pages_data[0].photos;
@@ -236,7 +293,10 @@ test("student photo manager bordered thumbnail geometry matches preview renderer
   const student = detail.students.find(item => item.name === "Crop Alice");
   expect(student).toBeTruthy();
   const photo = await uploadStudentPhoto(page, project.id, student.id, 1, "crop.png", redPng);
-  const mappingResponse = await page.request.put(`/api/projects/${project.id}/students/${student.id}/photos/mapping`, {
+  const mappingResponse = await page.request.put(
+    `/api/projects/${project.id}/students/${student.id}/photos/mapping`
+      + `?expected_template_revision=${detail.template_revision}`,
+    {
     data: {
       pages: {
         "0": {
@@ -244,7 +304,8 @@ test("student photo manager bordered thumbnail geometry matches preview renderer
         },
       },
     },
-  });
+    },
+  );
   expect(mappingResponse.ok()).toBeTruthy();
 
   await page.goto(`/projects/${project.id}/students/${student.id}/edit`);

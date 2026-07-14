@@ -109,8 +109,10 @@ export async function fetchProjectDetail(page, projectId) {
 
 
 export async function uploadStudentPhoto(page, projectId, studentId, slotId, name, buffer) {
+  const project = await fetchProjectDetail(page, projectId);
   const uploadResponse = await page.request.post(
-    `/api/projects/${projectId}/students/${studentId}/pages/0/photos/${slotId}`,
+    `/api/projects/${projectId}/students/${studentId}/pages/0/photos/${slotId}`
+      + `?expected_template_revision=${project.template_revision}`,
     {
       multipart: {
         file: {

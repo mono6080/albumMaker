@@ -222,6 +222,62 @@ function normalizeTemplateForEditor(templateData, previousPages = []) {
   };
 }
 
+function buildTemplateSyncConfirmationMessage(detail) {
+  const projectCount = detail.project_count ?? 0;
+  const studentCount = detail.student_count ?? 0;
+  const completedProjectCount = detail.completed_project_count ?? 0;
+  const reopenProjectCount = detail.reopen_project_count ?? 0;
+  const deletedPageCount = detail.deleted_page_count ?? 0;
+  const messages = [
+    `這次儲存會調整模板頁面結構，並同步 ${projectCount} 個既有專案（${studentCount} 位學生）。`,
+  ];
+  if (deletedPageCount > 0) {
+    messages.push(`其中會刪除 ${deletedPageCount} 頁，對應內容將不再顯示；系統會保留同步前備份。`);
+  }
+  const affectedPhotoCount = detail.affected_photo_count ?? 0;
+  const affectedLabelCount = (detail.affected_project_label_count ?? 0)
+    + (detail.affected_student_label_count ?? 0);
+  const affectedSkipCount = detail.affected_skip_count ?? 0;
+  if (affectedPhotoCount || affectedLabelCount || affectedSkipCount) {
+    messages.push(
+      `受影響內容：${affectedPhotoCount} 張照片、${affectedLabelCount} 筆文字、${affectedSkipCount} 個略過設定。`,
+    );
+  }
+  if ((detail.legacy_orphan_entry_count ?? 0) > 0) {
+    messages.push(`另有 ${detail.legacy_orphan_entry_count} 筆舊版頁面資料會保留在同步備份中。`);
+  }
+  if (completedProjectCount > 0) {
+    messages.push(`包含 ${completedProjectCount} 個已完成專案，既有輸出將需要重新產生。`);
+  }
+  if (reopenProjectCount > 0) {
+    messages.push(`因新增照片格，${reopenProjectCount} 個已完成專案會退回可編輯狀態。`);
+  }
+  messages.push("確定要同步並儲存嗎？");
+  return messages.join("");
+}
+
+function buildTemplateSyncSuccessMessage(actionLabel, syncResult) {
+  if (!syncResult || (syncResult.project_count ?? 0) === 0) return actionLabel;
+  return `${actionLabel}，已同步 ${syncResult.project_count} 個專案、${syncResult.student_count ?? 0} 位學生`;
+}
+
+function TemplateUsageBanner({ template }) {
+  const projectCount = template.project_count ?? 0;
+  if (projectCount === 0) return null;
+  const studentCount = template.student_count ?? 0;
+  const completedProjectCount = template.completed_project_count ?? 0;
+  return (
+    <div
+      role="status"
+      className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+      data-guide="template-project-impact"
+    >
+      此模板已套用於 {projectCount} 個專案、{studentCount} 位學生；按下儲存後，變更會同步套用。
+      {completedProjectCount > 0 && ` 其中 ${completedProjectCount} 個專案已完成，既有輸出會標記為需重新產生。`}
+    </div>
+  );
+}
+
 function createDraftPage(pageNumber) {
   return {
     id: null,
@@ -571,10 +627,17 @@ export default function TemplateEditor() {
 
   // ── 頁面操作 ──────────────────────────────────────────────────────────────
 
-  const handleSaveLayout = ({ showToast = true } = {}) => {
+  const handleSaveLayout = ({
+    showToast = true,
+    confirmProjectSync = false,
+    projectSyncChangeHash = null,
+  } = {}) => {
     if (saveInFlightRef.current) return saveInFlightRef.current;
     const saveOperation = (async () => {
       if (!templateRef.current) return false;
+      let latestSyncResult = null;
+      let shouldConfirmProjectSync = confirmProjectSync;
+      let confirmedChangeHash = projectSyncChangeHash;
       setIsSaving(true);
       try {
         do {
@@ -598,6 +661,9 @@ export default function TemplateEditor() {
           });
           const response = await saveTemplatePages(templateId, {
             expected_page_ids: [...persistedPageIdsRef.current],
+            expected_revision: workingTemplate.revision,
+            confirm_project_sync: shouldConfirmProjectSync,
+            ...(confirmedChangeHash ? { project_sync_change_hash: confirmedChangeHash } : {}),
             pages: pageSnapshots.map(({ page, editorKey, layout }) => ({
               ...(page.id == null ? { client_id: editorKey } : { id: page.id }),
               layout,
@@ -605,9 +671,23 @@ export default function TemplateEditor() {
           });
           const savedPages = response.data?.pages;
           if (!Array.isArray(savedPages)) throw new Error("invalid page snapshot response");
+          latestSyncResult = response.data?.sync ?? latestSyncResult;
 
           const nextTemplate = normalizeTemplateForEditor(
-            { ...workingTemplate, pages: savedPages },
+            {
+              ...workingTemplate,
+              ...(response.data?.revision == null ? {} : { revision: response.data.revision }),
+              ...(response.data?.sync?.reopened_project_count
+                ? {
+                    completed_project_count: Math.max(
+                      0,
+                      (workingTemplate.completed_project_count ?? 0)
+                        - response.data.sync.reopened_project_count,
+                    ),
+                  }
+                : {}),
+              pages: savedPages,
+            },
             workingTemplate.pages,
           );
           const snapshotsByKey = new Map(
@@ -625,14 +705,57 @@ export default function TemplateEditor() {
           pageStructureDirtyRef.current = false;
           templateRef.current = nextTemplate;
           setTemplate(nextTemplate);
+          shouldConfirmProjectSync = false;
+          confirmedChangeHash = null;
         } while (Object.keys(draftLayouts.current).length > 0 || pageStructureDirtyRef.current);
-        if (showToast) toast.success("已儲存");
+        if (showToast) toast.success(buildTemplateSyncSuccessMessage("已儲存", latestSyncResult));
         return true;
       } catch (error) {
+        const detail = error?.response?.data?.detail;
         if (error?.isLayoutValidationError) {
           toast.error(error.message);
+        } else if (
+          error?.response?.status === 409
+          && detail?.code === "template_structure_confirmation_required"
+        ) {
+          setConfirmModal({
+            message: buildTemplateSyncConfirmationMessage(detail),
+            confirmLabel: "同步並儲存",
+            confirmVariant: "danger",
+            onConfirm: () => handleSaveLayout({
+              showToast,
+              confirmProjectSync: true,
+              projectSyncChangeHash: detail.change_hash,
+            }),
+          });
+        } else if (
+          error?.response?.status === 409
+          && detail?.code === "template_structure_data_conflict"
+        ) {
+          if (detail.change_hash) {
+            setConfirmModal({
+              message: `${detail.message || "專案內容已變更。"}${buildTemplateSyncConfirmationMessage(detail)}`,
+              confirmLabel: "依最新內容同步",
+              confirmVariant: "danger",
+              onConfirm: () => handleSaveLayout({
+                showToast,
+                confirmProjectSync: true,
+                projectSyncChangeHash: detail.change_hash,
+              }),
+            });
+          } else {
+            toast.error(detail.message || "專案內容已變更，請重新儲存後再試");
+          }
         } else if (error?.response?.status === 409) {
           toast.error("模板頁面已被其他人變更，請重新整理後再試");
+        } else if (
+          error?.response?.status === 422
+          && detail?.code === "template_project_data_invalid"
+        ) {
+          const recordLabel = detail.student_id
+            ? `（專案 ${detail.project_id}／學生 ${detail.student_id}）`
+            : `（專案 ${detail.project_id}）`;
+          toast.error(`${detail.message}${recordLabel}`);
         } else {
           toast.error("儲存失敗，草稿仍保留在畫面上");
         }
@@ -722,11 +845,44 @@ export default function TemplateEditor() {
       toast.error("請先儲存新增頁面，再上傳背景");
       return;
     }
-    await uploadBackground(templateId, currentPage.id, croppedFile);
-    setBackgroundUrl(
-      `/api/templates/${templateId}/pages/${currentPage.id}/background?t=${Date.now()}`
-    );
-    toast.success("背景已上傳");
+    const backgroundPageId = currentPage.id;
+    const expectedRevision = templateRef.current?.revision;
+    if (expectedRevision == null) {
+      toast.error("找不到模板版本，請重新整理後再試");
+      return;
+    }
+    try {
+      const response = await uploadBackground(
+        templateId,
+        backgroundPageId,
+        croppedFile,
+        expectedRevision,
+      );
+      // 較新的請求已更新本地模板時，不讓晚到的舊回應倒退 revision 或背景。
+      if (templateRef.current?.revision !== expectedRevision) return;
+      const nextTemplate = {
+        ...templateRef.current,
+        revision: response.data.revision,
+        pages: templateRef.current.pages.map(page => (
+          page.id === backgroundPageId
+            ? { ...page, background_filename: response.data.filename }
+            : page
+        )),
+      };
+      templateRef.current = nextTemplate;
+      setTemplate(nextTemplate);
+      setBackgroundUrl(
+        `/api/templates/${templateId}/pages/${backgroundPageId}/background?t=${Date.now()}`
+      );
+      toast.success(buildTemplateSyncSuccessMessage("背景已上傳", response.data?.sync));
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      if (error?.response?.status === 409 && detail?.code === "template_revision_changed") {
+        toast.error(detail.message || "模板已被其他操作更新，請重新整理後再試");
+        return;
+      }
+      toast.error("背景上傳失敗");
+    }
   };
 
   const handleStickerUpload = async (stickerFile) => {
@@ -1877,15 +2033,31 @@ export default function TemplateEditor() {
   // ── 渲染 ──────────────────────────────────────────────────────────────────
 
   if (!template) return <div className="text-gray-400">載入中...</div>;
+  const confirmDialog = (
+    <ConfirmModal
+      isOpen={!!confirmModal}
+      message={confirmModal?.message}
+      onConfirm={async () => {
+        const confirmedModal = confirmModal;
+        await confirmedModal?.onConfirm();
+        setConfirmModal(current => (current === confirmedModal ? null : current));
+      }}
+      onCancel={() => setConfirmModal(null)}
+      confirmLabel={confirmModal?.confirmLabel}
+      confirmVariant={confirmModal?.confirmVariant}
+    />
+  );
 
   if (template.pages.length === 0) {
     return (
       <div>
+        {confirmDialog}
         <h1 className="text-2xl font-bold mb-4">編輯模板：{template.name}</h1>
         <div className="inline-flex items-center gap-1 text-sm text-gray-500 mb-4">
           <Camera className="w-4 h-4" />
           照片總計 0 張
         </div>
+        <TemplateUsageBanner template={template} />
         <div className="flex items-center gap-2">
           <button
             onClick={handleAddPage}
@@ -2310,12 +2482,7 @@ export default function TemplateEditor() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1042px] flex-col lg:-mx-4 lg:w-auto xl:mx-auto xl:w-full">
-      <ConfirmModal
-        isOpen={!!confirmModal}
-        message={confirmModal?.message}
-        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
-        onCancel={() => setConfirmModal(null)}
-      />
+      {confirmDialog}
       {spreadPreviewOpen && (
         <SpreadPreviewModal
           templateId={templateId}
@@ -2396,6 +2563,8 @@ export default function TemplateEditor() {
           </button>
         </div>
       </div>
+
+      <TemplateUsageBanner template={template} />
 
       {hasRepairableMaterialLinks && (
         <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">

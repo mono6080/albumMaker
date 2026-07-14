@@ -29,7 +29,7 @@ export function buildItems(allSlots, student) {
   const pagesDataMap = Object.fromEntries(
     (student?.pages_data ?? []).map(p => [p.page_index, p])
   );
-  return allSlots.map(({ pi, slotId, slotIndex, slotW, slotH, border, borderW, borderRadius, dimensionMode,
+  return allSlots.map(({ pi, templatePageId, slotId, slotIndex, slotW, slotH, border, borderW, borderRadius, dimensionMode,
     shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity }) => {
     const frameRect = getPhotoFrameRect({
       x: 0,
@@ -49,7 +49,7 @@ export function buildItems(allSlots, student) {
       contrast: photo?.contrast ?? 1.0,
     };
     return {
-      pi, slotId, slotIndex, slotW: frameRect.width, slotH: frameRect.height,
+      pi, templatePageId, slotId, slotIndex, slotW: frameRect.width, slotH: frameRect.height,
       border: border !== false, borderW: borderW ?? 8, borderRadius: borderRadius ?? 0,
       shadowEnabled, shadowOffsetX, shadowOffsetY, shadowBlur, shadowOpacity,
       origPi: photo ? pi : null,

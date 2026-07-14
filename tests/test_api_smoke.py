@@ -27,9 +27,11 @@ from tests.helpers import (
     jpeg_bytes,
     login,
     png_bytes,
+    revisioned_project_url,
     scale_box_for_image,
     smoke_layout,
     started_client,
+    template_revision,
     unique_name,
     use_tmp_uploads,
     workbook_bytes,
@@ -140,7 +142,9 @@ def test_template_project_student_and_text_contracts():
         assert_status(rename_student, 200)
 
         skip_response = client.patch(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/skip",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/skip"
+            ),
             json={"skip": True},
         )
         assert_status(skip_response, 200)
@@ -148,7 +152,7 @@ def test_template_project_student_and_text_contracts():
 
         project_label_texts = {"0": {"1": "Class label text"}}
         update_project_texts = client.put(
-            f"/api/projects/{project_id}/label_texts",
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/label_texts"),
             json=project_label_texts,
         )
         assert_status(update_project_texts, 200)
@@ -157,7 +161,9 @@ def test_template_project_student_and_text_contracts():
         assert get_project_texts.json() == project_label_texts
 
         update_student_texts = client.put(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/texts",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/texts"
+            ),
             json={"1": "Student label text"},
         )
         assert_status(update_student_texts, 200)
@@ -169,7 +175,10 @@ def test_template_project_student_and_text_contracts():
                 }
             }
         }
-        update_batch_texts = client.put(f"/api/projects/{project_id}/batch/texts", json=batch_texts)
+        update_batch_texts = client.put(
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/batch/texts"),
+            json=batch_texts,
+        )
         assert_status(update_batch_texts, 200)
 
         final_detail = client.get(f"/api/projects/{project_id}")
@@ -258,7 +267,9 @@ def test_project_delete_archives_and_restore_recovers(monkeypatch, tmp_path):
         assert_status(project_detail, 200)
         student_id = project_detail.json()["students"][0]["id"]
         upload_response = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+            ),
             files={"file": ("archived.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(upload_response, 200)
@@ -578,7 +589,11 @@ def test_student_editor_endpoint_only_returns_current_student_pages(monkeypatch,
         detail = client.get(f"/api/projects/{project_id}").json()
         current = detail["students"][0]
         upload = client.post(
-            f"/api/projects/{project_id}/students/{current['id']}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{current['id']}/pages/0/photos/1",
+            ),
             files={"file": ("current.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(upload, 200)
@@ -618,6 +633,7 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
 
         background_upload = client.post(
             f"/api/templates/{template_id}/pages/{page_id}/background",
+            params={"expected_revision": template_revision(client, template_id)},
             files={"file": ("red.png", png_bytes((20, 20), (230, 20, 20, 255)), "image/png")},
         )
         assert_status(background_upload, 200)
@@ -673,19 +689,22 @@ def test_sticker_upload_returns_intrinsic_dimensions(monkeypatch, tmp_path):
         asset_revision = payload.pop("asset_revision")
         assert asset_revision.startswith("sha256:")
         assert len(asset_revision) == len("sha256:") + 64
+        versioned_filename = payload["filename"]
+        assert versioned_filename.startswith("wide_")
+        assert versioned_filename.endswith(".png")
         assert payload == {
-            "path": f"templates/tmpl{template_id}/stickers/wide.png",
-            "filename": "wide.png",
+            "path": f"templates/tmpl{template_id}/stickers/{versioned_filename}",
+            "filename": versioned_filename,
             "width": 320,
             "height": 120,
         }
 
-        sticker = client.get(f"/api/templates/{template_id}/stickers/wide.png")
+        sticker = client.get(f"/api/templates/{template_id}/stickers/{versioned_filename}")
         assert_status(sticker, 200)
         with Image.open(BytesIO(sticker.content)) as sticker_image:
             assert sticker_image.size == (320, 120)
         client.cookies.clear()
-        assert_status(client.get(f"/api/templates/{template_id}/stickers/wide.png"), 401)
+        assert_status(client.get(f"/api/templates/{template_id}/stickers/{versioned_filename}"), 401)
 
 
 def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
@@ -734,6 +753,7 @@ def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
         source_template_id, source_page_id = create_template_with_page(client, name=unique_name("copy_source"))
         background_upload = client.post(
             f"/api/templates/{source_template_id}/pages/{source_page_id}/background",
+            params={"expected_revision": template_revision(client, source_template_id)},
             files={"file": ("copy-bg.png", png_bytes((24, 24), (20, 160, 80, 255)), "image/png")},
         )
         assert_status(background_upload, 200)
@@ -803,7 +823,9 @@ def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_pat
         student_ids = [student["id"] for student in detail.json()["students"]]
 
         shared_upload = client.post(
-            f"/api/projects/{project_id}/photos/shared/pages/0/slots/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/photos/shared/pages/0/slots/1"
+            ),
             files={"file": ("group.jpg", jpeg_bytes((60, 130, 220)), "image/jpeg")},
         )
         assert_status(shared_upload, 200)
@@ -824,7 +846,11 @@ def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_pat
         assert_status(second_photo, 200)
 
         clear_first = client.put(
-            f"/api/projects/{project_id}/students/{student_ids[0]}/photos/mapping",
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_ids[0]}/photos/mapping",
+            ),
             json={"pages": {"0": {"1": None}}},
         )
         assert_status(clear_first, 200)
@@ -879,18 +905,24 @@ def test_hidden_group_photo_slot_is_not_counted_or_writable(monkeypatch, tmp_pat
         student_id = project_detail.json()["students"][0]["id"]
 
         hidden_upload = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+            ),
             files={"file": ("hidden.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(hidden_upload, 404)
 
         visible_upload = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/2"
+            ),
             files={"file": ("visible.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(visible_upload, 200)
         hidden_mapping = client.put(
-            f"/api/projects/{project_id}/students/{student_id}/photos/mapping",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/photos/mapping"
+            ),
             json={"pages": {"0": {"1": {"path": visible_upload.json()["path"]}}}},
         )
         assert_status(hidden_mapping, 404)
@@ -955,12 +987,16 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         student_id = detail.json()["students"][0]["id"]
 
         photo_upload = client.post(
-            f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+            ),
             files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(photo_upload, 200)
         uploaded_path = photo_upload.json()["path"]
-        assert uploaded_path.endswith("/p0_slot1_smoke.jpg")
+        uploaded_filename = uploaded_path.rsplit("/", 1)[-1]
+        assert uploaded_filename.startswith("p0_slot1_smoke_")
+        assert uploaded_filename.endswith(".jpg")
 
         get_photo = client.get(f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1")
         assert_status(get_photo, 200)
@@ -974,13 +1010,13 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert "max-age" in student_preview.headers["cache-control"]
 
         stale_student_default = client.put(
-            f"/api/projects/{project_id}/batch/texts",
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/batch/texts"),
             json={"students": {str(student_id): {"0": {"1": "{name} smoke label"}}}},
         )
         assert_status(stale_student_default, 200)
 
         blank_texts = client.put(
-            f"/api/projects/{project_id}/label_texts",
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/label_texts"),
             json={"0": {"1": ""}},
         )
         assert_status(blank_texts, 200)
@@ -1107,7 +1143,9 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             assert all_image_names[0].endswith("_screen_page1.jpg")
 
         mapping_response = client.put(
-            f"/api/projects/{project_id}/students/{student_id}/photos/mapping",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_id}/photos/mapping"
+            ),
             json={
                 "pages": {
                     "0": {
@@ -1163,7 +1201,7 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
 
         # 改 B 的文字（會 bump project.updated_at）→ A 的快取必須仍然 HIT
         edit_b = client.put(
-            f"/api/projects/{project_id}/batch/texts",
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/batch/texts"),
             json={"students": {str(student_b): {"0": {"1": "B 的字"}}}},
         )
         assert_status(edit_b, 200)
@@ -1172,7 +1210,7 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
 
         # 改 A 自己的文字 → A 的快取換 key，MISS 重渲染
         edit_a = client.put(
-            f"/api/projects/{project_id}/batch/texts",
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/batch/texts"),
             json={"students": {str(student_a): {"0": {"1": "A 的字"}}}},
         )
         assert_status(edit_a, 200)
@@ -1181,7 +1219,9 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
 
         # 同名重傳（key 不變、bytes 變）→ v 欄位換 hash，快取 MISS
         upload_1 = client.post(
-            f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1"
+            ),
             files={"file": ("same.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(upload_1, 200)
@@ -1189,7 +1229,9 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
         warmed_photo = client.get(f"/api/projects/{project_id}/students/{student_a}/preview/0")
         assert warmed_photo.headers["x-preview-cache"] == "HIT"
         upload_2 = client.post(
-            f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1"
+            ),
             files={"file": ("same.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(upload_2, 200)
@@ -1209,11 +1251,17 @@ def test_concurrent_photo_and_text_writes_do_not_clobber(monkeypatch, tmp_path):
         student_id = client.get(f"/api/projects/{project_id}").json()["students"][0]["id"]
 
         request_errors = []
+        photo_write_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
+        )
+        text_write_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/texts"
+        )
 
         def upload_photo():
             try:
                 response = client.post(
-                    f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+                    photo_write_url,
                     files={"file": ("race.jpg", jpeg_bytes(), "image/jpeg")},
                 )
                 assert response.status_code == 200, response.text
@@ -1223,7 +1271,7 @@ def test_concurrent_photo_and_text_writes_do_not_clobber(monkeypatch, tmp_path):
         def save_texts(round_index: int):
             try:
                 response = client.put(
-                    f"/api/projects/{project_id}/students/{student_id}/pages/0/texts",
+                    text_write_url,
                     json={"1": f"race-text-{round_index}"},
                 )
                 assert response.status_code == 200, response.text
@@ -1241,5 +1289,7 @@ def test_concurrent_photo_and_text_writes_do_not_clobber(monkeypatch, tmp_path):
 
         assert request_errors == []
         page_data = client.get(f"/api/projects/{project_id}").json()["students"][0]["pages_data"][0]
-        assert page_data["photos"]["1"]["path"].endswith("race.jpg")
+        race_filename = page_data["photos"]["1"]["path"].rsplit("/", 1)[-1]
+        assert race_filename.startswith("p0_slot1_race_")
+        assert race_filename.endswith(".jpg")
         assert page_data["label_texts"]["1"] == "race-text-3"

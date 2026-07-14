@@ -78,11 +78,11 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別） |
 | GET / POST | `/` | 模板摘要清單 / 建立（可複製既有模板） |
 | GET / PATCH / DELETE | `/{id}` | 詳情（含頁面）/ 改名或移動期別 / 刪除 |
-| PUT | `/{id}/pages` | 原子儲存完整頁面快照；`expected_page_ids` 做結構衝突檢查，單次完成新增、刪除、重排與版型更新 |
-| POST | `/{id}/pages` | 新增頁 |
-| PUT / DELETE | `/{id}/pages/{page_id}/layout`、`…/pages/{page_id}` | 更新版型 / 刪頁 |
-| POST / GET | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖 |
-| POST / GET 🔓 | `/{id}/stickers`、`/{id}/stickers/{filename}` | 上傳 / 取得貼圖；上傳回傳 EXIF 校正後像素的 `asset_revision` |
+| PUT | `/{id}/pages` | 原子儲存完整頁面快照；必帶 `expected_revision` + `expected_page_ids`。既有專案遇結構變更先回 409 影響摘要／`change_hash`，確認重送後同 transaction 依 page id 搬移內容 |
+| POST | `/{id}/pages` | 舊版相容新增頁（deprecated；編輯器不呼叫） |
+| PUT / DELETE | `/{id}/pages/{page_id}/layout`、`…/pages/{page_id}` | 舊版相容更新／刪頁（deprecated；正式儲存走完整 snapshot） |
+| POST / GET | `/{id}/pages/{page_id}/background` | 上傳 / 取得背景圖；上傳必帶 `expected_revision` query，版本不符回 409 且不寫 DB/storage，成功才同步 template revision、既有專案與輸出失效 |
+| POST / GET 🔓 | `/{id}/stickers`、`/{id}/stickers/{filename}` | 上傳 / 取得貼圖；上傳回傳內容版本 key 與 EXIF 校正後像素的 `asset_revision`，按模板儲存前不覆寫既有貼圖 |
 | POST | `/{id}/pages/{page_id}/material-text-box-suggestion` | admin/art_team 只讀分析貼圖，回傳一次性 normalized 文字框建議；不寫 DB/storage |
 | GET | `/{id}/pages/{page_id}/preview` | 單頁預覽 JPEG（姓名佔位） |
 | GET | `/{id}/spread-preview/{start_page_index}` | 雙頁跨頁預覽 |
@@ -94,13 +94,13 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET | `/` | 依角色過濾的專案清單 |
 | GET | `/archive` | 30 天封存區 |
 | POST | `/` | 建立（自動設 owner） |
-| GET / PATCH / DELETE | `/{id}` | 詳情（含學生）/ 改名 / 軟刪封存 |
+| GET / PATCH / DELETE | `/{id}` | 詳情（含學生）/ 改名（失效舊輸出）/ 軟刪封存 |
 | POST | `/{id}/restore` | 復原封存 |
 | POST | `/{id}/complete` | 標記全班完成（owner/admin）：內容端點（名單/照片/文字/頁面跳過）對非 admin 回 403，渲染與下載不擋 |
 | POST | `/{id}/reopen` | 退回全班完成（admin 或管轄該 owner 的 supervisor） |
 | POST | `/{id}/students/batch` | 批次加學生 |
 | POST | `/{id}/students/copy` | 從既有專案複製學生名單（沿用名冊連結，同名跳過） |
-| PUT / DELETE | `/{id}/students/{sid}` | 改名 / 刪除 |
+| PUT / DELETE | `/{id}/students/{sid}` | 改名（失效舊輸出）/ 刪除（清除該生照片與輸出） |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全體 |
@@ -144,7 +144,9 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
   `attachment; filename*=UTF-8''...` 格式
 - **照片上傳並發限制**：`request_limiter.py` 的 `require_photo_upload_slot()`
   依賴注入，槽位數由環境變數控制
-- **photo mapping 兩步驟協議**：先重命名所有非 null 項對齊新格位前綴（收集
-  incoming 集合），再處理 null 項且只刪未被移走的檔案；順序顛倒會在跨頁互換時弄丟照片
+- **page-index 寫入 CAS**：照片上傳／mapping、專案與學生文字、skip、批次照片／文字都必帶
+  `expected_template_revision`；後端在一致鎖內比對，不符回 409，避免舊分頁在模板重排後寫錯頁。
+- **photo mapping 兩步驟協議**：先寫入所有非 null binding，再統一移除 null；實體檔只在
+  清除後已無任何 active reference 時刪除。照片 path 是 immutable opaque key，不因換頁／換格改名。
 - 安全 Headers（`X-Frame-Options: DENY` 等）由 `main.py` 的
   `SecurityHeadersMiddleware` 全域加入

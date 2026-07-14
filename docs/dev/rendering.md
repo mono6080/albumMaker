@@ -39,8 +39,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   `visible` 會改變像素，因此必須納入
 - **改渲染邏輯必把 `_RENDER_PIPELINE_VERSION` +1**，否則舊輸出因指紋一致
   不會被重渲（視覺修正不會生效）
-- 背景圖同檔名重傳靠 layout 的 `background_version`（`upload_background`
-  蓋時間戳）讓指紋失效
+- 背景圖採內容版本 key，layout 的 `background_version=sha256:...` 也會納入指紋；同名新內容
+  不覆寫舊資產
+- 渲染捕捉 `Project.template_revision` 與內容快照，完成後在 per-student render lock 內做
+  revision/content CAS 才發布 canonical PDF/JPG 與 `output_filename`。模板若在慢渲染途中更新，
+  舊渲染不得晚到覆寫新輸出或重新發布已失效 PDF；CAS 也包含 Project／Student `created_at`，
+  防止 SQLite 重用刪除後的 id 形成 ABA；全班／學期補渲染也不跨學生重用舊 layout。
+  專案／學生改名與刪除使用相同 project→student locks，完成後失效並清除舊 canonical 輸出
 - 渲染併發：單本渲染與全班/補渲染 job 都**逐位**取 `album_render_limiter`
   槽（`acquire_blocking`），不整批佔住
 
@@ -73,6 +78,9 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 - 儲存流程：新增、刪除與版型修改都先留在前端；使用者明確按「儲存」後，才以
   `PUT /api/templates/{id}/pages` 送出完整頁面快照，由後端在單一 transaction 內完成新增、刪除、
   重排與版型更新。儲存失敗會保留本地草稿；有未儲存變更時，跨頁預覽會提示先儲存且不會隱式寫 DB。
+- 模板已有 Project 時，編輯器顯示影響數；純版面微調直接同步，頁面／可填欄位結構變更
+  先顯示照片、文字、skip、已完成專案影響摘要並再次確認。Project 端以 `template_revision`
+  bust 模板 JSON 與瀏覽器預覽 URL 快取。
 
 ## PIL ⇄ Konva 補償條目
 

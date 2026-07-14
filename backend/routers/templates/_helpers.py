@@ -49,6 +49,7 @@ def _serialize_template_summary(template: Template) -> dict:
     return {
         "id": template.id,
         "name": template.name,
+        "revision": template.revision,
         "created_at": template.created_at,
         "page_count": len(template.pages),
         "photo_count": _count_template_photo_slots(template),

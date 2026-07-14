@@ -54,6 +54,24 @@ def assert_status(response, status_code: int) -> None:
     assert response.status_code == status_code, response.text
 
 
+def project_template_revision(client: TestClient, project_id: int) -> int:
+    response = client.get(f"/api/projects/{project_id}")
+    assert_status(response, 200)
+    return response.json()["template_revision"]
+
+
+def template_revision(client: TestClient, template_id: int) -> int:
+    response = client.get(f"/api/templates/{template_id}")
+    assert_status(response, 200)
+    return response.json()["revision"]
+
+
+def revisioned_project_url(client: TestClient, project_id: int, url: str) -> str:
+    separator = "&" if "?" in url else "?"
+    revision = project_template_revision(client, project_id)
+    return f"{url}{separator}expected_template_revision={revision}"
+
+
 def use_tmp_uploads(monkeypatch, tmp_path) -> None:
     from services import render_service
 

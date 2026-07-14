@@ -12,6 +12,7 @@ from tests.helpers import (
     create_user,
     jpeg_bytes,
     login,
+    revisioned_project_url,
     smoke_layout,
     started_client,
     unique_name,
@@ -360,7 +361,11 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         teacher_project = teacher_project_response.json()["id"]
         students = add_students(client, teacher_project, ["王小明", "李小華"])
         photo = client.post(
-            f"/api/projects/{teacher_project}/students/{students['王小明']}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                teacher_project,
+                f"/api/projects/{teacher_project}/students/{students['王小明']}/pages/0/photos/1",
+            ),
             files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(photo, 200)
@@ -501,14 +506,25 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
         )
         assert_status(rename, 403)
         photo = client.post(
-            f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/photos/1",
+            ),
             files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(photo, 403)
-        texts = client.put(f"/api/projects/{project_id}/label_texts", json={"0": {"1": "改字"}})
+        texts = client.put(
+            revisioned_project_url(client, project_id, f"/api/projects/{project_id}/label_texts"),
+            json={"0": {"1": "改字"}},
+        )
         assert_status(texts, 403)
         skip = client.patch(
-            f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/skip",
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{students['王小明']}/pages/0/skip",
+            ),
             json={"skip": True},
         )
         assert_status(skip, 403)
@@ -552,7 +568,11 @@ def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
         students = add_students(client, project, ["王小明", "李小華"])
         # 只給王小明照片；兩人都未渲染
         photo = client.post(
-            f"/api/projects/{project}/students/{students['王小明']}/pages/0/photos/1",
+            revisioned_project_url(
+                client,
+                project,
+                f"/api/projects/{project}/students/{students['王小明']}/pages/0/photos/1",
+            ),
             files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
         )
         assert_status(photo, 200)
@@ -607,7 +627,11 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
             (project_b, students_b["王小明"]),
         ):
             photo = client.post(
-                f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+                revisioned_project_url(
+                    client,
+                    project_id,
+                    f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1",
+                ),
                 files={"file": ("smoke.jpg", jpeg_bytes(), "image/jpeg")},
             )
             assert_status(photo, 200)
@@ -616,7 +640,11 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
 
         # 老師手動刪除王小明期1 的第 1 頁 → 匯出說明應標註缺頁
         skip_response = client.patch(
-            f"/api/projects/{project_a}/students/{students_a['王小明']}/pages/0/skip",
+            revisioned_project_url(
+                client,
+                project_a,
+                f"/api/projects/{project_a}/students/{students_a['王小明']}/pages/0/skip",
+            ),
             json={"skip": True},
         )
         assert_status(skip_response, 200)

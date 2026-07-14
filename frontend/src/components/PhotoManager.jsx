@@ -12,6 +12,7 @@ import { buildItems } from "../utils/photoUtils";
 import { maybeCompressImageFile } from "../utils/imageCompression";
 import { runWithConcurrency } from "../utils/concurrency";
 import { isRetryableUploadError, retryDelayMs } from "../utils/uploadRetry";
+import { getApiErrorMessage, isProjectTemplateRevisionError } from "../utils/apiError";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
@@ -31,6 +32,10 @@ function isTransformDirty(transform, origTransform) {
     Math.abs((transform.brightness ?? 1) - (origTransform.brightness ?? 1)) > 0.001 ||
     Math.abs((transform.contrast ?? 1) - (origTransform.contrast ?? 1)) > 0.001
   );
+}
+
+function itemSlotKey(item) {
+  return `${item.templatePageId ?? `page-index:${item.pi}`}:${String(item.slotId)}`;
 }
 
 // dnd-kit 包裝：照片格同時是拖曳來源與放置目標。
@@ -62,11 +67,11 @@ function uploadStatusLabel(status) {
 }
 
 function getUploadFailureMessage(error, count = 1) {
-  const detail = error?.response?.data?.detail;
+  const detailMessage = getApiErrorMessage(error, "");
   if (error?.response?.status === 413) {
-    return count > 1 ? `${count} 張照片超過大小上限，請壓縮後再上傳` : (detail || "照片超過大小上限，請壓縮後再上傳");
+    return count > 1 ? `${count} 張照片超過大小上限，請壓縮後再上傳` : (detailMessage || "照片超過大小上限，請壓縮後再上傳");
   }
-  if (detail) return count > 1 ? `${count} 張照片上傳失敗：${detail}` : detail;
+  if (detailMessage) return count > 1 ? `${count} 張照片上傳失敗：${detailMessage}` : detailMessage;
   return count > 1 ? `${count} 張照片上傳失敗` : "照片上傳失敗";
 }
 
@@ -74,11 +79,11 @@ function getUploadFailureMessage(error, count = 1) {
 // 檢視範圍可切「本頁／整本」：顯示、多選上傳與空格計算跟著檢視走，
 // 整本模式可一次上傳全書照片、跨頁拖曳調換；存檔邏輯永遠涵蓋整本。
 // onPageFocus：整本模式點某格時回報該頁，讓預覽/文字面板同步跳頁
-export default function PhotoManager({ projectId, studentId, pages, student, onPhotoSaved, onSaveStateChange, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
+export default function PhotoManager({ projectId, templateRevision, studentId, pages, student, onPhotoSaved, onSaveStateChange, onTemplateRevisionChanged, disabled = false, skippedPages = new Set(), activePage = null, onPageFocus = null }) {
   const allSlots = useMemo(() =>
     pages.flatMap((p, pi) =>
       getVisibleLayoutElements(p.layout, "photo").map((s, slotIndex) => ({
-        pi, slotId: s.id, slotIndex,
+        pi, templatePageId: p.id, slotId: s.id, slotIndex,
         slotW: s.width, slotH: s.height,
         dimensionMode: getPhotoSlotDimensionMode(p.layout),
         border: s.border !== false, borderW: s.border_width ?? 8,
@@ -101,6 +106,8 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
   // 本次進入頁面後是否成功存過照片：給「✓ 已儲存」正向回饋（與文字面板的存檔指示對齊）
   const [hasSavedPhotos, setHasSavedPhotos] = useState(false);
+  const blockedTemplateRevisionRef = useRef(null);
+  const previousStudentIdRef = useRef(studentId);
   // 待確認刪除的格位索引（刪照片要重傳，先確認再刪）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(null);
   const [isTouchDevice] = useState(() =>
@@ -124,6 +131,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
   useEffect(() => { itemsRef.current = items; }, [items]);
   const onPhotoSavedRef = useRef(onPhotoSaved);
   useEffect(() => { onPhotoSavedRef.current = onPhotoSaved; }, [onPhotoSaved]);
+  const onTemplateRevisionChangedRef = useRef(onTemplateRevisionChanged);
+  useEffect(() => {
+    onTemplateRevisionChangedRef.current = onTemplateRevisionChanged;
+  }, [onTemplateRevisionChanged]);
   const autoSaveTimerRef = useRef(null);
 
   // Debounced auto-save: fires 300ms after last items change
@@ -133,6 +144,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
       isTransformDirty(it.transform, it.origTransform)
     );
     if (!hasDirty || !studentId) return;
+    if (blockedTemplateRevisionRef.current === templateRevision) return;
     clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
       const cur = itemsRef.current; // snapshot at fire time
@@ -167,7 +179,15 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
             const maxAttempts = 3;
             for (let attempt = 1; ; attempt++) {
               try {
-                return await uploadPhoto(projectId, studentId, cur[i].pi, cur[i].slotId, fileToSend, onProgress);
+                return await uploadPhoto(
+                  projectId,
+                  templateRevision,
+                  studentId,
+                  cur[i].pi,
+                  cur[i].slotId,
+                  fileToSend,
+                  onProgress,
+                );
               } catch (error) {
                 if (!isRetryableUploadError(error) || attempt >= maxAttempts) throw error;
                 await new Promise(resolve => setTimeout(resolve, retryDelayMs(error)));
@@ -212,7 +232,7 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         // 儲存 mapping；renames 保留相容舊後端，新後端交換照片不再重命名 R2 物件
         let renames = {};
         if (Object.keys(pagesMap).length) {
-          const res = await updatePhotoMapping(projectId, studentId, pagesMap);
+          const res = await updatePhotoMapping(projectId, templateRevision, studentId, pagesMap);
           renames = res.data.renames || {};
         }
 
@@ -239,6 +259,10 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
           }
           if (snap.pendingFile !== null && uploadFailures[i]) {
             if (it.pendingFile !== snap.pendingFile) return it;
+            if (isProjectTemplateRevisionError(uploadFailures[i])) {
+              blockedTemplateRevisionRef.current = templateRevision;
+              return it;
+            }
             if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
             return {
               ...it,
@@ -272,6 +296,9 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         const failureList = Object.values(uploadFailures);
         if (failureList.length) {
           toast.error(getUploadFailureMessage(failureList[0], failureList.length));
+          if (failureList.some(isProjectTemplateRevisionError)) {
+            void onTemplateRevisionChangedRef.current?.();
+          }
         }
       } catch (error) {
         toast.error(getUploadFailureMessage(error));
@@ -279,18 +306,49 @@ export default function PhotoManager({ projectId, studentId, pages, student, onP
         setUploadStatus(null);
       }
     }, 300);
-  }, [items, studentId, projectId]);
+  }, [items, studentId, projectId, templateRevision]);
 
   // Re-init when student changes
   useEffect(() => {
+    const shouldPreservePending = previousStudentIdRef.current === studentId;
+    previousStudentIdRef.current = studentId;
     setItems(prev => {
-      prev.forEach(it => { if (it.previewUrl) URL.revokeObjectURL(it.previewUrl); });
-      return buildItems(allSlots, student);
+      const pendingBySlot = shouldPreservePending
+        ? new Map(
+            prev
+              .filter(item => item.pendingFile)
+              .map(item => [itemSlotKey(item), item]),
+          )
+        : new Map();
+      const retainedPreviewUrls = new Set();
+      const nextItems = buildItems(allSlots, student).map(item => {
+        const pendingItem = pendingBySlot.get(itemSlotKey(item));
+        if (!pendingItem) return item;
+        if (pendingItem.previewUrl) retainedPreviewUrls.add(pendingItem.previewUrl);
+        return {
+          ...item,
+          pendingFile: pendingItem.pendingFile,
+          previewUrl: pendingItem.previewUrl,
+          transform: { ...pendingItem.transform },
+        };
+      });
+      prev.forEach(item => {
+        if (item.previewUrl && !retainedPreviewUrls.has(item.previewUrl)) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+      });
+      return nextItems;
     });
     setAspectMap({});
     closeEditModal();
     setSelectedIdx(null);
-  }, [student, allSlots, closeEditModal]);
+  }, [student, studentId, allSlots, closeEditModal]);
+
+  useEffect(() => {
+    if (blockedTemplateRevisionRef.current !== templateRevision) {
+      blockedTemplateRevisionRef.current = null;
+    }
+  }, [templateRevision]);
 
   // Handle cached images: onLoad won't fire if img is already complete
   useEffect(() => {

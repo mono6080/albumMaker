@@ -35,9 +35,9 @@ regression test，見 [known-issues.md](known-issues.md)。
 
 | 用途 | Key 形式 |
 |------|----------|
-| 學生照片 | `projects/proj{pid}/photos/student{sid}/p{page_index}_slot{slot_id}_{filename}` |
-| 模板背景 | `templates/tmpl{tid}/backgrounds/page{page_id}_{filename}` |
-| 貼圖 | `templates/tmpl{tid}/stickers/{filename}` |
+| 學生照片 | `projects/proj{pid}/photos/student{sid}/p{page_index}_slot{slot_id}_{stem}_{content-hash}.{ext}` |
+| 模板背景 | `templates/tmpl{tid}/backgrounds/page{page_id}_{stem}_{content-hash}.{ext}` |
+| 貼圖 | `templates/tmpl{tid}/stickers/{stem}_{content-hash}.{ext}` |
 | PDF（列印） | `projects/proj{pid}/output/{stem}.pdf` |
 | PDF（螢幕） | `projects/proj{pid}/output/{stem}_screen.pdf` |
 | 學生單頁圖 | `projects/proj{pid}/output/{stem}/images/{print\|screen}/{stem}[_screen]_page{n}.jpg`（讀取時 fallback 舊版 `{stem}/{stem}_page{n}.jpg`） |
@@ -45,10 +45,17 @@ regression test，見 [known-issues.md](known-issues.md)。
 
 - key 計算集中在 `services/file_service.py`（`get_photo_key` /
   `get_background_key` / `get_sticker_key`）
+- 新上傳圖片的檔名尾端固定保留內容 hash；原始檔名過長時先截 stem 再拼 hash，避免不同 bytes
+  撞到同一 key。舊版無 hash key 保持可讀。
 - `{stem}` = `make_safe_filename(專案名) + "-" + make_safe_filename(學生名)`
   （`project_service.py`），非法字元 `\/:*?"<>|` 替換為 `_`
-- 照片移到不同格位時 `rename_photo_to_slot()` 透過 adapter 重命名，
-  使檔名前綴與新格位一致
+- DB 內的照片 path 是 immutable opaque key；頁面重排／換格只改 binding，不搬檔。換照片時
+  使用新內容 key，舊檔只有在不再被任何 active binding 引用時才刪，避免跨頁共享／重排後誤刪。
+- 背景與貼圖也是內容版本 key。新背景 DB commit 前保留舊 key，commit 後舊版交由延遲 GC；
+  同名貼圖上傳只建立新版本，直到模板 snapshot 儲存切換 path 才影響既有專案。
+- 專案／學生改名或刪除會先在 project→student locks 內提交 DB binding 與輸出失效，再清除舊
+  canonical output／學生照片 namespace；cleanup 失敗會記錄 error 而不把已成功的 DB mutation 回報成
+  失敗。學生照片 namespace 清理完成前不釋放 project lock，避免 SQLite 重用 student id 時誤刪新檔。
 - `students.output_filename` 存的是**列印版 PDF key**；下載 screen 版時以字串
   操作換副檔名 — 對 `.pdf` 的硬假設，見 [known-issues.md](known-issues.md)
 

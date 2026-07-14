@@ -2,7 +2,7 @@
 // 封裝所有與模板（Template）及模板頁面（TemplatePage）相關的 API 呼叫
 
 // 使用統一的 Cookie 認證 apiClient（含 401 interceptor）
-import { apiClient } from "./authApi";
+import { apiClient } from "./authApi.js";
 
 // ── 模板 CRUD ─────────────────────────────────────────────────────────────────
 
@@ -48,19 +48,55 @@ export const fetchTemplate = (templateId) =>
 
 // 相本編輯器切學生/切頁時模板都不變：短 TTL 快取省掉每次重抓
 // （模板 JSON 含全部版面可達數百 KB）。模板編輯器要看最新內容，仍用 fetchTemplate。
-const templateCache = new Map(); // templateId -> { promise, expiresAt }
+const templateCache = new Map(); // templateId:revision -> { promise, expiresAt }
 const TEMPLATE_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** fetchTemplate 的快取版：同模板 5 分鐘內共用同一次請求 */
-export const fetchTemplateCached = (templateId) => {
-  const cached = templateCache.get(templateId);
+/** fetchTemplate 的快取版：同模板、同版本 5 分鐘內共用同一次請求 */
+export const fetchTemplateCached = (templateId, templateRevision = null) => {
+  const cacheKey = `${templateId}:${templateRevision ?? "unversioned"}`;
+  const cached = templateCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
-  const promise = fetchTemplate(templateId).catch((error) => {
-    templateCache.delete(templateId);
-    throw error;
-  });
-  templateCache.set(templateId, { promise, expiresAt: Date.now() + TEMPLATE_CACHE_TTL_MS });
+  const promise = fetchTemplate(templateId)
+    .then((response) => {
+      // project GET 與 template GET 之間若剛好同步升版，不能把新版模板
+      // 污染到舊 revision 的 cache key；呼叫端會重抓一致的一對資料。
+      if (templateRevision != null && response.data?.revision !== templateRevision) {
+        templateCache.delete(cacheKey);
+      }
+      return response;
+    })
+    .catch((error) => {
+      templateCache.delete(cacheKey);
+      throw error;
+    });
+  templateCache.set(cacheKey, { promise, expiresAt: Date.now() + TEMPLATE_CACHE_TTL_MS });
   return promise;
+};
+
+const PROJECT_TEMPLATE_PAIR_MAX_ATTEMPTS = 3;
+
+/**
+ * 成對載入 project payload 與同 revision 的 live template。
+ * selectProjectData 用於 student editor 的巢狀 project payload。
+ */
+export const fetchProjectTemplatePair = async (
+  fetchProjectState,
+  selectProjectData = (responseData) => responseData,
+) => {
+  for (let attempt = 0; attempt < PROJECT_TEMPLATE_PAIR_MAX_ATTEMPTS; attempt += 1) {
+    const projectResponse = await fetchProjectState();
+    const projectData = selectProjectData(projectResponse.data);
+    const templateResponse = await fetchTemplateCached(
+      projectData.template_id,
+      projectData.template_revision,
+    );
+    if (templateResponse.data?.revision === projectData.template_revision) {
+      return { projectResponse, projectData, templateResponse };
+    }
+  }
+  const error = new Error("project and template revisions did not converge");
+  error.code = "PROJECT_TEMPLATE_REVISION_MISMATCH";
+  throw error;
 };
 
 /** 修改模板名稱（行內編輯） */
@@ -95,10 +131,14 @@ export const deleteTemplatePage = (templateId, pageId) =>
 // ── 背景圖 ────────────────────────────────────────────────────────────────────
 
 /** 上傳模板頁面的背景圖 */
-export const uploadBackground = (templateId, pageId, imageFile) => {
+export const uploadBackground = (templateId, pageId, imageFile, expectedRevision) => {
   const formData = new FormData();
   formData.append("file", imageFile);
-  return apiClient.post(`/templates/${templateId}/pages/${pageId}/background`, formData);
+  return apiClient.post(
+    `/templates/${templateId}/pages/${pageId}/background`,
+    formData,
+    { params: { expected_revision: expectedRevision } },
+  );
 };
 
 // ── 貼圖素材 ──────────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ from services.file_service import (
     read_and_process_photo_upload,
 )
 from services.layout_groups import iter_layout_render_elements
+from services.project_template_revision import lock_project_template_revision
 from services.request_limiter import require_photo_upload_slot
 from services.storage import get_storage
 from services.student_pages import (
@@ -133,6 +134,7 @@ async def upload_photo(
     page_index: int,
     slot_id: int,
     file: UploadFile = File(...),
+    expected_template_revision: int = Query(..., ge=1),
     _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -141,21 +143,27 @@ async def upload_photo(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
-    _assert_project_photo_slot_exists(project, page_index, slot_id)
     processed_upload = await read_and_process_photo_upload(file)
 
     storage = get_storage()
     now = utc_now()
 
-    def _mutate(pages_data) -> str:
-        key = apply_photo_to_page(
-            pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
-        )
-        project.updated_at = now
-        return key
+    def _write_photo() -> str:
+        with lock_project_template_revision(db, project, expected_template_revision):
+            assert_project_content_writable(project, current_user)
+            _assert_project_photo_slot_exists(project, page_index, slot_id)
 
-    # storage 寫入（R2 時是同步網路呼叫）下放 threadpool，不凍結 event loop
-    key = await run_in_threadpool(mutate_student_pages, db, student, _mutate)
+            def _mutate(pages_data) -> str:
+                key = apply_photo_to_page(
+                    pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
+                )
+                project.updated_at = now
+                return key
+
+            return mutate_student_pages(db, student, _mutate)
+
+    # CAS、storage 與 DB 寫入一起下放 threadpool，避免持有同步鎖時阻塞 event loop。
+    key = await run_in_threadpool(_write_photo)
 
     return {"filename": key.split("/")[-1], "path": key}
 
@@ -169,6 +177,7 @@ async def upload_shared_project_photo(
     page_index: int,
     slot_id: int,
     file: UploadFile = File(...),
+    expected_template_revision: int = Query(..., ge=1),
     _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -176,31 +185,33 @@ async def upload_shared_project_photo(
     """上傳專案共用照片，並套用到所有學生的同一頁同一照片格。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    _assert_project_photo_slot_exists(project, page_index, slot_id)
     processed_upload = await read_and_process_photo_upload(file)
 
     storage = get_storage()
     now = utc_now()
 
     def _fanout_to_all_students() -> int:
-        # 第 1 位實際上傳 bytes，其餘用 storage.copy（R2 為 server-side copy），
-        # 30 人班從 30 次上傳變 1 次上傳＋29 次輕量複製
-        count = 0
-        first_key: str | None = None
-        project.updated_at = now
-        for student in project.students:
-            # 逐學生進寫鎖並 commit：與其他上傳併發時不互相蓋寫 pages_data
-            key = mutate_student_pages(
-                db, student,
-                lambda pages_data, student=student: apply_photo_to_page(
-                    pages_data, student, project_id, page_index, slot_id,
-                    processed_upload, storage, now, source_key=first_key,
-                ),
-            )
-            if first_key is None:
-                first_key = key
-            count += 1
-        return count
+        with lock_project_template_revision(db, project, expected_template_revision):
+            assert_project_content_writable(project, current_user)
+            _assert_project_photo_slot_exists(project, page_index, slot_id)
+            # 第 1 位實際上傳 bytes，其餘用 storage.copy（R2 為 server-side copy），
+            # 30 人班從 30 次上傳變 1 次上傳＋29 次輕量複製
+            count = 0
+            first_key: str | None = None
+            project.updated_at = now
+            for student in project.students:
+                # 逐學生進寫鎖並 commit：與其他上傳併發時不互相蓋寫 pages_data
+                key = mutate_student_pages(
+                    db, student,
+                    lambda pages_data, student=student: apply_photo_to_page(
+                        pages_data, student, project_id, page_index, slot_id,
+                        processed_upload, storage, now, source_key=first_key,
+                    ),
+                )
+                if first_key is None:
+                    first_key = key
+                count += 1
+            return count
 
     # 整段 fanout（可能數十次 storage 操作）下放 threadpool，不凍結 event loop
     updated = await run_in_threadpool(_fanout_to_all_students)
@@ -226,6 +237,7 @@ async def batch_upload_photos(
     files: list[UploadFile] = File(...),
     mapping: str = Form(...),
     overwrite_existing: bool = Form(True),
+    expected_template_revision: int = Query(..., ge=1),
     _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -238,7 +250,6 @@ async def batch_upload_photos(
     """
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    _assert_project_photo_slot_exists(project, page_index, slot_id)
 
     try:
         mapping_data: dict[str, str] = json.loads(mapping)
@@ -252,9 +263,8 @@ async def batch_upload_photos(
 
     storage = get_storage()
     now = utc_now()
-    succeeded: list[dict] = []
     failed: list[dict] = []
-    skipped: list[dict] = []
+    prepared_assignments: list[tuple[object, str, object]] = []
 
     for student_id_str, filename in mapping_data.items():
         if student_id_str not in students_by_id:
@@ -289,35 +299,47 @@ async def batch_upload_photos(
             })
             continue
 
-        # 寫入（含 skip 判斷）進學生寫鎖並逐筆 commit：
-        # 精靈的兩個 chunk 併發打同一學生時不會互相蓋寫格位
-        def _mutate(pages_data, student=student, processed_upload=processed_upload) -> str | None:
-            if not overwrite_existing and page_has_photo(pages_data, page_index, slot_id):
-                return None
-            key = apply_photo_to_page(
-                pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
-            )
-            project.updated_at = now
-            return key
+        prepared_assignments.append((student, filename, processed_upload))
 
-        try:
-            # storage 寫入下放 threadpool，不凍結 event loop（R2 時是同步網路呼叫）
-            key = await run_in_threadpool(mutate_student_pages, db, student, _mutate)
-        except Exception:
-            failed.append({
-                "student_id": student.id, "filename": filename,
-                "reason": "storage_write_failed",
-            })
-            continue
+    def _write_batch() -> tuple[list[dict], list[dict]]:
+        succeeded: list[dict] = []
+        skipped: list[dict] = []
+        with lock_project_template_revision(db, project, expected_template_revision):
+            assert_project_content_writable(project, current_user)
+            _assert_project_photo_slot_exists(project, page_index, slot_id)
+            for student, filename, processed_upload in prepared_assignments:
+                # 寫入（含 skip 判斷）進學生寫鎖並逐筆 commit：
+                # 精靈的兩個 chunk 併發打同一學生時不會互相蓋寫格位
+                def _mutate(pages_data) -> str | None:
+                    if not overwrite_existing and page_has_photo(pages_data, page_index, slot_id):
+                        return None
+                    key = apply_photo_to_page(
+                        pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
+                    )
+                    project.updated_at = now
+                    return key
 
-        if key is None:
-            skipped.append({
-                "student_id": student.id, "filename": filename,
-                "reason": "already_has_photo",
-            })
-            continue
+                try:
+                    key = mutate_student_pages(db, student, _mutate)
+                except Exception:
+                    failed.append({
+                        "student_id": student.id, "filename": filename,
+                        "reason": "storage_write_failed",
+                    })
+                    continue
 
-        succeeded.append({"student_id": student.id, "filename": filename, "path": key})
+                if key is None:
+                    skipped.append({
+                        "student_id": student.id, "filename": filename,
+                        "reason": "already_has_photo",
+                    })
+                    continue
+
+                succeeded.append({"student_id": student.id, "filename": filename, "path": key})
+        return succeeded, skipped
+
+    # 影像解碼完成後才取得模板鎖；CAS 失敗時 storage 與 DB 都維持零寫入。
+    succeeded, skipped = await run_in_threadpool(_write_batch)
 
     return {
         "ok": True,
@@ -391,6 +413,7 @@ def update_photo_mapping(
     project_id: int,
     student_id: int,
     payload: PhotoMappingPayload,
+    expected_template_revision: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -410,16 +433,18 @@ def update_photo_mapping(
     """
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
-    storage = get_storage()
+    with lock_project_template_revision(db, project, expected_template_revision):
+        assert_project_content_writable(project, current_user)
+        student = get_student_or_404(student_id, project_id, db)
+        storage = get_storage()
 
-    # mapping 也是 pages_data 的 read-modify-write：與上傳共用學生寫鎖
-    def _mutate(pages_data) -> None:
-        validated_mapping = _validate_photo_mapping(project, student, pages_data, payload.pages)
-        apply_photo_mapping(pages_data, validated_mapping, storage)
-        now = utc_now()
-        student.updated_at = now
-        project.updated_at = now
+        # mapping 也是 pages_data 的 read-modify-write：與上傳共用學生寫鎖
+        def _mutate(pages_data) -> None:
+            validated_mapping = _validate_photo_mapping(project, student, pages_data, payload.pages)
+            apply_photo_mapping(pages_data, validated_mapping, storage)
+            now = utc_now()
+            student.updated_at = now
+            project.updated_at = now
 
-    mutate_student_pages(db, student, _mutate)
+        mutate_student_pages(db, student, _mutate)
     return {"ok": True, "renames": {}}

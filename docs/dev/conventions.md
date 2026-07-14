@@ -78,7 +78,9 @@
   前後端都要用的純值，正本在 `backend/services/design_tokens.json`、
   前端鏡像 `constants/designTokens.js`——不得在程式碼寫字面值；
   兩檔一致與消費點由 `tests/test_contract_pins.py` 釘住
-- **唯一入口不得繞道**：pages_data 寫入（`mutate_student_pages`）、
+- **唯一入口不得繞道**：一般 pages_data 寫入（`mutate_student_pages`；模板結構同步是唯一例外，
+  它在 `template_project_sync_service.py` 持有 template→project→student locks 後，以單一 transaction
+  重排所有學生）、
   補頁（`ensure_page_entry`）、screen PDF key（`student_pdf_key_for_mode`）、
   下載 anchor（`browserFiles`）等唯一入口，由
   `scripts/check_banned_patterns.py`（CI 必跑）擋住重新出現的複本；

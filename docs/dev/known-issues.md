@@ -24,6 +24,9 @@
 
 - **多 worker 下的並發**：`render_album` 是純 PIL（無共享 mutable state），
   但 uvicorn workers > 1 時 SQLite 寫入會搶鎖。目前單 worker、低並發沒事
+- **Storage cleanup 沒有 durable retry**：專案／學生改名或刪除在 DB commit 後清理舊輸出與
+  照片；失敗目前只記錄 ERROR，沒有 outbox／GC 重試，因此可能留下不再有 DB binding 的孤兒檔案。
+  若營運要求實體檔最終刪除保證，需補持久化 cleanup job（現行語意見 [storage.md](storage.md#storage-key-格式)）。
 - **S3 / R2 的中文 key**：照片 key 的 `{filename}` 保留使用者原檔名（可能中文）。
   R2 key 是 UTF-8 byte sequence 可容，但 CDN / signing 中間層行為未驗證
 - **新 storage adapter 的 EXIF transpose**：`open_image()` 必須做

@@ -42,6 +42,73 @@ def run_migrations():
         _remove_empty_text_bubbles_from_template_pages(connection)
         _add_roster_children_and_backfill(connection)
         _add_project_completed_at_column(connection)
+        _add_template_revision_tracking(connection)
+
+
+def _add_template_revision_tracking(connection):
+    """加入模板同步版本與結構變更備份表；可安全重跑。"""
+    template_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(templates)"))
+    }
+    if "revision" not in template_columns:
+        connection.execute(text(
+            "ALTER TABLE templates ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+        ))
+
+    project_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "template_revision" not in project_columns:
+        connection.execute(text(
+            "ALTER TABLE projects ADD COLUMN template_revision INTEGER NOT NULL DEFAULT 1"
+        ))
+
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "template_project_sync_backups" not in existing_tables:
+        connection.execute(text("""
+            CREATE TABLE template_project_sync_backups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sync_id VARCHAR NOT NULL,
+                template_id INTEGER NOT NULL,
+                project_id INTEGER,
+                old_revision INTEGER NOT NULL,
+                old_pages_json TEXT NOT NULL,
+                new_page_ids_json TEXT NOT NULL,
+                project_completed_at DATETIME,
+                project_label_texts_json TEXT,
+                students_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+    backup_columns = {
+        row[1]
+        for row in connection.execute(text(
+            "PRAGMA table_info(template_project_sync_backups)"
+        ))
+    }
+    if "project_completed_at" not in backup_columns:
+        connection.execute(text(
+            "ALTER TABLE template_project_sync_backups "
+            "ADD COLUMN project_completed_at DATETIME"
+        ))
+    connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_template_sync_backups_sync_id "
+        "ON template_project_sync_backups(sync_id)"
+    ))
+    connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_template_sync_backups_template_id "
+        "ON template_project_sync_backups(template_id)"
+    ))
+    connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_template_sync_backups_project_id "
+        "ON template_project_sync_backups(project_id)"
+    ))
+    connection.commit()
 
 
 def _add_project_completed_at_column(connection):

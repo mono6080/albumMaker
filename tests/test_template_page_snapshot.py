@@ -28,6 +28,12 @@ def _template_pages(client, template_id: int) -> list[dict]:
     return response.json()["pages"]
 
 
+def _template_revision(client, template_id: int) -> int:
+    response = client.get(f"/api/templates/{template_id}")
+    assert_status(response, 200)
+    return response.json()["revision"]
+
+
 def _layout_with_text(text: str) -> dict:
     layout = smoke_layout()
     layout["text_labels"][0]["text"] = text
@@ -48,6 +54,7 @@ def test_page_snapshot_atomically_updates_adds_deletes_and_reorders():
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id, second_page_id, third_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {
                         "id": second_page_id,
@@ -104,6 +111,7 @@ def test_invalid_page_snapshot_rolls_back_every_change():
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id, second_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"id": first_page_id, "layout": _layout_with_text("也不可寫入")},
                     {"client_id": "invalid-new-page", "layout": invalid_layout},
@@ -127,6 +135,7 @@ def test_stale_page_snapshot_returns_conflict_without_mutation():
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": stale_expected_ids,
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"id": first_page_id, "layout": _layout_with_text("過期修改")},
                 ],
@@ -155,6 +164,7 @@ def test_page_snapshot_rejects_foreign_and_duplicate_references_without_mutation
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"id": foreign_page_id, "layout": _layout_with_text("外部頁面")},
                 ],
@@ -167,6 +177,7 @@ def test_page_snapshot_rejects_foreign_and_duplicate_references_without_mutation
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"id": first_page_id, "layout": _layout_with_text("重複一")},
                     {"id": first_page_id, "layout": _layout_with_text("重複二")},
@@ -180,6 +191,7 @@ def test_page_snapshot_rejects_foreign_and_duplicate_references_without_mutation
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"client_id": "same-client-id", "layout": _layout_with_text("新增一")},
                     {"client_id": "same-client-id", "layout": _layout_with_text("新增二")},
@@ -193,6 +205,7 @@ def test_page_snapshot_rejects_foreign_and_duplicate_references_without_mutation
             f"/api/templates/{template_id}/pages",
             json={
                 "expected_page_ids": [first_page_id, first_page_id],
+                "expected_revision": _template_revision(client, template_id),
                 "pages": [
                     {"id": first_page_id, "layout": _layout_with_text("重複預期")},
                 ],

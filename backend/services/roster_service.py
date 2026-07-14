@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, joinedload
 from database import Project, RosterChild, Student, TemplatePeriod
 from services.project_service import (
     get_project_output_prefix,
-    get_template_page_layouts,
     make_safe_filename,
     render_and_save_student_album,
     student_pdf_key_for_mode,
@@ -266,16 +265,12 @@ def render_missing_semester_albums(
         progress_callback(0, total_count)
     rendered_count = 0
     render_errors = []
-    # 版型逐專案讀一次，避免每個學生重複查詢
-    layouts_by_project_id: dict[int, list[dict]] = {}
     for done_count, (project, student) in enumerate(missing_pairs, start=1):
-        if project.id not in layouts_by_project_id:
-            layouts_by_project_id[project.id] = get_template_page_layouts(project)
         try:
             # 逐位取渲染槽（而非整個 job 佔住）：老師同時按單本渲染不會整段被 job 卡死
             with album_render_limiter.acquire_blocking():
                 render_and_save_student_album(
-                    project, student, project.id, db, layouts_by_project_id[project.id]
+                    project, student, project.id, db
                 )
             rendered_count += 1
         except Exception as render_error:

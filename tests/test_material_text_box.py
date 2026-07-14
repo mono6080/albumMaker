@@ -67,7 +67,7 @@ def test_detector_reports_only_contract_unavailable_reasons():
     assert empty["reason"] == "no_shape"
 
 
-def test_upload_returns_decoded_revision_and_same_filename_overwrite_is_detectable(
+def test_upload_returns_decoded_revision_and_same_filename_keeps_immutable_versions(
     monkeypatch, tmp_path
 ):
     use_tmp_uploads(monkeypatch, tmp_path)
@@ -90,10 +90,13 @@ def test_upload_returns_decoded_revision_and_same_filename_overwrite_is_detectab
         assert_status(second, 200)
         first_payload = first.json()
         second_payload = second.json()
-        assert first_payload["path"] == second_payload["path"]
+        assert first_payload["path"] != second_payload["path"]
         assert first_payload["asset_revision"] == _expected_revision(first_data)
         assert second_payload["asset_revision"] == _expected_revision(second_data)
         assert first_payload["asset_revision"] != second_payload["asset_revision"]
+        storage = get_storage()
+        assert storage.get_bytes(first_payload["path"]) == first_data
+        assert storage.get_bytes(second_payload["path"]) == second_data
 
         stale = client.post(
             f"/api/templates/{template_id}/pages/{page_id}/material-text-box-suggestion",
