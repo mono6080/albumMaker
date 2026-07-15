@@ -7,8 +7,10 @@ import uuid
 from datetime import datetime
 
 import pytest
+from PIL import Image
 
 from database import Student
+from services import render_service, storage as storage_module
 from services.file_service import ProcessedImageUpload, content_versioned_filename
 from services.student_pages import apply_photo_to_page
 from services.storage import LocalStorageAdapter, R2StorageAdapter, _validate_r2_serve_mode
@@ -289,6 +291,149 @@ def test_r2_key_prefix_move_uses_single_prefix():
     assert "__e2e/run1/foo/bar.txt" not in client.objects
     assert client.objects["__e2e/run1/foo/baz.txt"] == b"hi"
     assert adapter.exists("foo/baz.txt") is True
+
+
+def test_storage_factory_reuses_only_matching_call_time_path_and_environment(monkeypatch, tmp_path):
+    """factory 每次都讀取目前 path/env；只有完整設定相同時才重用 adapter。"""
+    monkeypatch.setattr(storage_module, "_STORAGE_CACHE_KEY", None)
+    monkeypatch.setattr(storage_module, "_STORAGE_INSTANCE", None)
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    first_uploads = tmp_path / "backend" / "uploads-first"
+    second_uploads = tmp_path / "backend" / "uploads-second"
+    monkeypatch.setattr(render_service, "UPLOADS_DIR", first_uploads)
+
+    first_local = storage_module.get_storage()
+    assert storage_module.get_storage() is first_local
+
+    monkeypatch.setattr(render_service, "UPLOADS_DIR", second_uploads)
+    second_local = storage_module.get_storage()
+    assert second_local is not first_local
+    second_local.put("factory/pin.txt", b"second")
+    assert (second_uploads / "factory" / "pin.txt").read_bytes() == b"second"
+
+    created_configs = []
+
+    def fake_r2_adapter(**config):
+        instance = object()
+        created_configs.append((config, instance))
+        return instance
+
+    monkeypatch.setattr(storage_module, "R2StorageAdapter", fake_r2_adapter)
+    monkeypatch.setenv("STORAGE_BACKEND", "r2")
+    monkeypatch.setenv("R2_BUCKET", "bucket-one")
+    monkeypatch.setenv("R2_ACCOUNT_ID", "account")
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "access")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("R2_LOCAL_CACHE_DIR", "cache/r2")
+    monkeypatch.setenv("R2_LOCAL_MIRROR_DIR", "mirror/r2")
+    monkeypatch.setenv("R2_READ_CACHE_MAX_BYTES", "100")
+
+    first_r2 = storage_module.get_storage()
+    assert storage_module.get_storage() is first_r2
+    assert created_configs[0][0]["bucket"] == "bucket-one"
+    assert created_configs[0][0]["local_cache_dir"] == str((tmp_path / "cache" / "r2").resolve())
+    assert created_configs[0][0]["local_mirror_dir"] == str((tmp_path / "mirror" / "r2").resolve())
+
+    monkeypatch.setenv("R2_BUCKET", "bucket-two")
+    second_r2 = storage_module.get_storage()
+    assert second_r2 is not first_r2
+    assert created_configs[-1][0]["bucket"] == "bucket-two"
+
+    monkeypatch.setenv("R2_READ_CACHE_MAX_BYTES", "200")
+    third_r2 = storage_module.get_storage()
+    assert third_r2 is not second_r2
+    assert len(created_configs) == 3
+
+    # TODO(structural-refactor-v1 Wave 1): `_storage_config_key` 尚未納入
+    # PRODUCTION 與 R2_LOCAL_CACHE_MAX_BYTES；split factory 時需修正並補 regression。
+
+
+def test_r2_read_cache_hits_memory_then_local_then_mirror_before_remote(tmp_path):
+    """讀取順序固定為 memory → writable local cache → read-only mirror → R2。"""
+    local_cache = tmp_path / "cache"
+    mirror = tmp_path / "mirror"
+    local_key = "photos/local.jpg"
+    mirror_key = "photos/mirror.jpg"
+    remote_key = "photos/remote.jpg"
+    (local_cache / local_key).parent.mkdir(parents=True)
+    (local_cache / local_key).write_bytes(b"local")
+    (mirror / local_key).parent.mkdir(parents=True)
+    (mirror / local_key).write_bytes(b"mirror-shadowed")
+    (mirror / mirror_key).write_bytes(b"mirror")
+
+    client = FakeS3Client()
+    client.objects[remote_key] = b"remote"
+    adapter = R2StorageAdapter(
+        bucket="bucket",
+        s3_client=client,
+        local_cache_dir=str(local_cache),
+        local_mirror_dir=str(mirror),
+    )
+
+    assert adapter.get_bytes(local_key) == b"local"
+    (local_cache / local_key).write_bytes(b"changed-on-disk")
+    assert adapter.get_bytes(local_key) == b"local"
+    assert adapter.get_bytes(mirror_key) == b"mirror"
+    (mirror / mirror_key).unlink()
+    assert adapter.get_bytes(mirror_key) == b"mirror"
+    assert client.get_object_calls == []
+
+    assert adapter.get_bytes(remote_key) == b"remote"
+    assert client.get_object_calls == [remote_key]
+    assert (local_cache / remote_key).read_bytes() == b"remote"
+
+
+def test_r2_mutations_keep_memory_and_local_cache_in_sync(tmp_path):
+    """put/move/delete/delete_prefix 都同步 invalidation，不留下舊 cache bytes。"""
+    local_cache = tmp_path / "cache"
+    client = FakeS3Client()
+    adapter = R2StorageAdapter(
+        bucket="bucket",
+        s3_client=client,
+        local_cache_dir=str(local_cache),
+    )
+
+    adapter.put("photos/source.jpg", b"old")
+    adapter.put("photos/source.jpg", b"new")
+    assert adapter.get_cached_bytes("photos/source.jpg") == b"new"
+    assert (local_cache / "photos" / "source.jpg").read_bytes() == b"new"
+
+    adapter.move("photos/source.jpg", "photos/moved.jpg")
+    assert adapter.get_cached_bytes("photos/source.jpg") is None
+    assert adapter.get_cached_bytes("photos/moved.jpg") == b"new"
+
+    adapter.delete("photos/moved.jpg")
+    assert adapter.get_cached_bytes("photos/moved.jpg") is None
+
+    adapter.put("templates/tmpl1/backgrounds/a.jpg", b"one")
+    adapter.put("templates/tmpl10/backgrounds/b.jpg", b"ten")
+    adapter.delete_prefix("templates/tmpl1")
+    assert adapter.get_cached_bytes("templates/tmpl1/backgrounds/a.jpg") is None
+    assert adapter.get_cached_bytes("templates/tmpl10/backgrounds/b.jpg") == b"ten"
+
+
+def _exif_rotated_jpeg_bytes() -> bytes:
+    image = Image.new("RGB", (2, 3), (30, 90, 180))
+    exif = Image.Exif()
+    exif[274] = 6
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", exif=exif)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("backend", ["local", "r2"])
+def test_storage_open_image_applies_exif_orientation(backend, tmp_path):
+    """Local 與 R2 都必須在交給 renderer 前套用 EXIF transpose。"""
+    payload = _exif_rotated_jpeg_bytes()
+    if backend == "local":
+        adapter = LocalStorageAdapter(tmp_path / "uploads")
+    else:
+        adapter = R2StorageAdapter(bucket="bucket", s3_client=FakeS3Client())
+    adapter.put("photos/oriented.jpg", payload)
+
+    with adapter.open_image("photos/oriented.jpg") as image:
+        assert image.size == (3, 2)
+        assert image.getexif().get(274) in (None, 1)
 
 
 def test_r2_real_bucket_smoke_when_enabled():

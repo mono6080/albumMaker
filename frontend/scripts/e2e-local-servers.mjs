@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertFixedPortsAvailable,
+  createSupervisorReadyMessage,
+  stopOwnedProcessTrees,
+} from "./e2e-supervisor-utils.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const frontendDir = resolve(scriptDir, "..");
@@ -12,15 +17,21 @@ function startProcess(name, command, args) {
     cwd: frontendDir,
     env: process.env,
     shell: isWindows,
+    detached: !isWindows,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   child.stdout.on("data", data => process.stdout.write(prefixLines(name, data)));
   child.stderr.on("data", data => process.stderr.write(prefixLines(name, data)));
+  child.on("error", error => {
+    if (shuttingDown) return;
+    console.error(`[${name}] failed to start: ${error.message}`);
+    void shutdown(1);
+  });
   child.on("exit", (code, signal) => {
     if (shuttingDown) return;
     console.error(`[${name}] exited ${signal ?? code}`);
-    shutdown(code || 1);
+    void shutdown(code || 1);
   });
 
   children.push(child);
@@ -34,6 +45,15 @@ function prefixLines(name, data) {
     .filter(Boolean)
     .map(line => `[${name}] ${line}\n`)
     .join("");
+}
+
+function assertChildrenRunning() {
+  const exited = children.find(
+    child => child.exitCode !== null || child.signalCode !== null,
+  );
+  if (shuttingDown || exited) {
+    throw new Error("E2E child server exited before supervisor ownership was ready.");
+  }
 }
 
 async function waitForUrl(name, url, timeoutMs) {
@@ -58,41 +78,41 @@ async function waitForUrl(name, url, timeoutMs) {
 
 let shuttingDown = false;
 
-async function stopProcessTree(child) {
-  if (child.killed || child.exitCode !== null) return;
-  if (!isWindows) {
-    child.kill("SIGTERM");
-    return;
-  }
-  await new Promise(resolveStop => {
-    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.once("exit", resolveStop);
-    killer.once("error", resolveStop);
-  });
-}
-
 async function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  await Promise.all([...children].reverse().map(stopProcessTree));
+  await stopOwnedProcessTrees(children);
   process.exit(exitCode);
 }
 
 process.on("SIGINT", () => { void shutdown(0); });
 process.on("SIGTERM", () => { void shutdown(0); });
 
-startProcess("backend", isWindows ? "python.exe" : "python", ["../scripts/e2e_server.py"]);
-startProcess("vite", isWindows ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"]);
+async function main() {
+  await assertFixedPortsAvailable();
+  startProcess("backend", isWindows ? "python.exe" : "python", ["../scripts/e2e_server.py"]);
+  startProcess("vite", isWindows ? "npm.cmd" : "npm", [
+    "run",
+    "dev",
+    "--",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "5173",
+    "--strictPort",
+  ]);
 
-try {
   await waitForUrl("backend", "http://127.0.0.1:8765/api/health", 60_000);
   await waitForUrl("vite", "http://127.0.0.1:5173", 90_000);
+  // 讓已排入 event loop 的 child exit 先落地，避免舊 URL 回應造成假 ready。
+  await new Promise(resolveTurn => setImmediate(resolveTurn));
+  assertChildrenRunning();
+  process.send?.(createSupervisorReadyMessage());
   console.log("[ready] run tests with: npm run test:e2e:reuse -- -g <pattern>");
   process.stdin.resume();
-} catch (error) {
-  console.error(error.message);
-  shutdown(1);
 }
+
+main().catch(error => {
+  console.error(`[fatal] ${error.message}`);
+  void shutdown(1);
+});
