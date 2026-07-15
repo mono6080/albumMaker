@@ -11,6 +11,7 @@ import {
 
 const PHONE_CONTEXT = {
   viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
   isMobile: true,
   hasTouch: true,
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
@@ -302,6 +303,12 @@ test.describe("phone template editor", () => {
     await page.mouse.down();
     await page.mouse.move(resizeStart.x + 24, resizeStart.y + 32, { steps: 12 });
     await page.mouse.up();
+    const enlargedVisual = await readNodeScene(
+      page,
+      addedNodeId.replace("photo-", "photo-visual-"),
+    );
+    expect(enlargedVisual.scaleX).toBeCloseTo(1, 3);
+    expect(enlargedVisual.scaleY).toBeCloseTo(1, 3);
     await expect.poll(async () => (await readNodeScene(page, addedNodeId))?.width)
       .toBeGreaterThan(beforeResize.width + 5);
 

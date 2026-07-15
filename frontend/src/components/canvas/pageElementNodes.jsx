@@ -248,6 +248,7 @@ export function makePhotoControlProps(data, {
 
         node.scaleX(1); node.scaleY(1);
         node.width(newDisplayW); node.height(newDisplayH);
+        syncVisualNode(node);
         updateElement("photo", data.id, {
           x: nextSlot.x,
           y: nextSlot.y,
