@@ -81,7 +81,7 @@ TemplateProjectSyncBackup (id, sync_id, template_id, project_id nullable,
 學生個別覆蓋     students.pages_data_json[i]["label_texts"] = {label_id: text}
 ```
 
-- 合併唯一進入點：`project_service.py` 的 `merge_project_label_texts_into_pages()`。
+- 合併唯一進入點：`label_texts.py` 的 `merge_project_label_texts_into_pages()`。
   學生值優先，專案值補足未覆寫處；學生尚無對應頁時以專案值補上空 photos 頁面
 - 資料結構工具（欄位↔entry 轉換、對齊正規化、樣式覆寫合併）集中在
   `services/label_texts.py`

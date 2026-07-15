@@ -34,6 +34,7 @@ backend/
   main.py              FastAPI app、路由掛載、SecurityHeadersMiddleware、CORS、
                        slowapi limiter、SPA/PWA 靜態檔 serving（見下方「SPA catch-all」）
   database.py          ORM 模型（見 data-model.md）
+  app_paths.py         後端路徑 owner：BACKEND_DIR / UPLOADS_DIR
   migrations.py        啟動時自動執行的冪等 schema 遷移（規則見 data-model.md）
   auth.py              JWT 產生/驗證、bcrypt 密碼、get_current_user / require_role
   template_periods.py  模板期別的部門常數與狀態邏輯
@@ -60,16 +61,20 @@ backend/
       comments.py        審閱留言
       render.py          渲染、PDF / 圖片 / ZIP 輸出
   services/
-    render_service.py    渲染公開 API：render_page / render_album / save_album_pdf /
-                         save_album_images；持有 UPLOADS_DIR（storage.py 從這裡 import，不能移走）
+    render_service.py    頁面渲染 API：render_page / render_album / save_album_pdf /
+                         save_album_images；UPLOADS_DIR 只留相容 alias
     element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label
     draw_helpers.py      PIL 低階工具：字型、合成、形狀、文字換行、陰影
-    project_service.py   相冊輸出（dirty-skip）、ZIP 串流、label_texts 合併、安全檔名
+    project_service.py   舊 import 相容 facade；新程式直接 import 下列責任 owner
+    output_keys.py       輸出 key、安全檔名與 Content-Disposition
+    project_archive_service.py  到期封存專案的 Storage cleanup 與 DB purge
+    student_render_service.py   單一學生渲染、dirty-skip、發布 CAS 與 render fingerprint
+    project_export_service.py   專案 PDF／圖片 ZIP 串流
     student_pages.py     pages_data_json 的併發安全寫入入口（學生寫鎖、空頁 schema、
                          照片寫入與 mapping 協議）
     preview_cache.py     預覽圖內容定址快取（cache-aside、limiter 內二次查）
     file_service.py      Storage key 計算、上傳驗證與壓縮、照片縮圖（支援 HEIF）
-    label_texts.py       label_texts 資料結構工具（欄位↔entry 轉換、對齊正規化、合併）
+    label_texts.py       label_texts 資料結構工具與專案／學生／模板文字合併
     roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 規劃
     teacher_overview_service.py  老師進度總覽與 Excel 匯出
     template_service.py  模板複製（頁面、背景、貼圖資產）
@@ -77,7 +82,9 @@ backend/
     export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
     zip_stream.py        串流 ZIP 骨架（佔 limiter → 逐 entry drain → 釋放）
-    storage.py           StorageAdapter 抽象＋R2 讀取快取（見 storage.md）
+    storage.py           Storage 公開相容 facade（見 storage.md）
+    storage_base.py / storage_local.py / storage_r2.py  adapter 抽象與實作
+    storage_cache.py / storage_factory.py  R2 cache 與 call-time env/path factory
     request_limiter.py   BusyLimiter：渲染/打包/上傳並發槽位限制
 ```
 
@@ -90,10 +97,11 @@ hooks/       可重用 state 邏輯（useAutoSave / usePermissions / useInlineEd
 api/         只做 HTTP，不含業務判斷（authApi / templateApi / projectApi / urls）
 context/     AuthContext（全域 currentUser）
 constants/   靜態資料（fonts / design tokens），不含邏輯
-utils/       純函式工具（photoUtils / photoFrameGeometry / renderLayoutModel / …）
+utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / …）
 ```
 
-- `api.js` 與 `api/index.js` 是向後相容 barrel，舊頁面仍從此引入；新程式碼直接 import `api/*.js`
+- API consumer 直接 import `api/authApi.js`、`projectApi.js`、`templateApi.js` 或 `urls.js`；
+  不另設跨 domain barrel
 - 共用 axios clients：一般請求走 `apiClient`、渲染請求走長 timeout 的 `renderClient`
   （皆定義於 `authApi.js`，`withCredentials` 帶 HttpOnly Cookie、共用 401 interceptor）；
   不得另建 `axios.create()`
@@ -113,7 +121,6 @@ utils/       純函式工具（photoUtils / photoFrameGeometry / renderLayoutMod
 | SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin；supervisor 唯讀） |
 | TeacherOverview | `/admin/teacher-overview` | 老師進度：各老師（含尚未建專案者）的期別專案、照片格填滿進度、空白文字提醒與全班完成狀態（admin 全部；supervisor 管轄老師；PDF 產出狀態歸學期匯出頁） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
-| Offline | — | PWA 離線頁 |
 
 各路由的角色守衛（`PrivateRoute` + `allowedRoles`）見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)。
 

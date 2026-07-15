@@ -170,10 +170,6 @@ export const updatePhotoMapping = (projectId, expectedTemplateRevision, studentI
 
 // ── 對應文字 ──────────────────────────────────────────────────────────────────
 
-/** 取得專案層級的對應文字設定 */
-export const fetchProjectLabelTexts = (projectId) =>
-  apiClient.get(`/projects/${projectId}/label_texts`);
-
 /** 更新專案層級的對應文字設定（signal 供自動儲存取消過時請求） */
 export const updateProjectLabelTexts = (projectId, expectedTemplateRevision, labelTextsPayload, signal) =>
   apiClient.put(`/projects/${projectId}/label_texts`, labelTextsPayload, {
@@ -193,9 +189,3 @@ export const batchUpdateStudentTexts = (projectId, expectedTemplateRevision, stu
 /** 渲染單一學生的相冊並儲存為 PDF */
 export const renderStudent = (projectId, studentId) =>
   renderClient.post(`/projects/${projectId}/students/${studentId}/render`);
-
-/** 批次渲染專案中所有學生的相冊 */
-export const renderAllStudents = (projectId) =>
-  renderClient.post(`/projects/${projectId}/render/all`);
-
-export default apiClient;

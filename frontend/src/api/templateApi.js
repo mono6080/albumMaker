@@ -109,24 +109,12 @@ export const deleteTemplate = (templateId) =>
 
 // ── 模板頁面 CRUD ─────────────────────────────────────────────────────────────
 
-/** 在模板末尾新增一頁 */
-export const addTemplatePage = (templateId) =>
-  apiClient.post(`/templates/${templateId}/pages`);
-
 /**
  * 以單一 transaction 儲存模板的完整頁面快照。
  * 既有頁帶 id；尚未落盤的新頁帶 client_id，回應會保留 client_id 供前端換成正式 id。
  */
 export const saveTemplatePages = (templateId, payload) =>
   apiClient.put(`/templates/${templateId}/pages`, payload);
-
-/** 更新模板頁面的佈局 JSON */
-export const updatePageLayout = (templateId, pageId, layoutData) =>
-  apiClient.put(`/templates/${templateId}/pages/${pageId}/layout`, layoutData);
-
-/** 刪除指定模板頁面 */
-export const deleteTemplatePage = (templateId, pageId) =>
-  apiClient.delete(`/templates/${templateId}/pages/${pageId}`);
 
 // ── 背景圖 ────────────────────────────────────────────────────────────────────
 
@@ -166,5 +154,3 @@ export const suggestMaterialTextBox = (
   },
   { signal },
 );
-
-export default apiClient;

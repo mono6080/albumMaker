@@ -23,7 +23,11 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // 未安裝 eslint-plugin-react 時，core no-unused-vars 不會辨識 JSX component 引用。
+      // 保留 PascalCase／單字母 component 與 `_unused` 慣例，但不再放過 ALL_CAPS 死常數。
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^(?:_|[A-Z]$|[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*)',
+      }],
       'react-hooks/set-state-in-effect': 'off',
     },
   },

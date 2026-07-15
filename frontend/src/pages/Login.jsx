@@ -3,14 +3,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-
-const ROLE_LABELS = {
-  admin: "管理員",
-  art_team: "設計",
-  supervisor: "主管",
-  teacher: "帶班老師",
-  none: "無權限",
-};
+import { ROLE_GROUPS } from "../utils/userRoles";
 
 export default function Login() {
   const { login } = useAuth();
@@ -28,7 +21,7 @@ export default function Login() {
     try {
       const userData = await login(username, password);
       // 依角色導向不同首頁
-      if (userData.role === "art_team" || userData.role === "admin") {
+      if (ROLE_GROUPS.TEMPLATE_MANAGERS.includes(userData.role)) {
         navigate("/templates");
       } else {
         navigate("/projects");

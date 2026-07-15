@@ -22,8 +22,8 @@ function getPageHistory(historyStore, pageId) {
   return historyStore[pageId];
 }
 
-function getEditorPageKey(page) {
-  return page?.editorKey ?? page?.id;
+export function getEditorPageKey(page) {
+  return page?.editorKey ?? (page?.id == null ? null : `page:${page.id}`);
 }
 
 // onLayoutRestored：undo/redo 套用歷史版面後呼叫；編輯器可依快照校正隔離與選取。
@@ -155,31 +155,6 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     }
   }, [endHistoryGroup]);
 
-  // 批次儲存所有髒頁草稿：persistPage(pageId, layout) 由呼叫端提供 API 呼叫。
-  // 全部成功後清空髒頁標記並回傳已儲存的 layout 快照；沒有髒頁時回傳 null。
-  // 保留給非結構性呼叫；page id 全程以字串比較，臨時 id 不會被 Number() 變成 NaN。
-  const saveDirtyLayouts = useCallback(async (pages, persistPage) => {
-    const dirtyPageIds = Object.keys(draftLayouts.current);
-    if (dirtyPageIds.length === 0) return null;
-    const draftReferences = Object.fromEntries(
-      dirtyPageIds.map(pageId => [pageId, draftLayouts.current[pageId]])
-    );
-    const savedLayouts = Object.fromEntries(
-      dirtyPageIds.map(pageId => [pageId, cloneLayout(draftReferences[pageId])])
-    );
-    const persistedPageIds = pages
-      .filter(page => dirtyPageIds.includes(String(getEditorPageKey(page))))
-      .map(page => String(getEditorPageKey(page)));
-    await Promise.all(persistedPageIds.map(pageId => persistPage(pageId, savedLayouts[pageId])));
-    persistedPageIds.forEach(pageId => {
-      // 儲存請求進行中仍可能收到畫布操作；只清掉實際送出的那一版，保留較新的草稿。
-      if (draftLayouts.current[pageId] === draftReferences[pageId]) {
-        delete draftLayouts.current[pageId];
-      }
-    });
-    return savedLayouts;
-  }, []);
-
   return {
     draftLayouts,
     canUndo: historyAvailability.canUndo,
@@ -191,6 +166,5 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     undoLayout,
     redoLayout,
     reconcileSavedPages,
-    saveDirtyLayouts,
   };
 }

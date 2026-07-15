@@ -19,12 +19,7 @@ import {
 } from "lucide-react";
 
 import { getPhotoContentRect } from "../utils/photoFrameGeometry.js";
-import { ELEMENT_ARRAY_KEY } from "../utils/renderLayoutModel";
 import { isFillableTextLabel } from "../utils/textLabelRoles";
-import {
-  getNodeLayerState,
-  getVisibleLayoutElementOrdinals,
-} from "../utils/layoutLayerState.js";
 
 const ELEMENT_TYPE_META = {
   photo: {
@@ -236,13 +231,12 @@ function LayerRow({
 }
 
 export default function LayerListPanel({
-  pageLayout,
-  sortedPageElements,
+  editorLayoutModel,
   currentPageIndex,
   photoSlotDimensionMode,
   backgroundUrl,
   onSelectElement,
-  rootRenderNodes = null,
+  rootRenderNodes = [],
   scopeRenderNodes = null,
   isolationGroup = null,
   isolationTrail = [],
@@ -279,32 +273,19 @@ export default function LayerListPanel({
   };
 
   const selectedKeys = new Set(selectedRefs.map(ref => `${ref.type}-${ref.id}`));
-  const rootItems = rootRenderNodes ?? sortedPageElements.map(item => ({
-    kind: "element",
-    type: item.type,
-    id: item.data.id,
-    data: item.data,
-    index: item.index,
-  }));
+  const rootItems = rootRenderNodes;
   const layerPanelItems = scopeRenderNodes
     ? [...scopeRenderNodes].reverse()
     : isolationGroup
       ? [...(isolationGroup.children || [])].reverse()
       : [...rootItems].reverse();
-  const pageElementCounts = {
-    photo: pageLayout?.photo_slots?.length ?? 0,
-    text: pageLayout?.text_labels?.length ?? 0,
-    sticker: pageLayout?.stickers?.length ?? 0,
-  };
-  const visiblePhotoOrdinals = getVisibleLayoutElementOrdinals(pageLayout, "photo");
+  const pageElementCounts = editorLayoutModel.elementCounts;
+  const visiblePhotoOrdinals = editorLayoutModel.getVisibleElementOrdinals("photo");
   const hasIsolation = isolationTrail.length > 0 || !!isolationGroup;
 
   const getElementOrdinal = (type, elementId) => {
     if (type === "photo") return visiblePhotoOrdinals.get(String(elementId)) ?? null;
-    const arrayKey = ELEMENT_ARRAY_KEY[type];
-    const source = pageLayout?.[arrayKey] || [];
-    const index = source.findIndex(element => element.id === elementId);
-    return index >= 0 ? index + 1 : null;
+    return editorLayoutModel.getCollectionElementOrdinal(type, elementId);
   };
 
   const getLayerTitle = ({ type, data }) => {
@@ -429,7 +410,7 @@ export default function LayerListPanel({
                   const groupData = item.data ?? item;
                   const childCount = item.children?.length ?? groupData.children?.length ?? 0;
                   const layerRef = { type: "group", id: item.id };
-                  const layerState = getNodeLayerState(pageLayout, layerRef);
+                  const layerState = editorLayoutModel.getNodeLayerState(layerRef);
                   return (
                     <LayerRow
                       key={`group-${item.id}`}
@@ -455,7 +436,7 @@ export default function LayerListPanel({
 
                 const { type, data } = item;
                 const layerRef = { type, id: data.id };
-                const layerState = getNodeLayerState(pageLayout, layerRef);
+                const layerState = editorLayoutModel.getNodeLayerState(layerRef);
                 return (
                   <LayerRow
                     key={`${type}-${data.id}`}

@@ -1,27 +1,95 @@
-// 使用者角色與主管顯示的共用常數/helpers
-// 由 UserManagement 頁與 UserList 元件共用（獨立成純模組，元件檔依 react-refresh 規則不混出函式）
+// 使用者角色、權限群組與主管顯示的共用常數/helpers
+// 純模組供路由、權限 hook 與使用者管理共用。
+
+export const USER_ROLES = Object.freeze({
+  ADMIN: "admin",
+  ART_TEAM: "art_team",
+  SUPERVISOR: "supervisor",
+  TEACHER: "teacher",
+  NONE: "none",
+});
+
+export const ROLE_LABELS = Object.freeze({
+  [USER_ROLES.ADMIN]: "管理員",
+  [USER_ROLES.ART_TEAM]: "設計",
+  [USER_ROLES.SUPERVISOR]: "主管",
+  [USER_ROLES.TEACHER]: "帶班老師",
+  [USER_ROLES.NONE]: "無權限",
+});
 
 export const ROLE_OPTIONS = [
-  { value: "admin",      label: "管理員" },
-  { value: "art_team",   label: "設計" },
-  { value: "supervisor", label: "主管" },
-  { value: "teacher",    label: "帶班老師" },
-  { value: "none",       label: "無權限" },
+  { value: USER_ROLES.ADMIN,      label: ROLE_LABELS[USER_ROLES.ADMIN] },
+  { value: USER_ROLES.ART_TEAM,   label: ROLE_LABELS[USER_ROLES.ART_TEAM] },
+  { value: USER_ROLES.SUPERVISOR, label: ROLE_LABELS[USER_ROLES.SUPERVISOR] },
+  { value: USER_ROLES.TEACHER,    label: ROLE_LABELS[USER_ROLES.TEACHER] },
+  { value: USER_ROLES.NONE,       label: ROLE_LABELS[USER_ROLES.NONE] },
 ];
 
 export const ROLE_BADGE_STYLE = {
-  admin:      "bg-red-100 text-red-700",
-  art_team:   "bg-violet-100 text-violet-700",
-  supervisor: "bg-blue-100 text-blue-700",
-  teacher:    "bg-emerald-100 text-emerald-700",
-  none:       "bg-gray-100 text-gray-500",
+  [USER_ROLES.ADMIN]:      "bg-red-100 text-red-700",
+  [USER_ROLES.ART_TEAM]:   "bg-violet-100 text-violet-700",
+  [USER_ROLES.SUPERVISOR]: "bg-blue-100 text-blue-700",
+  [USER_ROLES.TEACHER]:    "bg-emerald-100 text-emerald-700",
+  [USER_ROLES.NONE]:       "bg-gray-100 text-gray-500",
 };
 
-const SUPERVISABLE_ROLES = new Set(["teacher", "supervisor"]);
+export const ROLE_GROUPS = Object.freeze({
+  ADMIN_ONLY: Object.freeze([USER_ROLES.ADMIN]),
+  TEMPLATE_MANAGERS: Object.freeze([USER_ROLES.ADMIN, USER_ROLES.ART_TEAM]),
+  PROJECT_READERS: Object.freeze([
+    USER_ROLES.ADMIN,
+    USER_ROLES.TEACHER,
+    USER_ROLES.SUPERVISOR,
+    USER_ROLES.ART_TEAM,
+  ]),
+  PROJECT_EDITORS: Object.freeze([
+    USER_ROLES.ADMIN,
+    USER_ROLES.TEACHER,
+    USER_ROLES.SUPERVISOR,
+  ]),
+  PROJECT_OWNER_EDITORS: Object.freeze([USER_ROLES.TEACHER, USER_ROLES.SUPERVISOR]),
+  COMMENTERS: Object.freeze([
+    USER_ROLES.ADMIN,
+    USER_ROLES.ART_TEAM,
+    USER_ROLES.SUPERVISOR,
+  ]),
+  REPORT_VIEWERS: Object.freeze([USER_ROLES.ADMIN, USER_ROLES.SUPERVISOR]),
+  SUPERVISABLE: Object.freeze([USER_ROLES.TEACHER, USER_ROLES.SUPERVISOR]),
+});
+
+const ROLE_PERMISSIONS = Object.freeze(Object.fromEntries(
+  Object.values(USER_ROLES).map((role) => [
+    role,
+    Object.freeze({
+      isAdmin: role === USER_ROLES.ADMIN,
+      isArtTeam: role === USER_ROLES.ART_TEAM,
+      isSupervisor: role === USER_ROLES.SUPERVISOR,
+      isTeacher: role === USER_ROLES.TEACHER,
+      canManageTemplates: ROLE_GROUPS.TEMPLATE_MANAGERS.includes(role),
+      canAccessProjects: ROLE_GROUPS.PROJECT_READERS.includes(role),
+      canCreateProject: ROLE_GROUPS.PROJECT_EDITORS.includes(role),
+      canDownloadPrint: role === USER_ROLES.ADMIN,
+      canComment: ROLE_GROUPS.COMMENTERS.includes(role),
+      canManageUsers: role === USER_ROLES.ADMIN,
+      canViewReports: ROLE_GROUPS.REPORT_VIEWERS.includes(role),
+    }),
+  ]),
+));
+
+export function getRolePermissions(role) {
+  return ROLE_PERMISSIONS[role] ?? ROLE_PERMISSIONS[USER_ROLES.NONE];
+}
+
+export function canUserEditProject(role, currentUserId, ownerUserId) {
+  return role === USER_ROLES.ADMIN || (
+    ROLE_GROUPS.PROJECT_OWNER_EDITORS.includes(role)
+    && currentUserId === ownerUserId
+  );
+}
 
 export function canHaveSupervisor(userOrRole) {
   const role = typeof userOrRole === "string" ? userOrRole : userOrRole?.role;
-  return SUPERVISABLE_ROLES.has(role);
+  return ROLE_GROUPS.SUPERVISABLE.includes(role);
 }
 
 export function getSupervisorIds(user) {

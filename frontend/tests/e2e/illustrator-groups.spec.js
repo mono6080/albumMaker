@@ -385,7 +385,15 @@ test("45 degree group transformer matches bounds before and after resize commit"
   };
   await page.mouse.move(canvasBox.x + bottomRight.x, canvasBox.y + bottomRight.y);
   await page.mouse.down();
-  await page.mouse.move(canvasBox.x + target.x, canvasBox.y + target.y, { steps: 12 });
+  // WebKit 會合併沒有 frame 間隔的 mousemove；逐步送出才能穩定驅動 Konva Transformer。
+  for (let step = 1; step <= 12; step += 1) {
+    const progress = step / 12;
+    await page.mouse.move(
+      canvasBox.x + bottomRight.x + (target.x - bottomRight.x) * progress,
+      canvasBox.y + bottomRight.y + (target.y - bottomRight.y) * progress,
+    );
+    await page.waitForTimeout(20);
+  }
   await page.mouse.up();
 
   await expect.poll(async () => (await readGroupGeometry())?.transformer.width ?? 0)

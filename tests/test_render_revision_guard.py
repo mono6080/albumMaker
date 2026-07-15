@@ -9,8 +9,8 @@ from fastapi import HTTPException
 
 from database import Project, SessionLocal, Student, Template, TemplatePage, init_db
 from routers.projects import crud as project_crud
-from services import project_service
-from services.project_service import build_combined_stem, get_project_output_prefix
+from services import student_render_service
+from services.output_keys import build_combined_stem, get_project_output_prefix
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
@@ -63,19 +63,19 @@ def _seed_render_target() -> dict:
 
 
 def _patch_fast_render(monkeypatch, render_album):
-    monkeypatch.setattr(project_service, "render_album", render_album)
+    monkeypatch.setattr(student_render_service, "render_album", render_album)
     monkeypatch.setattr(
-        project_service,
+        student_render_service,
         "derive_screen_images",
         lambda rendered_images: [f"screen:{image}" for image in rendered_images],
     )
     monkeypatch.setattr(
-        project_service,
+        student_render_service,
         "save_album_pdf",
         lambda rendered_images, mode: f"new-{mode}-pdf".encode(),
     )
     monkeypatch.setattr(
-        project_service,
+        student_render_service,
         "save_album_images",
         lambda rendered_images, stem, mode: {
             f"{stem}{'_screen' if mode == 'screen' else ''}_page1.jpg":
@@ -89,7 +89,7 @@ def _run_render(project_id: int, student_id: int, result: dict) -> None:
     try:
         project = db.get(Project, project_id)
         student = db.get(Student, student_id)
-        result["value"] = project_service.render_and_save_student_album(
+        result["value"] = student_render_service.render_and_save_student_album(
             project, student, project_id, db
         )
     except BaseException as error:
@@ -151,7 +151,7 @@ class _FailingOutputCleanupStorage(LocalStorageAdapter):
 def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(monkeypatch, tmp_path):
     seeded = _seed_render_target()
     storage = LocalStorageAdapter(tmp_path / "uploads")
-    monkeypatch.setattr(project_service, "get_storage", lambda: storage)
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
 
     combined_stem = build_combined_stem(seeded["project_name"], seeded["student_name"])
     output_prefix = get_project_output_prefix(seeded["project_id"])
@@ -245,7 +245,7 @@ def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(mo
 def test_same_student_renders_are_serialized_and_second_uses_completed_output(monkeypatch, tmp_path):
     seeded = _seed_render_target()
     storage = LocalStorageAdapter(tmp_path / "uploads")
-    monkeypatch.setattr(project_service, "get_storage", lambda: storage)
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
 
     first_render_started = threading.Event()
     allow_first_render_finish = threading.Event()
@@ -304,7 +304,7 @@ def test_rename_or_delete_waits_for_publish_then_invalidates_canonical_output(
     seeded = _seed_render_target()
     # Windows MAX_PATH：combined stem 同時出現在目錄與檔名，測試 base 必須保持短。
     storage = _BlockingPublishStorage(tmp_path.parent / f"rl-{mutation}" / "u")
-    monkeypatch.setattr(project_service, "get_storage", lambda: storage)
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
     _patch_fast_render(monkeypatch, lambda *args, **kwargs: ["print-image"])
 
@@ -448,7 +448,7 @@ def test_student_delete_stays_successful_when_output_cleanup_fails(monkeypatch, 
 def test_deleted_student_id_reuse_cannot_publish_old_render(monkeypatch, tmp_path):
     seeded = _seed_render_target()
     storage = LocalStorageAdapter(tmp_path / "uploads")
-    monkeypatch.setattr(project_service, "get_storage", lambda: storage)
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
 
     db = SessionLocal()

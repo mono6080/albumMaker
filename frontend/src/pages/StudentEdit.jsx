@@ -233,9 +233,7 @@ export default function StudentEdit() {
         onBeforeStep: () => { setMobileTab("photo"); },
       },
       {
-        // 桌面與行動版是兩個實例（student-text-panel / student-text-panel-mobile），
-        // 用前綴比對讓兩邊都吃得到
-        element: '[data-guide^="student-text-panel"]',
+        element: '[data-guide="student-text-panel"]',
         title: "個別文字",
         description: "需要為單一學生覆寫文字時，在這裡輸入。清空會輸出空白；按恢復預設可回到共用文字或模板文字。",
         side: "left",
@@ -429,45 +427,28 @@ export default function StudentEdit() {
           />
         </div>
 
-        {/* 桌面版文字面板 */}
+        {/* 文字面板只有一份實例；由版面 class 在手機分頁與桌面欄位間切換 */}
         <div
-          className="hidden lg:block lg:col-start-2 lg:row-start-2 lg:min-w-0 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1"
+          className={`lg:col-start-2 lg:row-start-2 lg:min-w-0 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1 ${mobileTab === "text" ? "block" : "hidden lg:block"}`}
           data-guide="student-text-panel"
         >
-          <StudentTextPanel
-            activePage={activePage}
-            activePageLayout={activePageLayout}
-            projectLabelTexts={projectLabelTexts}
-            student={student}
-            getLabelText={getLabelText}
-            getLabelAlign={getLabelAlign}
-            hasLabelTextOverride={hasLabelTextOverride}
-            onLabelChange={setLabelText}
-            onLabelAlignChange={setLabelAlign}
-            onRestoreDefault={restoreDefaultLabelText}
-            onScheduleSave={() => { if (student) scheduleSave(); }}
-            saveStatus={saveStatus}
-            isLocked={isProjectCompleted}
-          />
-        </div>
-
-        {/* 行動版文字面板（獨立顯示） */}
-        <div className={`lg:hidden ${mobileTab === "text" ? "block" : "hidden"} w-full`} data-guide="student-text-panel-mobile">
-          <StudentTextPanel
-            activePage={activePage}
-            activePageLayout={activePageLayout}
-            projectLabelTexts={projectLabelTexts}
-            student={student}
-            getLabelText={getLabelText}
-            getLabelAlign={getLabelAlign}
-            hasLabelTextOverride={hasLabelTextOverride}
-            onLabelChange={setLabelText}
-            onLabelAlignChange={setLabelAlign}
-            onRestoreDefault={restoreDefaultLabelText}
-            onScheduleSave={() => { if (student) scheduleSave(); }}
-            saveStatus={saveStatus}
-            isLocked={isProjectCompleted}
-          />
+          <div data-guide="student-text-panel-mobile">
+            <StudentTextPanel
+              activePage={activePage}
+              activePageLayout={activePageLayout}
+              projectLabelTexts={projectLabelTexts}
+              student={student}
+              getLabelText={getLabelText}
+              getLabelAlign={getLabelAlign}
+              hasLabelTextOverride={hasLabelTextOverride}
+              onLabelChange={setLabelText}
+              onLabelAlignChange={setLabelAlign}
+              onRestoreDefault={restoreDefaultLabelText}
+              onScheduleSave={() => { if (student) scheduleSave(); }}
+              saveStatus={saveStatus}
+              isLocked={isProjectCompleted}
+            />
+          </div>
         </div>
       </div>
     </div>

@@ -120,11 +120,46 @@ async function readNodeScene(page, nodeId) {
 }
 
 async function readNodeScreenPoint(page, nodeId) {
+  // 斷點切換時 Stage 尺寸與 camera 由兩次 React layout effect 更新；等整組幾何
+  // 連續三個 animation frame 不變，避免第一個 touch 還落在舊 camera 座標。
+  await expect.poll(() => page.evaluate(async (expectedNodeId) => {
+    const readSignature = () => {
+      const stage = window.Konva?.stages?.find(candidate => candidate.findOne(`#${expectedNodeId}`));
+      const camera = stage?.findOne("#page-camera");
+      const viewport = stage?.container().closest('[data-guide="editor-canvas-viewport"]');
+      if (!stage || !camera || !viewport) return null;
+      return [
+        stage.width(), stage.height(),
+        viewport.clientWidth, viewport.clientHeight,
+        camera.x(), camera.y(), camera.scaleX(), camera.scaleY(),
+      ];
+    };
+    const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+    const signatures = [readSignature()];
+    await nextFrame();
+    signatures.push(readSignature());
+    await nextFrame();
+    signatures.push(readSignature());
+    if (signatures.some(signature => signature == null)) return false;
+    const [first, second, third] = signatures;
+    const isSame = (left, right) => left.every((value, index) => (
+      Math.abs(value - right[index]) <= 0.01
+    ));
+    const stageMatchesViewport = Math.abs(third[0] - third[2]) <= 1
+      && Math.abs(third[1] - third[3]) <= 1;
+    return stageMatchesViewport && isSame(first, second) && isSame(second, third);
+  }, nodeId)).toBeTruthy();
+
   return page.evaluate((expectedNodeId) => {
     const stage = window.Konva?.stages?.find(candidate => candidate.findOne(`#${expectedNodeId}`));
     const node = stage?.findOne(`#${expectedNodeId}`);
     if (!stage || !node) return null;
-    const position = node.getAbsolutePosition();
+    // 點物件可視 bounds 中心；左上邊界在 WebKit 的縮放小數像素下可能落在 hit area 外。
+    const bounds = node.getClientRect({ relativeTo: stage });
+    const position = {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y + bounds.height / 2,
+    };
     const stageRect = stage.container().getBoundingClientRect();
     return {
       x: stageRect.left + position.x * stageRect.width / stage.width(),

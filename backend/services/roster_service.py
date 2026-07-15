@@ -10,14 +10,14 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session, joinedload
 
 from database import Project, RosterChild, Student, TemplatePeriod
-from services.project_service import (
+from services.output_keys import (
     get_project_output_prefix,
     make_safe_filename,
-    render_and_save_student_album,
     student_pdf_key_for_mode,
 )
 from services.request_limiter import album_render_limiter
 from services.storage import get_storage
+from services.student_render_service import render_and_save_student_album
 from services.zip_stream import open_zip_stream
 
 logger = logging.getLogger(__name__)

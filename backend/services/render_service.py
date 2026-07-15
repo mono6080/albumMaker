@@ -47,13 +47,12 @@ Student page data schema (pages_data_json is a list, one item per page):
 """
 
 import io
-import os
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw
 
+from app_paths import UPLOADS_DIR as UPLOADS_DIR
 from services.draw_helpers import get_font, load_key
 from services.element_renderers import (
     render_photo_slot,
@@ -67,9 +66,6 @@ from services.photo_frame_geometry import (
     build_photo_frame_slot,
     get_photo_slot_dimension_mode,
 )
-
-BACKEND_DIR = Path(__file__).parent.parent
-UPLOADS_DIR = Path(os.environ.get("ALBUM_MAKER_UPLOADS_DIR", BACKEND_DIR / "uploads"))
 
 _X_NUMERIC_KEYS = {
     "x",

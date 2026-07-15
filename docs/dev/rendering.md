@@ -27,7 +27,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 
 ## 相冊輸出與 dirty-skip
 
-`project_service.py` 的 `render_and_save_student_album()`：
+`student_render_service.py` 的 `render_and_save_student_album()`：
 
 - 只渲染**一次**列印尺寸（2480×3508），螢幕圖由 `derive_screen_images()`
   LANCZOS 降採樣到 794×1123 — 不再跑第二輪渲染
@@ -69,9 +69,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   photo → `photo_slots`、text → `text_labels`、sticker → `stickers`（`StickerNode`）
 - **Illustrator 式通用巢狀群組**：`groups[]` 可引用 photo/text/sticker/group，但不是第四種
   可繪製物件。Renderer 以每個 group subtree 當 stacking block，依 scope `children[]` 遞迴展平；
-  grouped leaf 不再從 root 重複畫。前端 traversal 在 `utils/layoutGroups.js`，後端 traversal 在
-  `services/layout_groups.py`；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy
-  flat traversal，確保每個元素仍只畫一次。圖層可見性契約見
+  grouped leaf 不再從 root 重複畫。前端 contract/graph、query、geometry、command 分別在
+  `utils/layoutGroupContractGraph.js`、`layoutGroupQueries.js`、`layoutGroupGeometry.js`、
+  `layoutGroupCommands.js`，`layoutGroups.js` 只保相容 exports；TemplateEditor 對同一 immutable
+  page layout 以 `editorLayoutModel.js` 單次建圖。後端 traversal 在 `services/layout_groups.py`；
+  若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
+  元素仍只畫一次。前端 export/model 契約由 `frontend/tests/unit/groups-contract.test.mjs` 釘住。
+  圖層可見性契約見
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)。
 - 任一 scope 的 direct group 可移動、旋轉、四角等比縮放；雙擊或 Enter 每次進一層 isolation 後，
   direct children 才能分別編輯。Group bounds 由 descendant world geometry 即時計算，不存入 layout；

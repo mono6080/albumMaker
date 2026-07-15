@@ -3,7 +3,7 @@
 // 分工：per-page 草稿/歷史在 hooks/useLayoutHistory、Konva 節點渲染在
 // components/canvas/pageElementNodes、雙頁預覽與圖層清單為獨立 component
 
-import { Fragment, useEffect, useRef, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -59,7 +59,7 @@ import useEditorStylePreferences from "../hooks/useEditorStylePreferences";
 import useEditorViewportMode, {
   EDITOR_VIEWPORT_MODE,
 } from "../hooks/useEditorViewportMode";
-import useLayoutHistory, { cloneLayout } from "../hooks/useLayoutHistory";
+import useLayoutHistory, { cloneLayout, getEditorPageKey } from "../hooks/useLayoutHistory";
 import { canvasViewportPointToPage } from "../utils/canvasCamera.js";
 import {
   CANVAS_DISPLAY_HEIGHT,
@@ -67,7 +67,6 @@ import {
   CANVAS_REAL_HEIGHT,
   CANVAS_REAL_WIDTH,
   ELEMENT_ARRAY_KEY,
-  getAllElementsSorted,
   getInitialStickerSize,
   getNextZIndex,
   toDisplayCoord,
@@ -85,17 +84,14 @@ import {
 import { DESIGN_TOKENS } from "../constants/designTokens.js";
 import { TEXT_LABEL_ROLES } from "../utils/textLabelRoles";
 import { startProductGuide } from "../utils/productGuide";
+import { buildEditorLayoutModel } from "../utils/editorLayoutModel.js";
 import {
-  buildRootRenderNodes,
   deleteLayoutElement,
   deleteLayoutGroup,
   flattenRenderNodes,
-  getDescendantLeafRefs,
   getGroupAncestorPath,
-  getGroupBounds,
   getGroupById,
   getMaterialTextLinkForNode,
-  getNodeBounds,
   getNodeParent,
   getScopeNodes,
   groupElements,
@@ -104,7 +100,6 @@ import {
   projectNormalizedBoxToSticker,
   removeInvalidMaterialTextLinks,
   reorderNode,
-  resolveHitToDirectChild,
   transformGroup,
   ungroupElements,
   validateLayoutGroups,
@@ -117,7 +112,6 @@ import {
 import {
   getLayoutNodeData,
   getNodeLayerState,
-  getVisibleLayoutElementOrdinals,
   getVisibleLayoutElements,
   updateLayoutNodeMetadata,
 } from "../utils/layoutLayerState.js";
@@ -207,10 +201,6 @@ function createEditorPageKey() {
   const suffix = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `draft-page:${suffix}`;
-}
-
-function getEditorPageKey(page) {
-  return page?.editorKey ?? (page?.id == null ? null : `page:${page.id}`);
 }
 
 function normalizeTemplateForEditor(templateData, previousPages = []) {
@@ -329,20 +319,6 @@ function uniqueRefs(refs) {
     seen.add(key);
     return true;
   });
-}
-
-function findRenderNode(nodes, ref) {
-  const stack = [...(nodes || [])].reverse();
-  while (stack.length) {
-    const node = stack.pop();
-    if (node.type === ref?.type && String(node.id) === String(ref.id)) return node;
-    if (node.kind === "group") {
-      for (let index = node.children.length - 1; index >= 0; index -= 1) {
-        stack.push(node.children[index]);
-      }
-    }
-  }
-  return null;
 }
 
 function normalizeDegrees(value) {
@@ -475,7 +451,6 @@ export default function TemplateEditor() {
   const [bgCropFile, setBgCropFile] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
-  const [totalPhotoCount, setTotalPhotoCount] = useState(0);
   const [inspectorTab, setInspectorTab] = useState("layers");
   const [activeMobilePanel, setActiveMobilePanel] = useState(null);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -517,6 +492,11 @@ export default function TemplateEditor() {
     : { width: CANVAS_DISPLAY_WIDTH, height: CANVAS_DISPLAY_HEIGHT };
   const isPhoneEditor = viewportMode === EDITOR_VIEWPORT_MODE.PHONE;
   const isTabletEditor = viewportMode === EDITOR_VIEWPORT_MODE.TABLET;
+  const editorLayoutModel = useMemo(() => buildEditorLayoutModel(pageLayout, {
+    onWarning: warning => (
+      console.warn("[TemplateEditor] invalid layout groups; using flat render", warning)
+    ),
+  }), [pageLayout]);
 
   useEffect(() => {
     setActiveMobilePanel(null);
@@ -593,6 +573,12 @@ export default function TemplateEditor() {
     setPageLayout,
     onLayoutRestored: reconcileRestoredEditorView,
   });
+  const totalPhotoCount = useMemo(() => {
+    // draftLayouts 是計數 SSOT；pageLayout 僅在目前頁草稿更新時觸發重算。
+    void pageLayout;
+    if (!template) return 0;
+    return countTemplatePhotoSlots(template, draftLayouts.current);
+  }, [pageLayout, template, draftLayouts]);
   const hasUnsavedChanges = pageStructureDirtyRef.current
     || Object.keys(draftLayouts.current).length > 0;
 
@@ -733,7 +719,7 @@ export default function TemplateEditor() {
     if (!tr || !stageRef.current) return;
     const nodes = selectedRefs
       .filter(ref => {
-        const state = getNodeLayerState(pageLayout, ref);
+        const state = editorLayoutModel.getNodeLayerState(ref);
         return state.isVisible && !state.isLocked;
       })
       .map(ref => {
@@ -743,7 +729,7 @@ export default function TemplateEditor() {
       .filter(Boolean);
     tr.nodes(nodes);
     tr.getLayer()?.batchDraw();
-  }, [selectedRefs, pageLayout, isolationGroupId]);
+  }, [selectedRefs, editorLayoutModel, isolationGroupId]);
 
   useEffect(() => {
     const redrawFrame = requestAnimationFrame(() => {
@@ -791,14 +777,6 @@ export default function TemplateEditor() {
     applyPageDisplay(nextPage);
     resetEditorView();
   }, [currentPageIndex, template, applyPageDisplay, resetEditorView]);
-
-  useEffect(() => {
-    if (!template) {
-      setTotalPhotoCount(0);
-      return;
-    }
-    setTotalPhotoCount(countTemplatePhotoSlots(template, draftLayouts.current));
-  }, [pageLayout, template, draftLayouts]);
 
   const startEditorGuide = useCallback(() => {
     startProductGuide(EDITOR_GUIDE_STEPS);
@@ -1101,17 +1079,9 @@ export default function TemplateEditor() {
 
   // ── 元素操作 ──────────────────────────────────────────────────────────────
 
-  const getElement = useCallback(({ type, id }, layout = pageLayout) => {
-    if (!layout) return null;
-    if (type === "photo")   return (layout.photo_slots || []).find(slot => String(slot.id) === String(id));
-    if (type === "text")    return (layout.text_labels || []).find(label => String(label.id) === String(id));
-    if (type === "sticker") return (layout.stickers || []).find(sticker => String(sticker.id) === String(id));
-    return null;
-  }, [pageLayout]);
-
   const handleSelectDirectRef = useCallback((directRef, { additive = false } = {}) => {
     if (!pageLayout || !directRef) return;
-    const directKeys = new Set(getScopeNodes(pageLayout, isolationGroupId).map(refKey));
+    const directKeys = new Set(editorLayoutModel.getScopeNodes(isolationGroupId).map(refKey));
     if (!directKeys.has(refKey(directRef))) return;
     if (!additive) {
       setSelectedRefs([directRef]);
@@ -1123,13 +1093,13 @@ export default function TemplateEditor() {
         ? baseRefs.filter(ref => !sameRef(ref, directRef))
         : [...baseRefs, directRef];
     });
-  }, [isolationGroupId, pageLayout]);
+  }, [editorLayoutModel, isolationGroupId, pageLayout]);
 
   const handleSelectElement = useCallback((elementRef, options = {}) => {
     if (!pageLayout || !elementRef) return;
-    const directRef = resolveHitToDirectChild(pageLayout, isolationGroupId, elementRef);
+    const directRef = editorLayoutModel.resolveHitToDirectChild(isolationGroupId, elementRef);
     if (directRef) handleSelectDirectRef(directRef, options);
-  }, [handleSelectDirectRef, isolationGroupId, pageLayout]);
+  }, [editorLayoutModel, handleSelectDirectRef, isolationGroupId, pageLayout]);
 
   const handleSelectGroup = useCallback((groupId, options = {}) => {
     handleSelectDirectRef({ type: "group", id: groupId }, options);
@@ -1154,19 +1124,19 @@ export default function TemplateEditor() {
   const enterGroup = useCallback((groupId, preferredHit = null) => {
     if (!pageLayout) return;
     const groupRef = { type: "group", id: groupId };
-    const isDirect = getScopeNodes(pageLayout, isolationGroupId).some(ref => sameRef(ref, groupRef));
-    const group = isDirect ? getGroupById(pageLayout, groupId) : null;
+    const isDirect = editorLayoutModel.getScopeNodes(isolationGroupId).some(ref => sameRef(ref, groupRef));
+    const group = isDirect ? editorLayoutModel.getGroupById(groupId) : null;
     if (!group) return;
     let nextChild = null;
     if (preferredHit?.type === "group") {
       nextChild = group.children.find(ref => sameRef(ref, preferredHit)) ?? null;
     } else if (preferredHit) {
-      nextChild = resolveHitToDirectChild(pageLayout, group.id, preferredHit);
+      nextChild = editorLayoutModel.resolveHitToDirectChild(group.id, preferredHit);
     }
     nextChild ??= group.children[0] ?? null;
-    setIsolationPath(getGroupAncestorPath(pageLayout, group.id));
+    setIsolationPath(editorLayoutModel.getGroupAncestorPath(group.id));
     setSelectedRefs(nextChild ? [nextChild] : []);
-  }, [isolationGroupId, pageLayout]);
+  }, [editorLayoutModel, isolationGroupId, pageLayout]);
 
   const exitGroup = useCallback(() => {
     if (!isolationPath.length) return;
@@ -1188,14 +1158,14 @@ export default function TemplateEditor() {
 
   const handleActivateElement = useCallback((elementRef) => {
     if (!pageLayout || !elementRef) return;
-    const directRef = resolveHitToDirectChild(pageLayout, isolationGroupId, elementRef);
+    const directRef = editorLayoutModel.resolveHitToDirectChild(isolationGroupId, elementRef);
     if (directRef?.type === "group") enterGroup(directRef.id, elementRef);
-  }, [enterGroup, isolationGroupId, pageLayout]);
+  }, [editorLayoutModel, enterGroup, isolationGroupId, pageLayout]);
 
   const handleCreateGroup = useCallback(() => {
     if (selectedRefs.length < 2) return;
     const canGroupSelection = selectedRefs.every(ref => {
-      const state = getNodeLayerState(pageLayout, ref);
+      const state = editorLayoutModel.getNodeLayerState(ref);
       return state.isVisible && !state.isLocked;
     });
     if (!canGroupSelection) {
@@ -1215,12 +1185,12 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法建立群組");
     }
-  }, [commitPageLayout, isolationGroupId, pageLayout, selectedRefs]);
+  }, [commitPageLayout, editorLayoutModel, isolationGroupId, selectedRefs]);
 
   const handleUngroup = useCallback((groupId) => {
-    const group = getGroupById(pageLayout, groupId);
+    const group = editorLayoutModel.getGroupById(groupId);
     if (!group) return;
-    if (getNodeLayerState(pageLayout, { type: "group", id: groupId }).isLocked) {
+    if (editorLayoutModel.getNodeLayerState({ type: "group", id: groupId }).isLocked) {
       toast.error("請先解除鎖定再解除群組");
       return;
     }
@@ -1230,11 +1200,11 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法解除群組");
     }
-  }, [commitPageLayout, pageLayout]);
+  }, [commitPageLayout, editorLayoutModel]);
 
   const updateElement = (elementType, elementId, propertyUpdates, commitOptions) => {
     const elementRef = { type: elementType, id: elementId };
-    if (getNodeLayerState(pageLayoutRef.current, elementRef).isLocked) return;
+    if (editorLayoutModel.getNodeLayerState(elementRef).isLocked) return;
     const arrayKey = ELEMENT_ARRAY_KEY[elementType];
     commitPageLayout(currentLayout => ({
       ...currentLayout,
@@ -1245,7 +1215,7 @@ export default function TemplateEditor() {
   };
 
   const updatePhotoElementFromEditor = (elementId, propertyUpdates, commitOptions) => {
-    if (getNodeLayerState(pageLayoutRef.current, { type: "photo", id: elementId }).isLocked) return;
+    if (editorLayoutModel.getNodeLayerState({ type: "photo", id: elementId }).isLocked) return;
     commitPageLayout(currentLayout => ({
       ...currentLayout,
       photo_slots: (currentLayout.photo_slots || []).map(
@@ -1258,7 +1228,7 @@ export default function TemplateEditor() {
 
   const deleteSelectedElement = useCallback(() => {
     if (selectedRefs.length === 0) return;
-    const editableRefs = selectedRefs.filter(ref => !getNodeLayerState(pageLayout, ref).isLocked);
+    const editableRefs = selectedRefs.filter(ref => !editorLayoutModel.getNodeLayerState(ref).isLocked);
     if (editableRefs.length === 0) {
       toast.error("請先解除鎖定再刪除");
       return;
@@ -1273,11 +1243,11 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法刪除選取物件");
     }
-  }, [commitPageLayout, pageLayout, selectedRefs]);
+  }, [commitPageLayout, editorLayoutModel, selectedRefs]);
 
   const handleLayerChange = useCallback((direction) => {
     if (!selectedElement) return;
-    if (getNodeLayerState(pageLayout, selectedElement).isLocked) {
+    if (editorLayoutModel.getNodeLayerState(selectedElement).isLocked) {
       toast.error("請先解除鎖定再調整圖層順序");
       return;
     }
@@ -1300,7 +1270,7 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法調整圖層");
     }
-  }, [commitPageLayout, isolationGroupId, pageLayout, selectedElement]);
+  }, [commitPageLayout, editorLayoutModel, isolationGroupId, selectedElement]);
 
   const handleRenameLayer = useCallback((ref, layerName) => {
     commitPageLayout(currentLayout => updateLayoutNodeMetadata(currentLayout, ref, {
@@ -1426,7 +1396,7 @@ export default function TemplateEditor() {
   const handleDuplicateSelection = useCallback(() => {
     if (!selectedRefs.length) return;
     if (selectedRefs.some(ref => {
-      const state = getNodeLayerState(pageLayout, ref);
+      const state = editorLayoutModel.getNodeLayerState(ref);
       return !state.isVisible || state.isLocked;
     })) return;
     try {
@@ -1442,7 +1412,7 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法複製選取物件");
     }
-  }, [commitPageLayout, isolationGroupId, pageLayout, selectedRefs]);
+  }, [commitPageLayout, editorLayoutModel, isolationGroupId, selectedRefs]);
 
   const handleCopySelection = useCallback(() => {
     const clipboard = createLayoutClipboard(pageLayout, selectedRefs, {
@@ -1458,7 +1428,7 @@ export default function TemplateEditor() {
 
   const handleCutSelection = useCallback(() => {
     const editableRefs = selectedRefs.filter(ref => {
-      const state = getNodeLayerState(pageLayout, ref);
+      const state = editorLayoutModel.getNodeLayerState(ref);
       return state.isVisible && !state.isLocked;
     });
     if (editableRefs.length === 0) {
@@ -1486,13 +1456,16 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法剪下選取物件");
     }
-  }, [commitPageLayout, currentPage, pageLayout, selectedRefs]);
+  }, [commitPageLayout, currentPage, editorLayoutModel, pageLayout, selectedRefs]);
 
   const handlePasteSelection = useCallback(() => {
     const clipboard = layoutClipboardRef.current;
     if (!clipboard) return;
     if (isolationGroupId != null) {
-      const targetGroupState = getNodeLayerState(pageLayout, { type: "group", id: isolationGroupId });
+      const targetGroupState = editorLayoutModel.getNodeLayerState({
+        type: "group",
+        id: isolationGroupId,
+      });
       if (!targetGroupState.isVisible || targetGroupState.isLocked) {
         toast.error("請先顯示並解除目前群組鎖定再貼上");
         return;
@@ -1529,7 +1502,7 @@ export default function TemplateEditor() {
     } catch (error) {
       toast.error(error?.message || "無法貼上物件");
     }
-  }, [commitPageLayout, currentPage, isolationGroupId, pageLayout]);
+  }, [commitPageLayout, currentPage, editorLayoutModel, isolationGroupId]);
 
   const handleMultiTransformStart = useCallback(() => {
     if (selectedRefs.length < 2 || !stageRef.current) return;
@@ -1546,13 +1519,13 @@ export default function TemplateEditor() {
           scaleX: node.scaleX(),
           scaleY: node.scaleY(),
         },
-        bounds: ref.type === "group" ? getNodeBounds(pageLayoutRef.current, ref) : null,
+        bounds: ref.type === "group" ? editorLayoutModel.getNodeBounds(ref) : null,
       }];
     });
     if (entries.length < 2) return;
     multiTransformSnapshotRef.current = { entries };
     beginCanvasGesture("multi-transform");
-  }, [beginCanvasGesture, selectedRefs]);
+  }, [beginCanvasGesture, editorLayoutModel, selectedRefs]);
 
   const handleMultiTransformEnd = useCallback(() => {
     const snapshot = multiTransformSnapshotRef.current;
@@ -1674,36 +1647,38 @@ export default function TemplateEditor() {
   }, [commitPageLayout, endCanvasGesture]);
 
   const handleToggleSelectedVisibility = useCallback(() => {
-    const shouldHide = selectedRefs.every(ref => getNodeLayerState(pageLayout, ref).isVisible);
+    const shouldHide = selectedRefs.every(ref => editorLayoutModel.getNodeLayerState(ref).isVisible);
     commitPageLayout(currentLayout => selectedRefs.reduce((nextLayout, ref) => (
       updateLayoutNodeMetadata(nextLayout, ref, { visible: !shouldHide })
     ), currentLayout));
-  }, [commitPageLayout, pageLayout, selectedRefs]);
+  }, [commitPageLayout, editorLayoutModel, selectedRefs]);
 
   const handleToggleSelectedLock = useCallback(() => {
-    const shouldLock = selectedRefs.every(ref => getNodeLayerState(pageLayout, ref).isLocked);
+    const shouldLock = selectedRefs.every(ref => editorLayoutModel.getNodeLayerState(ref).isLocked);
     commitPageLayout(currentLayout => selectedRefs.reduce((nextLayout, ref) => (
       updateLayoutNodeMetadata(nextLayout, ref, { locked: !shouldLock })
     ), currentLayout));
-  }, [commitPageLayout, pageLayout, selectedRefs]);
+  }, [commitPageLayout, editorLayoutModel, selectedRefs]);
 
   useEffect(() => {
     if (!pageLayout) return;
-    const deepestSurvivingId = [...isolationPath].reverse().find(id => getGroupById(pageLayout, id));
+    const deepestSurvivingId = [...isolationPath]
+      .reverse()
+      .find(id => editorLayoutModel.getGroupById(id));
     const canonicalPath = deepestSurvivingId == null
       ? []
-      : getGroupAncestorPath(pageLayout, deepestSurvivingId);
+      : editorLayoutModel.getGroupAncestorPath(deepestSurvivingId);
     if (canonicalPath.length !== isolationPath.length
       || canonicalPath.some((id, index) => String(id) !== String(isolationPath[index]))) {
       setIsolationPath(canonicalPath);
       return;
     }
-    const directKeys = new Set(getScopeNodes(pageLayout, isolationGroupId).map(refKey));
+    const directKeys = new Set(editorLayoutModel.getScopeNodes(isolationGroupId).map(refKey));
     setSelectedRefs(currentRefs => {
       const survivingRefs = currentRefs.filter(ref => directKeys.has(refKey(ref)));
       return survivingRefs.length === currentRefs.length ? currentRefs : survivingRefs;
     });
-  }, [isolationGroupId, isolationPath, pageLayout]);
+  }, [editorLayoutModel, isolationGroupId, isolationPath, pageLayout]);
 
   // Delete / Backspace / Undo / Redo / 群組導覽與方向鍵
   useEffect(() => {
@@ -1855,7 +1830,7 @@ export default function TemplateEditor() {
       return;
     }
     const stickerRef = target?.type === "sticker" ? { type: "sticker", id: target.id } : null;
-    const sticker = stickerRef ? getElement(stickerRef, layoutSnapshot) : null;
+    const sticker = stickerRef ? getLayoutNodeData(layoutSnapshot, stickerRef) : null;
 
     if (!sticker?.path) {
       toast.error("找不到可分析的圖片素材");
@@ -1901,7 +1876,10 @@ export default function TemplateEditor() {
       if (String(activePageSessionIdRef.current) !== String(request.pageKey)) return;
 
       const currentLayout = pageLayoutRef.current;
-      const currentSticker = getElement({ type: "sticker", id: request.stickerId }, currentLayout);
+      const currentSticker = getLayoutNodeData(
+        currentLayout,
+        { type: "sticker", id: request.stickerId },
+      );
       const currentParentId = currentSticker
         ? getNodeParent(currentLayout, { type: "sticker", id: currentSticker.id })?.id ?? null
         : null;
@@ -1936,7 +1914,7 @@ export default function TemplateEditor() {
       commitPageLayout(baseLayout => {
         if (String(activePageSessionIdRef.current) !== String(request.pageKey)) return baseLayout;
         const latestStickerRef = { type: "sticker", id: request.stickerId };
-        const latestSticker = getElement(latestStickerRef, baseLayout);
+        const latestSticker = getLayoutNodeData(baseLayout, latestStickerRef);
         const latestParentId = latestSticker
           ? getNodeParent(baseLayout, latestStickerRef)?.id ?? null
           : null;
@@ -1955,7 +1933,7 @@ export default function TemplateEditor() {
           }
           if (!request.hadExistingLink && latestLink) return baseLayout;
           const linkedTextRef = { type: "text", id: request.textId };
-          const linkedText = getElement(linkedTextRef, baseLayout);
+          const linkedText = getLayoutNodeData(baseLayout, linkedTextRef);
           if (!linkedText) return baseLayout;
           if (!request.hadExistingLink) {
             const textParentId = getNodeParent(baseLayout, linkedTextRef)?.id ?? null;
@@ -2036,7 +2014,7 @@ export default function TemplateEditor() {
         setAnalyzingTargetKey(null);
       }
     }
-  }, [commitPageLayout, currentPage, getElement, templateId]);
+  }, [commitPageLayout, currentPage, templateId]);
 
   const handleLinkSelectedMaterialText = useCallback(() => {
     const stickerRef = selectedRefs.find(ref => ref.type === "sticker");
@@ -2218,10 +2196,10 @@ export default function TemplateEditor() {
 
     const hitRef = getCanvasElementRefFromTarget(event.target, event.target?.getStage?.());
     const directRef = hitRef?.type === "group"
-      ? getScopeNodes(pageLayout, isolationGroupId).find(ref => sameRef(ref, hitRef)) ?? null
-      : resolveHitToDirectChild(pageLayout, isolationGroupId, hitRef);
+      ? editorLayoutModel.getScopeNodes(isolationGroupId).find(ref => sameRef(ref, hitRef)) ?? null
+      : editorLayoutModel.resolveHitToDirectChild(isolationGroupId, hitRef);
     setHoveredRef(current => (sameRef(current, directRef) ? current : directRef));
-  }, [activeTool, isolationGroupId, pageLayout]);
+  }, [activeTool, editorLayoutModel, isolationGroupId, pageLayout]);
 
   const handleStagePointerUp = useCallback(() => {
     if (cameraGestureRef.current?.kind === "pan") {
@@ -2393,12 +2371,12 @@ export default function TemplateEditor() {
     if (event.target !== event.target.getStage()) return;
     const pointer = getPointerCoordinates();
     if (!pointer || !isPointInsideCanvasPage(pointer.display)) return;
-    const currentBounds = getGroupBounds(pageLayoutRef.current, isolationGroupId);
+    const currentBounds = editorLayoutModel.getGroupBounds(isolationGroupId);
     if (!pointIsInsideOrientedBounds(pointer.real, currentBounds)) {
       event.cancelBubble = true;
       exitGroup();
     }
-  }, [activeTool, exitGroup, getPointerCoordinates, isolationGroupId]);
+  }, [activeTool, editorLayoutModel, exitGroup, getPointerCoordinates, isolationGroupId]);
 
   const addElementAtRealPoint = useCallback((tool, point, { centered = false } = {}) => {
     const sourceLayout = pageLayoutRef.current;
@@ -2636,6 +2614,8 @@ export default function TemplateEditor() {
             <button
               onClick={handleSaveLayout}
               disabled={isSaving}
+              data-guide="save-template"
+              data-dirty={hasUnsavedChanges ? "true" : "false"}
               className="rounded border border-indigo-200 bg-white px-4 py-2 text-indigo-700 disabled:opacity-50"
             >
               {isSaving ? "儲存中..." : "儲存"}
@@ -2646,40 +2626,36 @@ export default function TemplateEditor() {
     );
   }
 
-  const rootRenderNodes = buildRootRenderNodes(pageLayout, {
-    onWarning: warning => console.warn("[TemplateEditor] invalid layout groups; using flat render", warning),
-  });
-  const visibleRootRenderNodes = buildRootRenderNodes(pageLayout, {
-    visibleOnly: true,
-  });
-  const isolationGroup = isolationGroupId == null ? null : getGroupById(pageLayout, isolationGroupId);
+  const rootRenderNodes = editorLayoutModel.rootRenderNodes;
+  const isolationGroup = isolationGroupId == null
+    ? null
+    : editorLayoutModel.getGroupById(isolationGroupId);
   const selectedGroup = selectedElement?.type === "group"
-    ? getGroupById(pageLayout, selectedElement.id)
+    ? editorLayoutModel.getGroupById(selectedElement.id)
     : isolationGroup;
   const selectedItem = selectedElement?.type === "group"
     ? selectedGroup
-    : selectedElement ? getElement(selectedElement) : null;
+    : selectedElement ? editorLayoutModel.getNodeData(selectedElement) : null;
   const selectedPanelItem = selectedElement?.type === "group"
-    ? getGroupBounds(pageLayout, selectedElement.id)
+    ? editorLayoutModel.getGroupBounds(selectedElement.id)
     : selectedElement?.type === "photo"
       ? getPhotoEditorElementData(selectedItem, photoSlotDimensionMode)
       : selectedItem;
-  const getNodeData = ref => (
-    ref?.type === "group" ? getGroupById(pageLayout, ref.id) : getElement(ref)
-  );
-  const selectedItems = selectedRefs.map(ref => ({ ...ref, data: getNodeData(ref) })).filter(item => item.data);
-  const activeScopeRefs = getScopeNodes(pageLayout, isolationGroupId);
+  const selectedItems = selectedRefs
+    .map(ref => ({ ...ref, data: editorLayoutModel.getNodeData(ref) }))
+    .filter(item => item.data);
+  const activeScopeRefs = editorLayoutModel.getScopeNodes(isolationGroupId);
   const activeScopeRenderNodes = activeScopeRefs
-    .map(ref => findRenderNode(rootRenderNodes, ref))
+    .map(ref => editorLayoutModel.getRenderNode(ref))
     .filter(Boolean);
   const activeScopeCanvasNodes = activeScopeRefs
-    .map(ref => findRenderNode(visibleRootRenderNodes, ref))
+    .map(ref => editorLayoutModel.getRenderNode(ref, { visibleOnly: true }))
     .filter(Boolean);
-  const flattenedSceneLeaves = flattenRenderNodes(visibleRootRenderNodes, { visibleOnly: true });
+  const flattenedSceneLeaves = editorLayoutModel.visibleFlattenedLeaves;
   const activeLeafKeys = new Set(
     isolationGroupId == null
       ? []
-      : getDescendantLeafRefs(pageLayout, isolationGroupId).map(refKey),
+      : editorLayoutModel.getDescendantLeafRefs(isolationGroupId).map(refKey),
   );
   const activeLeafIndices = flattenedSceneLeaves
     .map((node, index) => (activeLeafKeys.has(refKey(node)) ? index : -1))
@@ -2696,13 +2672,12 @@ export default function TemplateEditor() {
     : flattenedSceneLeaves.slice(activeSceneEnd + 1);
   const isolationTrail = isolationPath.map((groupId, index) => ({
     id: groupId,
-    label: getGroupById(pageLayout, groupId)?.layer_name || `群組 ${index + 1}`,
-    data: getGroupById(pageLayout, groupId),
+    label: editorLayoutModel.getGroupById(groupId)?.layer_name || `群組 ${index + 1}`,
+    data: editorLayoutModel.getGroupById(groupId),
   }));
-  const sortedPageElements = getAllElementsSorted(pageLayout);
-  const visiblePhotoOrdinals = getVisibleLayoutElementOrdinals(pageLayout, "photo");
+  const visiblePhotoOrdinals = editorLayoutModel.getVisibleElementOrdinals("photo");
   const selectedMaterialLink = selectedElement
-    ? getMaterialTextLinkForNode(pageLayout, selectedElement)
+    ? editorLayoutModel.getMaterialTextLinkForNode(selectedElement)
     : null;
   const selectedAnalysisStickerId = selectedElement?.type === "sticker"
     ? selectedElement.id
@@ -2710,9 +2685,9 @@ export default function TemplateEditor() {
   const marqueeDisplayRect = marqueeGesture?.active
     ? normalizeSelectionRect(marqueeGesture.startDisplay, marqueeGesture.currentDisplay)
     : null;
-  const layoutValidation = validateLayoutGroups(pageLayout || {});
+  const layoutValidation = editorLayoutModel.validation;
   const hasRepairableMaterialLinks = layoutValidation.topologyValid && !layoutValidation.linkValid;
-  const selectedLayerStates = selectedRefs.map(ref => getNodeLayerState(pageLayout, ref));
+  const selectedLayerStates = selectedRefs.map(ref => editorLayoutModel.getNodeLayerState(ref));
   const isSelectionVisible = selectedLayerStates.length > 0
     && selectedLayerStates.every(state => state.isVisible);
   const isSelectionLocked = selectedLayerStates.length > 0
@@ -2720,7 +2695,7 @@ export default function TemplateEditor() {
   const canEditSelection = selectedLayerStates.length > 0
     && selectedLayerStates.every(state => state.isVisible && !state.isLocked);
   const selectedSingleLayerState = selectedElement
-    ? getNodeLayerState(pageLayout, selectedElement)
+    ? editorLayoutModel.getNodeLayerState(selectedElement)
     : null;
   const selectedFavoriteType = selectedRefs.length > 0
     && selectedRefs.every(ref => ref.type === selectedRefs[0].type)
@@ -2733,11 +2708,11 @@ export default function TemplateEditor() {
   const getMinimumMultiResizeFactor = () => selectedRefs.reduce((minimumFactor, ref) => {
     const targetNode = stageRef.current?.findOne(candidate => candidate.id() === `${ref.type}-${ref.id}`);
     if (!targetNode) return minimumFactor;
-    const leafRefs = ref.type === "group" ? getDescendantLeafRefs(pageLayout, ref.id) : [ref];
+    const leafRefs = ref.type === "group" ? editorLayoutModel.getDescendantLeafRefs(ref.id) : [ref];
     const scaleX = Math.max(Number.EPSILON, Math.abs(targetNode.scaleX()));
     const scaleY = Math.max(Number.EPSILON, Math.abs(targetNode.scaleY()));
     return leafRefs.reduce((leafMinimum, leafRef) => {
-      const leafData = getLayoutNodeData(pageLayout, leafRef);
+      const leafData = editorLayoutModel.getNodeData(leafRef);
       if (!leafData) return leafMinimum;
       const dimensions = leafRef.type === "photo"
         ? getPhotoContentRect(leafData, { dimensionMode: photoSlotDimensionMode })
@@ -2790,7 +2765,7 @@ export default function TemplateEditor() {
     const { type, data, index: elemIndex } = node;
     const elementRef = { type, id: data.id };
     const isInteractionDisabled = disabled
-      || (group == null && getNodeLayerState(pageLayout, elementRef).isLocked);
+      || (group == null && editorLayoutModel.getNodeLayerState(elementRef).isLocked);
     const isSelected = isRefSelected(elementRef);
     const isMultiTransformTarget = selectedRefs.length > 1 && isSelected && group == null;
     const isHovered = !isInteractionDisabled && group == null && isRefHovered(elementRef);
@@ -2885,10 +2860,10 @@ export default function TemplateEditor() {
   const renderDirectGroupNode = (node) => {
     const group = node.data;
     const groupRef = { type: "group", id: group.id };
-    const groupLayerState = getNodeLayerState(pageLayout, groupRef);
+    const groupLayerState = editorLayoutModel.getNodeLayerState(groupRef);
     const isSelected = isRefSelected(groupRef);
     const isHovered = !groupLayerState.isLocked && isRefHovered(groupRef);
-    const bounds = getNodeBounds(pageLayout, { type: "group", id: group.id });
+    const bounds = editorLayoutModel.getNodeBounds(groupRef);
     const center = {
       x: toDisplayCoord(bounds.centerX),
       y: toDisplayCoord(bounds.centerY),
@@ -3541,8 +3516,7 @@ export default function TemplateEditor() {
           )}
           layerPanel={(
             <LayerListPanel
-              pageLayout={pageLayout}
-              sortedPageElements={sortedPageElements}
+              editorLayoutModel={editorLayoutModel}
               rootRenderNodes={rootRenderNodes}
               scopeRenderNodes={activeScopeRenderNodes}
               isolationTrail={isolationTrail}

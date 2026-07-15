@@ -73,9 +73,9 @@ def revisioned_project_url(client: TestClient, project_id: int, url: str) -> str
 
 
 def use_tmp_uploads(monkeypatch, tmp_path) -> None:
-    from services import render_service
+    import app_paths
 
-    monkeypatch.setattr(render_service, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(app_paths, "UPLOADS_DIR", tmp_path / "uploads")
 
 
 def jpeg_bytes(color: tuple[int, int, int] = (240, 72, 72)) -> bytes:

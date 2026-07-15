@@ -21,7 +21,7 @@ from sqlalchemy import text
 from database import SessionLocal, get_db, init_db
 from migrations import run_migrations
 from routers import templates, projects, auth, users, roster
-from services.project_service import purge_expired_archived_projects
+from services.project_archive_service import purge_expired_archived_projects
 
 logger = logging.getLogger("album_maker.requests")
 

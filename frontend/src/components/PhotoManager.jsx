@@ -2,7 +2,7 @@ import { Fragment, useState, useRef, useEffect, useMemo } from "react";
 import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import { X, RefreshCw, Images, ZoomIn, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
-import { uploadPhoto, updatePhotoMapping } from "../api";
+import { updatePhotoMapping, uploadPhoto } from "../api/projectApi";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import ConfirmModal from "./ConfirmModal";
 import { Button, SegmentedControl } from "./ui";

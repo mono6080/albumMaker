@@ -10,11 +10,12 @@ import pytest
 from PIL import Image
 
 from database import Student
-from services import render_service, storage as storage_module
+import app_paths
+from services import storage_factory
 from services.file_service import ProcessedImageUpload, content_versioned_filename
 from services.student_pages import apply_photo_to_page
 from services.storage import LocalStorageAdapter, R2StorageAdapter, _validate_r2_serve_mode
-from services.project_service import _clear_student_render_outputs
+from services.student_render_service import _clear_student_render_outputs
 
 
 class FakeClientError(Exception):
@@ -295,18 +296,18 @@ def test_r2_key_prefix_move_uses_single_prefix():
 
 def test_storage_factory_reuses_only_matching_call_time_path_and_environment(monkeypatch, tmp_path):
     """factory 每次都讀取目前 path/env；只有完整設定相同時才重用 adapter。"""
-    monkeypatch.setattr(storage_module, "_STORAGE_CACHE_KEY", None)
-    monkeypatch.setattr(storage_module, "_STORAGE_INSTANCE", None)
+    monkeypatch.setattr(storage_factory, "_STORAGE_CACHE_KEY", None)
+    monkeypatch.setattr(storage_factory, "_STORAGE_INSTANCE", None)
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     first_uploads = tmp_path / "backend" / "uploads-first"
     second_uploads = tmp_path / "backend" / "uploads-second"
-    monkeypatch.setattr(render_service, "UPLOADS_DIR", first_uploads)
+    monkeypatch.setattr(app_paths, "UPLOADS_DIR", first_uploads)
 
-    first_local = storage_module.get_storage()
-    assert storage_module.get_storage() is first_local
+    first_local = storage_factory.get_storage()
+    assert storage_factory.get_storage() is first_local
 
-    monkeypatch.setattr(render_service, "UPLOADS_DIR", second_uploads)
-    second_local = storage_module.get_storage()
+    monkeypatch.setattr(app_paths, "UPLOADS_DIR", second_uploads)
+    second_local = storage_factory.get_storage()
     assert second_local is not first_local
     second_local.put("factory/pin.txt", b"second")
     assert (second_uploads / "factory" / "pin.txt").read_bytes() == b"second"
@@ -318,7 +319,7 @@ def test_storage_factory_reuses_only_matching_call_time_path_and_environment(mon
         created_configs.append((config, instance))
         return instance
 
-    monkeypatch.setattr(storage_module, "R2StorageAdapter", fake_r2_adapter)
+    monkeypatch.setattr(storage_factory, "R2StorageAdapter", fake_r2_adapter)
     monkeypatch.setenv("STORAGE_BACKEND", "r2")
     monkeypatch.setenv("R2_BUCKET", "bucket-one")
     monkeypatch.setenv("R2_ACCOUNT_ID", "account")
@@ -328,24 +329,38 @@ def test_storage_factory_reuses_only_matching_call_time_path_and_environment(mon
     monkeypatch.setenv("R2_LOCAL_MIRROR_DIR", "mirror/r2")
     monkeypatch.setenv("R2_READ_CACHE_MAX_BYTES", "100")
 
-    first_r2 = storage_module.get_storage()
-    assert storage_module.get_storage() is first_r2
+    first_r2 = storage_factory.get_storage()
+    assert storage_factory.get_storage() is first_r2
     assert created_configs[0][0]["bucket"] == "bucket-one"
     assert created_configs[0][0]["local_cache_dir"] == str((tmp_path / "cache" / "r2").resolve())
     assert created_configs[0][0]["local_mirror_dir"] == str((tmp_path / "mirror" / "r2").resolve())
 
     monkeypatch.setenv("R2_BUCKET", "bucket-two")
-    second_r2 = storage_module.get_storage()
+    second_r2 = storage_factory.get_storage()
     assert second_r2 is not first_r2
     assert created_configs[-1][0]["bucket"] == "bucket-two"
 
     monkeypatch.setenv("R2_READ_CACHE_MAX_BYTES", "200")
-    third_r2 = storage_module.get_storage()
+    third_r2 = storage_factory.get_storage()
     assert third_r2 is not second_r2
     assert len(created_configs) == 3
 
-    # TODO(structural-refactor-v1 Wave 1): `_storage_config_key` 尚未納入
-    # PRODUCTION 與 R2_LOCAL_CACHE_MAX_BYTES；split factory 時需修正並補 regression。
+    monkeypatch.setenv("R2_LOCAL_CACHE_MAX_BYTES", "300")
+    fourth_r2 = storage_factory.get_storage()
+    assert fourth_r2 is not third_r2
+
+    monkeypatch.setenv("PRODUCTION", "1")
+    fifth_r2 = storage_factory.get_storage()
+    assert fifth_r2 is not fourth_r2
+    assert len(created_configs) == 5
+
+    monkeypatch.delenv("PRODUCTION")
+    monkeypatch.setenv("R2_SERVE_MODE", "redirect")
+    monkeypatch.setenv("R2_PUBLIC_BASE_URL", "https://assets.example.com")
+    storage_factory.get_storage()
+    monkeypatch.setenv("PRODUCTION", "true")
+    with pytest.raises(RuntimeError, match="繞過媒體登入權限"):
+        storage_factory.get_storage()
 
 
 def test_r2_read_cache_hits_memory_then_local_then_mirror_before_remote(tmp_path):

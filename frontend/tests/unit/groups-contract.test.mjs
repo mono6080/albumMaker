@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as layoutGroupPublicApi from "../../src/utils/layoutGroups.js";
+import { buildEditorLayoutModel } from "../../src/utils/editorLayoutModel.js";
+import { buildLayoutGraph } from "../../src/utils/layoutGroupContractGraph.js";
 import { getAllElementsSorted } from "../../src/utils/renderLayoutModel.js";
 import {
   GROUP_CONTRACT,
@@ -12,6 +15,183 @@ import {
   validateLayoutGroups,
 } from "../../src/utils/layoutGroups.js";
 import { test } from "./harness.mjs";
+
+
+test("layoutGroups facade preserves the public export surface", () => {
+  assert.deepEqual(Object.keys(layoutGroupPublicApi).sort(), [
+    "GROUP_CONTRACT",
+    "LayoutGroupError",
+    "MATERIAL_TEXT_LINK_KIND",
+    "NESTED_GROUP_CONTRACT",
+    "addElementToGroup",
+    "assertValidLayoutGroups",
+    "buildLayoutGraph",
+    "buildRootRenderNodes",
+    "canonicalElementKey",
+    "deleteLayoutElement",
+    "deleteLayoutGroup",
+    "ensureNestedWorldV2",
+    "flattenRenderNodes",
+    "getAncestorGroupIds",
+    "getDescendantLeafRefs",
+    "getFlattenedRenderElements",
+    "getGroupAncestorPath",
+    "getGroupBounds",
+    "getGroupById",
+    "getGroupForElement",
+    "getMaterialTextLinkForNode",
+    "getMaterialTextLinks",
+    "getNodeBounds",
+    "getNodeParent",
+    "getScopeNodes",
+    "groupElements",
+    "insertNodeInScope",
+    "linkMaterialText",
+    "moveGroup",
+    "normalizeRootZIndices",
+    "projectNormalizedBoxToSticker",
+    "removeInvalidMaterialTextLinks",
+    "reorderGroupChild",
+    "reorderNode",
+    "reorderRootNode",
+    "resolveHitToDirectChild",
+    "rotateGroup",
+    "scaleGroupUniform",
+    "transformGroup",
+    "ungroupElements",
+    "unlinkMaterialText",
+    "validateLayoutGroups",
+  ]);
+});
+
+
+test("editor layout model builds one graph and reuses it for render and query views", () => {
+  const layout = {
+    group_contract: NESTED_GROUP_CONTRACT,
+    photo_slots: [{
+      id: "root-photo",
+      x: 0,
+      y: 0,
+      width: 80,
+      height: 60,
+      z_index: 0,
+    }],
+    text_labels: [{
+      id: "group-text",
+      x: 100,
+      y: 10,
+      width: 120,
+      height: 40,
+      z_index: 1,
+      visible: false,
+    }],
+    stickers: [{
+      id: "group-sticker",
+      x: 90,
+      y: 70,
+      width: 140,
+      height: 50,
+      z_index: 2,
+    }],
+    groups: [{
+      id: "group",
+      z_index: 1,
+      selection_rotation: 0,
+      children: [
+        { type: "text", id: "group-text" },
+        { type: "sticker", id: "group-sticker" },
+      ],
+    }],
+  };
+  let buildCount = 0;
+  const model = buildEditorLayoutModel(layout, {
+    buildGraph: (...args) => {
+      buildCount += 1;
+      return buildLayoutGraph(...args);
+    },
+  });
+
+  assert.equal(buildCount, 1);
+  assert.deepEqual(
+    model.rootRenderNodes.map(node => `${node.type}:${node.id}`),
+    ["photo:root-photo", "group:group"],
+  );
+  assert.deepEqual(
+    model.flattenedLeaves.map(node => `${node.type}:${node.id}`),
+    ["photo:root-photo", "text:group-text", "sticker:group-sticker"],
+  );
+  assert.deepEqual(
+    model.visibleFlattenedLeaves.map(node => `${node.type}:${node.id}`),
+    ["photo:root-photo", "sticker:group-sticker"],
+  );
+  assert.deepEqual(model.getScopeNodes("group"), [
+    { type: "text", id: "group-text" },
+    { type: "sticker", id: "group-sticker" },
+  ]);
+  assert.deepEqual(model.getDescendantLeafRefs("group"), [
+    { type: "text", id: "group-text" },
+    { type: "sticker", id: "group-sticker" },
+  ]);
+  assert.equal(model.getNodeLayerState({ type: "text", id: "group-text" }).isVisible, false);
+  assert.equal(model.getNodeLayerState({ type: "group", id: "group" }).isLocked, false);
+  assert.equal(model.getGroupBounds("group").width, 140);
+  assert.equal(model.getRenderNode({ type: "group", id: "group" }).kind, "group");
+  assert.deepEqual(model.elementCounts, { photo: 1, text: 1, sticker: 1 });
+  const visiblePhotoOrdinals = model.getVisibleElementOrdinals("photo");
+  assert.equal(visiblePhotoOrdinals.get("root-photo"), 1);
+  assert.equal(model.getVisibleElementOrdinals("photo"), visiblePhotoOrdinals);
+  assert.equal(model.getCollectionElementOrdinal("text", "group-text"), 1);
+  assert.equal(buildCount, 1);
+});
+
+
+test("editor layout model keeps legacy unsafe IDs and String collision first-match semantics", () => {
+  const unsafeNumberId = Number.MAX_SAFE_INTEGER + 1;
+  const objectId = { legacy: "object-id" };
+  const layout = {
+    photo_slots: [
+      { id: unsafeNumberId, marker: "unsafe-number", z_index: 0 },
+      { id: null, marker: "null", z_index: 1 },
+      { id: objectId, marker: "object", z_index: 2 },
+      { id: 1, marker: "collision-first", z_index: 3 },
+      { id: "1", marker: "collision-second", z_index: 4 },
+    ],
+    text_labels: [],
+    stickers: [],
+  };
+  let buildCount = 0;
+  const model = buildEditorLayoutModel(layout, {
+    buildGraph: (...args) => {
+      buildCount += 1;
+      return buildLayoutGraph(...args);
+    },
+  });
+
+  assert.equal(model.rootRenderNodes.length, layout.photo_slots.length);
+  assert.deepEqual(
+    model.rootRenderNodes.map(node => node.data.marker),
+    ["unsafe-number", "null", "object", "collision-first", "collision-second"],
+  );
+  const scopeRefs = model.getScopeNodes(null);
+  const scopeNodes = scopeRefs.map(ref => model.getRenderNode(ref));
+  const visibleScopeNodes = scopeRefs.map(ref => model.getRenderNode(ref, { visibleOnly: true }));
+  assert.equal(scopeNodes.length, layout.photo_slots.length);
+  assert.equal(visibleScopeNodes.length, layout.photo_slots.length);
+  assert.equal(scopeNodes.every(Boolean), true);
+  assert.equal(visibleScopeNodes.every(Boolean), true);
+
+  assert.equal(model.getRenderNode({ type: "photo", id: unsafeNumberId }).data.marker, "unsafe-number");
+  assert.equal(model.getRenderNode({ type: "photo", id: null }).data.marker, "null");
+  assert.equal(model.getRenderNode({ type: "photo", id: { another: "object" } }).data.marker, "object");
+  assert.equal(model.getRenderNode({ type: "photo", id: "1" }).data.marker, "collision-first");
+  assert.equal(model.getRenderNode({ type: "photo", id: 1 }).data.marker, "collision-first");
+  assert.equal(model.getNodeData({ type: "photo", id: unsafeNumberId }).marker, "unsafe-number");
+  assert.equal(model.getNodeData({ type: "photo", id: null }).marker, "null");
+  assert.equal(model.getNodeData({ type: "photo", id: { another: "object" } }).marker, "object");
+  assert.equal(model.getNodeData({ type: "photo", id: "1" }).marker, "collision-first");
+  assert.equal(model.getNodeLayerState({ type: "photo", id: null }).isVisible, true);
+  assert.equal(buildCount, 1);
+});
 
 
 test("group traversal keeps legacy order and renders grouped children exactly once in ref order", () => {

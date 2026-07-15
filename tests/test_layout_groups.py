@@ -13,7 +13,7 @@ from services.layout_groups import (
     validate_layout_groups,
 )
 from services.preview_cache import PREVIEW_CACHE_VERSION
-from services.project_service import _RENDER_PIPELINE_FILES
+from services.student_render_service import _RENDER_PIPELINE_FILES
 from services.render_service import (
     render_album,
     render_page,

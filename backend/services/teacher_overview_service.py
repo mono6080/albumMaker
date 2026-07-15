@@ -8,13 +8,13 @@ import json
 from sqlalchemy.orm import Session
 
 from database import User
-from services.label_texts import get_label_entry_text
-from services.layout_groups import iter_layout_render_elements
-from services.project_service import (
-    get_template_page_layouts,
+from services.label_texts import (
+    get_label_entry_text,
     merge_project_label_texts_into_pages,
 )
+from services.layout_groups import iter_layout_render_elements
 from services.roster_service import load_export_periods, load_export_projects
+from services.student_render_service import get_template_page_layouts
 
 
 def _summarize_student_progress(

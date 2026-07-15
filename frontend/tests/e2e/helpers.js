@@ -167,18 +167,25 @@ export function layoutWithPhotoSlots(layout, count) {
 
 export async function saveTemplateLayout(page) {
   const saveButton = page.getByRole("button", { name: "儲存", exact: true });
+  await expect(saveButton).toBeEnabled();
+  await expect(saveButton).toHaveAttribute("data-dirty", "true");
   const saveResponse = page.waitForResponse(
     response => (
       response.request().method() === "PUT"
       && /^\/api\/templates\/\d+\/pages\/?$/.test(new URL(response.url()).pathname)
-      && response.ok()
     ),
   );
   await saveButton.click();
-  await saveResponse;
+  const response = await saveResponse;
+  expect(
+    response.ok(),
+    `儲存模板回應 ${response.status()}: ${await response.text()}`,
+  ).toBeTruthy();
   await expect.poll(async () => (
-    await saveButton.count() === 0 || await saveButton.isEnabled()
-  )).toBeTruthy();
+    await saveButton.count() === 0
+      ? "gone"
+      : await saveButton.getAttribute("data-dirty")
+  )).toMatch(/^(false|gone)$/);
 }
 
 

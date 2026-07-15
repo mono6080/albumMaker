@@ -7,19 +7,19 @@
 
 ## StorageAdapter 抽象
 
-- 所有檔案 I/O 透過 `services/storage.py` 的 `get_storage()` 取得 adapter，
+- 所有檔案 I/O 透過 `get_storage()` 取得 adapter；舊／外部 import 由 `services/storage.py`
+  facade 相容，新內部 owner 可直接 import `storage_factory.py`，
   **不直接操作 `Path`**（跨模組 invariant，見
   [conventions.md](conventions.md#跨模組-invariants)）
 - 介面：put / open_image / serve / delete / delete_prefix / move / exists / list_keys / get_bytes
 - **批次存在性檢查用 `list_keys(prefix)`**：R2 上逐檔 `exists()` 是一次 head_object
   網路往返，數百檔會慢到 timeout（學期匯出預覽曾因此 29 秒）；改為每目錄列舉一次
   再做集合比對
-- 兩個實作：
-  - `LocalStorageAdapter` — 本機磁碟，base 為 `backend/uploads/`
-  - `R2StorageAdapter` — Cloudflare R2（S3 相容，boto3）
-- 由 `STORAGE_BACKEND` 環境變數切換（`local` / `r2`）
-- `storage.py` 從 `render_service.py` import `UPLOADS_DIR` — 不能把
-  `UPLOADS_DIR` 移出 render_service
+- `storage_base.py` 定義介面；`storage_local.py` 與 `storage_r2.py` 分別實作本機磁碟及
+  Cloudflare R2（S3 相容，boto3）；`storage_cache.py` 擁有 R2 memory/local cache。
+- `storage_factory.py` 的 `get_storage()` 在每次呼叫時讀 `STORAGE_BACKEND`、`R2_*`、
+  `PRODUCTION` 與 `app_paths.UPLOADS_DIR`；完整 path/env cache key 相同才重用 adapter。
+  `storage.py` 只保留公開 import facade。此契約由 `tests/test_storage.py` 釘住。
 - **介面 invariant**：`open_image()` 必須做 `ImageOps.exif_transpose`，
   原因見 [rendering.md 的 EXIF 條目](rendering.md#exif-方向open_image-統一-transpose)
 
@@ -48,7 +48,7 @@ regression test，見 [known-issues.md](known-issues.md)。
 - 新上傳圖片的檔名尾端固定保留內容 hash；原始檔名過長時先截 stem 再拼 hash，避免不同 bytes
   撞到同一 key。舊版無 hash key 保持可讀。
 - `{stem}` = `make_safe_filename(專案名) + "-" + make_safe_filename(學生名)`
-  （`project_service.py`），非法字元 `\/:*?"<>|` 替換為 `_`
+  （`output_keys.py`），非法字元 `\/:*?"<>|` 替換為 `_`
 - DB 內的照片 path 是 immutable opaque key；頁面重排／換格只改 binding，不搬檔。換照片時
   使用新內容 key，舊檔只有在不再被任何 active binding 引用時才刪，避免跨頁共享／重排後誤刪。
 - 背景與貼圖也是內容版本 key。新背景 DB commit 前保留舊 key，commit 後舊版交由延遲 GC；

@@ -101,7 +101,14 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
 
 export default function ProjectReview() {
   const { id } = useParams();
-  const { canDownloadPrint, canComment, canEditProject, isAdmin } = usePermissions();
+  const {
+    canDownloadPrint,
+    canComment,
+    canEditProject,
+    isAdmin,
+    isSupervisor,
+    isTeacher,
+  } = usePermissions();
   const { currentUser } = useAuth();
 
   const [project, setProject] = useState(null);
@@ -459,7 +466,7 @@ export default function ProjectReview() {
   const canEditCurrentProject = canEditProject(project.owner_id);
   const isProjectCompleted = Boolean(project.completed_at);
   // 退回權限：admin 或主管（後端會再驗證管轄範圍）
-  const canReopenProject = isAdmin || currentUser?.role === "supervisor";
+  const canReopenProject = isAdmin || isSupervisor;
 
   // ── 班級工作台：照片進度與階段判斷 ─────────────────────────────────────────
   // 階段 1 製作中（有照片格未填）→ 階段 2 照片備齊（可標記完成）→ 階段 3 已完成（交件）
@@ -902,7 +909,7 @@ export default function ProjectReview() {
       )}
 
       {/* 審閱留言區（admin / 美學組 / 主管可新增；老師可讀取） */}
-      {(canComment || currentUser?.role === "teacher") && (
+      {(canComment || isTeacher) && (
         <ReviewCommentsPanel
           comments={comments}
           canComment={canComment}

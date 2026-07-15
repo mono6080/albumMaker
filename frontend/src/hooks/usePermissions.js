@@ -1,33 +1,28 @@
 // 權限判斷 Hook
 // 依據當前使用者角色回傳各項操作的布林旗標
 
+import { useCallback, useMemo } from "react";
+
 import { useAuth } from "../context/AuthContext";
+import {
+  USER_ROLES,
+  canUserEditProject,
+  getRolePermissions,
+} from "../utils/userRoles";
 
 export function usePermissions() {
   const { currentUser } = useAuth();
-  const role = currentUser?.role ?? "none";
+  const role = currentUser?.role ?? USER_ROLES.NONE;
+  const currentUserId = currentUser?.id;
+  const rolePermissions = getRolePermissions(role);
 
-  return {
-    /** 是否為管理員 */
-    isAdmin: role === "admin",
+  const canEditProject = useCallback(
+    (ownerUserId) => canUserEditProject(role, currentUserId, ownerUserId),
+    [role, currentUserId],
+  );
 
-    /** 可管理模板（建立、編輯、刪除） */
-    canManageTemplates: role === "admin" || role === "art_team",
-
-    /** 可建立新專案 */
-    canCreateProject: role === "admin" || role === "teacher" || role === "supervisor",
-
-    /** 可編輯指定專案（需傳入 owner_id 判斷所有權） */
-    canEditProject: (ownerUserId) =>
-      role === "admin" || (["teacher", "supervisor"].includes(role) && currentUser?.id === ownerUserId),
-
-    /** 可下載完整畫質 PDF（僅 admin） */
-    canDownloadPrint: role === "admin",
-
-    /** 可留下審閱意見 */
-    canComment: role === "admin" || role === "art_team" || role === "supervisor",
-
-    /** 可管理使用者帳號 */
-    canManageUsers: role === "admin",
-  };
+  return useMemo(
+    () => ({ ...rolePermissions, canEditProject }),
+    [rolePermissions, canEditProject],
+  );
 }

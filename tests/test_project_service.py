@@ -1,11 +1,20 @@
 from copy import deepcopy
 
+from services import (
+    label_texts,
+    output_keys,
+    project_archive_service,
+    project_export_service,
+    project_service,
+    student_render_service,
+)
+from services.label_texts import merge_project_label_texts_into_pages
+from services.output_keys import student_pdf_key_for_mode
 from services.preview_cache import _preview_payload_hash
-from services.project_service import (
+from services.student_render_service import (
+    _RENDER_PIPELINE_FILES,
     _album_render_hash,
     _render_pipeline_fingerprint,
-    merge_project_label_texts_into_pages,
-    student_pdf_key_for_mode,
 )
 
 
@@ -25,6 +34,46 @@ def test_empty_student_label_text_overrides_project_label_text():
         "1": "",
         "2": "Student detail",
     }
+
+
+def test_project_service_facade_keeps_legacy_exports():
+    expected_owners = {
+        "_RENDER_PIPELINE_FILES": student_render_service,
+        "_album_render_hash": student_render_service,
+        "_clear_student_render_outputs": student_render_service,
+        "_render_pipeline_fingerprint": student_render_service,
+        "build_combined_stem": output_keys,
+        "build_content_disposition_header": output_keys,
+        "build_zip_of_student_images": project_export_service,
+        "clear_student_render_outputs": student_render_service,
+        "get_project_output_prefix": output_keys,
+        "get_student_image_entries": project_export_service,
+        "get_template_page_layouts": student_render_service,
+        "make_safe_filename": output_keys,
+        "merge_project_label_texts_into_pages": label_texts,
+        "open_all_student_images_zip_stream": project_export_service,
+        "open_all_student_pdfs_zip_stream": project_export_service,
+        "purge_expired_archived_projects": project_archive_service,
+        "render_and_save_student_album": student_render_service,
+        "student_pdf_key_for_mode": output_keys,
+    }
+    assert set(project_service.__all__) == set(expected_owners)
+    for symbol, owner in expected_owners.items():
+        assert getattr(project_service, symbol) is getattr(owner, symbol)
+
+
+def test_render_pipeline_fingerprint_tracks_split_render_owners():
+    source_names = {path.name for path in _RENDER_PIPELINE_FILES}
+    assert {
+        "student_render_service.py",
+        "render_service.py",
+        "label_texts.py",
+        "layout_groups.py",
+        "element_renderers.py",
+        "draw_helpers.py",
+        "photo_frame_geometry.py",
+        "design_tokens.json",
+    } <= source_names
 
 
 def test_empty_project_label_text_creates_blank_override_page():

@@ -4,9 +4,11 @@ import { Toaster } from "react-hot-toast";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { usePermissions } from "./hooks/usePermissions";
 import PrivateRoute from "./components/PrivateRoute";
 import PwaUpdateBanner from "./components/PwaUpdateBanner";
 import { Button } from "./components/ui";
+import { ROLE_GROUPS, ROLE_LABELS } from "./utils/userRoles";
 // 老師的核心路徑（登入→專案→總覽→編輯）維持同步載入，換頁零延遲
 import Login from "./pages/Login";
 import ProjectList from "./pages/ProjectList";
@@ -21,20 +23,17 @@ const UserManagement = lazy(() => import("./pages/UserManagement"));
 const SemesterExport = lazy(() => import("./pages/SemesterExport"));
 const TeacherOverview = lazy(() => import("./pages/TeacherOverview"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
-import './App.css';
-
-const ROLE_LABELS = {
-  admin: "管理員",
-  art_team: "設計",
-  supervisor: "主管",
-  teacher: "帶班老師",
-  none: "無權限",
-};
 
 function Nav({ hideOnPhone = false }) {
   const loc = useLocation();
   const navigate = useNavigate();
   const { currentUser, logout } = useAuth();
+  const {
+    canAccessProjects,
+    canManageTemplates,
+    canManageUsers,
+    canViewReports,
+  } = usePermissions();
   const isActive = (path) => loc.pathname.startsWith(path);
 
   const handleLogout = async () => {
@@ -53,18 +52,18 @@ function Nav({ hideOnPhone = false }) {
   if (loc.pathname === "/login") return null;
 
   const navLinks = [];
-  if (currentUser?.role === "admin" || currentUser?.role === "art_team") {
+  if (canManageTemplates) {
     navLinks.push({ path: "/templates", label: "模板" });
   }
-  if (["admin", "teacher", "supervisor", "art_team"].includes(currentUser?.role)) {
+  if (canAccessProjects) {
     navLinks.push({ path: "/projects", label: "相本專案" });
   }
   // 老師進度 / 學期匯出：admin 看全部，supervisor 限管轄老師（匯出僅 admin）
-  if (["admin", "supervisor"].includes(currentUser?.role)) {
+  if (canViewReports) {
     navLinks.push({ path: "/admin/teacher-overview", label: "老師進度" });
     navLinks.push({ path: "/admin/semester-export", label: "學期匯出" });
   }
-  if (currentUser?.role === "admin") {
+  if (canManageUsers) {
     navLinks.push({ path: "/admin/users", label: "使用者管理" });
   }
 
@@ -181,36 +180,36 @@ function AppContent() {
 
           {/* 模板（admin + 美學組） */}
           <Route path="/templates" element={
-            <PrivateRoute allowedRoles={["admin", "art_team"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.TEMPLATE_MANAGERS}>
               <TemplateList />
             </PrivateRoute>
           } />
           <Route path="/templates/:id/edit" element={
-            <PrivateRoute allowedRoles={["admin", "art_team"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.TEMPLATE_MANAGERS}>
               <TemplateEditor />
             </PrivateRoute>
           } />
 
           {/* 專案（admin + teacher + supervisor + art_team） */}
           <Route path="/projects" element={
-            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.PROJECT_READERS}>
               <ProjectList />
             </PrivateRoute>
           } />
           <Route path="/projects/:id/edit" element={
-            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.PROJECT_EDITORS}>
               <ClassEdit />
             </PrivateRoute>
           } />
           {/* 舊「名單與素材」路由：兩頁制後轉址到全班編輯器 */}
           <Route path="/projects/:id/batch" element={<BatchRouteRedirect />} />
           <Route path="/projects/:id/review" element={
-            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor", "art_team"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.PROJECT_READERS}>
               <ProjectReview />
             </PrivateRoute>
           } />
           <Route path="/projects/:projectId/students/:studentId/edit" element={
-            <PrivateRoute allowedRoles={["admin", "teacher", "supervisor"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.PROJECT_EDITORS}>
               <StudentEditRoute />
             </PrivateRoute>
           } />
@@ -224,21 +223,21 @@ function AppContent() {
 
           {/* 使用者管理（admin only） */}
           <Route path="/admin/users" element={
-            <PrivateRoute allowedRoles={["admin"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.ADMIN_ONLY}>
               <UserManagement />
             </PrivateRoute>
           } />
 
           {/* 學期彙整匯出（admin 匯出；supervisor 唯讀檢視） */}
           <Route path="/admin/semester-export" element={
-            <PrivateRoute allowedRoles={["admin", "supervisor"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.REPORT_VIEWERS}>
               <SemesterExport />
             </PrivateRoute>
           } />
 
           {/* 老師進度（admin 全部；supervisor 管轄老師） */}
           <Route path="/admin/teacher-overview" element={
-            <PrivateRoute allowedRoles={["admin", "supervisor"]}>
+            <PrivateRoute allowedRoles={ROLE_GROUPS.REPORT_VIEWERS}>
               <TeacherOverview />
             </PrivateRoute>
           } />

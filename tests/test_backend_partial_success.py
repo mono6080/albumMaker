@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from database import Project, SessionLocal
-from services import project_service
+from services import project_archive_service
 from services.storage import LocalStorageAdapter, get_storage
 from tests.helpers import (
     assert_status,
@@ -174,9 +174,9 @@ def test_expired_project_purge_commits_only_namespaces_cleaned_successfully(
         storage = SelectiveCleanupStorage(tmp_path / "uploads", failed_prefix)
         storage.put(f"{failed_prefix}/pin.txt", b"keep")
         storage.put(f"{purged_prefix}/pin.txt", b"remove")
-        monkeypatch.setattr(project_service, "get_storage", lambda: storage)
+        monkeypatch.setattr(project_archive_service, "get_storage", lambda: storage)
 
-        purged_ids = project_service.purge_expired_archived_projects(
+        purged_ids = project_archive_service.purge_expired_archived_projects(
             db,
             datetime.now(timezone.utc).replace(tzinfo=None),
         )

@@ -138,7 +138,9 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   expect(layout.photo_slots).toHaveLength(1);
   expect(layout.text_labels).toHaveLength(0);
 
-  await page.keyboard.press("Control+Y");
+  // 快捷鍵行為另有專門案例；此處用明確命令驗證 redo 後的儲存內容。
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expect(page.locator('[data-guide="save-template"]')).toHaveAttribute("data-dirty", "true");
   await saveTemplateLayout(page);
   layout = await fetchTemplatePageLayout(page, template.id);
   expect(layout.photo_slots).toHaveLength(1);

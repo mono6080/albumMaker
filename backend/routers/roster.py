@@ -11,7 +11,7 @@ from crud.roster_crud import get_any_student_or_404, get_roster_child_or_404
 from crud.user_crud import get_visible_owner_ids
 from database import User, get_db
 from services.export_jobs import get_render_job_state, start_render_missing_job
-from services.project_service import build_content_disposition_header
+from services.output_keys import build_content_disposition_header
 from services.roster_service import (
     build_semester_export_preview,
     delete_roster_child_if_orphaned,

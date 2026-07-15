@@ -8,7 +8,12 @@ import ConfirmModal from "../components/ConfirmModal";
 import SupervisorEditorModal from "../components/SupervisorEditorModal";
 import UserExcelImportForm from "../components/UserExcelImportForm";
 import UserList from "../components/UserList";
-import { ROLE_OPTIONS, canHaveSupervisor, getSupervisorIds } from "../utils/userRoles";
+import {
+  ROLE_OPTIONS,
+  USER_ROLES,
+  canHaveSupervisor,
+  getSupervisorIds,
+} from "../utils/userRoles";
 import {
   fetchAllUsers,
   createUser,
@@ -34,7 +39,7 @@ export default function UserManagement() {
   const [newUsername, setNewUsername] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newRole, setNewRole] = useState("teacher");
+  const [newRole, setNewRole] = useState(USER_ROLES.TEACHER);
   const [newSupervisorIds, setNewSupervisorIds] = useState([]);
   const [isCreating, setIsCreating] = useState(false);
   const [importFile, setImportFile] = useState(null);
@@ -60,7 +65,7 @@ export default function UserManagement() {
       const response = await fetchAllUsers();
       const allUsers = response.data;
       setUsers(allUsers);
-      setSupervisors(allUsers.filter((u) => u.role === "supervisor"));
+      setSupervisors(allUsers.filter((u) => u.role === USER_ROLES.SUPERVISOR));
     } catch {
       toast.error("載入使用者清單失敗");
     }
@@ -70,7 +75,7 @@ export default function UserManagement() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    if (newRole === "teacher" && newSupervisorIds.length === 0) {
+    if (newRole === USER_ROLES.TEACHER && newSupervisorIds.length === 0) {
       toast.error("請至少指定一位主管");
       return;
     }
@@ -86,7 +91,7 @@ export default function UserManagement() {
       await createUser(params);
       toast.success("使用者已建立");
       setNewUsername(""); setNewDisplayName(""); setNewPassword("");
-      setNewRole("teacher"); setNewSupervisorIds([]);
+      setNewRole(USER_ROLES.TEACHER); setNewSupervisorIds([]);
       await loadUsers();
     } catch (error) {
       toast.error(getErrorMessage(error, "建立失敗"));
@@ -128,7 +133,7 @@ export default function UserManagement() {
 
   const handleSupervisorToggle = async (user, supervisorId, checked) => {
     const currentSupervisorIds = getSupervisorIds(user);
-    if (user.role === "teacher" && !checked && currentSupervisorIds.length <= 1) {
+    if (user.role === USER_ROLES.TEACHER && !checked && currentSupervisorIds.length <= 1) {
       toast.error("請至少保留一位主管");
       return;
     }
@@ -279,7 +284,7 @@ export default function UserManagement() {
         {canHaveSupervisor(newRole) && (
           <div className="border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
             <div className="text-xs font-medium text-gray-500 mb-2">
-              主管（可多選{newRole === "supervisor" ? "，選填" : ""}）
+              主管（可多選{newRole === USER_ROLES.SUPERVISOR ? "，選填" : ""}）
             </div>
             {supervisors.length === 0 ? (
               <div className="text-xs text-gray-400">尚無主管</div>

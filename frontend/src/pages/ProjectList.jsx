@@ -19,7 +19,6 @@ import {
   X,
 } from "lucide-react";
 import { usePermissions } from "../hooks/usePermissions";
-import { useAuth } from "../context/AuthContext";
 import ConfirmModal from "../components/ConfirmModal";
 import CreateProjectModal from "../components/CreateProjectModal";
 import ProjectCard, { ArchivedProjectRow } from "../components/ProjectCard";
@@ -154,11 +153,10 @@ function buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, targetL
 // ── 專案清單頁面 ──────────────────────────────────────────────────────────────
 
 export default function ProjectList() {
-  const { canCreateProject, canEditProject } = usePermissions();
-  const { currentUser } = useAuth();
+  const { canCreateProject, canEditProject, isAdmin, isTeacher } = usePermissions();
   // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
-  const showOwner = currentUser?.role !== "teacher";
-  const canUseProjectFilters = currentUser?.role === "admin";
+  const showOwner = !isTeacher;
+  const canUseProjectFilters = isAdmin;
   const [projects, setProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [listLoadError, setListLoadError] = useState(null);

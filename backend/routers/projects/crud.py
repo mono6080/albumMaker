@@ -14,12 +14,10 @@ from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, ProjectComment, Student, Template, User, get_db, utc_now
 from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
-from services.project_service import (
-    clear_student_render_outputs,
-    purge_expired_archived_projects,
-)
+from services.project_archive_service import purge_expired_archived_projects
 from services.project_template_revision import lock_project_template_revision
 from services.storage import get_storage
+from services.student_render_service import clear_student_render_outputs
 from services.student_pages import (
     ensure_page_entry,
     lock_student_page_writes,
