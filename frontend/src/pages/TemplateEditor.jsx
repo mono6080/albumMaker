@@ -1,20 +1,11 @@
 // 模板編輯器頁面（Konva Canvas 版）
 // 以 Konva.js (Canvas 2D) 取代 CSS div 渲染，提高與 PIL 後端輸出的視覺一致性
-// 分工：per-page 草稿/歷史在 hooks/useLayoutHistory、Konva 節點渲染在
-// components/canvas/pageElementNodes、雙頁預覽與圖層清單為獨立 component
+// 分工：per-page 草稿/歷史在 hooks/useLayoutHistory、Stage 與節點生命週期在
+// components/canvas、雙頁預覽與圖層清單為獨立 component
 
-import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import {
-  Stage,
-  Layer,
-  Group as KonvaGroup,
-  Rect,
-  Image as KonvaImage,
-  Text as KonvaText,
-  Transformer,
-} from "react-konva";
 import { BookOpen, Camera, ChevronLeft, CircleHelp, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
 
 import {
@@ -25,22 +16,11 @@ import {
   suggestMaterialTextBox,
 } from "../api/templateApi";
 import ImageCropModal from "../components/ImageCropModal";
-import StickerNode from "../components/canvas/StickerNode";
-import {
-  getCanvasElementRefFromTarget,
-  OBJECT_HOVER_OUTLINE_NAME,
-  OBJECT_HOVER_STROKE,
-  OBJECT_HOVER_STROKE_WIDTH,
-} from "../components/canvas/canvasHover.js";
 import {
   applyPhotoEditorUpdates,
   clampPhotoContentRect,
-  makeGroupProps,
-  makePhotoControlProps,
-  renderFooterNode,
-  renderPhotoSlotNode,
-  renderTextLabelNode,
 } from "../components/canvas/pageElementNodes";
+import TemplateCanvas from "../components/canvas/TemplateCanvas";
 import LayerListPanel from "../components/LayerListPanel";
 import PropertyPanel from "../components/PropertyPanel";
 import GroupSelectionPanel from "../components/GroupSelectionPanel";
@@ -54,13 +34,11 @@ import ConfirmModal from "../components/ConfirmModal";
 import SpreadPreviewModal from "../components/SpreadPreviewModal";
 import { Button } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
-import useCanvasCamera from "../hooks/useCanvasCamera";
 import useEditorStylePreferences from "../hooks/useEditorStylePreferences";
 import useEditorViewportMode, {
   EDITOR_VIEWPORT_MODE,
 } from "../hooks/useEditorViewportMode";
 import useLayoutHistory, { cloneLayout, getEditorPageKey } from "../hooks/useLayoutHistory";
-import { canvasViewportPointToPage } from "../utils/canvasCamera.js";
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
@@ -69,17 +47,14 @@ import {
   ELEMENT_ARRAY_KEY,
   getInitialStickerSize,
   getNextZIndex,
-  toDisplayCoord,
   toRealCoord,
 } from "../utils/renderLayoutModel";
 import {
   buildPhotoSlotFromContentRect,
   getPhotoContentRect,
-  getPhotoFrameInsets,
   getPhotoSlotDimensionMode,
   PHOTO_SLOT_CONTENT_BOX_MODE,
   PHOTO_SLOT_DIMENSION_MODE_KEY,
-  snapPhotoSlotStandardRatio,
 } from "../utils/photoFrameGeometry.js";
 import { DESIGN_TOKENS } from "../constants/designTokens.js";
 import { TEXT_LABEL_ROLES } from "../utils/textLabelRoles";
@@ -88,7 +63,6 @@ import { buildEditorLayoutModel } from "../utils/editorLayoutModel.js";
 import {
   deleteLayoutElement,
   deleteLayoutGroup,
-  flattenRenderNodes,
   getGroupAncestorPath,
   getGroupById,
   getMaterialTextLinkForNode,
@@ -100,7 +74,6 @@ import {
   projectNormalizedBoxToSticker,
   removeInvalidMaterialTextLinks,
   reorderNode,
-  transformGroup,
   ungroupElements,
   validateLayoutGroups,
 } from "../utils/layoutGroups";
@@ -121,11 +94,6 @@ import {
   distributeLayoutNodes,
   moveLayoutNode,
 } from "../utils/layoutSelectionOperations.js";
-import {
-  getMarqueeSelectableRefs,
-  normalizeSelectionRect,
-  pointIsInsideOrientedBounds,
-} from "../utils/marqueeSelection";
 
 const EDITOR_GUIDE_STEPS = [
   {
@@ -311,21 +279,6 @@ function sameRef(left, right) {
   return refKey(left) === refKey(right);
 }
 
-function uniqueRefs(refs) {
-  const seen = new Set();
-  return (refs || []).filter((ref) => {
-    const key = refKey(ref);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function normalizeDegrees(value) {
-  const normalized = ((Number(value) || 0) + 180) % 360;
-  return (normalized < 0 ? normalized + 360 : normalized) - 180;
-}
-
 function createRequestToken() {
   return `material-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -367,27 +320,12 @@ function isKeyboardInputTarget(target) {
   return target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
 }
 
-const DESKTOP_CANVAS_CAMERA = {
-  mode: "manual",
-  zoom: 1,
-  viewX: 0,
-  viewY: 0,
-};
-const CANVAS_ZOOM_STEP = 1.2;
 const MOBILE_PANEL = {
   ADD: "add",
   PAGES: "pages",
   LAYERS: "layers",
   PROPERTIES: "properties",
 };
-
-function isPointInsideCanvasPage(point) {
-  return point != null
-    && point.x >= 0
-    && point.x <= CANVAS_DISPLAY_WIDTH
-    && point.y >= 0
-    && point.y <= CANVAS_DISPLAY_HEIGHT;
-}
 
 function countTemplatePhotoSlots(template, draftLayouts) {
   if (!template?.pages) return 0;
@@ -410,6 +348,7 @@ function getPhotoEditorElementData(slot, dimensionMode) {
 }
 
 export default function TemplateEditor() {
+  if (import.meta.env.DEV) globalThis.__ALBUM_EDITOR_RENDER_PROBE__?.("TemplateEditor");
   const { id: templateId } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
@@ -423,29 +362,14 @@ export default function TemplateEditor() {
   } = useEditorStylePreferences(currentUser?.id);
   const viewportMode = useEditorViewportMode();
   const isResponsiveCanvas = viewportMode !== EDITOR_VIEWPORT_MODE.DESKTOP;
-  const {
-    viewportRef,
-    viewportSize,
-    camera,
-    cameraRef,
-    isReady: isCanvasCameraReady,
-    fitToViewport,
-    zoomAtPoint,
-    panBy,
-    applyPinch,
-  } = useCanvasCamera();
 
   const [template, setTemplate] = useState(null);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [pageLayout, setPageLayout] = useState(null);
   const [selectedRefs, setSelectedRefs] = useState([]);
-  const [hoveredRef, setHoveredRef] = useState(null);
   const [isolationPath, setIsolationPath] = useState([]);
-  const [marqueeGesture, setMarqueeGesture] = useState(null);
-  const [transientTypographyScales, setTransientTypographyScales] = useState({});
   const [analyzingTargetKey, setAnalyzingTargetKey] = useState(null);
   const [backgroundUrl, setBackgroundUrl] = useState(null);
-  const [bgImage, setBgImage] = useState(null);
   const [activeTool, setActiveTool] = useState("select");
   const [isSaving, setIsSaving] = useState(false);
   const [bgCropFile, setBgCropFile] = useState(null);
@@ -456,40 +380,23 @@ export default function TemplateEditor() {
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [hasLayoutClipboard, setHasLayoutClipboard] = useState(false);
 
-  const stageRef = useRef(null);
-  const pageCameraRef = useRef(null);
-  const transformerRef = useRef(null);
+  const templateCanvasRef = useRef(null);
   const pageLayoutRef = useRef(null);
   const editorViewRef = useRef({ isolationPath: [], selectedRefs: [] });
   const activeCanvasGestureRef = useRef(null);
   const analysisRequestRef = useRef(null);
   const activePageSessionIdRef = useRef(null);
-  const suppressNextStageClickRef = useRef(false);
-  const suppressStageClickSequenceRef = useRef(0);
   const layoutClipboardRef = useRef(null);
   const clipboardPasteCountRef = useRef(0);
-  const multiTransformSnapshotRef = useRef(null);
   const saveInFlightRef = useRef(null);
   const templateRef = useRef(null);
   const persistedPageIdsRef = useRef([]);
   const pageStructureDirtyRef = useRef(false);
-  const cameraGestureRef = useRef(null);
-  const touchCandidateTargetRef = useRef(null);
-  const isSpacePanPressedRef = useRef(false);
   const hasUnsavedChangesRef = useRef(false);
   const historyGuardRef = useRef({ installed: false, returning: false, allowNextPop: false });
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
   const isolationGroupId = isolationPath.length ? isolationPath[isolationPath.length - 1] : null;
   const selectedElement = selectedRefs.length === 1 ? selectedRefs[0] : null;
-  const activeCanvasCamera = isResponsiveCanvas && isCanvasCameraReady
-    ? camera
-    : DESKTOP_CANVAS_CAMERA;
-  const canvasStageSize = isResponsiveCanvas
-    ? {
-        width: Math.max(1, viewportSize.width),
-        height: Math.max(1, viewportSize.height),
-      }
-    : { width: CANVAS_DISPLAY_WIDTH, height: CANVAS_DISPLAY_HEIGHT };
   const isPhoneEditor = viewportMode === EDITOR_VIEWPORT_MODE.PHONE;
   const isTabletEditor = viewportMode === EDITOR_VIEWPORT_MODE.TABLET;
   const editorLayoutModel = useMemo(() => buildEditorLayoutModel(pageLayout, {
@@ -505,10 +412,10 @@ export default function TemplateEditor() {
   }, [isPhoneEditor, viewportMode]);
 
   useEffect(() => {
-    if (!marqueeGesture && selectedRefs.length === 0) {
+    if (selectedRefs.length === 0) {
       setInspectorTab("layers");
     }
-  }, [marqueeGesture, selectedRefs.length]);
+  }, [selectedRefs.length]);
 
   const setSelectedElement = useCallback((nextSelection) => {
     setSelectedRefs(currentRefs => {
@@ -523,20 +430,14 @@ export default function TemplateEditor() {
   const currentPage = template?.pages[Math.min(currentPageIndex, (template?.pages.length ?? 1) - 1)];
 
   // ── 分頁草稿與復原/重做歷史（useLayoutHistory）─────────────────────────────
-  const beginCanvasGesture = useCallback((kind) => {
+  const handleCanvasGestureStateChange = useCallback((kind) => {
     activeCanvasGestureRef.current = kind;
-    setHoveredRef(null);
-  }, []);
-  const endCanvasGesture = useCallback(() => {
-    activeCanvasGestureRef.current = null;
   }, []);
   const resetEditorView = useCallback(() => {
     activeCanvasGestureRef.current = null;
     setSelectedRefs([]);
     setInspectorTab("layers");
-    setHoveredRef(null);
     setIsolationPath([]);
-    setMarqueeGesture(null);
   }, []);
   const reconcileRestoredEditorView = useCallback((restoredLayout) => {
     const previousView = editorViewRef.current;
@@ -554,7 +455,6 @@ export default function TemplateEditor() {
     editorViewRef.current = { isolationPath: nextPath, selectedRefs: nextSelection };
     setIsolationPath(nextPath);
     setSelectedRefs(nextSelection);
-    setMarqueeGesture(null);
   }, []);
   const {
     draftLayouts,
@@ -688,10 +588,6 @@ export default function TemplateEditor() {
     editorViewRef.current = { isolationPath, selectedRefs };
   }, [isolationPath, selectedRefs]);
 
-  useEffect(() => {
-    if (activeTool !== "select") setHoveredRef(null);
-  }, [activeTool]);
-
   useEffect(() => () => analysisRequestRef.current?.controller?.abort(), []);
 
   useEffect(() => {
@@ -703,41 +599,6 @@ export default function TemplateEditor() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
   }, [hasUnsavedChanges]);
-
-  // ── 背景圖載入 ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!backgroundUrl) { setBgImage(null); return; }
-    const img = new window.Image();
-    img.src = backgroundUrl;
-    img.onload = () => setBgImage(img);
-    img.onerror = () => setBgImage(null);
-  }, [backgroundUrl]);
-
-  // ── Transformer 同步選取節點 ─────────────────────────────────────────────
-  useEffect(() => {
-    const tr = transformerRef.current;
-    if (!tr || !stageRef.current) return;
-    const nodes = selectedRefs
-      .filter(ref => {
-        const state = editorLayoutModel.getNodeLayerState(ref);
-        return state.isVisible && !state.isLocked;
-      })
-      .map(ref => {
-        const nodeId = `${ref.type}-${ref.id}`;
-        return stageRef.current.findOne(node => node.id() === nodeId);
-      })
-      .filter(Boolean);
-    tr.nodes(nodes);
-    tr.getLayer()?.batchDraw();
-  }, [selectedRefs, editorLayoutModel, isolationGroupId]);
-
-  useEffect(() => {
-    const redrawFrame = requestAnimationFrame(() => {
-      transformerRef.current?.forceUpdate();
-      transformerRef.current?.getLayer()?.batchDraw();
-    });
-    return () => cancelAnimationFrame(redrawFrame);
-  }, [activeCanvasCamera.zoom, activeCanvasCamera.viewX, activeCanvasCamera.viewY]);
 
   // ── 載入與頁面切換 ────────────────────────────────────────────────────────
 
@@ -1121,6 +982,19 @@ export default function TemplateEditor() {
     });
   }, [handleSelectGroup, isMultiSelectMode]);
 
+  const handleCanvasSelectRef = useCallback((selectionRef, options = {}) => {
+    if (selectionRef?.type === "group") {
+      handleCanvasSelectGroup(selectionRef.id, options);
+      return;
+    }
+    handleCanvasSelectElement(selectionRef, options);
+  }, [handleCanvasSelectElement, handleCanvasSelectGroup]);
+
+  const handleCanvasClearSelection = useCallback(() => {
+    setInspectorTab("layers");
+    setSelectedElement(null);
+  }, [setSelectedElement]);
+
   const enterGroup = useCallback((groupId, preferredHit = null) => {
     if (!pageLayout) return;
     const groupRef = { type: "group", id: groupId };
@@ -1202,7 +1076,7 @@ export default function TemplateEditor() {
     }
   }, [commitPageLayout, editorLayoutModel]);
 
-  const updateElement = (elementType, elementId, propertyUpdates, commitOptions) => {
+  const updateElement = useCallback((elementType, elementId, propertyUpdates, commitOptions) => {
     const elementRef = { type: elementType, id: elementId };
     if (editorLayoutModel.getNodeLayerState(elementRef).isLocked) return;
     const arrayKey = ELEMENT_ARRAY_KEY[elementType];
@@ -1212,7 +1086,7 @@ export default function TemplateEditor() {
         element => String(element.id) === String(elementId) ? { ...element, ...propertyUpdates } : element
       ),
     }), commitOptions);
-  };
+  }, [commitPageLayout, editorLayoutModel]);
 
   const updatePhotoElementFromEditor = (elementId, propertyUpdates, commitOptions) => {
     if (editorLayoutModel.getNodeLayerState({ type: "photo", id: elementId }).isLocked) return;
@@ -1503,148 +1377,6 @@ export default function TemplateEditor() {
       toast.error(error?.message || "無法貼上物件");
     }
   }, [commitPageLayout, currentPage, editorLayoutModel, isolationGroupId]);
-
-  const handleMultiTransformStart = useCallback(() => {
-    if (selectedRefs.length < 2 || !stageRef.current) return;
-    const entries = selectedRefs.flatMap(ref => {
-      const node = stageRef.current.findOne(candidate => candidate.id() === `${ref.type}-${ref.id}`);
-      if (!node) return [];
-      return [{
-        ref: { ...ref },
-        node,
-        initialNodeState: {
-          x: node.x(),
-          y: node.y(),
-          rotation: node.rotation(),
-          scaleX: node.scaleX(),
-          scaleY: node.scaleY(),
-        },
-        bounds: ref.type === "group" ? editorLayoutModel.getNodeBounds(ref) : null,
-      }];
-    });
-    if (entries.length < 2) return;
-    multiTransformSnapshotRef.current = { entries };
-    beginCanvasGesture("multi-transform");
-  }, [beginCanvasGesture, editorLayoutModel, selectedRefs]);
-
-  const handleMultiTransformEnd = useCallback(() => {
-    const snapshot = multiTransformSnapshotRef.current;
-    multiTransformSnapshotRef.current = null;
-    if (!snapshot) {
-      endCanvasGesture();
-      return;
-    }
-    try {
-      commitPageLayout(currentLayout => snapshot.entries.reduce((nextLayout, entry) => {
-        const { ref, node, bounds } = entry;
-        const layerState = getNodeLayerState(nextLayout, ref);
-        if (!layerState.isVisible || layerState.isLocked) return nextLayout;
-        if (ref.type === "group") {
-          const scale = (Math.abs(node.scaleX()) + Math.abs(node.scaleY())) / 2;
-          return transformGroup(nextLayout, ref.id, {
-            dx: toRealCoord(node.x() - toDisplayCoord(bounds.centerX)),
-            dy: toRealCoord(node.y() - toDisplayCoord(bounds.centerY)),
-            rotationDelta: normalizeDegrees(node.rotation() - (bounds.rotation ?? 0)),
-            scale,
-          });
-        }
-
-        const sourceData = getLayoutNodeData(nextLayout, ref);
-        const collectionKey = ELEMENT_ARRAY_KEY[ref.type];
-        if (!sourceData || !collectionKey) return nextLayout;
-        const scaleX = Math.abs(node.scaleX());
-        const scaleY = Math.abs(node.scaleY());
-        const sourceWidth = Math.max(Number.EPSILON, Number(sourceData.width) || 0);
-        const sourceHeight = Math.max(Number.EPSILON, Number(sourceData.height) || 0);
-        const width = Math.max(Math.min(60, sourceWidth), toRealCoord(node.width() * scaleX));
-        const height = Math.max(Math.min(40, sourceHeight), toRealCoord(node.height() * scaleY));
-        if (ref.type === "photo") {
-          const dimensionMode = getPhotoSlotDimensionMode(nextLayout);
-          let nextWidth = width;
-          let nextHeight = height;
-          const snapped = snapPhotoSlotStandardRatio(
-            sourceData.width,
-            sourceData.height,
-            "width",
-            nextWidth,
-          );
-          if (snapped) ({ width: nextWidth, height: nextHeight } = snapped);
-          const insets = getPhotoFrameInsets(sourceData);
-          const frameCenterX = toRealCoord(node.x());
-          const frameCenterY = toRealCoord(node.y());
-          const nextSlot = applyPhotoEditorUpdates(sourceData, {
-            x: frameCenterX + (insets.left - insets.right) / 2 - nextWidth / 2,
-            y: frameCenterY + (insets.top - insets.bottom) / 2 - nextHeight / 2,
-            width: nextWidth,
-            height: nextHeight,
-            rotation: normalizeDegrees(node.rotation()),
-          }, dimensionMode);
-          return {
-            ...nextLayout,
-            [collectionKey]: (nextLayout[collectionKey] || []).map(item => (
-              String(item.id) === String(ref.id) ? nextSlot : item
-            )),
-          };
-        }
-        const updates = {
-          x: toRealCoord(node.x()) - width / 2,
-          y: toRealCoord(node.y()) - height / 2,
-          width,
-          height,
-          rotation: normalizeDegrees(node.rotation()),
-        };
-        return {
-          ...nextLayout,
-          [collectionKey]: (nextLayout[collectionKey] || []).map(item => (
-            String(item.id) === String(ref.id) ? { ...item, ...updates } : item
-          )),
-        };
-      }, currentLayout));
-      snapshot.entries.forEach(({ ref, node }) => {
-        node.scale({ x: 1, y: 1 });
-        const visualId = ref.type === "group"
-          ? `group-visual-${ref.id}`
-          : ref.type === "photo" ? `photo-visual-${ref.id}` : null;
-        const visualNode = visualId == null
-          ? null
-          : node.getLayer()?.findOne(candidate => candidate.id() === visualId);
-        if (visualNode) {
-          visualNode.position(node.position());
-          visualNode.rotation(node.rotation());
-          visualNode.scale({ x: 1, y: 1 });
-        }
-      });
-      transformerRef.current?.forceUpdate();
-    } catch (error) {
-      snapshot.entries.forEach(({ ref, node, initialNodeState }) => {
-        node.position({ x: initialNodeState.x, y: initialNodeState.y });
-        node.rotation(initialNodeState.rotation);
-        node.scale({ x: initialNodeState.scaleX, y: initialNodeState.scaleY });
-        const visualId = ref.type === "group"
-          ? `group-visual-${ref.id}`
-          : ref.type === "photo" ? `photo-visual-${ref.id}` : null;
-        const visualNode = visualId == null
-          ? null
-          : node.getLayer()?.findOne(candidate => candidate.id() === visualId);
-        if (visualNode) {
-          visualNode.position(node.position());
-          visualNode.rotation(node.rotation());
-          visualNode.scale(node.scale());
-        }
-      });
-      transformerRef.current?.forceUpdate();
-      toast.error(error?.message || "無法變形多選物件");
-    } finally {
-      setTransientTypographyScales(current => {
-        const next = { ...current };
-        snapshot.entries.forEach(({ ref }) => {
-          if (ref.type === "group") delete next[String(ref.id)];
-        });
-        return next;
-      });
-      endCanvasGesture();
-    }
-  }, [commitPageLayout, endCanvasGesture]);
 
   const handleToggleSelectedVisibility = useCallback(() => {
     const shouldHide = selectedRefs.every(ref => editorLayoutModel.getNodeLayerState(ref).isVisible);
@@ -2023,361 +1755,6 @@ export default function TemplateEditor() {
     handleAnalyzeMaterial({ ...stickerRef, textId: textRef.id });
   }, [handleAnalyzeMaterial, selectedRefs]);
 
-  // ── Konva Stage 事件：放置元素 or 取消選取 ───────────────────────────────
-
-  const setCameraInteractionListening = useCallback((isListening) => {
-    pageCameraRef.current?.listening(isListening);
-    transformerRef.current?.listening(isListening);
-    stageRef.current?.batchDraw();
-  }, []);
-
-  const suppressImmediateStageClick = useCallback(() => {
-    suppressNextStageClickRef.current = true;
-    suppressStageClickSequenceRef.current += 1;
-    const sequence = suppressStageClickSequenceRef.current;
-    requestAnimationFrame(() => {
-      if (suppressStageClickSequenceRef.current === sequence) {
-        suppressNextStageClickRef.current = false;
-      }
-    });
-  }, []);
-
-  const finishCameraGesture = useCallback(({ suppressClick = true } = {}) => {
-    const gesture = cameraGestureRef.current;
-    if (!gesture || gesture.kind === "touch-blocked") return;
-    cameraGestureRef.current = null;
-    if (suppressClick) suppressImmediateStageClick();
-    setCameraInteractionListening(true);
-    const stageContainer = stageRef.current?.container();
-    if (stageContainer) stageContainer.style.cursor = "";
-    endCanvasGesture();
-  }, [endCanvasGesture, setCameraInteractionListening, suppressImmediateStageClick]);
-
-  const beginCameraGesture = useCallback((gesture, target) => {
-    target?.stopDrag?.();
-    cameraGestureRef.current = gesture;
-    setMarqueeGesture(null);
-    setCameraInteractionListening(false);
-    beginCanvasGesture("camera");
-    const stageContainer = stageRef.current?.container();
-    if (stageContainer) stageContainer.style.cursor = "grabbing";
-  }, [beginCanvasGesture, setCameraInteractionListening]);
-
-  const getStageTouchPoints = useCallback((nativeEvent) => {
-    const stage = stageRef.current;
-    if (!stage) return [];
-    stage.setPointersPositions(nativeEvent);
-    return stage.getPointersPositions().map(point => ({ x: point.x, y: point.y }));
-  }, []);
-
-  const getPointerCoordinates = useCallback(() => {
-    const viewportPosition = stageRef.current?.getPointerPosition();
-    const displayPosition = pageCameraRef.current?.getRelativePointerPosition();
-    if (!viewportPosition || !displayPosition) return null;
-    return {
-      viewport: viewportPosition,
-      display: displayPosition,
-      real: {
-        x: toRealCoord(displayPosition.x),
-        y: toRealCoord(displayPosition.y),
-      },
-    };
-  }, []);
-
-  const handleStagePointerDown = useCallback((event) => {
-    if (cameraGestureRef.current) return;
-    const nativeEvent = event.evt;
-    const touchCount = nativeEvent?.touches?.length ?? 0;
-    if (isResponsiveCanvas && touchCount === 1) {
-      touchCandidateTargetRef.current = event.target;
-    }
-    if (isResponsiveCanvas && touchCount >= 2) {
-      const isLayoutGesture = activeCanvasGestureRef.current != null
-        && activeCanvasGestureRef.current !== "marquee";
-      if (isLayoutGesture || transformerRef.current?.isTransforming()) {
-        cameraGestureRef.current = { kind: "touch-blocked" };
-        return;
-      }
-      const touchPoints = getStageTouchPoints(nativeEvent);
-      if (touchPoints.length < 2) return;
-      if (activeCanvasGestureRef.current === "marquee") endCanvasGesture();
-      touchCandidateTargetRef.current?.stopDrag?.();
-      touchCandidateTargetRef.current = null;
-      beginCameraGesture({
-        kind: "pinch",
-        startCamera: { ...cameraRef.current },
-        startTouches: touchPoints.slice(0, 2),
-      }, event.target);
-      nativeEvent.preventDefault?.();
-      event.cancelBubble = true;
-      return;
-    }
-
-    const pointerButton = nativeEvent?.button ?? 0;
-    const shouldPanCamera = isResponsiveCanvas
-      && (pointerButton === 1 || (pointerButton === 0 && isSpacePanPressedRef.current));
-    if (shouldPanCamera) {
-      beginCameraGesture({
-        kind: "pan",
-        lastClientX: nativeEvent.clientX,
-        lastClientY: nativeEvent.clientY,
-      }, event.target);
-      nativeEvent.preventDefault?.();
-      event.cancelBubble = true;
-      return;
-    }
-
-    if (activeTool !== "select" || event.target !== event.target.getStage()) return;
-    // 手機一般模式的空白觸控只負責取消選取；明確開啟多選後才允許框選。
-    if (isPhoneEditor && touchCount === 1 && !isMultiSelectMode) return;
-    if (pointerButton !== 0) return;
-    const pointer = getPointerCoordinates();
-    if (!pointer || !isPointInsideCanvasPage(pointer.display)) return;
-    setInspectorTab("properties");
-    setMarqueeGesture({
-      startViewport: pointer.viewport,
-      currentViewport: pointer.viewport,
-      startDisplay: pointer.display,
-      currentDisplay: pointer.display,
-      startReal: pointer.real,
-      currentReal: pointer.real,
-      additive: isMultiSelectMode || !!nativeEvent?.shiftKey,
-      baseSelection: isMultiSelectMode || nativeEvent?.shiftKey ? [...selectedRefs] : [],
-      active: false,
-    });
-    beginCanvasGesture("marquee");
-  }, [
-    activeTool,
-    beginCameraGesture,
-    beginCanvasGesture,
-    cameraRef,
-    endCanvasGesture,
-    getPointerCoordinates,
-    getStageTouchPoints,
-    isPhoneEditor,
-    isMultiSelectMode,
-    isResponsiveCanvas,
-    selectedRefs,
-  ]);
-
-  const handleStagePointerMove = useCallback(() => {
-    if (cameraGestureRef.current) return;
-    if (!marqueeGesture || !pageLayout) return;
-    const pointer = getPointerCoordinates();
-    if (!pointer) return;
-    const distance = Math.hypot(
-      pointer.viewport.x - marqueeGesture.startViewport.x,
-      pointer.viewport.y - marqueeGesture.startViewport.y,
-    );
-    const active = marqueeGesture.active || distance > 4;
-    const nextGesture = {
-      ...marqueeGesture,
-      currentViewport: pointer.viewport,
-      currentDisplay: pointer.display,
-      currentReal: pointer.real,
-      active,
-    };
-    setMarqueeGesture(nextGesture);
-    if (!active) return;
-    const selectionRect = normalizeSelectionRect(nextGesture.startReal, nextGesture.currentReal);
-    const hits = getMarqueeSelectableRefs(pageLayout, selectionRect, {
-      parentGroupId: isolationGroupId,
-    });
-    setSelectedRefs(nextGesture.additive
-      ? uniqueRefs([...nextGesture.baseSelection, ...hits])
-      : hits);
-  }, [getPointerCoordinates, isolationGroupId, marqueeGesture, pageLayout]);
-
-  const handleStageHoverMove = useCallback((event) => {
-    if (activeTool !== "select" || activeCanvasGestureRef.current || !pageLayout) {
-      setHoveredRef(null);
-      return;
-    }
-
-    const hitRef = getCanvasElementRefFromTarget(event.target, event.target?.getStage?.());
-    const directRef = hitRef?.type === "group"
-      ? editorLayoutModel.getScopeNodes(isolationGroupId).find(ref => sameRef(ref, hitRef)) ?? null
-      : editorLayoutModel.resolveHitToDirectChild(isolationGroupId, hitRef);
-    setHoveredRef(current => (sameRef(current, directRef) ? current : directRef));
-  }, [activeTool, editorLayoutModel, isolationGroupId, pageLayout]);
-
-  const handleStagePointerUp = useCallback(() => {
-    if (cameraGestureRef.current?.kind === "pan") {
-      finishCameraGesture();
-      return;
-    }
-    if (cameraGestureRef.current) return;
-    if (!marqueeGesture) return;
-    if (marqueeGesture.active) suppressImmediateStageClick();
-    setMarqueeGesture(null);
-    endCanvasGesture();
-  }, [endCanvasGesture, finishCameraGesture, marqueeGesture, suppressImmediateStageClick]);
-
-  const handleStageTouchMove = useCallback((event) => {
-    const gesture = cameraGestureRef.current;
-    if (gesture?.kind === "pinch") {
-      const touchPoints = getStageTouchPoints(event.evt);
-      if (touchPoints.length >= 2) {
-        applyPinch(gesture.startCamera, gesture.startTouches, touchPoints.slice(0, 2));
-      }
-      event.evt.preventDefault?.();
-      event.cancelBubble = true;
-      return;
-    }
-    if (gesture?.kind === "touch-blocked") return;
-    handleStagePointerMove();
-  }, [applyPinch, getStageTouchPoints, handleStagePointerMove]);
-
-  const handleStageTouchEnd = useCallback((event) => {
-    const gesture = cameraGestureRef.current;
-    if (gesture?.kind === "pinch") {
-      if ((event.evt?.touches?.length ?? 0) === 0) {
-        touchCandidateTargetRef.current = null;
-        finishCameraGesture();
-      }
-      event.evt.preventDefault?.();
-      event.cancelBubble = true;
-      return;
-    }
-    if (gesture?.kind === "touch-blocked") {
-      if ((event.evt?.touches?.length ?? 0) === 0) {
-        cameraGestureRef.current = null;
-        touchCandidateTargetRef.current = null;
-      }
-      return;
-    }
-    if ((event.evt?.touches?.length ?? 0) === 0) {
-      if (event.evt?.type === "touchcancel") {
-        touchCandidateTargetRef.current = null;
-      } else {
-        // Konva 會在 touchend 後才合成 tap；保留起點到下一幀，避免 Transformer
-        // 的放大命中區把 tap 轉成 Stage 空白點擊而誤清除既有選取。
-        const touchTarget = touchCandidateTargetRef.current;
-        requestAnimationFrame(() => {
-          if (touchCandidateTargetRef.current === touchTarget) {
-            touchCandidateTargetRef.current = null;
-          }
-        });
-      }
-    }
-    handleStagePointerUp();
-  }, [finishCameraGesture, handleStagePointerUp]);
-
-  useEffect(() => {
-    if (!isResponsiveCanvas) return undefined;
-    const handleMouseMove = (mouseEvent) => {
-      const gesture = cameraGestureRef.current;
-      if (gesture?.kind !== "pan") return;
-      const delta = {
-        x: mouseEvent.clientX - gesture.lastClientX,
-        y: mouseEvent.clientY - gesture.lastClientY,
-      };
-      gesture.lastClientX = mouseEvent.clientX;
-      gesture.lastClientY = mouseEvent.clientY;
-      panBy(delta);
-      mouseEvent.preventDefault();
-    };
-    const handleMouseUp = () => {
-      if (cameraGestureRef.current?.kind === "pan") finishCameraGesture({ suppressClick: false });
-    };
-    const recoverCameraInteraction = () => {
-      isSpacePanPressedRef.current = false;
-      if (cameraGestureRef.current?.kind === "touch-blocked") {
-        cameraGestureRef.current = null;
-        touchCandidateTargetRef.current = null;
-        return;
-      }
-      if (cameraGestureRef.current) finishCameraGesture({ suppressClick: false });
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") recoverCameraInteraction();
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    window.addEventListener("blur", recoverCameraInteraction);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("blur", recoverCameraInteraction);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      recoverCameraInteraction();
-    };
-  }, [finishCameraGesture, isResponsiveCanvas, panBy]);
-
-  useEffect(() => {
-    if (!isResponsiveCanvas) {
-      isSpacePanPressedRef.current = false;
-      return undefined;
-    }
-    const handleSpaceDown = (keyboardEvent) => {
-      if (keyboardEvent.code !== "Space" || isKeyboardInputTarget(document.activeElement)) return;
-      isSpacePanPressedRef.current = true;
-      keyboardEvent.preventDefault();
-    };
-    const handleSpaceUp = (keyboardEvent) => {
-      if (keyboardEvent.code === "Space") isSpacePanPressedRef.current = false;
-    };
-    window.addEventListener("keydown", handleSpaceDown);
-    window.addEventListener("keyup", handleSpaceUp);
-    return () => {
-      window.removeEventListener("keydown", handleSpaceDown);
-      window.removeEventListener("keyup", handleSpaceUp);
-    };
-  }, [isResponsiveCanvas]);
-
-  useEffect(() => {
-    if (isResponsiveCanvas || !cameraGestureRef.current) return;
-    if (cameraGestureRef.current.kind === "touch-blocked") {
-      cameraGestureRef.current = null;
-      touchCandidateTargetRef.current = null;
-      return;
-    }
-    finishCameraGesture({ suppressClick: false });
-  }, [finishCameraGesture, isResponsiveCanvas]);
-
-  useEffect(() => {
-    if (!isResponsiveCanvas || !pageLayout) return undefined;
-    const stage = stageRef.current;
-    const stageContainer = stage?.container();
-    if (!stage || !stageContainer) return undefined;
-    const handleCameraWheel = (wheelEvent) => {
-      if (!wheelEvent.ctrlKey && !wheelEvent.metaKey) return;
-      wheelEvent.preventDefault();
-      stage.setPointersPositions(wheelEvent);
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return;
-      const zoomFactor = Math.exp(-wheelEvent.deltaY * 0.002);
-      zoomAtPoint(cameraRef.current.zoom * zoomFactor, pointer);
-    };
-    stageContainer.addEventListener("wheel", handleCameraWheel, { passive: false });
-    return () => stageContainer.removeEventListener("wheel", handleCameraWheel);
-  }, [cameraRef, isResponsiveCanvas, pageLayout, zoomAtPoint]);
-
-  useEffect(() => {
-    if (!marqueeGesture) return undefined;
-    window.addEventListener("mouseup", handleStagePointerUp);
-    window.addEventListener("touchend", handleStagePointerUp);
-    window.addEventListener("touchcancel", handleStagePointerUp);
-    return () => {
-      window.removeEventListener("mouseup", handleStagePointerUp);
-      window.removeEventListener("touchend", handleStagePointerUp);
-      window.removeEventListener("touchcancel", handleStagePointerUp);
-    };
-  }, [handleStagePointerUp, marqueeGesture]);
-
-  const handleStageDoubleClick = useCallback((event) => {
-    if (activeTool !== "select" || isolationGroupId == null) return;
-    if (event.target !== event.target.getStage()) return;
-    const pointer = getPointerCoordinates();
-    if (!pointer || !isPointInsideCanvasPage(pointer.display)) return;
-    const currentBounds = editorLayoutModel.getGroupBounds(isolationGroupId);
-    if (!pointIsInsideOrientedBounds(pointer.real, currentBounds)) {
-      event.cancelBubble = true;
-      exitGroup();
-    }
-  }, [activeTool, editorLayoutModel, exitGroup, getPointerCoordinates, isolationGroupId]);
-
   const addElementAtRealPoint = useCallback((tool, point, { centered = false } = {}) => {
     const sourceLayout = pageLayoutRef.current;
     if (!sourceLayout || !point) return null;
@@ -2455,11 +1832,8 @@ export default function TemplateEditor() {
 
   const handleMobileAddTool = useCallback((tool) => {
     if (!["addPhotoPortrait", "addPhotoLandscape", "addText"].includes(tool)) return;
-    const viewportCenter = {
-      x: canvasStageSize.width / 2,
-      y: canvasStageSize.height / 2,
-    };
-    const pageCenter = canvasViewportPointToPage(viewportCenter, activeCanvasCamera);
+    const pageCenter = templateCanvasRef.current?.getViewportCenterPagePoint();
+    if (!pageCenter) return;
     const clampedPageCenter = {
       x: Math.max(0, Math.min(CANVAS_DISPLAY_WIDTH, pageCenter.x)),
       y: Math.max(0, Math.min(CANVAS_DISPLAY_HEIGHT, pageCenter.y)),
@@ -2471,38 +1845,7 @@ export default function TemplateEditor() {
     setActiveTool("select");
     setIsMultiSelectMode(false);
     setActiveMobilePanel(null);
-  }, [activeCanvasCamera, addElementAtRealPoint, canvasStageSize.height, canvasStageSize.width]);
-
-  const handleStageClick = (e) => {
-    if (!pageLayout) return;
-    if (suppressNextStageClickRef.current) {
-      suppressNextStageClickRef.current = false;
-      return;
-    }
-    const pointer = getPointerCoordinates();
-    if (!pointer) return;
-    const realX = pointer.real.x;
-    const realY = pointer.real.y;
-    const isInsidePage = isPointInsideCanvasPage(pointer.display);
-
-    if (["addPhotoPortrait", "addPhotoLandscape", "addText"].includes(activeTool)) {
-      if (!isInsidePage) return;
-      addElementAtRealPoint(activeTool, { x: realX, y: realY });
-      return;
-    }
-
-    const touchStartedOnCanvasControl = touchCandidateTargetRef.current != null
-      && touchCandidateTargetRef.current !== stageRef.current;
-    // 選取模式：點擊空白處取消選取。觸控若從物件／Transformer 開始，
-    // 即使 Konva 將合成 tap 的 target 回報成 Stage，也不應誤判為空白。
-    if (e.target === stageRef.current
-      && !touchStartedOnCanvasControl
-      && !e.evt?.shiftKey
-      && !isMultiSelectMode) {
-      setInspectorTab("layers");
-      setSelectedElement(null);
-    }
-  };
+  }, [addElementAtRealPoint]);
 
   // ── 渲染 ──────────────────────────────────────────────────────────────────
 
@@ -2648,43 +1991,17 @@ export default function TemplateEditor() {
   const activeScopeRenderNodes = activeScopeRefs
     .map(ref => editorLayoutModel.getRenderNode(ref))
     .filter(Boolean);
-  const activeScopeCanvasNodes = activeScopeRefs
-    .map(ref => editorLayoutModel.getRenderNode(ref, { visibleOnly: true }))
-    .filter(Boolean);
-  const flattenedSceneLeaves = editorLayoutModel.visibleFlattenedLeaves;
-  const activeLeafKeys = new Set(
-    isolationGroupId == null
-      ? []
-      : editorLayoutModel.getDescendantLeafRefs(isolationGroupId).map(refKey),
-  );
-  const activeLeafIndices = flattenedSceneLeaves
-    .map((node, index) => (activeLeafKeys.has(refKey(node)) ? index : -1))
-    .filter(index => index >= 0);
-  const activeSceneStart = activeLeafIndices.length ? activeLeafIndices[0] : 0;
-  const activeSceneEnd = activeLeafIndices.length
-    ? activeLeafIndices[activeLeafIndices.length - 1]
-    : -1;
-  const passiveSceneBefore = isolationGroupId == null
-    ? []
-    : flattenedSceneLeaves.slice(0, activeSceneStart);
-  const passiveSceneAfter = isolationGroupId == null
-    ? []
-    : flattenedSceneLeaves.slice(activeSceneEnd + 1);
   const isolationTrail = isolationPath.map((groupId, index) => ({
     id: groupId,
     label: editorLayoutModel.getGroupById(groupId)?.layer_name || `群組 ${index + 1}`,
     data: editorLayoutModel.getGroupById(groupId),
   }));
-  const visiblePhotoOrdinals = editorLayoutModel.getVisibleElementOrdinals("photo");
   const selectedMaterialLink = selectedElement
     ? editorLayoutModel.getMaterialTextLinkForNode(selectedElement)
     : null;
   const selectedAnalysisStickerId = selectedElement?.type === "sticker"
     ? selectedElement.id
     : selectedMaterialLink?.material_id ?? null;
-  const marqueeDisplayRect = marqueeGesture?.active
-    ? normalizeSelectionRect(marqueeGesture.startDisplay, marqueeGesture.currentDisplay)
-    : null;
   const layoutValidation = editorLayoutModel.validation;
   const hasRepairableMaterialLinks = layoutValidation.topologyValid && !layoutValidation.linkValid;
   const selectedLayerStates = selectedRefs.map(ref => editorLayoutModel.getNodeLayerState(ref));
@@ -2705,28 +2022,6 @@ export default function TemplateEditor() {
   const applicableFavoriteStyles = selectedFavoriteType
     ? favoriteStyles.filter(item => item.type === selectedFavoriteType)
     : [];
-  const getMinimumMultiResizeFactor = () => selectedRefs.reduce((minimumFactor, ref) => {
-    const targetNode = stageRef.current?.findOne(candidate => candidate.id() === `${ref.type}-${ref.id}`);
-    if (!targetNode) return minimumFactor;
-    const leafRefs = ref.type === "group" ? editorLayoutModel.getDescendantLeafRefs(ref.id) : [ref];
-    const scaleX = Math.max(Number.EPSILON, Math.abs(targetNode.scaleX()));
-    const scaleY = Math.max(Number.EPSILON, Math.abs(targetNode.scaleY()));
-    return leafRefs.reduce((leafMinimum, leafRef) => {
-      const leafData = editorLayoutModel.getNodeData(leafRef);
-      if (!leafData) return leafMinimum;
-      const dimensions = leafRef.type === "photo"
-        ? getPhotoContentRect(leafData, { dimensionMode: photoSlotDimensionMode })
-        : leafData;
-      const width = Math.max(Number.EPSILON, Number(dimensions.width) || 0);
-      const height = Math.max(Number.EPSILON, Number(dimensions.height) || 0);
-      return Math.max(
-        leafMinimum,
-        60 / (width * scaleX),
-        40 / (height * scaleY),
-      );
-    }, minimumFactor);
-  }, 0);
-
   const handleSelectedPropertyChange = (updates, options = {}) => {
     if (!selectedElement || selectedElement.type === "group" || selectedSingleLayerState?.isLocked) return;
     const historyKey = options.historyGroup
@@ -2740,286 +2035,6 @@ export default function TemplateEditor() {
     rememberStyleUpdates(selectedElement.type, updates);
     if (options.endHistoryGroup) endHistoryGroup(historyKey);
   };
-
-  // 傳給 Konva 節點渲染函式的頁面 state（見 components/canvas/pageElementNodes）
-  const canvasNodeContext = {
-    isSelectMode: activeTool === "select",
-    photoSlotDimensionMode,
-    currentPageIndex,
-    updateElement,
-    setSelectedElement,
-    onSelectElement: handleCanvasSelectElement,
-    onActivateElement: handleActivateElement,
-    onGestureStart: beginCanvasGesture,
-    onGestureEnd: endCanvasGesture,
-  };
-
-  const isRefSelected = ref => selectedRefs.some(selectedRef => sameRef(selectedRef, ref));
-  const isRefHovered = ref => hoveredRef != null && sameRef(hoveredRef, ref);
-
-  const renderElementNode = (node, {
-    disabled = false,
-    group = null,
-    typographyScale = 1,
-  } = {}) => {
-    const { type, data, index: elemIndex } = node;
-    const elementRef = { type, id: data.id };
-    const isInteractionDisabled = disabled
-      || (group == null && editorLayoutModel.getNodeLayerState(elementRef).isLocked);
-    const isSelected = isRefSelected(elementRef);
-    const isMultiTransformTarget = selectedRefs.length > 1 && isSelected && group == null;
-    const isHovered = !isInteractionDisabled && group == null && isRefHovered(elementRef);
-
-    if (type === "photo") {
-      const visiblePhotoIndex = (visiblePhotoOrdinals.get(String(data.id)) ?? (elemIndex + 1)) - 1;
-      const controlProps = makePhotoControlProps(data, canvasNodeContext);
-      if (isInteractionDisabled) Object.assign(controlProps, { draggable: false, listening: false });
-      if (isMultiTransformTarget) {
-        Object.assign(controlProps, { onTransformStart: undefined, onTransformEnd: undefined });
-      }
-      if (group) {
-        Object.assign(controlProps, {
-          draggable: false,
-          listening: activeTool === "select" && !disabled,
-          onClick: (event) => {
-            event.cancelBubble = true;
-            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-          },
-          onTap: (event) => {
-            event.cancelBubble = true;
-            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-          },
-          onDblClick: (event) => {
-            event.cancelBubble = true;
-            enterGroup(group.id, elementRef);
-          },
-          onDblTap: (event) => {
-            event.cancelBubble = true;
-            enterGroup(group.id, elementRef);
-          },
-        });
-      }
-      return renderPhotoSlotNode(
-        data,
-        visiblePhotoIndex,
-        isSelected,
-        isHovered,
-        controlProps,
-        canvasNodeContext,
-      );
-    }
-
-    const groupProps = makeGroupProps(type, data, canvasNodeContext);
-    if (isInteractionDisabled) Object.assign(groupProps, { draggable: false, listening: false });
-    if (isMultiTransformTarget) {
-      Object.assign(groupProps, { onTransformStart: undefined, onTransformEnd: undefined });
-    }
-    if (group) {
-      Object.assign(groupProps, {
-        draggable: false,
-        listening: activeTool === "select" && !disabled,
-        onClick: (event) => {
-          event.cancelBubble = true;
-          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-        },
-        onTap: (event) => {
-          event.cancelBubble = true;
-          handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-        },
-        onDblClick: (event) => {
-          event.cancelBubble = true;
-          enterGroup(group.id, elementRef);
-        },
-        onDblTap: (event) => {
-          event.cancelBubble = true;
-          enterGroup(group.id, elementRef);
-        },
-      });
-    }
-
-    if (type === "text") return renderTextLabelNode(
-      data,
-      isSelected,
-      groupProps,
-      { isHovered, suppressSelectedStroke: selectedRefs.length === 1, typographyScale },
-    );
-    if (type === "sticker") return (
-      <StickerNode
-        key={`sticker-${data.id}`}
-        sticker={data}
-        templateId={templateId}
-        isHovered={isHovered}
-        isSelected={isSelected}
-        suppressSelectedStroke={selectedRefs.length === 1}
-        groupProps={groupProps}
-      />
-    );
-    return null;
-  };
-
-  const renderDirectGroupNode = (node) => {
-    const group = node.data;
-    const groupRef = { type: "group", id: group.id };
-    const groupLayerState = editorLayoutModel.getNodeLayerState(groupRef);
-    const isSelected = isRefSelected(groupRef);
-    const isHovered = !groupLayerState.isLocked && isRefHovered(groupRef);
-    const bounds = editorLayoutModel.getNodeBounds(groupRef);
-    const center = {
-      x: toDisplayCoord(bounds.centerX),
-      y: toDisplayCoord(bounds.centerY),
-    };
-    const displayWidth = toDisplayCoord(bounds.width);
-    const displayHeight = toDisplayCoord(bounds.height);
-    const baseRotation = bounds.rotation ?? group.selection_rotation ?? 0;
-    const typographyScale = transientTypographyScales[String(group.id)] ?? 1;
-    const syncGroupVisualNode = (controlNode) => {
-      const visualNode = controlNode.getLayer()?.findOne(
-        candidate => candidate.id() === `group-visual-${group.id}`,
-      );
-      if (!visualNode) return;
-      visualNode.position(controlNode.position());
-      visualNode.rotation(controlNode.rotation());
-      visualNode.scale({ x: controlNode.scaleX(), y: controlNode.scaleY() });
-      visualNode.getLayer()?.batchDraw();
-    };
-    const resetTransientTransform = (konvaNode) => {
-      konvaNode.position(center);
-      konvaNode.rotation(baseRotation);
-      konvaNode.scale({ x: 1, y: 1 });
-      syncGroupVisualNode(konvaNode);
-      setTransientTypographyScales(current => {
-        if (current[String(group.id)] == null) return current;
-        const next = { ...current };
-        delete next[String(group.id)];
-        return next;
-      });
-    };
-    const commitGroupTransform = (konvaNode, { includeScaleAndRotation }) => {
-      const dx = toRealCoord(konvaNode.x() - center.x);
-      const dy = toRealCoord(konvaNode.y() - center.y);
-      const scale = includeScaleAndRotation
-        ? (Math.abs(konvaNode.scaleX()) + Math.abs(konvaNode.scaleY())) / 2
-        : 1;
-      const rotationDelta = includeScaleAndRotation
-        ? normalizeDegrees(konvaNode.rotation() - baseRotation)
-        : 0;
-      resetTransientTransform(konvaNode);
-      try {
-        commitPageLayout(currentLayout => transformGroup(currentLayout, group.id, {
-          dx,
-          dy,
-          rotationDelta,
-          scale,
-        }));
-      } catch (error) {
-        toast.error(error?.message || "無法變形群組");
-      } finally {
-        endCanvasGesture();
-      }
-    };
-
-    return (
-      <Fragment key={`group-pair-${group.id}`}>
-        <KonvaGroup
-          id={`group-visual-${group.id}`}
-          x={center.x}
-          y={center.y}
-          rotation={baseRotation}
-          listening={false}
-        >
-          <KonvaGroup rotation={-baseRotation}>
-            <KonvaGroup x={-center.x} y={-center.y}>
-              {flattenRenderNodes([node], { visibleOnly: true }).map(childNode => renderElementNode(childNode, {
-                group,
-                typographyScale,
-              }))}
-            </KonvaGroup>
-          </KonvaGroup>
-        </KonvaGroup>
-        <KonvaGroup
-          key={`group-${group.id}`}
-          id={`group-${group.id}`}
-          x={center.x}
-          y={center.y}
-          width={displayWidth}
-          height={displayHeight}
-          rotation={baseRotation}
-          scaleX={1}
-          scaleY={1}
-          draggable={activeTool === "select" && !groupLayerState.isLocked}
-          listening={activeTool === "select" && !groupLayerState.isLocked}
-          onClick={(event) => {
-            event.cancelBubble = true;
-            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-          }}
-          onTap={(event) => {
-            event.cancelBubble = true;
-            handleCanvasSelectGroup(group.id, { additive: !!event.evt?.shiftKey });
-          }}
-          onDblClick={(event) => {
-            event.cancelBubble = true;
-            enterGroup(group.id);
-          }}
-          onDblTap={(event) => {
-            event.cancelBubble = true;
-            enterGroup(group.id);
-          }}
-          onDragStart={() => beginCanvasGesture("group-drag")}
-          onDragMove={event => syncGroupVisualNode(event.currentTarget)}
-          onDragEnd={event => commitGroupTransform(event.currentTarget, { includeScaleAndRotation: false })}
-          onTransformStart={selectedRefs.length > 1
-            ? undefined
-            : () => beginCanvasGesture("group-transform")}
-          onTransform={(event) => {
-            syncGroupVisualNode(event.currentTarget);
-            const nodeScale = (
-              Math.abs(event.currentTarget.scaleX()) + Math.abs(event.currentTarget.scaleY())
-            ) / 2;
-            const safeScale = Number.isFinite(nodeScale) && nodeScale > 0 ? nodeScale : 1;
-            setTransientTypographyScales(current => (
-              current[String(group.id)] === safeScale
-                ? current
-                : { ...current, [String(group.id)]: safeScale }
-            ));
-          }}
-          onTransformEnd={selectedRefs.length > 1
-            ? undefined
-            : event => commitGroupTransform(event.currentTarget, { includeScaleAndRotation: true })}
-        >
-          <Rect
-            x={-displayWidth / 2}
-            y={-displayHeight / 2}
-            width={displayWidth}
-            height={displayHeight}
-            fill="rgba(255,255,255,0.001)"
-          />
-          {isHovered && !isSelected && (
-            <Rect
-              name={OBJECT_HOVER_OUTLINE_NAME}
-              x={-displayWidth / 2}
-              y={-displayHeight / 2}
-              width={displayWidth}
-              height={displayHeight}
-              fill="transparent"
-              stroke={OBJECT_HOVER_STROKE}
-              strokeWidth={OBJECT_HOVER_STROKE_WIDTH}
-              listening={false}
-            />
-          )}
-        </KonvaGroup>
-      </Fragment>
-    );
-  };
-
-  const renderActiveScopeNode = (node) => (
-    node.kind === "group" ? renderDirectGroupNode(node) : renderElementNode(node)
-  );
-
-  const renderPassiveLeaf = (node) => (
-    <KonvaGroup key={`passive-${node.type}-${node.id}`} opacity={0.25} listening={false}>
-      {renderElementNode(node, { disabled: true })}
-    </KonvaGroup>
-  );
 
   return (
     <div className={`mx-auto flex w-full max-w-[1042px] flex-col lg:-mx-4 lg:w-auto xl:mx-auto xl:w-full ${
@@ -3189,24 +2204,19 @@ export default function TemplateEditor() {
           ? "flex min-h-0 min-w-0 flex-1 flex-col max-md:w-full"
           : "flex flex-shrink-0 flex-col"}
         >
-          <div
-            ref={viewportRef}
-            style={{
-              cursor: activeTool === "select" ? "default" : "crosshair",
-              touchAction: isResponsiveCanvas ? "none" : undefined,
-            }}
-            className={`relative min-h-0 overflow-hidden border border-gray-300 bg-gray-100 select-none ${
-              isResponsiveCanvas
-                ? isPhoneEditor
-                  ? "h-full w-full rounded-none border-x-0"
-                  : "h-full w-full rounded"
-                : "h-[752px] w-[532px] bg-white"
-            }`}
-            data-guide="editor-canvas-viewport"
-            data-canvas-viewport={isResponsiveCanvas ? "responsive" : "desktop"}
-          >
-            <div className="absolute inset-0" data-guide="canvas-frame">
-            {!isPhoneEditor && (
+          <TemplateCanvas
+            ref={templateCanvasRef}
+            layoutModel={editorLayoutModel}
+            pageSessionKey={getEditorPageKey(currentPage)}
+            templateId={templateId}
+            pageIndex={currentPageIndex}
+            backgroundUrl={backgroundUrl}
+            viewportMode={viewportMode}
+            activeTool={activeTool}
+            isMultiSelectMode={isMultiSelectMode}
+            selectedRefs={selectedRefs}
+            isolationGroupId={isolationGroupId}
+            selectionOverlay={!isPhoneEditor ? (
               <SelectionQuickActions
                 selectedCount={selectedRefs.length}
                 isVisible={isSelectionVisible}
@@ -3223,202 +2233,19 @@ export default function TemplateEditor() {
                 onDelete={deleteSelectedElement}
                 touchFriendly={isResponsiveCanvas}
               />
-            )}
-            {isResponsiveCanvas && (
-              <div
-                className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-lg backdrop-blur"
-                role="toolbar"
-                aria-label="畫布縮放"
-              >
-                <button
-                  type="button"
-                  data-guide="zoom-out"
-                  aria-label="縮小畫布"
-                  disabled={!isCanvasCameraReady}
-                  onClick={() => zoomAtPoint(cameraRef.current.zoom / CANVAS_ZOOM_STEP)}
-                  className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
-                >
-                  −
-                </button>
-                <span className="min-w-12 text-center text-xs font-medium text-gray-600" aria-live="polite">
-                  {Math.round(activeCanvasCamera.zoom * 100)}%
-                </span>
-                <button
-                  type="button"
-                  data-guide="zoom-fit"
-                  disabled={!isCanvasCameraReady}
-                  onClick={fitToViewport}
-                  className="inline-flex min-h-11 min-w-20 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-40"
-                >
-                  適合畫面
-                </button>
-                <button
-                  type="button"
-                  data-guide="zoom-in"
-                  aria-label="放大畫布"
-                  disabled={!isCanvasCameraReady}
-                  onClick={() => zoomAtPoint(cameraRef.current.zoom * CANVAS_ZOOM_STEP)}
-                  className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
-                >
-                  ＋
-                </button>
-              </div>
-            )}
-            <Stage
-              ref={stageRef}
-              width={canvasStageSize.width}
-              height={canvasStageSize.height}
-              onClick={handleStageClick}
-              onTap={handleStageClick}
-              onMouseDown={handleStagePointerDown}
-              onMouseMove={(event) => {
-                handleStagePointerMove(event);
-                handleStageHoverMove(event);
-              }}
-              onMouseUp={handleStagePointerUp}
-              onMouseLeave={() => setHoveredRef(null)}
-              onTouchStart={handleStagePointerDown}
-              onTouchMove={handleStageTouchMove}
-              onTouchEnd={handleStageTouchEnd}
-              onTouchCancel={handleStageTouchEnd}
-              onDblClick={handleStageDoubleClick}
-              onDblTap={handleStageDoubleClick}
-            >
-              <Layer>
-                <KonvaGroup
-                  ref={pageCameraRef}
-                  id="page-camera"
-                  x={activeCanvasCamera.viewX}
-                  y={activeCanvasCamera.viewY}
-                  scaleX={activeCanvasCamera.zoom}
-                  scaleY={activeCanvasCamera.zoom}
-                >
-                  <KonvaGroup
-                    clipX={0}
-                    clipY={0}
-                    clipWidth={CANVAS_DISPLAY_WIDTH}
-                    clipHeight={CANVAS_DISPLAY_HEIGHT}
-                  >
-                {/* 白色底色 */}
-                <Rect
-                  x={0} y={0}
-                  width={CANVAS_DISPLAY_WIDTH}
-                  height={CANVAS_DISPLAY_HEIGHT}
-                  fill="#ffffff"
-                  listening={false}
-                />
-
-                {/* 背景圖 */}
-                {bgImage ? (
-                  <KonvaImage
-                    image={bgImage}
-                    x={0} y={0}
-                    width={CANVAS_DISPLAY_WIDTH}
-                    height={CANVAS_DISPLAY_HEIGHT}
-                    listening={false}
-                  />
-                ) : (
-                  <KonvaText
-                    x={0}
-                    y={CANVAS_DISPLAY_HEIGHT / 2 - 10}
-                    width={CANVAS_DISPLAY_WIDTH}
-                    text="請上傳背景圖"
-                    fontSize={14}
-                    fill="#CCCCCC"
-                    align="center"
-                    listening={false}
-                  />
-                )}
-
-                {/* 只讓目前 scope 的 direct nodes 可互動；隔離外葉節點維持原 z-slot 並淡化。 */}
-                {isolationGroupId == null ? (
-                  activeScopeCanvasNodes.map(renderActiveScopeNode)
-                ) : (
-                  <>
-                    {passiveSceneBefore.map(renderPassiveLeaf)}
-                    {activeScopeCanvasNodes.map(renderActiveScopeNode)}
-                    {passiveSceneAfter.map(renderPassiveLeaf)}
-                  </>
-                )}
-
-                {renderFooterNode(pageLayout?.footer)}
-
-                {marqueeDisplayRect && (
-                  <Rect
-                    x={marqueeDisplayRect.x}
-                    y={marqueeDisplayRect.y}
-                    width={marqueeDisplayRect.width}
-                    height={marqueeDisplayRect.height}
-                    fill="rgba(79,70,229,0.08)"
-                    stroke="#4F46E5"
-                    strokeWidth={1}
-                    strokeScaleEnabled={false}
-                    dash={[5, 3]}
-                    listening={false}
-                  />
-                )}
-                  </KonvaGroup>
-                </KonvaGroup>
-
-                {/* Transformer：顯示縮放/旋轉把手 */}
-                <Transformer
-                  ref={transformerRef}
-                  resizeEnabled={selectedRefs.length > 0 && canEditSelection}
-                  keepRatio={selectedRefs.length > 1 || selectedElement?.type === "group"
-                    || (selectedElement?.type === "photo" && isolationGroupId == null)}
-                  flipEnabled={false}
-                  rotateEnabled={selectedRefs.length > 0 && canEditSelection}
-                  centeredScaling={selectedElement?.type === "group"}
-                  onTransformStart={selectedRefs.length > 1 ? handleMultiTransformStart : undefined}
-                  onTransformEnd={selectedRefs.length > 1 ? handleMultiTransformEnd : undefined}
-                  borderStroke="#4F46E5"
-                  borderStrokeWidth={1}
-                  anchorFill="#4F46E5"
-                  anchorStroke="#ffffff"
-                  anchorStrokeWidth={1}
-                  anchorSize={isResponsiveCanvas ? 14 : 8}
-                  anchorStyleFunc={(anchor) => {
-                    anchor.hitStrokeWidth(isResponsiveCanvas ? 44 : 10);
-                  }}
-                  rotateAnchorOffset={isResponsiveCanvas ? 28 : 20}
-                  enabledAnchors={selectedRefs.length === 0 || !canEditSelection
-                    ? []
-                    : selectedRefs.length > 1 || selectedElement?.type === "group" || selectedElement?.type === "photo"
-                    // 群組與照片格只留四角把手等比縮放；隔離中的貼圖/文字可自由改比例
-                    ? ["top-left", "top-right", "bottom-left", "bottom-right"]
-                    : [
-                      "top-left", "top-center", "top-right",
-                      "middle-left", "middle-right",
-                      "bottom-left", "bottom-center", "bottom-right",
-                    ]}
-                  boundBoxFunc={(oldBox, newBox) => {
-                    const isShrinking = Math.abs(newBox.width) < Math.abs(oldBox.width)
-                      || Math.abs(newBox.height) < Math.abs(oldBox.height);
-                    const minimumScale = activeCanvasCamera.zoom;
-                    if (isShrinking
-                      && (Math.abs(newBox.width) < toDisplayCoord(60) * minimumScale
-                        || Math.abs(newBox.height) < toDisplayCoord(40) * minimumScale)) {
-                      return oldBox;
-                    }
-                    if (selectedRefs.length > 1
-                      && Math.abs((newBox.rotation ?? 0) - (oldBox.rotation ?? 0)) < 1e-6) {
-                      const resizeFactor = Math.min(
-                        Math.abs(newBox.width / oldBox.width),
-                        Math.abs(newBox.height / oldBox.height),
-                      );
-                      if (resizeFactor < 1 && resizeFactor < getMinimumMultiResizeFactor()) return oldBox;
-                    }
-                    return newBox;
-                  }}
-                />
-              </Layer>
-            </Stage>
-            </div>
-          </div>
-
-          <p className="mt-1.5 hidden text-xs text-gray-400 md:block">
-            提示：點選工具後在畫布上點擊放置；拖曳移動；四角拖曳調整大小；頂部圓點旋轉
-          </p>
+            ) : null}
+            onSelectRef={handleCanvasSelectRef}
+            onReplaceSelection={setSelectedRefs}
+            onClearSelection={handleCanvasClearSelection}
+            onActivateRef={handleActivateElement}
+            onEnterGroup={enterGroup}
+            onExitGroup={exitGroup}
+            onRequestInspectorTab={setInspectorTab}
+            onAddAtRealPoint={addElementAtRealPoint}
+            onUpdateElement={updateElement}
+            onCommitLayout={commitPageLayout}
+            onGestureStateChange={handleCanvasGestureStateChange}
+          />
         </div>
 
         {/* 右側：固定屬性／圖層檢查器 */}

@@ -13,6 +13,7 @@ python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界與既有債務清單
 
 # 前端
 cd frontend
@@ -45,10 +46,18 @@ npm run build                # production bundle（改前端後必跑）
   - `test_layout_groups.py`：v1/v2 group schema、safe canonical refs、任意深度 traversal、cycle 與
     malformed topology/link fallback
   - `test_material_text_box.py`：素材分析授權、namespace/revision、零寫入與 normalized box 契約
+  - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
+    使用者批次匯入、刪除的 transaction 邊界
+  - `test_backend_route_boundaries.py` + `scripts/check_backend_route_boundaries.py`：完整掃描
+    `backend/routers/**/*.py` 的 route inventory，禁止新路由把 commit、storage mutation 或重業務邏輯
+    留在 HTTP adapter；既有債務採精確 manifest，只能減少不能擴張
 - **前端**：lint / unit / render-parity / Playwright E2E；無 vitest / RTL 元件測試。
   `tests/e2e/illustrator-groups.spec.js` 在 Chromium/WebKit 覆蓋通用／巢狀群組、逐層 isolation、marquee、
   Ctrl/Cmd+G、固定 typography、isolation 內 undo，以及分析建立／重設普通文字框、不改 topology、
   invalid-link 修復與跨頁 stale response guard。
+  `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
+  `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
+  `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
 - **pre-commit**：`.pre-commit-config.yaml`（ruff check/format + mypy）；
   是否已在本機 install 不由 repo 保證
 - `pyproject.toml` 關閉 pytest cache provider（本 repo 的 Windows ACL 對

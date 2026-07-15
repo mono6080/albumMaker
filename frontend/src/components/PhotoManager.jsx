@@ -2,41 +2,17 @@ import { Fragment, useState, useRef, useEffect, useMemo } from "react";
 import { DndContext, DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import { X, RefreshCw, Images, ZoomIn, ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import toast from "react-hot-toast";
-import { updatePhotoMapping, uploadPhoto } from "../api/projectApi";
 import { buildPhotoThumbnailUrl, buildPhotoUrl } from "../api/urls";
 import ConfirmModal from "./ConfirmModal";
 import { Button, SegmentedControl } from "./ui";
 import PhotoSlotCard from "./PhotoSlotCard";
 import PhotoEditModal, { usePhotoEditModal } from "./PhotoEditModal";
 import { buildItems } from "../utils/photoUtils";
-import { maybeCompressImageFile } from "../utils/imageCompression";
-import { runWithConcurrency } from "../utils/concurrency";
-import { isRetryableUploadError, retryDelayMs } from "../utils/uploadRetry";
-import { getApiErrorMessage, isProjectTemplateRevisionError } from "../utils/apiError";
+import { DEFAULT_PHOTO_TRANSFORM, isPhotoTransformDirty } from "../utils/photoSaveModel";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
+import usePhotoAutoSave from "../hooks/usePhotoAutoSave";
 import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
-
-const PHOTO_UPLOAD_PARALLEL_LIMIT = 2;
-
-// 照片格重置（清空/替換/刪除）用的預設 transform；buildItems 產生的 item 一律
-// 帶齊這五個欄位，reset 位置也必須帶齊，否則下游要靠散落的 `?? 1` 補洞
-const DEFAULT_PHOTO_TRANSFORM = { scale: 1.0, offsetX: 0, offsetY: 0, brightness: 1.0, contrast: 1.0 };
-
-// 兩個 transform 是否需要重新儲存（scale / 位移 / 亮度 / 對比任一改變）
-function isTransformDirty(transform, origTransform) {
-  return (
-    Math.abs(transform.scale - origTransform.scale) > 0.001 ||
-    Math.abs(transform.offsetX - origTransform.offsetX) > 0.001 ||
-    Math.abs(transform.offsetY - origTransform.offsetY) > 0.001 ||
-    Math.abs((transform.brightness ?? 1) - (origTransform.brightness ?? 1)) > 0.001 ||
-    Math.abs((transform.contrast ?? 1) - (origTransform.contrast ?? 1)) > 0.001
-  );
-}
-
-function itemSlotKey(item) {
-  return `${item.templatePageId ?? `page-index:${item.pi}`}:${String(item.slotId)}`;
-}
 
 // dnd-kit 包裝：照片格同時是拖曳來源與放置目標。
 // 不展開 attributes（會加 aria-disabled 誤導輔助工具），只取 listeners。
@@ -66,15 +42,6 @@ function uploadStatusLabel(status) {
   return "上傳中";
 }
 
-function getUploadFailureMessage(error, count = 1) {
-  const detailMessage = getApiErrorMessage(error, "");
-  if (error?.response?.status === 413) {
-    return count > 1 ? `${count} 張照片超過大小上限，請壓縮後再上傳` : (detailMessage || "照片超過大小上限，請壓縮後再上傳");
-  }
-  if (detailMessage) return count > 1 ? `${count} 張照片上傳失敗：${detailMessage}` : detailMessage;
-  return count > 1 ? `${count} 張照片上傳失敗` : "照片上傳失敗";
-}
-
 // activePage：與預覽/文字面板同步的當前頁（null＝顯示全部頁，相容舊用法）；
 // 檢視範圍可切「本頁／整本」：顯示、多選上傳與空格計算跟著檢視走，
 // 整本模式可一次上傳全書照片、跨頁拖曳調換；存檔邏輯永遠涵蓋整本。
@@ -95,19 +62,30 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
     )
   , [pages]);
 
-  const [items, setItems] = useState(() => buildItems(allSlots, student));
+  const serverItems = useMemo(() => buildItems(allSlots, student), [allSlots, student]);
+  const {
+    items,
+    setItems,
+    itemsRef,
+    createPendingUploadId,
+    uploadStatus,
+    photoRefreshKey,
+    hasSavedPhotos,
+    hasUnsaved,
+    isBusy: isSaveBusy,
+  } = usePhotoAutoSave({
+    projectId,
+    templateRevision,
+    studentId,
+    serverItems,
+    onPhotoSaved,
+    onTemplateRevisionChanged,
+  });
   // aspectMap[rk] = naturalW/naturalH — set on img onLoad or for cached images
   const [aspectMap, setAspectMap] = useState({});
   const thumbImgRefs = useRef({});
   const [activeDragIndex, setActiveDragIndex] = useState(null); // dnd-kit 拖曳中的格子
   const [selectedIdx, setSelectedIdx] = useState(null); // mobile tap-to-select
-  // uploadStatus: null = 閒置；otherwise { phase, percent }
-  const [uploadStatus, setUploadStatus] = useState(null);
-  const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
-  // 本次進入頁面後是否成功存過照片：給「✓ 已儲存」正向回饋（與文字面板的存檔指示對齊）
-  const [hasSavedPhotos, setHasSavedPhotos] = useState(false);
-  const blockedTemplateRevisionRef = useRef(null);
-  const previousStudentIdRef = useRef(studentId);
   // 待確認刪除的格位索引（刪照片要重傳，先確認再刪）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(null);
   const [isTouchDevice] = useState(() =>
@@ -126,229 +104,12 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
   });
   const { openEditModal, closeEditModal } = photoEdit;
 
-  // Refs for auto-save (avoid stale closures)
-  const itemsRef = useRef(items);
-  useEffect(() => { itemsRef.current = items; }, [items]);
-  const onPhotoSavedRef = useRef(onPhotoSaved);
-  useEffect(() => { onPhotoSavedRef.current = onPhotoSaved; }, [onPhotoSaved]);
-  const onTemplateRevisionChangedRef = useRef(onTemplateRevisionChanged);
+  // revision recovery 會由 usePhotoAutoSave 保留 desired 後重建 items；此處只重置顯示層狀態。
   useEffect(() => {
-    onTemplateRevisionChangedRef.current = onTemplateRevisionChanged;
-  }, [onTemplateRevisionChanged]);
-  const autoSaveTimerRef = useRef(null);
-
-  // Debounced auto-save: fires 300ms after last items change
-  useEffect(() => {
-    const hasDirty = items.some(it =>
-      it.pendingFile !== null || it.serverPath !== it.origServerPath ||
-      isTransformDirty(it.transform, it.origTransform)
-    );
-    if (!hasDirty || !studentId) return;
-    if (blockedTemplateRevisionRef.current === templateRevision) return;
-    clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
-      const cur = itemsRef.current; // snapshot at fire time
-      try {
-        // Upload pending files, track returned server paths
-        const uploadedPaths = {};
-        const uploadFailures = {};
-        const pendingIndices = cur.map((it, i) => it.pendingFile ? i : -1).filter(i => i >= 0);
-        if (pendingIndices.length) {
-          const progressByIndex = new Map(pendingIndices.map(i => [i, 0]));
-          let completedUploads = 0;
-
-          const updateAggregateStatus = (phaseOverride) => {
-            const totalProgress = [...progressByIndex.values()].reduce((sum, pct) => sum + pct, 0);
-            const percent = Math.round(totalProgress / pendingIndices.length);
-            const phase = phaseOverride ?? (
-              percent >= 100 && completedUploads < pendingIndices.length ? "processing" : "uploading"
-            );
-            setUploadStatus({
-              phase,
-              percent,
-              completed: completedUploads,
-              total: pendingIndices.length,
-            });
-          };
-
-          updateAggregateStatus("uploading");
-
-          // 暫時性失敗（503 排隊滿、網路斷）自動重試——不重試的話照片會從格子消失，
-          // 老師得手動重選重傳；判斷與等待時間共用 utils/uploadRetry.js
-          const uploadWithRetry = async (i, fileToSend, onProgress) => {
-            const maxAttempts = 3;
-            for (let attempt = 1; ; attempt++) {
-              try {
-                return await uploadPhoto(
-                  projectId,
-                  templateRevision,
-                  studentId,
-                  cur[i].pi,
-                  cur[i].slotId,
-                  fileToSend,
-                  onProgress,
-                );
-              } catch (error) {
-                if (!isRetryableUploadError(error) || attempt >= maxAttempts) throw error;
-                await new Promise(resolve => setTimeout(resolve, retryDelayMs(error)));
-              }
-            }
-          };
-
-          const uploadOne = async (i) => {
-            try {
-              // 上傳前壓縮：手機原圖 4-12MB → ~0.5-1MB，傳輸省 ~80%
-              const fileToSend = await maybeCompressImageFile(cur[i].pendingFile);
-              const res = await uploadWithRetry(i, fileToSend, pct => {
-                progressByIndex.set(i, pct);
-                updateAggregateStatus();
-              });
-              progressByIndex.set(i, 100);
-              uploadedPaths[i] = res.data.path;
-            } catch (error) {
-              progressByIndex.set(i, 100);
-              uploadFailures[i] = error;
-            } finally {
-              completedUploads += 1;
-              updateAggregateStatus(completedUploads === pendingIndices.length ? "saving" : undefined);
-            }
-          };
-
-          await runWithConcurrency(pendingIndices, PHOTO_UPLOAD_PARALLEL_LIMIT, uploadOne);
-        }
-        // Save mapping for moved / transform-changed items (skip pending — just uploaded)
-        const pagesMap = {};
-        for (const it of cur) {
-          if (it.pendingFile) continue;
-          const dirty = it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
-          if (!dirty) continue;
-          if (!pagesMap[it.pi]) pagesMap[it.pi] = {};
-          pagesMap[it.pi][String(it.slotId)] = it.serverPath === null ? null : {
-            path: it.serverPath, scale: it.transform.scale,
-            offset_x: it.transform.offsetX, offset_y: it.transform.offsetY,
-            brightness: it.transform.brightness, contrast: it.transform.contrast,
-          };
-        }
-        // 儲存 mapping；renames 保留相容舊後端，新後端交換照片不再重命名 R2 物件
-        let renames = {};
-        if (Object.keys(pagesMap).length) {
-          const res = await updatePhotoMapping(projectId, templateRevision, studentId, pagesMap);
-          renames = res.data.renames || {};
-        }
-
-        // Sync orig values in-place so dirty flags clear without a full load().
-        // This prevents the parent's load() → buildItems() from reverting changes
-        // the user made between when the auto-save fired and when it completed.
-        setItems(prev => prev.map((it, i) => {
-          const snap = cur[i];
-          if (!snap) return it;
-          if (snap.pendingFile !== null && uploadedPaths[i] !== undefined) {
-            // Guard: ignore if the user already replaced the file mid-upload
-            if (it.pendingFile !== snap.pendingFile) return it;
-            if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
-            return {
-              ...it,
-              pendingFile: null,
-              previewUrl: null,
-              serverPath: uploadedPaths[i],
-              origServerPath: uploadedPaths[i],
-              origPi: snap.pi,
-              origSlotId: snap.slotId,
-              origTransform: { ...snap.transform },
-            };
-          }
-          if (snap.pendingFile !== null && uploadFailures[i]) {
-            if (it.pendingFile !== snap.pendingFile) return it;
-            if (isProjectTemplateRevisionError(uploadFailures[i])) {
-              blockedTemplateRevisionRef.current = templateRevision;
-              return it;
-            }
-            if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
-            return {
-              ...it,
-              pendingFile: null,
-              previewUrl: null,
-              serverPath: snap.origServerPath,
-              origPi: snap.origPi,
-              origSlotId: snap.origSlotId,
-              transform: { ...snap.origTransform },
-            };
-          }
-          if (snap.pendingFile !== null) return it; // upload was attempted but failed
-          // 舊後端可能回傳重命名後路徑；新後端維持原路徑以避免 R2 copy/delete。
-          const renamedPath = renames[String(snap.pi)]?.[String(snap.slotId)];
-          const syncedPath = renamedPath ?? snap.serverPath;
-          return {
-            ...it,
-            serverPath: syncedPath,
-            origServerPath: syncedPath,
-            origPi: syncedPath ? snap.pi : null,
-            origSlotId: syncedPath ? snap.slotId : null,
-            origTransform: { ...snap.transform },
-          };
-        }));
-
-        if (Object.keys(uploadedPaths).length || Object.keys(pagesMap).length) {
-          setPhotoRefreshKey(Date.now());
-          setHasSavedPhotos(true);
-          onPhotoSavedRef.current?.(); // lightweight: just refresh preview timestamp
-        }
-        const failureList = Object.values(uploadFailures);
-        if (failureList.length) {
-          toast.error(getUploadFailureMessage(failureList[0], failureList.length));
-          if (failureList.some(isProjectTemplateRevisionError)) {
-            void onTemplateRevisionChangedRef.current?.();
-          }
-        }
-      } catch (error) {
-        toast.error(getUploadFailureMessage(error));
-      } finally {
-        setUploadStatus(null);
-      }
-    }, 300);
-  }, [items, studentId, projectId, templateRevision]);
-
-  // Re-init when student changes
-  useEffect(() => {
-    const shouldPreservePending = previousStudentIdRef.current === studentId;
-    previousStudentIdRef.current = studentId;
-    setItems(prev => {
-      const pendingBySlot = shouldPreservePending
-        ? new Map(
-            prev
-              .filter(item => item.pendingFile)
-              .map(item => [itemSlotKey(item), item]),
-          )
-        : new Map();
-      const retainedPreviewUrls = new Set();
-      const nextItems = buildItems(allSlots, student).map(item => {
-        const pendingItem = pendingBySlot.get(itemSlotKey(item));
-        if (!pendingItem) return item;
-        if (pendingItem.previewUrl) retainedPreviewUrls.add(pendingItem.previewUrl);
-        return {
-          ...item,
-          pendingFile: pendingItem.pendingFile,
-          previewUrl: pendingItem.previewUrl,
-          transform: { ...pendingItem.transform },
-        };
-      });
-      prev.forEach(item => {
-        if (item.previewUrl && !retainedPreviewUrls.has(item.previewUrl)) {
-          URL.revokeObjectURL(item.previewUrl);
-        }
-      });
-      return nextItems;
-    });
     setAspectMap({});
     closeEditModal();
     setSelectedIdx(null);
-  }, [student, studentId, allSlots, closeEditModal]);
-
-  useEffect(() => {
-    if (blockedTemplateRevisionRef.current !== templateRevision) {
-      blockedTemplateRevisionRef.current = null;
-    }
-  }, [templateRevision]);
+  }, [studentId, templateRevision, closeEditModal]);
 
   // Handle cached images: onLoad won't fire if img is already complete
   useEffect(() => {
@@ -363,15 +124,10 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
     }
   }, [items]);
 
-  useEffect(() => () => {
-    setItems(prev => { prev.forEach(it => { if (it.previewUrl) URL.revokeObjectURL(it.previewUrl); }); return prev; });
-  }, []);
-
   // ── Dirty detection ───────────────────────────────────────────────────────
   const isDirty = (it) =>
-    it.pendingFile !== null || it.serverPath !== it.origServerPath || isTransformDirty(it.transform, it.origTransform);
+    it.pendingFile !== null || it.serverPath !== it.origServerPath || isPhotoTransformDirty(it.transform, it.origTransform);
   const hasDirty = items.some(isDirty);
-  const isSaveBusy = hasDirty || uploadStatus !== null;
 
   useEffect(() => {
     onSaveStateChange?.(isSaveBusy);
@@ -379,14 +135,15 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
   }, [isSaveBusy, onSaveStateChange]);
 
   useEffect(() => {
-    if (!isSaveBusy) return undefined;
+    const shouldWarnBeforeUnload = isSaveBusy || hasUnsaved;
+    if (!shouldWarnBeforeUnload) return undefined;
     const warnBeforeUnload = event => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [isSaveBusy]);
+  }, [hasUnsaved, isSaveBusy]);
   // 檢視範圍：page＝跟著全域頁碼、book＝整本（一次上傳全書、跨頁調換用）
   const [viewScope, setViewScope] = useState("page");
   const effectiveActivePage = viewScope === "book" ? null : activePage;
@@ -421,7 +178,7 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
   // ── File helpers ──────────────────────────────────────────────────────────
   function assignFile(arr, i, file) {
     if (arr[i].previewUrl) URL.revokeObjectURL(arr[i].previewUrl);
-    arr[i] = { ...arr[i], pendingFile: file, previewUrl: URL.createObjectURL(file),
+    arr[i] = { ...arr[i], pendingUploadId: createPendingUploadId(), pendingFile: file, previewUrl: URL.createObjectURL(file),
       serverPath: null, origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
   }
 
@@ -456,7 +213,7 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
       const next = [...prev];
       const it = { ...next[idx] };
       if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
-      next[idx] = { ...it, pendingFile: file, previewUrl: URL.createObjectURL(file),
+      next[idx] = { ...it, pendingUploadId: createPendingUploadId(), pendingFile: file, previewUrl: URL.createObjectURL(file),
         serverPath: null, origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
@@ -468,7 +225,7 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
       const next = [...prev];
       const it = { ...next[idx] };
       if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
-      next[idx] = { ...it, pendingFile: null, previewUrl: null, serverPath: null,
+      next[idx] = { ...it, pendingUploadId: null, pendingFile: null, previewUrl: null, serverPath: null,
         origPi: null, origSlotId: null, transform: { ...DEFAULT_PHOTO_TRANSFORM } };
       return next;
     });
@@ -484,8 +241,10 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
       const next = [...prev];
       const a = prev[i], b = prev[j];
       next[i] = { ...a, origPi: b.origPi, origSlotId: b.origSlotId, serverPath: b.serverPath,
+        pendingUploadId: b.pendingUploadId ?? null,
         pendingFile: b.pendingFile, previewUrl: b.previewUrl, transform: { ...b.transform } };
       next[j] = { ...b, origPi: a.origPi, origSlotId: a.origSlotId, serverPath: a.serverPath,
+        pendingUploadId: a.pendingUploadId ?? null,
         pendingFile: a.pendingFile, previewUrl: a.previewUrl, transform: { ...a.transform } };
       return next;
     });

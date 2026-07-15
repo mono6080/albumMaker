@@ -145,6 +145,99 @@ test("student photo manager keeps a pending file while refreshing a newer templa
 });
 
 
+test("student photo manager reconciles a moved pending photo after delayed POST response", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    browserName === "webkit",
+    "Playwright WebKit route.fetch 無法重送原 multipart boundary，會在後端先得到 415",
+  );
+  const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
+  const templateName = `E2E 延遲照片模板 ${Date.now()}`;
+  const projectName = `E2E 延遲照片專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(page, projectName, templateId);
+  await addStudents(page, project.id, ["Delayed Alice"]);
+
+  const initialDetail = await fetchProjectDetail(page, project.id);
+  const student = initialDetail.students.find(item => item.name === "Delayed Alice");
+  expect(student).toBeTruthy();
+
+  let releaseDelayedResponse;
+  const delayedResponseGate = new Promise(resolve => { releaseDelayedResponse = resolve; });
+  let markBackendWriteComplete;
+  const backendWriteComplete = new Promise(resolve => { markBackendWriteComplete = resolve; });
+  let uploadRequestCount = 0;
+  await page.route(
+    `**/api/projects/${project.id}/students/${student.id}/pages/0/photos/1?*`,
+    async route => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      uploadRequestCount += 1;
+      const response = await route.fetch();
+      const body = await response.body();
+      markBackendWriteComplete(JSON.parse(body.toString()).path);
+      await delayedResponseGate;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        body,
+      });
+    },
+  );
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await expect(page.getByText("照片管理")).toBeVisible();
+  const firstCell = page.locator('[data-guide="student-photo-cell"][data-slot-id="1"]');
+  const secondCell = page.locator('[data-guide="student-photo-cell"][data-slot-id="2"]');
+
+  await firstCell
+    .locator('input[type="file"]:not([multiple])')
+    .setInputFiles({ name: "delayed-move.png", mimeType: "image/png", buffer: redPng });
+  const uploadedPath = await backendWriteComplete;
+  expect(uploadedPath).toMatch(/delayed-move_[0-9a-f]{16}\.png$/);
+
+  // 後端已寫入 slot 1、瀏覽器仍等 POST response；此時把同一 token 移到 slot 2。
+  await dragWithSteps(page, firstCell, secondCell);
+  await expect(firstCell.locator('[data-guide="photo-slot-image"]')).toHaveCount(0);
+  await expect(secondCell.locator('[data-guide="photo-slot-image"]')).toHaveAttribute("src", /^blob:/);
+
+  const mappingResponse = page.waitForResponse(response => (
+    response.url().includes(`/students/${student.id}/photos/mapping`)
+    && response.request().method() === "PUT"
+    && response.ok()
+  ));
+  releaseDelayedResponse();
+  await mappingResponse;
+
+  await expect.poll(async () => {
+    const detail = await fetchProjectDetail(page, project.id);
+    return detail.students.find(item => item.id === student.id)?.pages_data?.[0]?.photos ?? {};
+  }, { timeout: 20_000 }).toEqual({
+    "2": expect.objectContaining({ path: uploadedPath }),
+  });
+  await expect(secondCell.locator('[data-guide="photo-slot-image"]')).toHaveAttribute(
+    "src",
+    /\/photos\/2\/thumbnail\?v=.*delayed-move_[0-9a-f]{16}\.png/,
+  );
+  const oldSlotResponse = await page.request.get(
+    `/api/projects/${project.id}/students/${student.id}/pages/0/photos/1`,
+  );
+  const movedSlotResponse = await page.request.get(
+    `/api/projects/${project.id}/students/${student.id}/pages/0/photos/2`,
+  );
+  expect(oldSlotResponse.status()).toBe(404);
+  expect(movedSlotResponse.ok()).toBeTruthy();
+  await expect(page.getByText("✓ 已儲存")).toBeVisible();
+  expect(uploadRequestCount).toBe(1);
+});
+
+
 test("student multi-select upload only fills remaining empty slots", async ({ page }) => {
   const layout = layoutWithPhotoSlots(await loadFixtureLayout(), 4);
   const templateName = `E2E 多選模板 ${Date.now()}`;

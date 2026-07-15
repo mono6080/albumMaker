@@ -1,7 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, resolve, relative } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import {
+  captureGuideScreenshot,
+  imagePathOf,
+  loadGuideScreenshots,
+  markerBoxStyle,
+  relativeWebPath,
+  requireOk,
+  screenshotTargetMeta,
+} from "./guide_artifacts.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const frontendRequire = createRequire(resolve(repoRoot, "frontend/package.json"));
@@ -17,18 +27,8 @@ const apiUrl = "http://127.0.0.1:8765/api";
 const adminPassword = process.env.GUIDE_ADMIN_PASSWORD ?? "admin";
 
 const realToDisplay = value => Math.round(value * 530 / 794);
-const roundPercent = value => Math.round(value * 100) / 100;
-const clampPercent = value => Math.max(0, Math.min(100, value));
-
 function docsRelative(filePath) {
-  return relative(docsDir, filePath).replaceAll("\\", "/");
-}
-
-async function requireOk(response, label) {
-  if (!response.ok()) {
-    throw new Error(`${label} failed: ${response.status()} ${await response.text()}`);
-  }
-  return response;
+  return relativeWebPath(docsDir, filePath);
 }
 
 async function createBackgroundImage(browser) {
@@ -154,104 +154,32 @@ async function createDemoTemplate(context, backgroundPath) {
   return { templateId: template.id, templateName };
 }
 
-function percentBox(rawBox, viewport, padding = 4) {
-  const paddedX = Math.max(0, rawBox.x - padding);
-  const paddedY = Math.max(0, rawBox.y - padding);
-  const paddedRight = Math.min(viewport.width, rawBox.x + rawBox.width + padding);
-  const paddedBottom = Math.min(viewport.height, rawBox.y + rawBox.height + padding);
-
-  return {
-    x: roundPercent(clampPercent(paddedX / viewport.width * 100)),
-    y: roundPercent(clampPercent(paddedY / viewport.height * 100)),
-    width: roundPercent(clampPercent((paddedRight - paddedX) / viewport.width * 100)),
-    height: roundPercent(clampPercent((paddedBottom - paddedY) / viewport.height * 100)),
-  };
-}
-
-async function resolveTargetBox(page, marker) {
-  if (marker.box) return marker.box;
-
-  const viewport = page.viewportSize() ?? { width: 1440, height: 1000 };
-  let rawBox = null;
-
-  if (marker.selector) {
-    rawBox = await page.locator(marker.selector).first().boundingBox();
-  } else if (marker.relativeTo && marker.rect) {
-    const baseBox = await page.locator(marker.relativeTo).first().boundingBox();
-    if (baseBox) {
-      rawBox = {
-        x: baseBox.x + marker.rect.x,
-        y: baseBox.y + marker.rect.y,
-        width: marker.rect.width,
-        height: marker.rect.height,
-      };
-    }
-  }
-
-  return rawBox ? percentBox(rawBox, viewport, marker.padding ?? 4) : null;
-}
-
-async function resolveMarkers(page, markers) {
-  const resolved = [];
-  for (const marker of markers) {
-    const box = await resolveTargetBox(page, marker);
-    if (box) {
-      resolved.push({ n: marker.n, text: marker.text, box });
-    }
-  }
-  return resolved;
-}
-
 async function screenshot(page, name, options = {}) {
   const { markers = [], ...screenshotOptions } = options;
-  const target = resolve(assetDir, name);
-  const resolvedMarkers = await resolveMarkers(page, markers);
-  await page.screenshot({ path: target, fullPage: false, ...screenshotOptions });
-  return { path: target, markers: resolvedMarkers };
+  return captureGuideScreenshot({
+    page,
+    assetDir,
+    name,
+    markers,
+    screenshotOptions,
+  });
 }
 
 async function screenshotsFromDisk() {
-  let targetMeta = {};
-  try {
-    targetMeta = JSON.parse(await readFile(targetMetaPath, "utf8"));
-  } catch {
-    targetMeta = {};
-  }
-
-  const imagePaths = {
-    list: "01-template-list.png",
-    editor: "02-editor-overview.png",
-    pages: "03-page-tools.png",
-    photoTool: "04-photo-tool.png",
-    photo: "05-photo-properties.png",
-    textContent: "06-text-content.png",
-    text: "07-text-shadow.png",
-    spread: "08-spread-preview.png",
-  };
-
-  return Object.fromEntries(
-    Object.entries(imagePaths).map(([key, fileName]) => [
-      key,
-      {
-        path: resolve(assetDir, fileName),
-        markers: targetMeta[key] ?? [],
-      },
-    ]),
-  );
-}
-
-function screenshotTargetMeta(screenshots) {
-  return Object.fromEntries(
-    Object.entries(screenshots).map(([key, image]) => [key, image.markers ?? []]),
-  );
-}
-
-function imagePathOf(image) {
-  return typeof image === "string" ? image : image.path;
-}
-
-function markerBoxStyle(box) {
-  return `left:${box.x}%;top:${box.y}%;width:${box.width}%;height:${box.height}%;`;
+  return loadGuideScreenshots({
+    assetDir,
+    targetMetaPath,
+    imagePaths: {
+      list: "01-template-list.png",
+      editor: "02-editor-overview.png",
+      pages: "03-page-tools.png",
+      photoTool: "04-photo-tool.png",
+      photo: "05-photo-properties.png",
+      textContent: "06-text-content.png",
+      text: "07-text-shadow.png",
+      spread: "08-spread-preview.png",
+    },
+  });
 }
 
 function stepFigure(image, caption, markers = image.markers ?? []) {

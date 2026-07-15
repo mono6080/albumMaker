@@ -1,8 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve, relative } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import {
+  captureGuideScreenshot,
+  loadGuideScreenshots,
+  markerBoxStyle,
+  relativeWebPath,
+  requireOk,
+  screenshotTargetMeta,
+} from "./guide_artifacts.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const frontendRequire = createRequire(resolve(repoRoot, "frontend/package.json"));
@@ -20,76 +29,18 @@ const adminPassword = process.env.GUIDE_ADMIN_PASSWORD ?? "admin";
 const teacherPassword = "teacher-guide-123";
 const A4_WIDTH = 794;
 const A4_HEIGHT = 1123;
-const roundPercent = value => Math.round(value * 100) / 100;
-const clampPercent = value => Math.max(0, Math.min(100, value));
-
 function docsRelative(filePath) {
-  return relative(docsDir, filePath).replaceAll("\\", "/");
-}
-
-async function requireOk(response, label) {
-  if (!response.ok()) {
-    throw new Error(`${label} failed: ${response.status()} ${await response.text()}`);
-  }
-  return response;
-}
-
-function percentBox(rawBox, viewport, padding = 4) {
-  const paddedX = Math.max(0, rawBox.x - padding);
-  const paddedY = Math.max(0, rawBox.y - padding);
-  const paddedRight = Math.min(viewport.width, rawBox.x + rawBox.width + padding);
-  const paddedBottom = Math.min(viewport.height, rawBox.y + rawBox.height + padding);
-  return {
-    x: roundPercent(clampPercent(paddedX / viewport.width * 100)),
-    y: roundPercent(clampPercent(paddedY / viewport.height * 100)),
-    width: roundPercent(clampPercent((paddedRight - paddedX) / viewport.width * 100)),
-    height: roundPercent(clampPercent((paddedBottom - paddedY) / viewport.height * 100)),
-  };
-}
-
-async function resolveTargetBox(page, marker) {
-  if (marker.box) return marker.box;
-  const viewport = page.viewportSize() ?? { width: 1440, height: 1000 };
-  let rawBox = null;
-  if (marker.selector) {
-    rawBox = await page.locator(marker.selector).first().boundingBox();
-  } else if (marker.relativeTo && (marker.rect || marker.templateRect)) {
-    const baseBox = await page.locator(marker.relativeTo).first().boundingBox();
-    if (baseBox) {
-      if (marker.templateRect) {
-        rawBox = {
-          x: baseBox.x + marker.templateRect.x * baseBox.width / A4_WIDTH,
-          y: baseBox.y + marker.templateRect.y * baseBox.height / A4_HEIGHT,
-          width: marker.templateRect.width * baseBox.width / A4_WIDTH,
-          height: marker.templateRect.height * baseBox.height / A4_HEIGHT,
-        };
-      } else {
-        rawBox = {
-          x: baseBox.x + marker.rect.x,
-          y: baseBox.y + marker.rect.y,
-          width: marker.rect.width,
-          height: marker.rect.height,
-        };
-      }
-    }
-  }
-  return rawBox ? percentBox(rawBox, viewport, marker.padding ?? 4) : null;
-}
-
-async function resolveMarkers(page, markers) {
-  const resolved = [];
-  for (const marker of markers) {
-    const box = await resolveTargetBox(page, marker);
-    if (box) resolved.push({ n: marker.n, text: marker.text, box });
-  }
-  return resolved;
+  return relativeWebPath(docsDir, filePath);
 }
 
 async function screenshot(page, name, markers = []) {
-  const target = resolve(assetDir, name);
-  const resolvedMarkers = await resolveMarkers(page, markers);
-  await page.screenshot({ path: target, fullPage: false });
-  return { path: target, markers: resolvedMarkers };
+  return captureGuideScreenshot({
+    page,
+    assetDir,
+    name,
+    markers,
+    templateSize: { width: A4_WIDTH, height: A4_HEIGHT },
+  });
 }
 
 async function waitForPreviewImage(page, selector = '[data-guide="student-page-preview"] img') {
@@ -103,10 +54,6 @@ async function waitForPreviewImage(page, selector = '[data-guide="student-page-p
     { timeout: 30000 },
   );
   await page.waitForTimeout(250);
-}
-
-function markerBoxStyle(box) {
-  return `left:${box.x}%;top:${box.y}%;width:${box.width}%;height:${box.height}%;`;
 }
 
 function imageDataUri(filePath) {
@@ -455,34 +402,20 @@ const GUIDE_MARKERS = {
 };
 
 async function screenshotsFromDisk() {
-  let targetMeta = {};
-  try {
-    targetMeta = JSON.parse(await readFile(targetMetaPath, "utf8"));
-  } catch {
-    targetMeta = {};
-  }
-  const imagePaths = {
-    projectList: "01-project-list.png",
-    projectCreate: "02-project-create.png",
-    reviewWorkbench: "03-review-workbench.png",
-    rosterModal: "04-roster-modal.png",
-    classEdit: "05-class-edit.png",
-    classPhotoModal: "06-class-photo-modal.png",
-    studentEdit: "07-student-edit.png",
-    reviewComplete: "08-review-complete.png",
-  };
-  return Object.fromEntries(
-    Object.entries(imagePaths).map(([key, fileName]) => [
-      key,
-      { path: resolve(assetDir, fileName), markers: targetMeta[key] ?? [] },
-    ]),
-  );
-}
-
-function screenshotTargetMeta(screenshots) {
-  return Object.fromEntries(
-    Object.entries(screenshots).map(([key, image]) => [key, image.markers ?? []]),
-  );
+  return loadGuideScreenshots({
+    assetDir,
+    targetMetaPath,
+    imagePaths: {
+      projectList: "01-project-list.png",
+      projectCreate: "02-project-create.png",
+      reviewWorkbench: "03-review-workbench.png",
+      rosterModal: "04-roster-modal.png",
+      classEdit: "05-class-edit.png",
+      classPhotoModal: "06-class-photo-modal.png",
+      studentEdit: "07-student-edit.png",
+      reviewComplete: "08-review-complete.png",
+    },
+  });
 }
 
 async function buildPdf(screenshots) {

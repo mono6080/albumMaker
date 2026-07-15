@@ -141,8 +141,8 @@ function BatchRouteRedirect() {
 // 學生編輯必須隨 studentId remount：否則快速連續切換時，
 // 上一位學生的文字/照片狀態會以新學生的 id 存檔（資料覆寫）
 function StudentEditRoute() {
-  const { studentId } = useParams();
-  return <StudentEdit key={studentId} />;
+  const { projectId, studentId } = useParams();
+  return <StudentEdit key={`${projectId}:${studentId}`} />;
 }
 
 function AppContent() {

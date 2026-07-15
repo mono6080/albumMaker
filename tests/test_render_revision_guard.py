@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from database import Project, SessionLocal, Student, Template, TemplatePage, init_db
 from routers.projects import crud as project_crud
-from services import student_render_service
+from services import project_lifecycle_service, student_render_service
 from services.output_keys import build_combined_stem, get_project_output_prefix
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
@@ -306,6 +306,7 @@ def test_rename_or_delete_waits_for_publish_then_invalidates_canonical_output(
     storage = _BlockingPublishStorage(tmp_path.parent / f"rl-{mutation}" / "u")
     monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
+    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
     _patch_fast_render(monkeypatch, lambda *args, **kwargs: ["print-image"])
 
     with started_client() as client:
@@ -378,6 +379,7 @@ def test_student_delete_holds_project_lock_until_photo_cleanup_finishes(monkeypa
     )
     storage = _BlockingPhotoCleanupStorage(tmp_path / "uploads", photo_prefix)
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
+    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
     photo_key = f"{photo_prefix}/existing.jpg"
     storage.put(photo_key, b"photo")
 
@@ -422,6 +424,7 @@ def test_student_delete_stays_successful_when_output_cleanup_fails(monkeypatch, 
     seeded = _seed_render_target()
     storage = _FailingOutputCleanupStorage(tmp_path / "uploads")
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
+    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
     photo_prefix = (
         f"projects/proj{seeded['project_id']}/photos/student{seeded['student_id']}"
     )
@@ -450,6 +453,7 @@ def test_deleted_student_id_reuse_cannot_publish_old_render(monkeypatch, tmp_pat
     storage = LocalStorageAdapter(tmp_path / "uploads")
     monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
+    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
 
     db = SessionLocal()
     try:
@@ -526,6 +530,7 @@ def test_rename_stays_successful_when_output_cleanup_fails(
     seeded = _seed_render_target()
     storage = _FailingOutputCleanupStorage(tmp_path / "uploads")
     monkeypatch.setattr(project_crud, "get_storage", lambda: storage)
+    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
 
     with started_client() as client:
         login(client)

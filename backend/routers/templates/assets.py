@@ -2,15 +2,11 @@
 # 背景圖與貼圖素材的上傳/讀取，
 # 路由層僅負責 HTTP 接收與回應，storage key 計算委派給 services/file_service
 
-import io
 import hashlib
 import json
 import logging
-import re
-from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy.orm import Session
 
@@ -20,14 +16,12 @@ from database import User, get_db
 from services.file_service import (
     content_versioned_filename,
     get_background_key,
-    get_sticker_key,
     read_and_validate_image,
 )
-from services.layout_groups import canonical_id
-from services.material_text_box import (
-    analyze_material_text_box,
-    decode_rgba_image,
-    rgba_asset_revision,
+from services.template_asset_service import (
+    serve_sticker,
+    store_sticker,
+    suggest_material_text_box as suggest_material_text_box_use_case,
 )
 from services.storage import get_storage
 from services.template_project_sync_service import commit_direct_template_render_change
@@ -44,9 +38,6 @@ class MaterialTextBoxSuggestionRequest(BaseModel):
     path: str = Field(min_length=1, max_length=1024)
     source_revision: str | None = None
     request_token: str = Field(max_length=128)
-
-
-_ASSET_REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 # ── 背景圖 ────────────────────────────────────────────────────────────────────
@@ -155,67 +146,7 @@ async def upload_sticker(
 ):
     """上傳貼圖素材至模板專屬目錄。"""
     file_bytes = await read_and_validate_image(file, max_mb=10)
-    try:
-        with Image.open(io.BytesIO(file_bytes)) as uploaded_image:
-            rgba = decode_rgba_image(uploaded_image)
-            image_width, image_height = rgba.size
-            asset_revision = rgba_asset_revision(rgba)
-    except UnidentifiedImageError:
-        raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
-
-    # 貼圖採內容版本 key：同名新檔不再覆寫已被既有模板 layout 引用的像素。
-    # 真正套用新版本要等編輯器按「儲存」把新 path 寫進 snapshot。
-    versioned_filename = content_versioned_filename(
-        file.filename,
-        asset_revision,
-        "sticker",
-    )
-    key = get_sticker_key(template_id, versioned_filename)
-    get_storage().put(key, file_bytes)
-    return {
-        "path": key,
-        "filename": PurePosixPath(key).name,
-        "width": image_width,
-        "height": image_height,
-        "asset_revision": asset_revision,
-    }
-
-
-def _is_canonical_template_sticker_key(template_id: int, path: str) -> bool:
-    if "\\" in path or path.startswith("/"):
-        return False
-    parts = path.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        return False
-    prefix = get_sticker_key(template_id, "")
-    if not path.startswith(prefix):
-        return False
-    relative_name = path[len(prefix):]
-    if "/" in relative_name:
-        return False
-    return get_sticker_key(template_id, PurePosixPath(relative_name).name) == path
-
-
-def _matches_saved_sticker(page_layout: dict, sticker_id, path: str) -> bool:
-    try:
-        requested_id = canonical_id(sticker_id)
-    except ValueError:
-        return False
-    matches = []
-    for sticker in page_layout.get("stickers") or []:
-        if not isinstance(sticker, dict):
-            continue
-        try:
-            if canonical_id(sticker.get("id")) == requested_id:
-                matches.append(sticker)
-        except ValueError:
-            continue
-    if len(matches) > 1:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "ambiguous_sticker_id", "message": "貼圖 ID 不唯一"},
-        )
-    return len(matches) == 1 and matches[0].get("path") == path
+    return store_sticker(template_id, file.filename, file_bytes)
 
 
 @router.post("/{template_id}/pages/{page_id}/material-text-box-suggestion")
@@ -227,59 +158,15 @@ def suggest_material_text_box(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """Analyze one protected sticker without mutating DB or storage."""
-    template_page = get_template_page_or_404(page_id, template_id, db)
-    page_layout = json.loads(template_page.layout_json)
-    path = payload.path
-    try:
-        canonical_id(payload.sticker_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_sticker_reference", "message": "貼圖 ID 格式不正確"},
-        ) from exc
-    if not (
-        _is_canonical_template_sticker_key(template_id, path)
-        or _matches_saved_sticker(page_layout, payload.sticker_id, path)
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_sticker_reference", "message": "貼圖不屬於此模板"},
-        )
-    if payload.source_revision is not None and not _ASSET_REVISION_PATTERN.fullmatch(
-        payload.source_revision
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_asset_revision", "message": "素材版本格式不正確"},
-        )
-
-    try:
-        with get_storage().open_image(path) as sticker_image:
-            rgba = decode_rgba_image(sticker_image)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="找不到貼圖") from exc
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "material_image_unreadable", "message": "貼圖無法解析"},
-        ) from exc
-
-    actual_revision = rgba_asset_revision(rgba)
-    if payload.source_revision is not None and payload.source_revision != actual_revision:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "asset_revision_stale",
-                "message": "素材內容已變更，請重新分析",
-                "source_revision": actual_revision,
-            },
-        )
-
-    return {
-        **analyze_material_text_box(rgba),
-        "source_revision": actual_revision,
-        "request_token": payload.request_token,
-    }
+    return suggest_material_text_box_use_case(
+        db,
+        template_id,
+        page_id,
+        sticker_id=payload.sticker_id,
+        path=payload.path,
+        source_revision=payload.source_revision,
+        request_token=payload.request_token,
+    )
 
 
 @router.get("/{template_id}/stickers/{filename}")
@@ -289,8 +176,4 @@ def get_sticker(
     _: User = Depends(get_current_user),
 ):
     """回傳指定貼圖素材檔案。"""
-    storage = get_storage()
-    key = get_sticker_key(template_id, filename)
-    if not storage.exists(key):
-        raise HTTPException(status_code=404, detail="找不到貼圖")
-    return storage.serve(key)
+    return serve_sticker(template_id, filename)

@@ -17,8 +17,9 @@
 - **role=none 拒絕登入**；密碼建立與重設最短 8 字元
 - **SECRET_KEY**：環境變數；`PRODUCTION=1` 未設定則拒絕啟動
 - 授權輔助：`Depends(get_current_user)` 驗登入、`Depends(require_role("admin", ...))`
-  驗角色（不符回 403）；專案層級用 `_helpers.py` 的
-  `assert_project_readable` / `assert_project_writable`
+  驗角色（不符回 403）；專案層級由 `services/project_access_service.py` 的
+  `assert_project_readable` / `assert_project_writable` 統一判斷，路由 `_helpers.py`
+  只保留相容 re-export
 
 ## 角色權限矩陣
 

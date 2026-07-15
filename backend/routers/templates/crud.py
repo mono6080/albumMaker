@@ -3,7 +3,6 @@
 # 路由層僅負責 HTTP 接收與回應，複製流程委派給 services/template_service
 
 import json
-import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
@@ -11,7 +10,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
-from crud.template_crud import get_period_or_404, get_template_or_404, get_template_page_or_404
+from crud.template_crud import get_template_or_404, get_template_page_or_404
 from database import Project, Student, Template, TemplatePeriod, User, get_db
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
@@ -19,7 +18,10 @@ from services.photo_frame_geometry import (
     PHOTO_SLOT_CONTENT_BOX_MODE,
     PHOTO_SLOT_DIMENSION_MODE_KEY,
 )
-from services.storage import get_storage
+from services.template_lifecycle_service import (
+    delete_template as delete_template_use_case,
+    rename_template as rename_template_use_case,
+)
 from services.template_page_snapshot_service import (
     normalize_template_page_layout,
     replace_template_pages_snapshot,
@@ -36,7 +38,6 @@ from ._helpers import (
 from .schemas import TemplatePageSnapshotRequest
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 # ── 模板 CRUD ─────────────────────────────────────────────────────────────────
@@ -99,16 +100,12 @@ def rename_template(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """修改模板名稱或移動到其他期別。"""
-    template = get_template_or_404(template_id, db)
-    if name is not None:
-        template_name = name.strip()
-        if not template_name:
-            raise HTTPException(status_code=400, detail="模板名稱不可空白")
-        template.name = template_name
-    if period_id is not None:
-        period = get_period_or_404(period_id, db)
-        template.period_id = period.id
-    db.commit()
+    rename_template_use_case(
+        db,
+        template_id,
+        name=name,
+        period_id=period_id,
+    )
     return {"ok": True}
 
 
@@ -171,15 +168,7 @@ def delete_template(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """刪除指定模板及其所有頁面與關聯檔案（背景圖、貼圖）。"""
-    template = get_template_or_404(template_id, db)
-    if db.query(Project).filter(Project.template_id == template_id).first():
-        raise HTTPException(status_code=409, detail="此模板仍有專案使用，無法刪除")
-    db.delete(template)
-    db.commit()
-    try:
-        get_storage().delete_prefix(f"templates/tmpl{template_id}")
-    except Exception as storage_error:
-        logger.error("模板已刪除但素材清理失敗 template_id=%s: %s", template_id, storage_error)
+    delete_template_use_case(db, template_id)
     return {"ok": True}
 
 

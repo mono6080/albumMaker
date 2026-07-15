@@ -200,6 +200,24 @@ async function readCameraState(page) {
   });
 }
 
+async function readTemplateEditorRenderCount(page) {
+  return page.evaluate(() => (
+    window.__ALBUM_EDITOR_RENDER_PROBE_COUNTS__?.TemplateEditor ?? 0
+  ));
+}
+
+async function readTransformerBounds(page) {
+  return page.evaluate(() => {
+    const stage = window.Konva?.stages?.find(candidate => (
+      (candidate.findOne("Transformer")?.nodes?.().length ?? 0) > 0
+    ));
+    const transformer = stage?.findOne("Transformer");
+    return stage && transformer
+      ? transformer.getClientRect({ relativeTo: stage })
+      : null;
+  });
+}
+
 test.describe("phone template editor", () => {
   test.use(PHONE_CONTEXT);
 
@@ -439,6 +457,104 @@ test.describe("phone template editor", () => {
     await page.reload();
     page.off("dialog", acceptUnexpectedDialog);
     expect(beforeUnloadDialogs).toBe(0);
+    page.off("request", recordMutation);
+  });
+
+  test("camera pan and pinch stay inside TemplateCanvas without rerendering TemplateEditor", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "CDP multi-touch characterization only runs in Chromium");
+    await page.addInitScript(() => {
+      window.__ALBUM_EDITOR_RENDER_PROBE_COUNTS__ = {};
+      window.__ALBUM_EDITOR_RENDER_PROBE__ = (componentName) => {
+        const counts = window.__ALBUM_EDITOR_RENDER_PROBE_COUNTS__;
+        counts[componentName] = (counts[componentName] ?? 0) + 1;
+      };
+    });
+    const { templateId } = await createAndOpenEditor(
+      page,
+      createMobileLayout(),
+      "camera-render-boundary",
+    );
+    const textPoint = await readNodeScreenPoint(page, `text-${FIRST_TEXT_ID}`);
+    await page.touchscreen.tap(textPoint.x, textPoint.y);
+    await expect.poll(() => readSelectedNodeIds(page)).toEqual([`text-${FIRST_TEXT_ID}`]);
+    const beforeLayout = await fetchTemplatePageLayout(page, templateId);
+    const mutationRequests = [];
+    const recordMutation = (request) => {
+      if (request.method() !== "GET" && request.url().includes(`/api/templates/${templateId}`)) {
+        mutationRequests.push(`${request.method()} ${request.url()}`);
+      }
+    };
+    page.on("request", recordMutation);
+    await expect.poll(async () => {
+      const first = await readTemplateEditorRenderCount(page);
+      await page.waitForTimeout(50);
+      return await readTemplateEditorRenderCount(page) === first ? first : null;
+    }).not.toBeNull();
+
+    const initialRenderCount = await readTemplateEditorRenderCount(page);
+    expect(initialRenderCount).toBeGreaterThan(0);
+    const viewportBox = await page.locator('[data-guide="editor-canvas-viewport"]').boundingBox();
+    if (!viewportBox) throw new Error("Template canvas viewport has no bounding box");
+    const center = {
+      x: viewportBox.x + viewportBox.width / 2,
+      y: viewportBox.y + viewportBox.height / 2,
+    };
+
+    const beforePinch = await readCameraState(page);
+    const beforeTransformer = await readTransformerBounds(page);
+    expect(beforeTransformer).not.toBeNull();
+    const cdp = await page.context().newCDPSession(page);
+    const touchPoint = (id, x, y) => ({ id, x, y, radiusX: 1, radiusY: 1, force: 1 });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [
+        touchPoint(1, center.x - 25, center.y),
+        touchPoint(2, center.x + 25, center.y),
+      ],
+    });
+    for (const distance of [35, 45, 55, 65, 80]) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          touchPoint(1, center.x - distance, center.y),
+          touchPoint(2, center.x + distance, center.y),
+        ],
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(async () => (await readCameraState(page))?.scale)
+      .toBeGreaterThan(beforePinch.scale + 0.01);
+    const afterPinchScale = (await readCameraState(page)).scale;
+    expect(await readSelectedNodeIds(page)).toEqual([`text-${FIRST_TEXT_ID}`]);
+    const afterTransformer = await readTransformerBounds(page);
+    expect(afterTransformer).not.toBeNull();
+    expect(afterTransformer.width).toBeGreaterThan(beforeTransformer.width);
+    await expect(page.getByRole("toolbar", { name: "畫布縮放" })).toContainText(
+      `${Math.round(afterPinchScale * 100)}%`,
+    );
+    expect(await readTemplateEditorRenderCount(page)).toBe(initialRenderCount);
+
+    const beforePan = await readCameraState(page);
+    await page.mouse.move(center.x, center.y);
+    await page.keyboard.down("Space");
+    await page.mouse.down();
+    await page.mouse.move(center.x + 28, center.y + 20, { steps: 4 });
+    await page.mouse.up();
+    await page.keyboard.up("Space");
+    await expect.poll(async () => (await readCameraState(page))?.x)
+      .not.toBeCloseTo(beforePan.x, 2);
+    expect(await readTemplateEditorRenderCount(page)).toBe(initialRenderCount);
+    expect(await readSelectedNodeIds(page)).toEqual([`text-${FIRST_TEXT_ID}`]);
+    await expect(page.locator('[data-guide="save-template"]')).toHaveAttribute("data-dirty", "false");
+    await expect(page.getByRole("button", { name: "復原", exact: true })).toBeDisabled();
+    expect(mutationRequests).toEqual([]);
+    expect(await fetchTemplatePageLayout(page, templateId)).toEqual(beforeLayout);
+    expect(await page.evaluate(() => (
+      (window.Konva?.stages ?? []).filter(stage => stage.container()?.isConnected).length
+    ))).toBe(1);
     page.off("request", recordMutation);
   });
 

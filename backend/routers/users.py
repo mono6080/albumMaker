@@ -1,25 +1,23 @@
 # 使用者管理路由模組
 # 所有端點僅限 admin 角色存取；業務邏輯下移 services/user_service.py
 
-import logging
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
-from crud.user_crud import get_user_or_404, serialize_user_identity
-from database import Project, ProjectComment, User, get_db, teacher_supervisors
+from crud.user_crud import serialize_user_identity
+from database import User, get_db
 from services.user_service import (
-    create_user_record,
+    create_user as create_user_use_case,
+    delete_user as delete_user_use_case,
     import_users_from_workbook,
-    normalize_supervisor_ids,
-    remove_supervisor_assignments,
-    update_user_record,
+    update_current_user_settings,
+    update_user as update_user_use_case,
 )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -70,17 +68,15 @@ def create_user(
     _: User = Depends(require_role("admin")),
 ):
     """建立新使用者。帶班老師必須指定至少一位主管。"""
-    supervisor_ids = normalize_supervisor_ids(body.supervisor_ids, body.supervisor_id)
-    new_user = create_user_record(
+    new_user = create_user_use_case(
         db,
         username=body.username,
         display_name=body.display_name,
         password=body.password,
         role=body.role,
-        supervisor_ids=supervisor_ids,
+        supervisor_id=body.supervisor_id,
+        supervisor_ids=body.supervisor_ids,
     )
-    db.commit()
-    db.refresh(new_user)
     return _serialize_user(new_user)
 
 
@@ -121,10 +117,8 @@ def update_my_settings(
     current_user: User = Depends(get_current_user),
 ):
     """更新目前登入使用者自己的 UI 偏好。"""
-    current_user.ui_font_scale = round(float(body.ui_font_scale), 2)
-    db.commit()
-    db.refresh(current_user)
-    return serialize_user_identity(current_user)
+    updated_user = update_current_user_settings(db, current_user, body.ui_font_scale)
+    return serialize_user_identity(updated_user)
 
 
 @router.patch("/{user_id}")
@@ -135,10 +129,9 @@ def update_user(
     current_admin: User = Depends(require_role("admin")),
 ):
     """修改使用者資料（顯示名稱、角色、主管、密碼重設）。"""
-    target_user = get_user_or_404(user_id, db)
-    update_user_record(
+    target_user = update_user_use_case(
         db,
-        target_user,
+        user_id,
         username=body.username,
         display_name=body.display_name,
         role=body.role,
@@ -147,8 +140,6 @@ def update_user(
         new_password=body.new_password,
         clear_supervisor=body.clear_supervisor,
     )
-    db.commit()
-    db.refresh(target_user)
     return _serialize_user(target_user)
 
 
@@ -159,34 +150,7 @@ def delete_user(
     current_admin: User = Depends(require_role("admin")),
 ):
     """刪除使用者（不能刪除自己）。"""
-    if user_id == current_admin.id:
-        raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
-    target_user = get_user_or_404(user_id, db)
-    # 將被刪除使用者的專案移交給執行刪除的 admin，並記錄審計日誌
-    transferred = db.query(Project).filter(Project.owner_id == user_id).count()
-    if transferred:
-        logger.warning(
-            "使用者刪除：%s（id=%s）的 %s 個專案移交給 admin %s（id=%s）",
-            target_user.username, user_id, transferred,
-            current_admin.username, current_admin.id,
-        )
-    db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
-    transferred_comments = db.query(ProjectComment).filter(ProjectComment.author_id == user_id).count()
-    if transferred_comments:
-        logger.warning(
-            "使用者刪除：%s（id=%s）的 %s 則留言作者移交給 admin %s（id=%s）",
-            target_user.username, user_id, transferred_comments,
-            current_admin.username, current_admin.id,
-        )
-        db.query(ProjectComment).filter(ProjectComment.author_id == user_id).update(
-            {"author_id": current_admin.id}
-        )
-    db.execute(
-        teacher_supervisors.delete().where(teacher_supervisors.c.teacher_id == user_id)
-    )
-    remove_supervisor_assignments(user_id, db)
-    db.delete(target_user)
-    db.commit()
+    delete_user_use_case(db, current_admin, user_id)
     return {"ok": True}
 
 

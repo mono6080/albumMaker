@@ -53,7 +53,7 @@ backend/
       render.py          單頁與跨頁預覽
     projects/          /api/projects/*，拆分子模組：
       __init__.py        路由組合
-      _helpers.py        assert_project_readable / writable、共用 payload 型別
+      _helpers.py        舊 import 相容 re-export、共用 payload 型別
       schemas.py         回應 schema
       crud.py            專案 CRUD、封存/還原、學生管理、頁面跳過
       photos.py          照片上傳（單張/共用/批次分配）、讀取、mapping
@@ -66,6 +66,8 @@ backend/
     element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label
     draw_helpers.py      PIL 低階工具：字型、合成、形狀、文字換行、陰影
     project_service.py   舊 import 相容 facade；新程式直接 import 下列責任 owner
+    project_access_service.py  專案 read/write/content/completion 權限判斷
+    project_lifecycle_service.py  專案建立、改名、封存、還原、完成與退回 use case
     output_keys.py       輸出 key、安全檔名與 Content-Disposition
     project_archive_service.py  到期封存專案的 Storage cleanup 與 DB purge
     student_render_service.py   單一學生渲染、dirty-skip、發布 CAS 與 render fingerprint
@@ -78,7 +80,9 @@ backend/
     roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 規劃
     teacher_overview_service.py  老師進度總覽與 Excel 匯出
     template_service.py  模板複製（頁面、背景、貼圖資產）
-    user_service.py      使用者建立/更新驗證、Excel 批次匯入
+    template_lifecycle_service.py  模板改名與刪除 use case
+    template_asset_service.py  貼圖保存／讀取與素材文字框分析
+    user_service.py      使用者建立／更新／刪除與 Excel 批次匯入 use case
     export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
     zip_stream.py        串流 ZIP 骨架（佔 limiter → 逐 entry drain → 釋放）
@@ -99,6 +103,13 @@ context/     AuthContext（全域 currentUser）
 constants/   靜態資料（fonts / design tokens），不含邏輯
 utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / …）
 ```
+
+- TemplateEditor 的 Konva 節點拆在 `components/canvas/CanvasNode.jsx`、
+  `CanvasArtwork.jsx`、`TemplateCanvas.jsx`；相機與畫布責任見
+  [rendering.md 的 TemplateEditor](rendering.md#templateeditor前端編輯器)
+- 照片儲存生命週期由 `hooks/usePhotoAutoSave.js` 對接 React，純狀態與 single-flight
+  協調器分別在 `utils/photoSaveModel.js`、`utils/photoSaveCoordinator.js`；契約由
+  `frontend/tests/unit/photo-save.test.mjs` 釘住
 
 - API consumer 直接 import `api/authApi.js`、`projectApi.js`、`templateApi.js` 或 `urls.js`；
   不另設跨 domain barrel

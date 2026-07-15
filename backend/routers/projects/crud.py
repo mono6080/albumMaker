@@ -2,19 +2,25 @@
 # 處理專案建立/讀取/修改/刪除，以及學生的批次新增、改名、刪除與頁面跳過
 
 import logging
-from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, Query
-from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import Project, ProjectComment, Student, Template, User, get_db, utc_now
+from database import Project, ProjectComment, Student, User, get_db, utc_now
 from services.roster_service import delete_roster_child_if_orphaned, resolve_roster_child_id
 from services.project_archive_service import purge_expired_archived_projects
+from services.project_lifecycle_service import (
+    archive_project as archive_project_use_case,
+    complete_project as complete_project_use_case,
+    create_project as create_project_use_case,
+    rename_project as rename_project_use_case,
+    reopen_project as reopen_project_use_case,
+    restore_project as restore_project_use_case,
+)
 from services.project_template_revision import lock_project_template_revision
 from services.storage import get_storage
 from services.student_render_service import clear_student_render_outputs
@@ -23,15 +29,13 @@ from services.student_pages import (
     lock_student_page_writes,
     mutate_student_pages,
 )
-from services.template_sync_locks import lock_project_content_writes, lock_template_write
+from services.template_sync_locks import lock_project_content_writes
 from template_periods import department_label
 
 from ._helpers import (
     _parse_json_field,
-    assert_project_completion_revertible,
     assert_project_content_writable,
     assert_project_readable,
-    assert_project_writable,
 )
 from .schemas import (
     BatchAddResult,
@@ -45,7 +49,6 @@ from .schemas import (
 )
 
 router = APIRouter()
-PROJECT_ARCHIVE_DAYS = 30
 logger = logging.getLogger(__name__)
 
 
@@ -119,44 +122,14 @@ def create_project(
     current_user: User = Depends(require_role("admin", "teacher", "supervisor")),
 ):
     """建立新專案，需指定使用的模板，自動設定所有者為當前使用者。"""
-    # 與模板 snapshot 共用同一把鎖：若剛好同步中，等同步完成後以最新 revision
-    # 建立；不會落在 project 掃描之後、commit 之前而漏掉同步。
-    with lock_template_write(template_id):
-        db.rollback()
-        db.expire_all()
-        template = db.query(Template).filter(Template.id == template_id).first()
-        if not template:
-            raise HTTPException(status_code=404, detail="找不到模板")
-
-        project_department = department
-        project_period_id = template_period_id
-        if template.period:
-            if department and department != template.period.department:
-                raise HTTPException(status_code=400, detail="模板不屬於所選部門")
-            if template_period_id and template_period_id != template.period.id:
-                raise HTTPException(status_code=400, detail="模板不屬於所選期別")
-            if template.period.status != "active":
-                raise HTTPException(status_code=400, detail="只能使用「使用中」期別的模板建立專案")
-            project_department = template.period.department
-            project_period_id = template.period.id
-
-        new_project = Project(
-            name=name,
-            template_id=template_id,
-            template_revision=template.revision,
-            owner_id=current_user.id,
-            department=project_department,
-            template_period_id=project_period_id,
-        )
-        db.add(new_project)
-        db.commit()
-        db.refresh(new_project)
-        return {
-            "id": new_project.id,
-            "name": new_project.name,
-            "department": new_project.department,
-            "template_period_id": new_project.template_period_id,
-        }
+    return create_project_use_case(
+        db,
+        current_user,
+        name=name,
+        template_id=template_id,
+        department=department,
+        template_period_id=template_period_id,
+    )
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
@@ -248,39 +221,7 @@ def rename_project(
     current_user: User = Depends(get_current_user),
 ):
     """修改專案名稱（行內編輯）。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
-    with lock_project_content_writes([project_id]):
-        db.rollback()
-        db.expire_all()
-        project = get_project_or_404(project_id, db)
-        assert_project_writable(project, current_user)
-        normalized_name = name.strip()
-        if project.name == normalized_name:
-            db.rollback()
-            return {"ok": True}
-
-        previous_name = project.name
-        output_states = [
-            (student.name, student.output_filename)
-            for student in project.students
-        ]
-        project.name = normalized_name
-        project.updated_at = utc_now()
-        for student in project.students:
-            student.output_filename = None
-        db.commit()
-
-        storage = get_storage()
-        for student_name, output_filename in output_states:
-            _clear_student_outputs_best_effort(
-                storage,
-                project_id,
-                previous_name,
-                student_name,
-                output_filename,
-            )
-    return {"ok": True}
+    return rename_project_use_case(db, current_user, project_id, name)
 
 
 @router.delete("/{project_id}")
@@ -290,24 +231,7 @@ def delete_project(
     current_user: User = Depends(get_current_user),
 ):
     """將指定專案封存 30 天，期限內可復原。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
-    with lock_project_content_writes([project_id]):
-        db.rollback()
-        db.expire_all()
-        project = get_project_or_404(project_id, db)
-        assert_project_writable(project, current_user)
-        now = utc_now()
-        project.deleted_at = now
-        project.archive_expires_at = now + timedelta(days=PROJECT_ARCHIVE_DAYS)
-        project.updated_at = now
-        db.commit()
-        db.refresh(project)
-        return {
-            "ok": True,
-            "deleted_at": project.deleted_at,
-            "archive_expires_at": project.archive_expires_at,
-        }
+    return archive_project_use_case(db, current_user, project_id)
 
 
 @router.post("/{project_id}/restore")
@@ -317,30 +241,7 @@ def restore_project(
     current_user: User = Depends(get_current_user),
 ):
     """復原 30 天封存期限內的專案。"""
-    project = get_project_or_404(project_id, db, include_archived=True)
-    assert_project_writable(project, current_user)
-    expired_at_lock = False
-    now = None
-    with lock_project_content_writes([project_id]):
-        db.rollback()
-        db.expire_all()
-        project = get_project_or_404(project_id, db, include_archived=True)
-        assert_project_writable(project, current_user)
-        # 可能曾等待模板同步／其他專案寫入；到期判斷必須使用拿到鎖後的時間。
-        now = utc_now()
-        if project.deleted_at is None:
-            return {"ok": True}
-        if project.archive_expires_at and project.archive_expires_at <= now:
-            expired_at_lock = True
-        else:
-            project.deleted_at = None
-            project.archive_expires_at = None
-            project.updated_at = now
-            db.commit()
-            return {"ok": True}
-    if expired_at_lock:
-        purge_expired_archived_projects(db, now)
-    raise HTTPException(status_code=404, detail="專案不存在或已清除")
+    return restore_project_use_case(db, current_user, project_id)
 
 
 @router.post("/{project_id}/complete")
@@ -350,20 +251,7 @@ def complete_project(
     current_user: User = Depends(get_current_user),
 ):
     """標記全班完成：內容鎖定（名單/照片/文字），需主管或 admin 退回才能再修改。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_writable(project, current_user)
-    with lock_project_content_writes([project_id]):
-        db.rollback()
-        db.expire_all()
-        project = get_project_or_404(project_id, db)
-        assert_project_writable(project, current_user)
-        # 空專案沒有「完成」可言，擋下誤觸（一鎖名單就什麼都動不了）
-        if not project.students:
-            raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
-        if project.completed_at is None:
-            project.completed_at = utc_now()
-            db.commit()
-        return {"ok": True, "completed_at": project.completed_at}
+    return complete_project_use_case(db, current_user, project_id)
 
 
 @router.post("/{project_id}/reopen")
@@ -373,16 +261,7 @@ def reopen_project(
     current_user: User = Depends(get_current_user),
 ):
     """退回「全班完成」標記，恢復可編輯（限管轄該老師的主管或 admin）。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_completion_revertible(project, current_user, db)
-    with lock_project_content_writes([project_id]):
-        db.rollback()
-        db.expire_all()
-        project = get_project_or_404(project_id, db)
-        assert_project_completion_revertible(project, current_user, db)
-        project.completed_at = None
-        db.commit()
-        return {"ok": True}
+    return reopen_project_use_case(db, current_user, project_id)
 
 
 def _visible_projects_query(db: Session, current_user: User):

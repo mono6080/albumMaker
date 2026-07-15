@@ -1,6 +1,7 @@
 # 使用者管理業務邏輯（users router 的下層）
 # Excel 批次匯入、使用者建立/更新規則、主管關係維護
 
+import logging
 import re
 
 from fastapi import HTTPException
@@ -8,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from auth import hash_password
 from crud.user_crud import SUPERVISABLE_ROLES, get_user_or_404
-from database import User, teacher_supervisors
+from database import Project, ProjectComment, User, teacher_supervisors
+
+
+logger = logging.getLogger(__name__)
 
 VALID_ROLES = {"admin", "art_team", "supervisor", "teacher", "none"}
 MIN_PASSWORD_LENGTH = 8
@@ -46,6 +50,104 @@ IMPORT_HEADER_ALIASES = {
         "主管账号",
     },
 }
+
+
+def create_user(
+    db: Session,
+    *,
+    username: str,
+    display_name: str,
+    password: str,
+    role: str,
+    supervisor_id: int | None,
+    supervisor_ids: list[int] | None,
+) -> User:
+    """建立使用者並以單一 transaction 提交。"""
+    normalized_ids = normalize_supervisor_ids(supervisor_ids, supervisor_id)
+    new_user = create_user_record(
+        db,
+        username=username,
+        display_name=display_name,
+        password=password,
+        role=role,
+        supervisor_ids=normalized_ids,
+    )
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def update_current_user_settings(db: Session, current_user: User, ui_font_scale: float) -> User:
+    """更新目前使用者的 UI 偏好。"""
+    current_user.ui_font_scale = round(float(ui_font_scale), 2)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+def update_user(
+    db: Session,
+    user_id: int,
+    *,
+    username: str | None,
+    display_name: str | None,
+    role: str | None,
+    supervisor_id: int | None,
+    supervisor_ids: list[int] | None,
+    new_password: str | None,
+    clear_supervisor: bool,
+) -> User:
+    """更新使用者及主管關係並提交。"""
+    target_user = get_user_or_404(user_id, db)
+    update_user_record(
+        db,
+        target_user,
+        username=username,
+        display_name=display_name,
+        role=role,
+        supervisor_id=supervisor_id,
+        supervisor_ids=supervisor_ids,
+        new_password=new_password,
+        clear_supervisor=clear_supervisor,
+    )
+    db.commit()
+    db.refresh(target_user)
+    return target_user
+
+
+def delete_user(db: Session, current_admin: User, user_id: int) -> None:
+    """刪除使用者，並在同一 transaction 移交專案與留言。"""
+    if user_id == current_admin.id:
+        raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
+    target_user = get_user_or_404(user_id, db)
+    transferred = db.query(Project).filter(Project.owner_id == user_id).count()
+    if transferred:
+        logger.warning(
+            "使用者刪除：%s（id=%s）的 %s 個專案移交給 admin %s（id=%s）",
+            target_user.username,
+            user_id,
+            transferred,
+            current_admin.username,
+            current_admin.id,
+        )
+    db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
+    transferred_comments = db.query(ProjectComment).filter(ProjectComment.author_id == user_id).count()
+    if transferred_comments:
+        logger.warning(
+            "使用者刪除：%s（id=%s）的 %s 則留言作者移交給 admin %s（id=%s）",
+            target_user.username,
+            user_id,
+            transferred_comments,
+            current_admin.username,
+            current_admin.id,
+        )
+        db.query(ProjectComment).filter(ProjectComment.author_id == user_id).update(
+            {"author_id": current_admin.id}
+        )
+    db.execute(teacher_supervisors.delete().where(teacher_supervisors.c.teacher_id == user_id))
+    remove_supervisor_assignments(user_id, db)
+    db.delete(target_user)
+    db.commit()
 
 
 def import_users_from_workbook(db: Session, workbook) -> tuple[list, list, list]:

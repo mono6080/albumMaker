@@ -5,7 +5,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw
 
 from database import SessionLocal, TemplatePage
-from routers.templates import assets as template_assets
+from services import template_asset_service
 from services.layout_groups import MAX_JAVASCRIPT_SAFE_INTEGER
 from services.material_text_box import (
     DETECTOR_VERSION,
@@ -177,7 +177,7 @@ def test_suggestion_storage_adapter_is_strictly_read_only(monkeypatch):
         login(client)
         template_id, page_id = create_template_with_page(client)
         path = f"templates/tmpl{template_id}/stickers/material.png"
-        monkeypatch.setattr(template_assets, "get_storage", lambda: fake_storage)
+        monkeypatch.setattr(template_asset_service, "get_storage", lambda: fake_storage)
 
         response = client.post(
             f"/api/templates/{template_id}/pages/{page_id}/material-text-box-suggestion",

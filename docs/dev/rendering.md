@@ -57,9 +57,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   等 model 函式僅供 render-parity 腳本消費，編輯器實際的 Konva 節點渲染在
   `components/canvas/pageElementNodes.jsx`）
 - Responsive camera 的 pure math 在 `utils/canvasCamera.js`，ResizeObserver 與 fit/manual lifecycle
-  在 `hooks/useCanvasCamera.js`。Stage 使用 viewport pixels；page-camera Group 才套 pan/zoom 並裁切
-  530×750 page boundary，Transformer 留在 camera 外維持 screen-space handles。Camera、sheet、
-  responsive panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload。
+  在 `hooks/useCanvasCamera.js`。`components/canvas/TemplateCanvas.jsx` 是唯一 Stage owner：Stage 使用
+  viewport pixels，`#page-camera` Group 才套 pan/zoom 並裁切 530×750 page boundary，Transformer 留在
+  camera 外維持 screen-space handles；父層只能透過 ref 呼叫 fit、zoom 與讀取 viewport/page 座標。
+  `CanvasArtwork.jsx` memo 化繪圖樹且不接收 camera state，`CanvasNode.jsx` 負責單一物件的即時預覽與
+  commit，因此純 pan／pinch frame 不得重 render TemplateEditor／Artwork。Camera、sheet、responsive
+  panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload；手勢尾端的
+  synthetic tap 也不得清除既有選取。此契約由 `template-editor-mobile.spec.js` 的 render probe 釘住。
 - TemplateEditor 的 UI 模式固定為 phone `<768px`、tablet `768–1023px`、desktop `>=1024px`；phone
   使用 canvas-first top bar、bottom dock/sheets，tablet 使用左欄與手動 side drawer，desktop 使用三欄
   static inspector。Phone/tablet 選取物件不會自動開 inspector；完整互動與驗收契約見

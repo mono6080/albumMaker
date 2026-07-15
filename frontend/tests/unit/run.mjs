@@ -1,5 +1,6 @@
 import "./api.test.mjs";
 import "./photos.test.mjs";
+import "./photo-save.test.mjs";
 import "./camera.test.mjs";
 import "./render.test.mjs";
 import "./layers.test.mjs";
