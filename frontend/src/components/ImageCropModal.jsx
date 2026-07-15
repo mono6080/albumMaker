@@ -233,10 +233,11 @@ export default function ImageCropModal({
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500 w-8">縮放</span>
           <input
+            aria-label="裁切圖片縮放比例"
             type="range" min="1" max="6" step="0.01"
             value={scale}
             onChange={handleSliderChange}
-            className="flex-1"
+            className="h-11 flex-1"
           />
           <span className="text-xs text-gray-400 w-10 text-right">{Math.round(scale * 100)}%</span>
         </div>
@@ -245,14 +246,14 @@ export default function ImageCropModal({
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-1.5 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+            className="min-h-11 rounded border border-gray-300 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
           >
             取消
           </button>
           <button
             onClick={handleConfirm}
             disabled={!imgNat}
-            className="px-4 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="min-h-11 rounded bg-indigo-600 px-4 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             套用裁切
           </button>

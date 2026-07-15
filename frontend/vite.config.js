@@ -9,6 +9,7 @@ const appBuildId =
   process.env.SOURCE_VERSION ||
   process.env.GITHUB_SHA ||
   Date.now().toString(36)
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:8765'
 
 export default defineConfig({
   define: {
@@ -56,7 +57,7 @@ export default defineConfig({
   ],
   server: {
     proxy: {
-      '/api': 'http://localhost:8765'
+      '/api': apiProxyTarget
     }
   }
 })

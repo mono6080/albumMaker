@@ -34,7 +34,7 @@ function BatchSelect({ label, propertyKey, value, options, onChange }) {
         value={value === MIXED_VALUE ? "" : value}
         onChange={event => onChange?.({ [propertyKey]: event.target.value })}
         disabled={!onChange}
-        className="rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 disabled:bg-gray-50 disabled:text-gray-400"
+        className="min-h-11 rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 disabled:bg-gray-50 disabled:text-gray-400"
       >
         {value === MIXED_VALUE && <option value="" disabled>混合</option>}
         {options.map(option => (
@@ -59,7 +59,7 @@ function BatchNumberInput({ label, propertyKey, value, min, max, onChange }) {
           if (event.target.value !== "") onChange?.({ [propertyKey]: Number(event.target.value) });
         }}
         disabled={!onChange}
-        className="rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-700 placeholder:text-gray-400 disabled:bg-gray-50 disabled:text-gray-400"
+        className="min-h-11 rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-700 placeholder:text-gray-400 disabled:bg-gray-50 disabled:text-gray-400"
       />
     </label>
   );
@@ -73,7 +73,7 @@ function BatchBooleanSelect({ label, propertyKey, value, trueLabel, falseLabel, 
         value={value === MIXED_VALUE ? "" : String(value)}
         onChange={event => onChange?.({ [propertyKey]: event.target.value === "true" })}
         disabled={!onChange}
-        className="rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 disabled:bg-gray-50 disabled:text-gray-400"
+        className="min-h-11 rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 disabled:bg-gray-50 disabled:text-gray-400"
       >
         {value === MIXED_VALUE && <option value="" disabled>混合</option>}
         <option value="true">{trueLabel}</option>
@@ -88,14 +88,14 @@ function BatchColorInput({ value, onChange }) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs text-gray-500">文字顏色</span>
-      <span className="flex items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1">
+      <span className="flex min-h-11 items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1">
         <input
           type="color"
           value={isMixed ? "#333333" : value}
           onChange={event => onChange?.({ font_color: event.target.value })}
           disabled={!onChange}
           aria-label="批次設定文字顏色"
-          className="h-6 w-8 cursor-pointer border-0 bg-transparent p-0 disabled:cursor-not-allowed"
+          className="h-9 w-11 cursor-pointer border-0 bg-transparent p-0 disabled:cursor-not-allowed"
         />
         <span className="truncate text-xs text-gray-500">{isMixed ? "混合" : value}</span>
       </span>
@@ -113,7 +113,7 @@ function FavoriteStyleControls({ favoriteStyles, onSaveFavoriteStyle, onApplyFav
           type="button"
           onClick={() => onSaveFavoriteStyle?.()}
           disabled={!onSaveFavoriteStyle}
-          className="rounded border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+          className="min-h-11 rounded border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
         >
           儲存目前樣式
         </button>
@@ -127,7 +127,7 @@ function FavoriteStyleControls({ favoriteStyles, onSaveFavoriteStyle, onApplyFav
               onClick={() => onApplyFavoriteStyle?.(style)}
               disabled={!onApplyFavoriteStyle}
               title={`套用${style.name || style.label || `常用樣式 ${index + 1}`}`}
-              className="truncate rounded border border-gray-200 bg-white px-2 py-1.5 text-left text-xs text-gray-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+              className="min-h-11 truncate rounded border border-gray-200 bg-white px-2 py-1.5 text-left text-xs text-gray-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
             >
               {style.name || style.label || `常用樣式 ${index + 1}`}
             </button>
@@ -299,7 +299,7 @@ export default function GroupSelectionPanel({
               onClick={() => onAlign?.(option.value)}
               disabled={!onAlign}
               title={`將已選物件${option.label}`}
-              className="rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+              className="min-h-11 rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
             >
               {option.label}
             </button>
@@ -311,7 +311,7 @@ export default function GroupSelectionPanel({
             onClick={() => onDistribute?.("horizontal")}
             disabled={!canDistribute}
             title={items.length < 3 ? "至少選取 3 個物件" : "水平平均分布"}
-            className="rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            className="min-h-11 rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
           >
             水平分布
           </button>
@@ -320,7 +320,7 @@ export default function GroupSelectionPanel({
             onClick={() => onDistribute?.("vertical")}
             disabled={!canDistribute}
             title={items.length < 3 ? "至少選取 3 個物件" : "垂直平均分布"}
-            className="rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            className="min-h-11 rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
           >
             垂直分布
           </button>
@@ -329,7 +329,7 @@ export default function GroupSelectionPanel({
             onClick={() => onMatchSize?.()}
             disabled={!canMatchSize || !onMatchSize}
             title={canMatchSize ? "比照主要選取物件的尺寸" : "目前選取無法統一尺寸"}
-            className="rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            className="min-h-11 rounded border border-gray-200 bg-white px-1.5 py-1.5 text-xs text-gray-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
           >
             等大
           </button>
@@ -359,7 +359,7 @@ export default function GroupSelectionPanel({
         <button
           type="button"
           onClick={() => onGroup?.()}
-          className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+          className="min-h-11 w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
         >
           建立群組
         </button>
@@ -367,7 +367,7 @@ export default function GroupSelectionPanel({
           <button
             type="button"
             onClick={() => onLinkMaterialText?.()}
-            className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
+            className="min-h-11 w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
           >
             符合素材並連結文字框
           </button>

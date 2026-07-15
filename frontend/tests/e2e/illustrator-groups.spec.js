@@ -545,9 +545,9 @@ test("group corner resize preserves typography through transient commit undo and
   });
   await expect(page.getByText("純文字屬性")).toBeVisible();
   const positionInputs = page.locator('[data-guide="property-position-size"] input[type="number"]');
-  const fontSizeInput = page.locator("label").filter({ hasText: "字級（pt）" }).locator('input[type="number"]');
-  const lineHeightInput = page.locator("label").filter({ hasText: "行距" }).locator('input[type="number"]');
-  const letterSpacingInput = page.locator("label").filter({ hasText: "字間距（px）" }).locator('input[type="number"]');
+  const fontSizeInput = page.getByRole("spinbutton", { name: "字級數值", exact: true });
+  const lineHeightInput = page.getByRole("spinbutton", { name: "行距數值", exact: true });
+  const letterSpacingInput = page.getByRole("spinbutton", { name: "字間距數值", exact: true });
   const expectTypography = async () => {
     await expect(page.locator("textarea").first()).toHaveValue(text.text);
     await expect(fontSizeInput).toHaveValue(String(text.font_size));
@@ -872,7 +872,7 @@ test("sticker analysis creates and linked text resets without changing topology 
   const groupsAfterCreate = JSON.parse(JSON.stringify(saved.groups));
 
   await page.locator("textarea").first().fill("保留這段文字");
-  const fontSizeNumber = page.locator("label").filter({ hasText: "字級（pt）" }).locator('input[type="number"]');
+  const fontSizeNumber = page.getByRole("spinbutton", { name: "字級數值", exact: true });
   await fontSizeNumber.fill("36");
   await page.locator('[data-guide="property-panel"]')
     .getByRole("button", { name: "位置與尺寸" })

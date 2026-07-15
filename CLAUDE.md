@@ -27,6 +27,7 @@ Claude Code 在此專案的工作指引。本檔只放 **agent 行為規則** �
 | [docs/dev/known-issues.md](docs/dev/known-issues.md) | 已知 drift、開放問題、測試缺口 | 遇到「這是 bug 嗎」先查這裡 |
 | [docs/dev/doc-policy.md](docs/dev/doc-policy.md) | 文件怎麼寫、SSOT 規則、拆分規則 | 改任何文件之前 |
 | [docs/specs/illustrator-style-groups-v1.md](docs/specs/illustrator-style-groups-v1.md) | Illustrator 式群組、隔離編輯與素材文字框輔助功能的實作契約 | 實作或審查群組、雙擊隔離、圖片分析文字框 |
+| [docs/specs/mobile-template-editor-v1.md](docs/specs/mobile-template-editor-v1.md) | 手機版模板編輯器的 responsive workspace、觸控手勢與驗收契約 | 實作或審查手機畫布、底部面板、多選與行動版操作 |
 | docs/teacher-album-guide.md 等 | 終端使用者教學（老師 / 設計組），由 `scripts/generate_*.mjs` 產出 HTML/PDF | 改使用者教學 |
 
 ## Agent 硬規則（必守）

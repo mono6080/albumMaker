@@ -51,10 +51,19 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 
 ## TemplateEditor（前端編輯器）
 
-- react-konva Canvas 2D 畫布，A4 直式；display / real 兩套座標換算與
+- react-konva Canvas 2D 畫布，A4 直式；版面 geometry 有 real space（794×1123）與
+  page space（530×750），手機／平板另有只供檢視的 viewport space。real / page 換算與
   z-index 工具在 `utils/renderLayoutModel.js`（其 `buildRenderLayoutModel`
   等 model 函式僅供 render-parity 腳本消費，編輯器實際的 Konva 節點渲染在
   `components/canvas/pageElementNodes.jsx`）
+- Responsive camera 的 pure math 在 `utils/canvasCamera.js`，ResizeObserver 與 fit/manual lifecycle
+  在 `hooks/useCanvasCamera.js`。Stage 使用 viewport pixels；page-camera Group 才套 pan/zoom 並裁切
+  530×750 page boundary，Transformer 留在 camera 外維持 screen-space handles。Camera、sheet、
+  responsive panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload。
+- TemplateEditor 的 UI 模式固定為 phone `<768px`、tablet `768–1023px`、desktop `>=1024px`；phone
+  使用 canvas-first top bar、bottom dock/sheets，tablet 使用左欄與手動 side drawer，desktop 使用三欄
+  static inspector。Phone/tablet 選取物件不會自動開 inspector；完整互動與驗收契約見
+  [mobile-template-editor-v1.md](../specs/mobile-template-editor-v1.md)。
 - 三種元素對應 `layout_json` 的三個陣列（格式見
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)）：
   photo → `photo_slots`、text → `text_labels`、sticker → `stickers`（`StickerNode`）

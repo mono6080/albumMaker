@@ -43,6 +43,7 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
         type="button"
         title={isRecent ? `${color}（最近使用）` : color}
         aria-label={`使用顏色 ${color}`}
+        aria-pressed={isActive}
         onClick={() => onChange(color)}
         style={{
           background: color,
@@ -50,7 +51,7 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
             ? "0 0 0 2px #fff, 0 0 0 4px #4F46E5"
             : "inset 0 0 0 1px rgba(0,0,0,0.15)",
         }}
-        className="relative h-6 w-6 rounded-md transition-transform hover:scale-110 focus:outline-none"
+        className="relative h-11 w-11 rounded-md transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
       >
         {isRecent && (
           <span
@@ -78,7 +79,7 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
       )}
 
       {/* ── 常見色票 ── */}
-      <div className="grid grid-cols-8 gap-1">
+      <div className="grid grid-cols-5 gap-1 xl:grid-cols-6">
         {PRESETS.map(color => renderSwatch(color))}
       </div>
 
@@ -88,9 +89,10 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
         <button
           type="button"
           title="開啟調色盤"
+          aria-label="開啟系統調色盤"
           onClick={() => nativeRef.current?.click()}
           style={{ background: safeValue }}
-          className="w-8 h-8 rounded-lg border border-gray-200 flex-shrink-0 hover:ring-2 hover:ring-indigo-300 transition-all"
+          className="h-11 w-11 flex-shrink-0 rounded-lg border border-gray-200 transition-all hover:ring-2 hover:ring-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         />
         {/* Hex 輸入 */}
         <input
@@ -106,7 +108,7 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
           onKeyDown={e => {
             if (e.key === "Enter") e.target.blur();
           }}
-          className="border rounded px-2 py-1 text-sm font-mono w-24 uppercase tracking-wider"
+          className="min-h-11 w-24 rounded border px-2 py-1 font-mono text-sm uppercase tracking-wider"
           placeholder="#000000"
           maxLength={7}
         />
@@ -114,7 +116,7 @@ export default function ColorPicker({ value, onChange, label, guideId, recentCol
         <button
           type="button"
           onClick={() => nativeRef.current?.click()}
-          className="ml-auto text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors whitespace-nowrap"
+          className="ml-auto min-h-11 whitespace-nowrap rounded-lg border border-indigo-200 px-2 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-50 hover:text-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         >
           調色盤
         </button>

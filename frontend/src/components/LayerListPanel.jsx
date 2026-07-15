@@ -136,7 +136,7 @@ function LayerRow({
           {...listeners}
           aria-label="拖曳重新排序圖層"
           title={`拖曳調整「${title}」的圖層順序`}
-          className="flex h-7 w-6 flex-shrink-0 cursor-grab items-center justify-center rounded text-gray-300 hover:bg-white hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 active:cursor-grabbing"
+          className="flex h-11 w-11 flex-shrink-0 cursor-grab items-center justify-center rounded text-gray-300 hover:bg-white hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 active:cursor-grabbing lg:h-7 lg:w-6"
           style={{ touchAction: "none" }}
         >
           <GripVertical className="h-4 w-4" />
@@ -164,7 +164,7 @@ function LayerRow({
             }}
             placeholder={defaultTitle}
             aria-label={`重新命名「${title}」`}
-            className="min-w-0 flex-1 rounded border border-indigo-300 bg-white px-2 py-1 text-sm text-gray-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            className="min-h-11 min-w-0 flex-1 rounded border border-indigo-300 bg-white px-2 py-1 text-sm text-gray-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 lg:min-h-0"
             autoFocus
           />
         </div>
@@ -173,7 +173,7 @@ function LayerRow({
           type="button"
           onClick={onSelect}
           onDoubleClick={onDoubleClick}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:min-h-0"
         >
           <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.className}`}>
             <Icon className="h-4 w-4" />
@@ -195,7 +195,7 @@ function LayerRow({
             aria-label="重新命名圖層"
             aria-describedby={titleId}
             title={`重新命名「${title}」`}
-            className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+            className="flex h-11 w-11 items-center justify-center rounded text-gray-400 hover:bg-white hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:h-7 lg:w-7"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -208,7 +208,7 @@ function LayerRow({
             aria-label={visibilityInherited ? "圖層由上層群組隱藏" : isVisible ? "隱藏圖層" : "顯示圖層"}
             aria-describedby={titleId}
             title={visibilityInherited ? "請先顯示上層群組" : `${isVisible ? "隱藏" : "顯示"}「${title}」`}
-            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed ${
+            className={`flex h-11 w-11 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed lg:h-7 lg:w-7 ${
               isVisible ? "text-gray-400 hover:text-indigo-600" : "text-gray-300 hover:text-indigo-600"
             }`}
           >
@@ -223,7 +223,7 @@ function LayerRow({
             aria-label={lockInherited ? "圖層由上層群組鎖定" : isLocked ? "解除鎖定圖層" : "鎖定圖層"}
             aria-describedby={titleId}
             title={lockInherited ? "請先解除上層群組鎖定" : `${isLocked ? "解除鎖定" : "鎖定"}「${title}」`}
-            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed ${
+            className={`flex h-11 w-11 items-center justify-center rounded hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed lg:h-7 lg:w-7 ${
               isLocked ? "bg-amber-50 text-amber-600" : "text-gray-400 hover:text-indigo-600"
             }`}
           >
@@ -381,7 +381,7 @@ export default function LayerListPanel({
             <button
               type="button"
               onClick={onExitGroup}
-              className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-700 hover:underline"
+              className="inline-flex min-h-11 items-center gap-1 rounded px-2 text-sm font-semibold text-indigo-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:min-h-0 lg:rounded-none lg:px-0"
             >
               <ChevronLeft className="h-4 w-4" />
               離開群組
@@ -394,7 +394,11 @@ export default function LayerListPanel({
 
         {hasIsolation && (
           <div className="mb-3 flex flex-wrap items-center gap-1 rounded bg-indigo-50 px-2 py-1.5 text-xs text-indigo-700" data-guide="isolation-breadcrumb">
-            <button type="button" onClick={() => onNavigateIsolation?.(-1)} className="font-medium hover:underline">
+            <button
+              type="button"
+              onClick={() => onNavigateIsolation?.(-1)}
+              className="inline-flex min-h-11 items-center rounded px-2 font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:min-h-0 lg:rounded-none lg:px-0"
+            >
               圖層
             </button>
             {(isolationTrail.length ? isolationTrail : [{ id: isolationGroup?.id, label: "群組 1" }]).map((trailItem, index) => (
@@ -404,7 +408,7 @@ export default function LayerListPanel({
                   type="button"
                   onClick={() => onNavigateIsolation?.(index)}
                   aria-current={index === isolationTrail.length - 1 ? "location" : undefined}
-                  className="font-medium hover:underline"
+                  className="inline-flex min-h-11 items-center rounded px-2 font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:min-h-0 lg:rounded-none lg:px-0"
                 >
                   {trailItem.label || `群組 ${index + 1}`}
                 </button>

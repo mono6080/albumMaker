@@ -15,7 +15,7 @@ import {
   Text as KonvaText,
   Transformer,
 } from "react-konva";
-import { BookOpen, Camera, CircleHelp, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
+import { BookOpen, Camera, ChevronLeft, CircleHelp, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
 
 import {
   fetchTemplate,
@@ -45,16 +45,27 @@ import LayerListPanel from "../components/LayerListPanel";
 import PropertyPanel from "../components/PropertyPanel";
 import GroupSelectionPanel from "../components/GroupSelectionPanel";
 import EditorInspector from "../components/EditorInspector";
+import EditorCommandDock from "../components/EditorCommandDock";
+import EditorPagesPanel from "../components/EditorPagesPanel";
+import EditorSheet from "../components/EditorSheet";
+import EditorToolsPanel from "../components/EditorToolsPanel";
 import SelectionQuickActions from "../components/SelectionQuickActions";
 import ConfirmModal from "../components/ConfirmModal";
 import SpreadPreviewModal from "../components/SpreadPreviewModal";
 import { Button } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+import useCanvasCamera from "../hooks/useCanvasCamera";
 import useEditorStylePreferences from "../hooks/useEditorStylePreferences";
+import useEditorViewportMode, {
+  EDITOR_VIEWPORT_MODE,
+} from "../hooks/useEditorViewportMode";
 import useLayoutHistory, { cloneLayout } from "../hooks/useLayoutHistory";
+import { canvasViewportPointToPage } from "../utils/canvasCamera.js";
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
+  CANVAS_REAL_HEIGHT,
+  CANVAS_REAL_WIDTH,
   ELEMENT_ARRAY_KEY,
   getAllElementsSorted,
   getInitialStickerSize,
@@ -266,14 +277,19 @@ function TemplateUsageBanner({ template }) {
   if (projectCount === 0) return null;
   const studentCount = template.student_count ?? 0;
   const completedProjectCount = template.completed_project_count ?? 0;
+  const fullMessage = `此模板已套用於 ${projectCount} 個專案、${studentCount} 位學生；按下儲存後，變更會同步套用。${
+    completedProjectCount > 0
+      ? ` 其中 ${completedProjectCount} 個專案已完成，既有輸出會標記為需重新產生。`
+      : ""
+  }`;
   return (
     <div
       role="status"
-      className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+      className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 max-md:mb-0 max-md:rounded-none max-md:border-x-0 max-md:py-1.5 max-md:text-xs"
       data-guide="template-project-impact"
+      title={fullMessage}
     >
-      此模板已套用於 {projectCount} 個專案、{studentCount} 位學生；按下儲存後，變更會同步套用。
-      {completedProjectCount > 0 && ` 其中 ${completedProjectCount} 個專案已完成，既有輸出會標記為需重新產生。`}
+      <span className="max-md:block max-md:truncate">{fullMessage}</span>
     </div>
   );
 }
@@ -375,6 +391,28 @@ function isKeyboardInputTarget(target) {
   return target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
 }
 
+const DESKTOP_CANVAS_CAMERA = {
+  mode: "manual",
+  zoom: 1,
+  viewX: 0,
+  viewY: 0,
+};
+const CANVAS_ZOOM_STEP = 1.2;
+const MOBILE_PANEL = {
+  ADD: "add",
+  PAGES: "pages",
+  LAYERS: "layers",
+  PROPERTIES: "properties",
+};
+
+function isPointInsideCanvasPage(point) {
+  return point != null
+    && point.x >= 0
+    && point.x <= CANVAS_DISPLAY_WIDTH
+    && point.y >= 0
+    && point.y <= CANVAS_DISPLAY_HEIGHT;
+}
+
 function countTemplatePhotoSlots(template, draftLayouts) {
   if (!template?.pages) return 0;
   return template.pages.reduce((total, page) => {
@@ -407,6 +445,19 @@ export default function TemplateEditor() {
     saveFavoriteStyle,
     removeFavoriteStyle,
   } = useEditorStylePreferences(currentUser?.id);
+  const viewportMode = useEditorViewportMode();
+  const isResponsiveCanvas = viewportMode !== EDITOR_VIEWPORT_MODE.DESKTOP;
+  const {
+    viewportRef,
+    viewportSize,
+    camera,
+    cameraRef,
+    isReady: isCanvasCameraReady,
+    fitToViewport,
+    zoomAtPoint,
+    panBy,
+    applyPinch,
+  } = useCanvasCamera();
 
   const [template, setTemplate] = useState(null);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
@@ -426,16 +477,20 @@ export default function TemplateEditor() {
   const [spreadPreviewOpen, setSpreadPreviewOpen] = useState(false);
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
   const [inspectorTab, setInspectorTab] = useState("layers");
+  const [activeMobilePanel, setActiveMobilePanel] = useState(null);
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [hasLayoutClipboard, setHasLayoutClipboard] = useState(false);
 
   const stageRef = useRef(null);
+  const pageCameraRef = useRef(null);
   const transformerRef = useRef(null);
-  const stickerFileInputRef = useRef(null);
   const pageLayoutRef = useRef(null);
   const editorViewRef = useRef({ isolationPath: [], selectedRefs: [] });
   const activeCanvasGestureRef = useRef(null);
   const analysisRequestRef = useRef(null);
   const activePageSessionIdRef = useRef(null);
   const suppressNextStageClickRef = useRef(false);
+  const suppressStageClickSequenceRef = useRef(0);
   const layoutClipboardRef = useRef(null);
   const clipboardPasteCountRef = useRef(0);
   const multiTransformSnapshotRef = useRef(null);
@@ -443,9 +498,31 @@ export default function TemplateEditor() {
   const templateRef = useRef(null);
   const persistedPageIdsRef = useRef([]);
   const pageStructureDirtyRef = useRef(false);
+  const cameraGestureRef = useRef(null);
+  const touchCandidateTargetRef = useRef(null);
+  const isSpacePanPressedRef = useRef(false);
+  const hasUnsavedChangesRef = useRef(false);
+  const historyGuardRef = useRef({ installed: false, returning: false, allowNextPop: false });
   const photoSlotDimensionMode = getPhotoSlotDimensionMode(pageLayout);
   const isolationGroupId = isolationPath.length ? isolationPath[isolationPath.length - 1] : null;
   const selectedElement = selectedRefs.length === 1 ? selectedRefs[0] : null;
+  const activeCanvasCamera = isResponsiveCanvas && isCanvasCameraReady
+    ? camera
+    : DESKTOP_CANVAS_CAMERA;
+  const canvasStageSize = isResponsiveCanvas
+    ? {
+        width: Math.max(1, viewportSize.width),
+        height: Math.max(1, viewportSize.height),
+      }
+    : { width: CANVAS_DISPLAY_WIDTH, height: CANVAS_DISPLAY_HEIGHT };
+  const isPhoneEditor = viewportMode === EDITOR_VIEWPORT_MODE.PHONE;
+  const isTabletEditor = viewportMode === EDITOR_VIEWPORT_MODE.TABLET;
+
+  useEffect(() => {
+    setActiveMobilePanel(null);
+    if (isPhoneEditor) setActiveTool("select");
+    else setIsMultiSelectMode(false);
+  }, [isPhoneEditor, viewportMode]);
 
   useEffect(() => {
     if (!marqueeGesture && selectedRefs.length === 0) {
@@ -520,6 +597,100 @@ export default function TemplateEditor() {
     || Object.keys(draftLayouts.current).length > 0;
 
   useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    const discardMessage = "尚有未儲存的模板變更。確定要放棄變更並離開嗎？";
+    const historyGuard = historyGuardRef.current;
+    if (!historyGuard.installed) {
+      historyGuard.installed = true;
+      const currentRouteState = window.history.state?.usr;
+      if (!currentRouteState?.templateEditorGuard) {
+        navigate(".", {
+          state: { ...(currentRouteState ?? {}), templateEditorGuard: true },
+        });
+      }
+    }
+    const handleDocumentLink = (event) => {
+      if (!hasUnsavedChangesRef.current
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey) return;
+      const anchor = event.target.closest?.("a[href]");
+      if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.origin !== window.location.origin
+        || destination.href === window.location.href) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActiveMobilePanel(null);
+      setConfirmModal({
+        message: discardMessage,
+        confirmLabel: "放棄變更並離開",
+        confirmVariant: "danger",
+        onConfirm: () => navigate(`${destination.pathname}${destination.search}${destination.hash}`),
+      });
+    };
+    const handleNavigationRequest = (event) => {
+      if (!hasUnsavedChangesRef.current) return;
+      event.preventDefault();
+      setActiveMobilePanel(null);
+      setConfirmModal({
+        message: discardMessage,
+        confirmLabel: "放棄變更並離開",
+        confirmVariant: "danger",
+        onConfirm: () => event.detail?.proceed?.(),
+      });
+    };
+    const handleHistoryBack = () => {
+      if (historyGuard.returning) {
+        historyGuard.returning = false;
+        return;
+      }
+      if (historyGuard.allowNextPop) {
+        historyGuard.allowNextPop = false;
+        return;
+      }
+      const shouldLeave = !hasUnsavedChangesRef.current || window.confirm(discardMessage);
+      if (shouldLeave) {
+        // 第一個 back 只移到同 URL 的 guard base；再退一次才真正離開 editor。
+        historyGuard.allowNextPop = true;
+        window.setTimeout(() => window.history.back(), 0);
+      } else {
+        // 取消時回到 sentinel，整個過程 route 不曾離開 editor，保留記憶體草稿。
+        historyGuard.returning = true;
+        window.setTimeout(() => window.history.forward(), 0);
+      }
+    };
+    document.addEventListener("click", handleDocumentLink, true);
+    window.addEventListener("album-maker:navigation-request", handleNavigationRequest);
+    window.addEventListener("popstate", handleHistoryBack);
+    return () => {
+      document.removeEventListener("click", handleDocumentLink, true);
+      window.removeEventListener("album-maker:navigation-request", handleNavigationRequest);
+      window.removeEventListener("popstate", handleHistoryBack);
+    };
+  }, [navigate]);
+
+  const handleExitEditor = useCallback(() => {
+    if (!hasUnsavedChanges) {
+      navigate("/templates");
+      return;
+    }
+    setActiveMobilePanel(null);
+    setConfirmModal({
+      message: "尚有未儲存的模板變更。確定要放棄變更並返回模板列表嗎？",
+      confirmLabel: "放棄變更並離開",
+      confirmVariant: "danger",
+      onConfirm: () => navigate("/templates"),
+    });
+  }, [hasUnsavedChanges, navigate]);
+
+  useEffect(() => {
     pageLayoutRef.current = pageLayout;
   }, [pageLayout]);
 
@@ -573,6 +744,14 @@ export default function TemplateEditor() {
     tr.nodes(nodes);
     tr.getLayer()?.batchDraw();
   }, [selectedRefs, pageLayout, isolationGroupId]);
+
+  useEffect(() => {
+    const redrawFrame = requestAnimationFrame(() => {
+      transformerRef.current?.forceUpdate();
+      transformerRef.current?.getLayer()?.batchDraw();
+    });
+    return () => cancelAnimationFrame(redrawFrame);
+  }, [activeCanvasCamera.zoom, activeCanvasCamera.viewX, activeCanvasCamera.viewY]);
 
   // ── 載入與頁面切換 ────────────────────────────────────────────────────────
 
@@ -958,13 +1137,19 @@ export default function TemplateEditor() {
 
   const handleCanvasSelectElement = useCallback((elementRef, options = {}) => {
     setInspectorTab("properties");
-    handleSelectElement(elementRef, options);
-  }, [handleSelectElement]);
+    handleSelectElement(elementRef, {
+      ...options,
+      additive: isMultiSelectMode || options.additive,
+    });
+  }, [handleSelectElement, isMultiSelectMode]);
 
   const handleCanvasSelectGroup = useCallback((groupId, options = {}) => {
     setInspectorTab("properties");
-    handleSelectGroup(groupId, options);
-  }, [handleSelectGroup]);
+    handleSelectGroup(groupId, {
+      ...options,
+      additive: isMultiSelectMode || options.additive,
+    });
+  }, [handleSelectGroup, isMultiSelectMode]);
 
   const enterGroup = useCallback((groupId, preferredHit = null) => {
     if (!pageLayout) return;
@@ -1267,6 +1452,7 @@ export default function TemplateEditor() {
     if (!clipboard) return;
     layoutClipboardRef.current = clipboard;
     clipboardPasteCountRef.current = 0;
+    setHasLayoutClipboard(true);
     toast.success(`已複製 ${selectedRefs.length} 個物件`);
   }, [currentPage, pageLayout, selectedRefs]);
 
@@ -1292,6 +1478,7 @@ export default function TemplateEditor() {
       ), currentLayout));
       layoutClipboardRef.current = clipboard;
       clipboardPasteCountRef.current = 0;
+      setHasLayoutClipboard(true);
       setSelectedRefs(currentRefs => currentRefs.filter(
         ref => !editableRefs.some(item => sameRef(item, ref)),
       ));
@@ -1521,6 +1708,7 @@ export default function TemplateEditor() {
   // Delete / Backspace / Undo / Redo / 群組導覽與方向鍵
   useEffect(() => {
     const handleKeyDown = (keyEvent) => {
+      if (keyEvent.defaultPrevented) return;
       const isInputTarget = isKeyboardInputTarget(document.activeElement);
       const normalizedKey = keyEvent.key.toLowerCase();
       const isModifiedEditorCommand = (keyEvent.ctrlKey || keyEvent.metaKey)
@@ -1859,44 +2047,154 @@ export default function TemplateEditor() {
 
   // ── Konva Stage 事件：放置元素 or 取消選取 ───────────────────────────────
 
+  const setCameraInteractionListening = useCallback((isListening) => {
+    pageCameraRef.current?.listening(isListening);
+    transformerRef.current?.listening(isListening);
+    stageRef.current?.batchDraw();
+  }, []);
+
+  const suppressImmediateStageClick = useCallback(() => {
+    suppressNextStageClickRef.current = true;
+    suppressStageClickSequenceRef.current += 1;
+    const sequence = suppressStageClickSequenceRef.current;
+    requestAnimationFrame(() => {
+      if (suppressStageClickSequenceRef.current === sequence) {
+        suppressNextStageClickRef.current = false;
+      }
+    });
+  }, []);
+
+  const finishCameraGesture = useCallback(({ suppressClick = true } = {}) => {
+    const gesture = cameraGestureRef.current;
+    if (!gesture || gesture.kind === "touch-blocked") return;
+    cameraGestureRef.current = null;
+    if (suppressClick) suppressImmediateStageClick();
+    setCameraInteractionListening(true);
+    const stageContainer = stageRef.current?.container();
+    if (stageContainer) stageContainer.style.cursor = "";
+    endCanvasGesture();
+  }, [endCanvasGesture, setCameraInteractionListening, suppressImmediateStageClick]);
+
+  const beginCameraGesture = useCallback((gesture, target) => {
+    target?.stopDrag?.();
+    cameraGestureRef.current = gesture;
+    setMarqueeGesture(null);
+    setCameraInteractionListening(false);
+    beginCanvasGesture("camera");
+    const stageContainer = stageRef.current?.container();
+    if (stageContainer) stageContainer.style.cursor = "grabbing";
+  }, [beginCanvasGesture, setCameraInteractionListening]);
+
+  const getStageTouchPoints = useCallback((nativeEvent) => {
+    const stage = stageRef.current;
+    if (!stage) return [];
+    stage.setPointersPositions(nativeEvent);
+    return stage.getPointersPositions().map(point => ({ x: point.x, y: point.y }));
+  }, []);
+
   const getPointerCoordinates = useCallback(() => {
-    const position = stageRef.current?.getPointerPosition();
-    if (!position) return null;
+    const viewportPosition = stageRef.current?.getPointerPosition();
+    const displayPosition = pageCameraRef.current?.getRelativePointerPosition();
+    if (!viewportPosition || !displayPosition) return null;
     return {
-      display: position,
-      real: { x: toRealCoord(position.x), y: toRealCoord(position.y) },
+      viewport: viewportPosition,
+      display: displayPosition,
+      real: {
+        x: toRealCoord(displayPosition.x),
+        y: toRealCoord(displayPosition.y),
+      },
     };
   }, []);
 
   const handleStagePointerDown = useCallback((event) => {
+    if (cameraGestureRef.current) return;
+    const nativeEvent = event.evt;
+    const touchCount = nativeEvent?.touches?.length ?? 0;
+    if (isResponsiveCanvas && touchCount === 1) {
+      touchCandidateTargetRef.current = event.target;
+    }
+    if (isResponsiveCanvas && touchCount >= 2) {
+      const isLayoutGesture = activeCanvasGestureRef.current != null
+        && activeCanvasGestureRef.current !== "marquee";
+      if (isLayoutGesture || transformerRef.current?.isTransforming()) {
+        cameraGestureRef.current = { kind: "touch-blocked" };
+        return;
+      }
+      const touchPoints = getStageTouchPoints(nativeEvent);
+      if (touchPoints.length < 2) return;
+      if (activeCanvasGestureRef.current === "marquee") endCanvasGesture();
+      touchCandidateTargetRef.current?.stopDrag?.();
+      touchCandidateTargetRef.current = null;
+      beginCameraGesture({
+        kind: "pinch",
+        startCamera: { ...cameraRef.current },
+        startTouches: touchPoints.slice(0, 2),
+      }, event.target);
+      nativeEvent.preventDefault?.();
+      event.cancelBubble = true;
+      return;
+    }
+
+    const pointerButton = nativeEvent?.button ?? 0;
+    const shouldPanCamera = isResponsiveCanvas
+      && (pointerButton === 1 || (pointerButton === 0 && isSpacePanPressedRef.current));
+    if (shouldPanCamera) {
+      beginCameraGesture({
+        kind: "pan",
+        lastClientX: nativeEvent.clientX,
+        lastClientY: nativeEvent.clientY,
+      }, event.target);
+      nativeEvent.preventDefault?.();
+      event.cancelBubble = true;
+      return;
+    }
+
     if (activeTool !== "select" || event.target !== event.target.getStage()) return;
-    if (event.evt?.button != null && event.evt.button !== 0) return;
+    // 手機一般模式的空白觸控只負責取消選取；明確開啟多選後才允許框選。
+    if (isPhoneEditor && touchCount === 1 && !isMultiSelectMode) return;
+    if (pointerButton !== 0) return;
     const pointer = getPointerCoordinates();
-    if (!pointer) return;
+    if (!pointer || !isPointInsideCanvasPage(pointer.display)) return;
     setInspectorTab("properties");
     setMarqueeGesture({
+      startViewport: pointer.viewport,
+      currentViewport: pointer.viewport,
       startDisplay: pointer.display,
       currentDisplay: pointer.display,
       startReal: pointer.real,
       currentReal: pointer.real,
-      additive: !!event.evt?.shiftKey,
-      baseSelection: event.evt?.shiftKey ? [...selectedRefs] : [],
+      additive: isMultiSelectMode || !!nativeEvent?.shiftKey,
+      baseSelection: isMultiSelectMode || nativeEvent?.shiftKey ? [...selectedRefs] : [],
       active: false,
     });
     beginCanvasGesture("marquee");
-  }, [activeTool, beginCanvasGesture, getPointerCoordinates, selectedRefs]);
+  }, [
+    activeTool,
+    beginCameraGesture,
+    beginCanvasGesture,
+    cameraRef,
+    endCanvasGesture,
+    getPointerCoordinates,
+    getStageTouchPoints,
+    isPhoneEditor,
+    isMultiSelectMode,
+    isResponsiveCanvas,
+    selectedRefs,
+  ]);
 
   const handleStagePointerMove = useCallback(() => {
+    if (cameraGestureRef.current) return;
     if (!marqueeGesture || !pageLayout) return;
     const pointer = getPointerCoordinates();
     if (!pointer) return;
     const distance = Math.hypot(
-      pointer.display.x - marqueeGesture.startDisplay.x,
-      pointer.display.y - marqueeGesture.startDisplay.y,
+      pointer.viewport.x - marqueeGesture.startViewport.x,
+      pointer.viewport.y - marqueeGesture.startViewport.y,
     );
     const active = marqueeGesture.active || distance > 4;
     const nextGesture = {
       ...marqueeGesture,
+      currentViewport: pointer.viewport,
       currentDisplay: pointer.display,
       currentReal: pointer.real,
       active,
@@ -1926,11 +2224,157 @@ export default function TemplateEditor() {
   }, [activeTool, isolationGroupId, pageLayout]);
 
   const handleStagePointerUp = useCallback(() => {
+    if (cameraGestureRef.current?.kind === "pan") {
+      finishCameraGesture();
+      return;
+    }
+    if (cameraGestureRef.current) return;
     if (!marqueeGesture) return;
-    if (marqueeGesture.active) suppressNextStageClickRef.current = true;
+    if (marqueeGesture.active) suppressImmediateStageClick();
     setMarqueeGesture(null);
     endCanvasGesture();
-  }, [endCanvasGesture, marqueeGesture]);
+  }, [endCanvasGesture, finishCameraGesture, marqueeGesture, suppressImmediateStageClick]);
+
+  const handleStageTouchMove = useCallback((event) => {
+    const gesture = cameraGestureRef.current;
+    if (gesture?.kind === "pinch") {
+      const touchPoints = getStageTouchPoints(event.evt);
+      if (touchPoints.length >= 2) {
+        applyPinch(gesture.startCamera, gesture.startTouches, touchPoints.slice(0, 2));
+      }
+      event.evt.preventDefault?.();
+      event.cancelBubble = true;
+      return;
+    }
+    if (gesture?.kind === "touch-blocked") return;
+    handleStagePointerMove();
+  }, [applyPinch, getStageTouchPoints, handleStagePointerMove]);
+
+  const handleStageTouchEnd = useCallback((event) => {
+    const gesture = cameraGestureRef.current;
+    if (gesture?.kind === "pinch") {
+      if ((event.evt?.touches?.length ?? 0) === 0) {
+        touchCandidateTargetRef.current = null;
+        finishCameraGesture();
+      }
+      event.evt.preventDefault?.();
+      event.cancelBubble = true;
+      return;
+    }
+    if (gesture?.kind === "touch-blocked") {
+      if ((event.evt?.touches?.length ?? 0) === 0) {
+        cameraGestureRef.current = null;
+        touchCandidateTargetRef.current = null;
+      }
+      return;
+    }
+    if ((event.evt?.touches?.length ?? 0) === 0) {
+      if (event.evt?.type === "touchcancel") {
+        touchCandidateTargetRef.current = null;
+      } else {
+        // Konva 會在 touchend 後才合成 tap；保留起點到下一幀，避免 Transformer
+        // 的放大命中區把 tap 轉成 Stage 空白點擊而誤清除既有選取。
+        const touchTarget = touchCandidateTargetRef.current;
+        requestAnimationFrame(() => {
+          if (touchCandidateTargetRef.current === touchTarget) {
+            touchCandidateTargetRef.current = null;
+          }
+        });
+      }
+    }
+    handleStagePointerUp();
+  }, [finishCameraGesture, handleStagePointerUp]);
+
+  useEffect(() => {
+    if (!isResponsiveCanvas) return undefined;
+    const handleMouseMove = (mouseEvent) => {
+      const gesture = cameraGestureRef.current;
+      if (gesture?.kind !== "pan") return;
+      const delta = {
+        x: mouseEvent.clientX - gesture.lastClientX,
+        y: mouseEvent.clientY - gesture.lastClientY,
+      };
+      gesture.lastClientX = mouseEvent.clientX;
+      gesture.lastClientY = mouseEvent.clientY;
+      panBy(delta);
+      mouseEvent.preventDefault();
+    };
+    const handleMouseUp = () => {
+      if (cameraGestureRef.current?.kind === "pan") finishCameraGesture({ suppressClick: false });
+    };
+    const recoverCameraInteraction = () => {
+      isSpacePanPressedRef.current = false;
+      if (cameraGestureRef.current?.kind === "touch-blocked") {
+        cameraGestureRef.current = null;
+        touchCandidateTargetRef.current = null;
+        return;
+      }
+      if (cameraGestureRef.current) finishCameraGesture({ suppressClick: false });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") recoverCameraInteraction();
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("blur", recoverCameraInteraction);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("blur", recoverCameraInteraction);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      recoverCameraInteraction();
+    };
+  }, [finishCameraGesture, isResponsiveCanvas, panBy]);
+
+  useEffect(() => {
+    if (!isResponsiveCanvas) {
+      isSpacePanPressedRef.current = false;
+      return undefined;
+    }
+    const handleSpaceDown = (keyboardEvent) => {
+      if (keyboardEvent.code !== "Space" || isKeyboardInputTarget(document.activeElement)) return;
+      isSpacePanPressedRef.current = true;
+      keyboardEvent.preventDefault();
+    };
+    const handleSpaceUp = (keyboardEvent) => {
+      if (keyboardEvent.code === "Space") isSpacePanPressedRef.current = false;
+    };
+    window.addEventListener("keydown", handleSpaceDown);
+    window.addEventListener("keyup", handleSpaceUp);
+    return () => {
+      window.removeEventListener("keydown", handleSpaceDown);
+      window.removeEventListener("keyup", handleSpaceUp);
+    };
+  }, [isResponsiveCanvas]);
+
+  useEffect(() => {
+    if (isResponsiveCanvas || !cameraGestureRef.current) return;
+    if (cameraGestureRef.current.kind === "touch-blocked") {
+      cameraGestureRef.current = null;
+      touchCandidateTargetRef.current = null;
+      return;
+    }
+    finishCameraGesture({ suppressClick: false });
+  }, [finishCameraGesture, isResponsiveCanvas]);
+
+  useEffect(() => {
+    if (!isResponsiveCanvas || !pageLayout) return undefined;
+    const stage = stageRef.current;
+    const stageContainer = stage?.container();
+    if (!stage || !stageContainer) return undefined;
+    const handleCameraWheel = (wheelEvent) => {
+      if (!wheelEvent.ctrlKey && !wheelEvent.metaKey) return;
+      wheelEvent.preventDefault();
+      stage.setPointersPositions(wheelEvent);
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+      const zoomFactor = Math.exp(-wheelEvent.deltaY * 0.002);
+      zoomAtPoint(cameraRef.current.zoom * zoomFactor, pointer);
+    };
+    stageContainer.addEventListener("wheel", handleCameraWheel, { passive: false });
+    return () => stageContainer.removeEventListener("wheel", handleCameraWheel);
+  }, [cameraRef, isResponsiveCanvas, pageLayout, zoomAtPoint]);
 
   useEffect(() => {
     if (!marqueeGesture) return undefined;
@@ -1948,13 +2392,108 @@ export default function TemplateEditor() {
     if (activeTool !== "select" || isolationGroupId == null) return;
     if (event.target !== event.target.getStage()) return;
     const pointer = getPointerCoordinates();
-    if (!pointer) return;
+    if (!pointer || !isPointInsideCanvasPage(pointer.display)) return;
     const currentBounds = getGroupBounds(pageLayoutRef.current, isolationGroupId);
     if (!pointIsInsideOrientedBounds(pointer.real, currentBounds)) {
       event.cancelBubble = true;
       exitGroup();
     }
   }, [activeTool, exitGroup, getPointerCoordinates, isolationGroupId]);
+
+  const addElementAtRealPoint = useCallback((tool, point, { centered = false } = {}) => {
+    const sourceLayout = pageLayoutRef.current;
+    if (!sourceLayout || !point) return null;
+
+    if (tool === "addPhotoPortrait" || tool === "addPhotoLandscape") {
+      const contentSize = tool === "addPhotoPortrait"
+        ? { width: 240, height: 320 }
+        : { width: 320, height: 240 };
+      const newSlotStyle = {
+        id: generateElementId(),
+        rotation: 0,
+        border: true,
+        border_width: 8,
+        z_index: getNextZIndex(sourceLayout),
+      };
+      const newSlot = buildPhotoSlotFromContentRect(
+        newSlotStyle,
+        clampPhotoContentRect({
+          x: centered ? point.x - contentSize.width / 2 : point.x,
+          y: centered ? point.y - contentSize.height / 2 : point.y,
+          width: contentSize.width,
+          height: contentSize.height,
+        }),
+        { dimensionMode: photoSlotDimensionMode },
+      );
+      commitPageLayout(currentLayout => ({
+        ...currentLayout,
+        photo_slots: [
+          ...(currentLayout.photo_slots || []),
+          { ...newSlot, z_index: getNextZIndex(currentLayout) },
+        ],
+      }));
+      setIsolationPath([]);
+      setInspectorTab("properties");
+      setSelectedElement({ type: "photo", id: newSlot.id });
+      return { type: "photo", id: newSlot.id };
+    }
+
+    if (tool === "addText") {
+      const width = 240;
+      const height = 80;
+      const requestedX = centered ? point.x - width / 2 : point.x;
+      const requestedY = centered ? point.y - height / 2 : point.y;
+      const newTextLabel = {
+        id: generateElementId(),
+        x: centered ? Math.max(0, Math.min(CANVAS_REAL_WIDTH - width, requestedX)) : requestedX,
+        y: centered ? Math.max(0, Math.min(CANVAS_REAL_HEIGHT - height, requestedY)) : requestedY,
+        width,
+        height,
+        rotation: 0,
+        text: "{name}的文字標題",
+        text_role: TEXT_LABEL_ROLES.FILLABLE,
+        font_size: 28,
+        font_color: "#3B6B8C",
+        font_family: "msjh",
+        text_align: "center",
+        line_height: 1.4,
+        z_index: getNextZIndex(sourceLayout),
+      };
+      commitPageLayout(currentLayout => ({
+        ...currentLayout,
+        text_labels: [
+          ...(currentLayout.text_labels || []),
+          { ...newTextLabel, z_index: getNextZIndex(currentLayout) },
+        ],
+      }));
+      setIsolationPath([]);
+      setInspectorTab("properties");
+      setSelectedElement({ type: "text", id: newTextLabel.id });
+      return { type: "text", id: newTextLabel.id };
+    }
+
+    return null;
+  }, [commitPageLayout, photoSlotDimensionMode, setSelectedElement]);
+
+  const handleMobileAddTool = useCallback((tool) => {
+    if (!["addPhotoPortrait", "addPhotoLandscape", "addText"].includes(tool)) return;
+    const viewportCenter = {
+      x: canvasStageSize.width / 2,
+      y: canvasStageSize.height / 2,
+    };
+    const pageCenter = canvasViewportPointToPage(viewportCenter, activeCanvasCamera);
+    const clampedPageCenter = {
+      x: Math.max(0, Math.min(CANVAS_DISPLAY_WIDTH, pageCenter.x)),
+      y: Math.max(0, Math.min(CANVAS_DISPLAY_HEIGHT, pageCenter.y)),
+    };
+    addElementAtRealPoint(tool, {
+      x: toRealCoord(clampedPageCenter.x),
+      y: toRealCoord(clampedPageCenter.y),
+    }, { centered: true });
+    setActiveTool("select");
+    setIsMultiSelectMode(false);
+    setActiveMobilePanel(null);
+  }, [activeCanvasCamera, addElementAtRealPoint, canvasStageSize.height, canvasStageSize.width]);
 
   const handleStageClick = (e) => {
     if (!pageLayout) return;
@@ -1966,65 +2505,22 @@ export default function TemplateEditor() {
     if (!pointer) return;
     const realX = pointer.real.x;
     const realY = pointer.real.y;
+    const isInsidePage = isPointInsideCanvasPage(pointer.display);
 
-    if (activeTool === "addPhotoPortrait" || activeTool === "addPhotoLandscape") {
-      // 新照片格一律固定比例：3:4 直式或 4:3 橫式
-      const contentSize = activeTool === "addPhotoPortrait"
-        ? { width: 240, height: 320 }
-        : { width: 320, height: 240 };
-      const newSlotStyle = {
-        id: generateElementId(),
-        rotation: 0,
-        border: true, border_width: 8,
-        z_index: getNextZIndex(pageLayout),
-      };
-      const newSlot = buildPhotoSlotFromContentRect(
-        newSlotStyle,
-        clampPhotoContentRect({
-          x: realX,
-          y: realY,
-          width: contentSize.width,
-          height: contentSize.height,
-        }),
-        { dimensionMode: photoSlotDimensionMode },
-      );
-      commitPageLayout(currentLayout => ({
-        ...currentLayout,
-        photo_slots: [...currentLayout.photo_slots, { ...newSlot, z_index: getNextZIndex(currentLayout) }],
-      }));
-      setIsolationPath([]);
-      setInspectorTab("properties");
-      setSelectedElement({ type: "photo", id: newSlot.id });
+    if (["addPhotoPortrait", "addPhotoLandscape", "addText"].includes(activeTool)) {
+      if (!isInsidePage) return;
+      addElementAtRealPoint(activeTool, { x: realX, y: realY });
       return;
     }
 
-    if (activeTool === "addText") {
-      const newTextLabel = {
-        id: generateElementId(),
-        x: realX, y: realY,
-        width: 240, height: 80,
-        rotation: 0,
-        text: "{name}的文字標題",
-        text_role: TEXT_LABEL_ROLES.FILLABLE,
-        font_size: 28,
-        font_color: "#3B6B8C",
-        font_family: "msjh",
-        text_align: "center",
-        line_height: 1.4,
-        z_index: getNextZIndex(pageLayout),
-      };
-      commitPageLayout(currentLayout => ({
-        ...currentLayout,
-        text_labels: [...(currentLayout.text_labels || []), { ...newTextLabel, z_index: getNextZIndex(currentLayout) }],
-      }));
-      setIsolationPath([]);
-      setInspectorTab("properties");
-      setSelectedElement({ type: "text", id: newTextLabel.id });
-      return;
-    }
-
-    // 選取模式：點擊空白處取消選取
-    if (e.target === stageRef.current && !e.evt?.shiftKey) {
+    const touchStartedOnCanvasControl = touchCandidateTargetRef.current != null
+      && touchCandidateTargetRef.current !== stageRef.current;
+    // 選取模式：點擊空白處取消選取。觸控若從物件／Transformer 開始，
+    // 即使 Konva 將合成 tap 的 target 回報成 Stage，也不應誤判為空白。
+    if (e.target === stageRef.current
+      && !touchStartedOnCanvasControl
+      && !e.evt?.shiftKey
+      && !isMultiSelectMode) {
       setInspectorTab("layers");
       setSelectedElement(null);
     }
@@ -2047,6 +2543,76 @@ export default function TemplateEditor() {
       confirmVariant={confirmModal?.confirmVariant}
     />
   );
+
+  if (template.pages.length === 0 && isResponsiveCanvas) {
+    return (
+      <div className={`mx-auto flex w-full max-w-[1042px] flex-col bg-slate-50 ${
+        isPhoneEditor
+          ? "fixed inset-0 z-30 h-dvh max-w-none overflow-hidden pb-[calc(4rem+env(safe-area-inset-bottom))]"
+          : "h-[calc(100dvh-5.25rem)] min-h-0 overflow-hidden"
+      }`}>
+        {confirmDialog}
+        <div
+          className="flex min-h-14 flex-shrink-0 items-center gap-1 border-b border-gray-200 bg-white px-1.5 shadow-sm"
+          data-guide={isPhoneEditor ? "mobile-editor-topbar" : "editor-compact-topbar"}
+        >
+          <button
+            type="button"
+            onClick={handleExitEditor}
+            aria-label="返回模板列表"
+            className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <div className="min-w-0 flex-1 px-1">
+            <h1 className="truncate text-sm font-semibold text-gray-900" title={template.name}>{template.name}</h1>
+            <p className="truncate text-[11px] text-gray-500">尚未建立頁面 · 0 張照片</p>
+          </div>
+          <span className="inline-flex flex-shrink-0 items-center" data-guide="history-actions">
+            <button type="button" onClick={undoLayout} disabled={!canUndo} aria-label="復原" className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 disabled:opacity-35">
+              <Undo2 className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={redoLayout} disabled={!canRedo} aria-label="重做" className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 disabled:opacity-35">
+              <Redo2 className="h-4 w-4" />
+            </button>
+          </span>
+          <button
+            type="button"
+            onClick={handleSaveLayout}
+            disabled={isSaving || !hasUnsavedChanges}
+            data-guide="save-template"
+            data-dirty={hasUnsavedChanges ? "true" : "false"}
+            className="inline-flex min-h-11 min-w-14 flex-shrink-0 items-center justify-center gap-1 rounded-lg bg-indigo-600 px-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+          >
+            {isSaving ? "儲存中" : "儲存"}
+            {hasUnsavedChanges && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />}
+          </button>
+        </div>
+        <TemplateUsageBanner template={template} />
+        <div className="flex min-h-0 flex-1 items-center justify-center p-5">
+          <section className="w-full max-w-sm rounded-2xl border border-dashed border-gray-300 bg-white p-6 text-center shadow-sm" aria-labelledby="empty-template-title">
+            <span className="mx-auto inline-flex h-14 w-14 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+              <Camera className="h-6 w-6" />
+            </span>
+            <h2 id="empty-template-title" className="mt-4 text-lg font-semibold text-gray-900">先建立第一頁</h2>
+            <p className="mt-1 text-sm leading-6 text-gray-500">建立頁面後即可加入照片格、文字、背景與貼圖。</p>
+            {!isPhoneEditor && (
+              <button type="button" onClick={handleAddPage} disabled={isSaving} className="mt-5 min-h-11 w-full rounded-lg bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                新增第一頁
+              </button>
+            )}
+          </section>
+        </div>
+        {isPhoneEditor && (
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)]" data-guide="mobile-editor-dock">
+            <button type="button" onClick={handleAddPage} disabled={isSaving} aria-label="新增第一頁" className="inline-flex min-h-14 w-full items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+              ＋ 新增第一頁
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (template.pages.length === 0) {
     return (
@@ -2481,7 +3047,11 @@ export default function TemplateEditor() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1042px] flex-col lg:-mx-4 lg:w-auto xl:mx-auto xl:w-full">
+    <div className={`mx-auto flex w-full max-w-[1042px] flex-col lg:-mx-4 lg:w-auto xl:mx-auto xl:w-full ${
+      isPhoneEditor
+        ? "fixed inset-0 z-30 h-dvh max-w-none overflow-hidden bg-slate-50 pb-[calc(4rem+env(safe-area-inset-bottom))]"
+        : isTabletEditor ? "h-[calc(100dvh-5.25rem)] min-h-0 overflow-hidden" : ""
+    }`}>
       {confirmDialog}
       {spreadPreviewOpen && (
         <SpreadPreviewModal
@@ -2491,78 +3061,97 @@ export default function TemplateEditor() {
           onClose={() => setSpreadPreviewOpen(false)}
         />
       )}
-      {/* 頂部標題列 */}
-      <div className="mb-3 flex flex-shrink-0 flex-wrap items-center gap-3" data-guide="editor-header">
-        <button onClick={() => navigate("/templates")} className="text-sm text-gray-500 hover:text-gray-700">
-          ← 返回
-        </button>
-        <h1 className="text-lg font-bold">{template.name}</h1>
-        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">模板編輯器</span>
-        <span data-guide="template-photo-count" className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
-          <Camera className="w-3 h-3" />
-          照片總計 {totalPhotoCount} 張
-        </span>
-        <div className="ml-auto flex items-center gap-2" data-guide="top-actions">
-          {/* 與全站教學鈕同一顆 token（secondary） */}
-          <Button
-            type="button"
-            onClick={startEditorGuide}
-            variant="secondary"
-            size="sm"
-          >
-            <CircleHelp className="w-4 h-4" />
-            製作教學
-          </Button>
-          <span className="inline-flex items-center gap-2" data-guide="history-actions">
+      {/* 手機／平板把最常用命令固定在單列，避免儲存被擠出首屏。 */}
+      {isResponsiveCanvas ? (
+        <div
+          className="flex min-h-14 flex-shrink-0 items-center gap-1 border-b border-gray-200 bg-white px-1.5 shadow-sm"
+          data-guide={isPhoneEditor ? "mobile-editor-topbar" : "editor-compact-topbar"}
+        >
           <button
             type="button"
-            onClick={undoLayout}
-            disabled={!canUndo}
-            aria-label="復原"
-            title="復原 (Ctrl+Z)"
-            className="w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35 disabled:hover:bg-white"
+            onClick={handleExitEditor}
+            aria-label="返回模板列表"
+            className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100"
           >
-            <Undo2 className="w-4 h-4" />
+            <ChevronLeft className="h-5 w-5" />
           </button>
-          <button
-            type="button"
-            onClick={redoLayout}
-            disabled={!canRedo}
-            aria-label="重做"
-            title="重做 (Ctrl+Y / Ctrl+Shift+Z)"
-            className="w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35 disabled:hover:bg-white"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
+          <div className="min-w-0 flex-1 px-1">
+            <h1 className="truncate text-sm font-semibold text-gray-900" title={template.name}>{template.name}</h1>
+            <p className="truncate text-[11px] text-gray-500">
+              第 {currentPageIndex + 1}/{template.pages.length} 頁 · {totalPhotoCount} 張照片
+            </p>
+          </div>
+          <span className="inline-flex flex-shrink-0 items-center" data-guide="history-actions">
+            <button
+              type="button"
+              onClick={undoLayout}
+              disabled={!canUndo}
+              aria-label="復原"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 disabled:opacity-35"
+            >
+              <Undo2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={redoLayout}
+              disabled={!canRedo}
+              aria-label="重做"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 disabled:opacity-35"
+            >
+              <Redo2 className="h-4 w-4" />
+            </button>
           </span>
           <button
             type="button"
-            onClick={handleOpenSpreadPreview}
-            disabled={isSaving || template.pages.length === 0}
-            data-guide="spread-preview"
-            className="inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <BookOpen className="w-4 h-4" />
-            雙頁預覽
-          </button>
-          <button
             onClick={handleSaveLayout}
             disabled={isSaving || hasRepairableMaterialLinks}
             title={hasRepairableMaterialLinks ? "請先清除失效素材連結" : undefined}
             data-guide="save-template"
-            className="inline-flex items-center gap-1.5 px-4 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            data-dirty={hasUnsavedChanges ? "true" : "false"}
+            className="inline-flex min-h-11 min-w-14 flex-shrink-0 items-center justify-center gap-1 rounded-lg bg-indigo-600 px-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            {isSaving ? "儲存中..." : (
-              <>
-                儲存
-                {hasUnsavedChanges && (
-                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />
-                )}
-              </>
-            )}
+            {isSaving ? "儲存中" : "儲存"}
+            {hasUnsavedChanges && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />}
           </button>
+          <span className="sr-only" aria-live="polite">
+            {isSaving ? "儲存中" : hasUnsavedChanges ? "有未儲存變更" : "已儲存"}
+          </span>
         </div>
-      </div>
+      ) : (
+        <div className="mb-3 flex flex-shrink-0 flex-wrap items-center gap-3" data-guide="editor-header">
+          <button onClick={handleExitEditor} className="text-sm text-gray-500 hover:text-gray-700">
+            ← 返回
+          </button>
+          <h1 className="text-lg font-bold">{template.name}</h1>
+          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500">模板編輯器</span>
+          <span data-guide="template-photo-count" className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+            <Camera className="h-3 w-3" />
+            照片總計 {totalPhotoCount} 張
+          </span>
+          <div className="ml-auto flex items-center gap-2" data-guide="top-actions">
+            <Button type="button" onClick={startEditorGuide} variant="secondary" size="sm">
+              <CircleHelp className="h-4 w-4" />
+              製作教學
+            </Button>
+            <span className="inline-flex items-center gap-2" data-guide="history-actions">
+              <button type="button" onClick={undoLayout} disabled={!canUndo} aria-label="復原" title="復原 (Ctrl+Z)" className="inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35">
+                <Undo2 className="h-4 w-4" />
+              </button>
+              <button type="button" onClick={redoLayout} disabled={!canRedo} aria-label="重做" title="重做 (Ctrl+Y / Ctrl+Shift+Z)" className="inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-35">
+                <Redo2 className="h-4 w-4" />
+              </button>
+            </span>
+            <button type="button" onClick={handleOpenSpreadPreview} disabled={isSaving || template.pages.length === 0} data-guide="spread-preview" className="inline-flex items-center gap-1.5 rounded border border-gray-200 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              <BookOpen className="h-4 w-4" />
+              雙頁預覽
+            </button>
+            <button onClick={handleSaveLayout} disabled={isSaving || hasRepairableMaterialLinks} title={hasRepairableMaterialLinks ? "請先清除失效素材連結" : undefined} data-guide="save-template" data-dirty={hasUnsavedChanges ? "true" : "false"} className="inline-flex items-center gap-1.5 rounded bg-indigo-600 px-4 py-1 text-sm text-white hover:bg-indigo-700 disabled:opacity-50">
+              {isSaving ? "儲存中..." : "儲存"}
+              {hasUnsavedChanges && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />}
+            </button>
+          </div>
+        </div>
+      )}
 
       <TemplateUsageBanner template={template} />
 
@@ -2590,141 +3179,120 @@ export default function TemplateEditor() {
         />
       )}
 
-      {/* 三欄主體 */}
-      <div className="flex flex-wrap gap-2 lg:flex-nowrap xl:gap-4">
-        {/* 左側工具欄 */}
-        <div className="flex w-36 flex-shrink-0 flex-col gap-4 lg:w-40" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
-          {/* 工具 */}
-          <div data-guide="tool-panel">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">工具</p>
-            <div className="flex flex-col gap-1">
-              {[
-                { key: "select",            label: "↖ 選取" },
-                { key: "addPhotoPortrait",  label: "＋ 照片格 3:4 直式" },
-                { key: "addPhotoLandscape", label: "＋ 照片格 4:3 橫式" },
-                { key: "addText",           label: "＋ 純文字" },
-              ].map(tool => (
-                <button
-                  key={tool.key}
-                  onClick={() => setActiveTool(tool.key)}
-                  data-guide={`tool-${tool.key === "addPhotoPortrait" ? "add-photo" : tool.key === "addPhotoLandscape" ? "add-photo-landscape" : tool.key === "addText" ? "add-text" : "select"}`}
-                  className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
-                    activeTool === tool.key
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "bg-white text-gray-700 hover:bg-gray-50 border-gray-200"
-                  }`}
-                >
-                  {tool.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 素材 */}
-          <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">素材</p>
-            <div className="flex flex-col gap-1">
-              <label
-                data-guide="upload-background"
-                title={currentPage?.id == null ? "請先儲存新增頁面" : undefined}
-                onClick={(event) => {
-                  if (currentPage?.id != null) return;
-                  event.preventDefault();
-                  toast.error("請先儲存新增頁面，再上傳背景");
-                }}
-                className={`px-3 py-1.5 rounded text-sm text-left border bg-white text-gray-700 border-gray-200 transition-colors ${
-                  currentPage?.id == null
-                    ? "cursor-not-allowed opacity-50"
-                    : "cursor-pointer hover:bg-gray-50"
-                }`}
-              >
-                {currentPage?.id == null ? "↑ 上傳背景（先儲存）" : "↑ 上傳背景"}
-                <input type="file" accept="image/*" className="hidden" onChange={handleBackgroundSelect} />
-              </label>
-              <label className="px-3 py-1.5 rounded text-sm text-left border bg-white hover:bg-gray-50 cursor-pointer text-gray-700 border-gray-200 transition-colors">
-                ＋ 貼圖素材
-                <input
-                  ref={stickerFileInputRef}
-                  type="file" accept="image/*" className="hidden"
-                  onChange={event => {
-                    if (event.target.files?.[0]) {
-                      handleStickerUpload(event.target.files[0]);
-                      event.target.value = "";
-                    }
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-
-          {/* 頁面 */}
-          <div className="flex flex-col flex-1 min-h-0" data-guide="page-list">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">頁面</p>
-            <div className="flex flex-col gap-1 overflow-y-auto flex-1">
-              {template.pages.map((templatePage, pageTabIndex) => (
-                <button
-                  key={getEditorPageKey(templatePage)}
-                  onClick={() => {
-                    setInspectorTab("layers");
-                    setCurrentPageIndex(pageTabIndex);
-                  }}
-                  className={`px-3 py-1.5 rounded text-sm text-left border transition-colors ${
-                    currentPageIndex === pageTabIndex
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "bg-white text-gray-600 hover:bg-gray-50 border-gray-200"
-                  }`}
-                >
-                  <span>第 {pageTabIndex + 1} 頁</span>
-                  {templatePage.id == null && (
-                    <span aria-hidden="true" className="ml-1.5 text-[10px] opacity-80">●</span>
-                  )}
-                </button>
-              ))}
-              <button
-                onClick={handleAddPage}
-                disabled={isSaving}
-                data-guide="add-page"
-                className="rounded border border-dashed border-gray-300 px-3 py-1.5 text-left text-sm text-gray-500 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                ＋ 新增頁
-              </button>
-            </div>
-            <button
-              onClick={handleDeletePage}
-              disabled={isSaving}
-              className="mt-2 rounded border border-red-200 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              刪除此頁
-            </button>
+      {/* 三欄主體；手機只留下可用空間內的畫布。 */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-nowrap gap-2 overflow-hidden xl:gap-4">
+        {/* 左側工具欄；平板按鈕維持 44px，低高度時整欄自行捲動。 */}
+        {!isPhoneEditor && (
+        <div className="hidden w-36 flex-shrink-0 flex-col overflow-hidden md:flex lg:w-40" style={{ maxHeight: CANVAS_DISPLAY_HEIGHT }}>
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pr-1">
+            <EditorToolsPanel
+              activeTool={activeTool}
+              onToolChange={setActiveTool}
+              canUploadBackground={currentPage?.id != null}
+              onBackgroundBlocked={() => toast.error("請先儲存新增頁面，再上傳背景")}
+              onBackgroundSelect={handleBackgroundSelect}
+              onStickerSelect={handleStickerUpload}
+            />
+            <EditorPagesPanel
+              pages={template.pages}
+              currentPageIndex={currentPageIndex}
+              isDisabled={isSaving}
+              onSelectPage={(pageTabIndex) => {
+                setInspectorTab("layers");
+                setCurrentPageIndex(pageTabIndex);
+              }}
+              onAddPage={handleAddPage}
+              onDeletePage={handleDeletePage}
+              className="min-h-[14rem]"
+            />
           </div>
         </div>
+        )}
 
         {/* 中央畫布區 */}
-        <div className="flex-shrink-0 flex flex-col">
+        <div className={isResponsiveCanvas
+          ? "flex min-h-0 min-w-0 flex-1 flex-col max-md:w-full"
+          : "flex flex-shrink-0 flex-col"}
+        >
           <div
-            style={{ cursor: activeTool === "select" ? "default" : "crosshair" }}
-            className="relative border border-gray-300 rounded overflow-hidden bg-white select-none"
-            data-guide="canvas-frame"
+            ref={viewportRef}
+            style={{
+              cursor: activeTool === "select" ? "default" : "crosshair",
+              touchAction: isResponsiveCanvas ? "none" : undefined,
+            }}
+            className={`relative min-h-0 overflow-hidden border border-gray-300 bg-gray-100 select-none ${
+              isResponsiveCanvas
+                ? isPhoneEditor
+                  ? "h-full w-full rounded-none border-x-0"
+                  : "h-full w-full rounded"
+                : "h-[752px] w-[532px] bg-white"
+            }`}
+            data-guide="editor-canvas-viewport"
+            data-canvas-viewport={isResponsiveCanvas ? "responsive" : "desktop"}
           >
-            <SelectionQuickActions
-              selectedCount={selectedRefs.length}
-              isVisible={isSelectionVisible}
-              isLocked={isSelectionLocked}
-              canEdit={canEditSelection}
-              canGroup={selectedRefs.length >= 2}
-              canUngroup={selectedRefs.length === 1 && selectedElement?.type === "group"}
-              canDuplicate={selectedRefs.length > 0}
-              onToggleVisibility={handleToggleSelectedVisibility}
-              onToggleLock={handleToggleSelectedLock}
-              onDuplicate={handleDuplicateSelection}
-              onGroup={handleCreateGroup}
-              onUngroup={() => handleUngroup(selectedElement?.id)}
-              onDelete={deleteSelectedElement}
-            />
+            <div className="absolute inset-0" data-guide="canvas-frame">
+            {!isPhoneEditor && (
+              <SelectionQuickActions
+                selectedCount={selectedRefs.length}
+                isVisible={isSelectionVisible}
+                isLocked={isSelectionLocked}
+                canEdit={canEditSelection}
+                canGroup={selectedRefs.length >= 2}
+                canUngroup={selectedRefs.length === 1 && selectedElement?.type === "group"}
+                canDuplicate={selectedRefs.length > 0}
+                onToggleVisibility={handleToggleSelectedVisibility}
+                onToggleLock={handleToggleSelectedLock}
+                onDuplicate={handleDuplicateSelection}
+                onGroup={handleCreateGroup}
+                onUngroup={() => handleUngroup(selectedElement?.id)}
+                onDelete={deleteSelectedElement}
+                touchFriendly={isResponsiveCanvas}
+              />
+            )}
+            {isResponsiveCanvas && (
+              <div
+                className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-lg backdrop-blur"
+                role="toolbar"
+                aria-label="畫布縮放"
+              >
+                <button
+                  type="button"
+                  data-guide="zoom-out"
+                  aria-label="縮小畫布"
+                  disabled={!isCanvasCameraReady}
+                  onClick={() => zoomAtPoint(cameraRef.current.zoom / CANVAS_ZOOM_STEP)}
+                  className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  −
+                </button>
+                <span className="min-w-12 text-center text-xs font-medium text-gray-600" aria-live="polite">
+                  {Math.round(activeCanvasCamera.zoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  data-guide="zoom-fit"
+                  disabled={!isCanvasCameraReady}
+                  onClick={fitToViewport}
+                  className="inline-flex min-h-11 min-w-20 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-40"
+                >
+                  適合畫面
+                </button>
+                <button
+                  type="button"
+                  data-guide="zoom-in"
+                  aria-label="放大畫布"
+                  disabled={!isCanvasCameraReady}
+                  onClick={() => zoomAtPoint(cameraRef.current.zoom * CANVAS_ZOOM_STEP)}
+                  className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  ＋
+                </button>
+              </div>
+            )}
             <Stage
               ref={stageRef}
-              width={CANVAS_DISPLAY_WIDTH}
-              height={CANVAS_DISPLAY_HEIGHT}
+              width={canvasStageSize.width}
+              height={canvasStageSize.height}
               onClick={handleStageClick}
               onTap={handleStageClick}
               onMouseDown={handleStagePointerDown}
@@ -2735,12 +3303,27 @@ export default function TemplateEditor() {
               onMouseUp={handleStagePointerUp}
               onMouseLeave={() => setHoveredRef(null)}
               onTouchStart={handleStagePointerDown}
-              onTouchMove={handleStagePointerMove}
-              onTouchEnd={handleStagePointerUp}
+              onTouchMove={handleStageTouchMove}
+              onTouchEnd={handleStageTouchEnd}
+              onTouchCancel={handleStageTouchEnd}
               onDblClick={handleStageDoubleClick}
               onDblTap={handleStageDoubleClick}
             >
               <Layer>
+                <KonvaGroup
+                  ref={pageCameraRef}
+                  id="page-camera"
+                  x={activeCanvasCamera.viewX}
+                  y={activeCanvasCamera.viewY}
+                  scaleX={activeCanvasCamera.zoom}
+                  scaleY={activeCanvasCamera.zoom}
+                >
+                  <KonvaGroup
+                    clipX={0}
+                    clipY={0}
+                    clipWidth={CANVAS_DISPLAY_WIDTH}
+                    clipHeight={CANVAS_DISPLAY_HEIGHT}
+                  >
                 {/* 白色底色 */}
                 <Rect
                   x={0} y={0}
@@ -2785,6 +3368,23 @@ export default function TemplateEditor() {
 
                 {renderFooterNode(pageLayout?.footer)}
 
+                {marqueeDisplayRect && (
+                  <Rect
+                    x={marqueeDisplayRect.x}
+                    y={marqueeDisplayRect.y}
+                    width={marqueeDisplayRect.width}
+                    height={marqueeDisplayRect.height}
+                    fill="rgba(79,70,229,0.08)"
+                    stroke="#4F46E5"
+                    strokeWidth={1}
+                    strokeScaleEnabled={false}
+                    dash={[5, 3]}
+                    listening={false}
+                  />
+                )}
+                  </KonvaGroup>
+                </KonvaGroup>
+
                 {/* Transformer：顯示縮放/旋轉把手 */}
                 <Transformer
                   ref={transformerRef}
@@ -2801,8 +3401,11 @@ export default function TemplateEditor() {
                   anchorFill="#4F46E5"
                   anchorStroke="#ffffff"
                   anchorStrokeWidth={1}
-                  anchorSize={8}
-                  rotateAnchorOffset={20}
+                  anchorSize={isResponsiveCanvas ? 14 : 8}
+                  anchorStyleFunc={(anchor) => {
+                    anchor.hitStrokeWidth(isResponsiveCanvas ? 44 : 10);
+                  }}
+                  rotateAnchorOffset={isResponsiveCanvas ? 28 : 20}
                   enabledAnchors={selectedRefs.length === 0 || !canEditSelection
                     ? []
                     : selectedRefs.length > 1 || selectedElement?.type === "group" || selectedElement?.type === "photo"
@@ -2816,9 +3419,10 @@ export default function TemplateEditor() {
                   boundBoxFunc={(oldBox, newBox) => {
                     const isShrinking = Math.abs(newBox.width) < Math.abs(oldBox.width)
                       || Math.abs(newBox.height) < Math.abs(oldBox.height);
+                    const minimumScale = activeCanvasCamera.zoom;
                     if (isShrinking
-                      && (Math.abs(newBox.width) < toDisplayCoord(60)
-                        || Math.abs(newBox.height) < toDisplayCoord(40))) {
+                      && (Math.abs(newBox.width) < toDisplayCoord(60) * minimumScale
+                        || Math.abs(newBox.height) < toDisplayCoord(40) * minimumScale)) {
                       return oldBox;
                     }
                     if (selectedRefs.length > 1
@@ -2832,31 +3436,31 @@ export default function TemplateEditor() {
                     return newBox;
                   }}
                 />
-
-                {marqueeDisplayRect && (
-                  <Rect
-                    x={marqueeDisplayRect.x}
-                    y={marqueeDisplayRect.y}
-                    width={marqueeDisplayRect.width}
-                    height={marqueeDisplayRect.height}
-                    fill="rgba(79,70,229,0.08)"
-                    stroke="#4F46E5"
-                    strokeWidth={1}
-                    dash={[5, 3]}
-                    listening={false}
-                  />
-                )}
               </Layer>
             </Stage>
+            </div>
           </div>
 
-          <p className="text-xs text-gray-400 mt-1.5">
+          <p className="mt-1.5 hidden text-xs text-gray-400 md:block">
             提示：點選工具後在畫布上點擊放置；拖曳移動；四角拖曳調整大小；頂部圓點旋轉
           </p>
         </div>
 
         {/* 右側：固定屬性／圖層檢查器 */}
         <EditorInspector
+          presentation={isPhoneEditor
+            ? "bottom-sheet"
+            : isTabletEditor ? "side-drawer" : "static"}
+          isOpen={isPhoneEditor
+            ? activeMobilePanel === MOBILE_PANEL.LAYERS
+              || activeMobilePanel === MOBILE_PANEL.PROPERTIES
+            : undefined}
+          onOpenChange={isPhoneEditor
+            ? (isOpen) => {
+                if (!isOpen) setActiveMobilePanel(null);
+              }
+            : undefined}
+          showTrigger={!isPhoneEditor}
           activeTab={inspectorTab}
           onTabChange={setInspectorTab}
           selectedRefs={selectedRefs}
@@ -2946,8 +3550,14 @@ export default function TemplateEditor() {
               currentPageIndex={currentPageIndex}
               photoSlotDimensionMode={photoSlotDimensionMode}
               backgroundUrl={backgroundUrl}
-              onSelectElement={(type, id, options) => handleSelectElement({ type, id }, options)}
-              onSelectGroup={handleSelectGroup}
+              onSelectElement={(type, id, options = {}) => handleSelectElement(
+                { type, id },
+                { ...options, additive: isMultiSelectMode || options.additive },
+              )}
+              onSelectGroup={(groupId, options = {}) => handleSelectGroup(
+                groupId,
+                { ...options, additive: isMultiSelectMode || options.additive },
+              )}
               onEnterGroup={enterGroup}
               onExitGroup={exitGroup}
               onNavigateIsolation={navigateIsolation}
@@ -2959,6 +3569,127 @@ export default function TemplateEditor() {
           )}
         />
       </div>
+
+      {isPhoneEditor && (
+        <div className="flex h-12 flex-shrink-0 items-center border-y border-gray-200 bg-white/95">
+          {selectedRefs.length === 0 && !hasLayoutClipboard ? (
+            <p className="w-full px-3 text-center text-xs text-gray-400">點選物件後，可在這裡快速編輯</p>
+          ) : (
+            <SelectionQuickActions
+              presentation="context-rail"
+              selectedCount={selectedRefs.length}
+              isVisible={isSelectionVisible}
+              isLocked={isSelectionLocked}
+              canEdit={canEditSelection}
+              canGroup={selectedRefs.length >= 2}
+              canUngroup={selectedRefs.length === 1 && selectedElement?.type === "group"}
+              canDuplicate={selectedRefs.length > 0}
+              canCopy={selectedRefs.length > 0}
+              canCut={selectedRefs.length > 0 && canEditSelection}
+              canPaste={hasLayoutClipboard}
+              onToggleVisibility={handleToggleSelectedVisibility}
+              onToggleLock={handleToggleSelectedLock}
+              onDuplicate={handleDuplicateSelection}
+              onCopy={handleCopySelection}
+              onCut={handleCutSelection}
+              onPaste={handlePasteSelection}
+              onGroup={handleCreateGroup}
+              onUngroup={() => handleUngroup(selectedElement?.id)}
+              onDelete={deleteSelectedElement}
+              className="h-full border-y-0"
+            />
+          )}
+        </div>
+      )}
+
+      {isPhoneEditor && (
+        <EditorCommandDock
+          activePanel={activeMobilePanel}
+          isMultiSelectActive={isMultiSelectMode}
+          selectedCount={selectedRefs.length}
+          panelIds={{
+            add: "editor-add-sheet",
+            pages: "editor-pages-sheet",
+            layers: "editor-inspector",
+            properties: "editor-inspector",
+          }}
+          onToggleMultiSelect={() => {
+            setActiveTool("select");
+            setActiveMobilePanel(null);
+            setIsMultiSelectMode(current => !current);
+          }}
+          onPanelChange={(panel) => {
+            if (panel === MOBILE_PANEL.LAYERS) setInspectorTab("layers");
+            if (panel === MOBILE_PANEL.PROPERTIES) setInspectorTab("properties");
+            setActiveMobilePanel(panel);
+          }}
+        />
+      )}
+
+      {isPhoneEditor && (
+        <EditorSheet
+          id="editor-add-sheet"
+          isOpen={activeMobilePanel === MOBILE_PANEL.ADD}
+          onClose={() => setActiveMobilePanel(null)}
+          title="新增與素材"
+          description="選擇後會放在目前畫布中央"
+          bodyClassName="p-4"
+        >
+          <EditorToolsPanel
+            activeTool={activeTool}
+            showSelectTool={false}
+            onToolChange={handleMobileAddTool}
+            canUploadBackground={currentPage?.id != null}
+            onBackgroundBlocked={() => toast.error("請先儲存新增頁面，再上傳背景")}
+            onBackgroundSelect={(event) => {
+              handleBackgroundSelect(event);
+              setActiveMobilePanel(null);
+            }}
+            onStickerSelect={(file) => {
+              setActiveMobilePanel(null);
+              handleStickerUpload(file);
+            }}
+          />
+          <section className="mt-5 border-t border-gray-200 pt-4" aria-label="其他工具">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">其他</p>
+            <div className="grid gap-2">
+              <button type="button" onClick={() => { setActiveMobilePanel(null); startEditorGuide(); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                <CircleHelp className="h-4 w-4" />製作教學
+              </button>
+              <button type="button" onClick={() => { setActiveMobilePanel(null); handleOpenSpreadPreview(); }} disabled={isSaving || template.pages.length === 0} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+                <BookOpen className="h-4 w-4" />雙頁預覽
+              </button>
+            </div>
+          </section>
+        </EditorSheet>
+      )}
+
+      {isPhoneEditor && (
+        <EditorSheet
+          id="editor-pages-sheet"
+          isOpen={activeMobilePanel === MOBILE_PANEL.PAGES}
+          onClose={() => setActiveMobilePanel(null)}
+          title={`頁面 · ${currentPageIndex + 1}/${template.pages.length}`}
+          bodyClassName="flex min-h-0 flex-col p-4"
+        >
+          <EditorPagesPanel
+            pages={template.pages}
+            currentPageIndex={currentPageIndex}
+            isDisabled={isSaving}
+            onSelectPage={(pageIndex) => {
+              setInspectorTab("layers");
+              setCurrentPageIndex(pageIndex);
+            }}
+            onPageSelected={() => setActiveMobilePanel(null)}
+            onAddPage={handleAddPage}
+            onDeletePage={() => {
+              setActiveMobilePanel(null);
+              handleDeletePage();
+            }}
+            className="min-h-0 flex-1"
+          />
+        </EditorSheet>
+      )}
     </div>
   );
 }

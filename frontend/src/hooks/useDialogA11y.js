@@ -12,6 +12,21 @@ const FOCUSABLE_SELECTOR = [
 let openDialogCount = 0;
 let originalBodyOverflow = "";
 
+function isVisibleFocusable(element) {
+  if (!(element instanceof HTMLElement) || element.tabIndex < 0) return false;
+  if (element.closest("[hidden], [aria-hidden='true'], [inert]")) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== "none"
+    && style.visibility !== "hidden"
+    && element.getClientRects().length > 0;
+}
+
+function getFocusableElements(dialog) {
+  return dialog
+    ? [...dialog.querySelectorAll(FOCUSABLE_SELECTOR)].filter(isVisibleFocusable)
+    : [];
+}
+
 export default function useDialogA11y({ isOpen = true, onClose, closeOnEscape = true } = {}) {
   const dialogRef = useRef(null);
   const onCloseRef = useRef(onClose);
@@ -31,7 +46,10 @@ export default function useDialogA11y({ isOpen = true, onClose, closeOnEscape = 
 
     const frame = requestAnimationFrame(() => {
       const dialog = dialogRef.current;
-      const initial = dialog?.querySelector("[autofocus]") ?? dialog?.querySelector(FOCUSABLE_SELECTOR);
+      const autofocusTarget = dialog?.querySelector("[autofocus]");
+      const initial = isVisibleFocusable(autofocusTarget)
+        ? autofocusTarget
+        : getFocusableElements(dialog)[0];
       (initial ?? dialog)?.focus();
     });
 
@@ -45,8 +63,7 @@ export default function useDialogA11y({ isOpen = true, onClose, closeOnEscape = 
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = [...dialog.querySelectorAll(FOCUSABLE_SELECTOR)]
-        .filter(element => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+      const focusable = getFocusableElements(dialog);
       if (focusable.length === 0) {
         event.preventDefault();
         dialog.focus();

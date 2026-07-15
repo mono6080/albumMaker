@@ -71,6 +71,23 @@ async function addTextToCurrentPage(page, canvas, text) {
 }
 
 
+async function readFirstKonvaNodeScreenPoint(page, nodeIdPrefix) {
+  return page.evaluate((expectedPrefix) => {
+    const stage = window.Konva?.stages?.find(candidate => (
+      candidate.find(node => node.id()?.startsWith(expectedPrefix)).length > 0
+    ));
+    const node = stage?.find(nodeCandidate => nodeCandidate.id()?.startsWith(expectedPrefix))?.[0];
+    if (!stage || !node) return null;
+    const position = node.getAbsolutePosition();
+    const stageRect = stage.container().getBoundingClientRect();
+    return {
+      x: stageRect.left + position.x * stageRect.width / stage.width(),
+      y: stageRect.top + position.y * stageRect.height / stage.height(),
+    };
+  }, nodeIdPrefix);
+}
+
+
 async function deleteCurrentTemplatePage(page) {
   await page.getByRole("button", { name: "刪除此頁", exact: true }).click();
   await page.getByRole("dialog", { name: "確定刪除" })
@@ -208,14 +225,20 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await expect(page.locator("#editor-inspector")).toBeHidden();
   await expect(drawerTrigger).toBeFocused();
 
-  // 行動版從畫布選取物件時，應直接開啟屬性 drawer。
-  await canvas.click({ position: { x: 270, y: 287 } });
+  // 平板從畫布選取物件時保留 selection，但 drawer 必須由使用者明確開啟。
+  const tabletPhotoPoint = await readFirstKonvaNodeScreenPoint(page, "photo-");
+  expect(tabletPhotoPoint).not.toBeNull();
+  await page.mouse.click(tabletPhotoPoint.x, tabletPhotoPoint.y);
+  await expect(page.locator("#editor-inspector")).toBeHidden();
+  await expect(drawerTrigger).toBeVisible();
+  await expect(drawerTrigger).toHaveAttribute("aria-label", "開啟屬性面板");
+  await drawerTrigger.click();
   await expect(inspectorDrawer).toBeVisible();
   await expect(inspectorDrawer.getByRole("tab", { name: "屬性" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
-  await expect(inspectorDrawer.getByText("純文字屬性")).toBeVisible();
+  await expect(inspectorDrawer.getByText("照片格屬性")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("#editor-inspector")).toBeHidden();
   await expect(drawerTrigger).toBeVisible();
@@ -574,13 +597,13 @@ test("page edits and structural mutations stay local until reload or save", asyn
   await firstTextarea.fill(localFirstText);
   const canvas = page.locator(".konvajs-content canvas").first();
   await page.locator('[data-guide="add-page"]').click();
-  await expect(page.getByRole("button", { name: "第 3 頁", exact: true })).toHaveClass(/bg-indigo-600/);
+  await expect(page.getByRole("button", { name: /^第 3 頁/ })).toHaveClass(/bg-indigo-600/);
   await addTextToCurrentPage(page, canvas, localNewPageText);
 
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await deleteCurrentTemplatePage(page);
-  await expect(page.getByRole("button", { name: "第 3 頁", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^第 3 頁/ })).toHaveCount(0);
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await expect(page.locator('[data-layer-ref^="text:"]')
     .locator("button")
     .filter({ hasText: localNewPageText })).toBeVisible();
@@ -596,11 +619,11 @@ test("page edits and structural mutations stay local until reload or save", asyn
 
   await page.reload();
   await expect(page.getByText("模板編輯器")).toBeVisible();
-  await expect(page.getByRole("button", { name: "第 2 頁", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "第 3 頁", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^第 2 頁/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^第 3 頁/ })).toHaveCount(0);
   const restoredFirstTextarea = await selectTextLayer(page, firstText.id, firstText.value);
   await expect(restoredFirstTextarea).toHaveValue(firstText.value);
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   const restoredSecondTextarea = await selectTextLayer(page, secondText.id, secondText.value);
   await expect(restoredSecondTextarea).toHaveValue(secondText.value);
   await page.waitForTimeout(750);
@@ -642,10 +665,10 @@ test("explicit save atomically persists mixed page changes and new-page content"
   await addTextToCurrentPage(page, canvas, discardedNewPageText);
   await deleteCurrentTemplatePage(page);
 
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await deleteCurrentTemplatePage(page);
-  await expect(page.getByRole("button", { name: "第 2 頁", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "第 3 頁", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^第 2 頁/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^第 3 頁/ })).toHaveCount(0);
 
   const snapshotPayloads = [];
   const recordSnapshot = (request) => {
@@ -679,7 +702,7 @@ test("explicit save atomically persists mixed page changes and new-page content"
 
   await page.reload();
   await expect(page.getByText("模板編輯器")).toBeVisible();
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await expect(page.locator('[data-layer-ref^="text:"]')
     .locator("button")
     .filter({ hasText: savedNewPageText })).toBeVisible();
@@ -715,7 +738,7 @@ test("failed page snapshot keeps every draft and retries without duplicate pages
   const canvas = page.locator(".konvajs-content canvas").first();
   await page.locator('[data-guide="add-page"]').click();
   await addTextToCurrentPage(page, canvas, retainedNewPageText);
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await deleteCurrentTemplatePage(page);
 
   const snapshotRoute = `**/api/templates/${templateId}/pages`;
@@ -742,7 +765,7 @@ test("failed page snapshot keeps every draft and retries without duplicate pages
 
   const retainedTextarea = await selectTextLayer(page, firstText.id, retainedFirstText);
   await expect(retainedTextarea).toHaveValue(retainedFirstText);
-  await page.getByRole("button", { name: "第 2 頁", exact: true }).click();
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
   await expect(page.locator('[data-layer-ref^="text:"]')
     .locator("button")
     .filter({ hasText: retainedNewPageText })).toBeVisible();
@@ -786,7 +809,7 @@ test("deleting the final page stays local and can be explicitly saved from the e
   expect(persisted.pages).toEqual([]);
 
   await page.getByRole("button", { name: "新增第一頁", exact: true }).click();
-  await expect(page.getByRole("button", { name: "第 1 頁", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^第 1 頁/ })).toBeVisible();
   persisted = await fetchTemplateDetail(page, templateId);
   expect(persisted.pages).toEqual([]);
 

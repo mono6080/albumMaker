@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Layers3, SlidersHorizontal, Trash2, X } from "lucide-react";
 
-import useDialogA11y from "../hooks/useDialogA11y";
-
-const DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
+import useEditorViewportMode, { EDITOR_VIEWPORT_MODE } from "../hooks/useEditorViewportMode";
+import EditorSheet from "./EditorSheet";
 
 const ELEMENT_TYPE_LABELS = {
   photo: "照片格",
@@ -32,116 +31,26 @@ function getSelectionSummary(selectedRefs) {
   };
 }
 
-function useMediaQuery(query) {
-  const [matches, setMatches] = useState(() => (
-    typeof window !== "undefined" && window.matchMedia(query).matches
-  ));
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia(query);
-    const handleChange = () => setMatches(mediaQuery.matches);
-    handleChange();
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [query]);
-
-  return matches;
+function presentationForViewport(viewportMode) {
+  if (viewportMode === EDITOR_VIEWPORT_MODE.PHONE) return "bottom-sheet";
+  if (viewportMode === EDITOR_VIEWPORT_MODE.TABLET) return "side-drawer";
+  return "static";
 }
 
-export default function EditorInspector({
+function InspectorContent({
   activeTab,
   onTabChange,
   selectedRefs,
   currentPageIndex,
-  maxHeight,
   propertyPanel,
   layerPanel,
   onDeleteSelection,
+  onClose,
+  isModal,
+  propertiesTabRef,
+  layersTabRef,
 }) {
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const isDrawerViewport = useMediaQuery(DRAWER_MEDIA_QUERY);
-  const isPointerDownRef = useRef(false);
-  const pendingAutoOpenRef = useRef(false);
-  const shouldRestoreTriggerFocusRef = useRef(false);
-  const previousPageIndexRef = useRef(currentPageIndex);
-  const drawerTriggerRef = useRef(null);
-  const propertiesTabRef = useRef(null);
-  const layersTabRef = useRef(null);
-  const handleCloseDrawer = () => setIsDrawerOpen(false);
-  const inspectorRef = useDialogA11y({
-    isOpen: isDrawerViewport && isDrawerOpen,
-    onClose: handleCloseDrawer,
-  });
   const selectionSummary = getSelectionSummary(selectedRefs);
-  const shouldAutoOpenDrawer = isDrawerViewport
-    && activeTab === "properties"
-    && selectedRefs.length > 0;
-  const shouldAutoOpenDrawerRef = useRef(shouldAutoOpenDrawer);
-
-  useEffect(() => {
-    shouldAutoOpenDrawerRef.current = shouldAutoOpenDrawer;
-  }, [shouldAutoOpenDrawer]);
-
-  useEffect(() => {
-    const handlePointerDown = () => {
-      isPointerDownRef.current = true;
-    };
-    const handlePointerEnd = () => {
-      isPointerDownRef.current = false;
-      if (pendingAutoOpenRef.current && shouldAutoOpenDrawerRef.current) {
-        shouldRestoreTriggerFocusRef.current = false;
-        setIsDrawerOpen(true);
-      }
-      pendingAutoOpenRef.current = false;
-    };
-    window.addEventListener("pointerdown", handlePointerDown, true);
-    window.addEventListener("pointerup", handlePointerEnd, true);
-    window.addEventListener("pointercancel", handlePointerEnd, true);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown, true);
-      window.removeEventListener("pointerup", handlePointerEnd, true);
-      window.removeEventListener("pointercancel", handlePointerEnd, true);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!shouldAutoOpenDrawer) {
-      pendingAutoOpenRef.current = false;
-      return;
-    }
-    if (isPointerDownRef.current) {
-      pendingAutoOpenRef.current = true;
-      return;
-    }
-    shouldRestoreTriggerFocusRef.current = false;
-    setIsDrawerOpen(true);
-  }, [shouldAutoOpenDrawer, selectedRefs]);
-
-  useEffect(() => {
-    if (previousPageIndexRef.current !== currentPageIndex) {
-      previousPageIndexRef.current = currentPageIndex;
-      pendingAutoOpenRef.current = false;
-      shouldRestoreTriggerFocusRef.current = false;
-      setIsDrawerOpen(false);
-    }
-  }, [currentPageIndex]);
-
-  useEffect(() => {
-    if (!isDrawerViewport || !isDrawerOpen) return undefined;
-    const focusFrame = requestAnimationFrame(() => {
-      (activeTab === "properties" ? propertiesTabRef : layersTabRef).current?.focus();
-    });
-    return () => cancelAnimationFrame(focusFrame);
-  }, [activeTab, isDrawerOpen, isDrawerViewport]);
-
-  useEffect(() => {
-    if (!isDrawerViewport || isDrawerOpen || !shouldRestoreTriggerFocusRef.current) {
-      return undefined;
-    }
-    shouldRestoreTriggerFocusRef.current = false;
-    const focusFrame = requestAnimationFrame(() => drawerTriggerRef.current?.focus());
-    return () => cancelAnimationFrame(focusFrame);
-  }, [isDrawerOpen, isDrawerViewport]);
 
   const handleTabKeyDown = (event) => {
     let nextTab = null;
@@ -158,59 +67,8 @@ export default function EditorInspector({
     (nextTab === "properties" ? propertiesTabRef : layersTabRef).current?.focus();
   };
 
-  const activeTabLabel = activeTab === "properties" ? "屬性" : "圖層";
-  const ActiveTabIcon = activeTab === "properties" ? SlidersHorizontal : Layers3;
-  const inspectorHeight = typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight;
-
   return (
-    <>
-      <button
-        ref={drawerTriggerRef}
-        type="button"
-        aria-controls="editor-inspector"
-        aria-expanded={isDrawerOpen}
-        aria-hidden={isDrawerOpen ? "true" : undefined}
-        tabIndex={isDrawerOpen ? -1 : undefined}
-        aria-label={`開啟${activeTabLabel}面板`}
-        onClick={() => {
-          shouldRestoreTriggerFocusRef.current = true;
-          setIsDrawerOpen(true);
-        }}
-        className={`fixed bottom-4 right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg transition-opacity hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 lg:hidden ${
-          isDrawerOpen ? "pointer-events-none opacity-0" : "opacity-100"
-        }`}
-      >
-        <ActiveTabIcon className="h-4 w-4" />
-        {activeTabLabel}
-        {selectedRefs.length > 0 && (
-          <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">
-            {selectedRefs.length}
-          </span>
-        )}
-      </button>
-
-      {isDrawerOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[1px] lg:hidden"
-          aria-hidden="true"
-          onClick={handleCloseDrawer}
-        />
-      )}
-
-      <aside
-        ref={inspectorRef}
-        id="editor-inspector"
-        tabIndex={isDrawerViewport ? -1 : undefined}
-        role={isDrawerViewport ? "dialog" : undefined}
-        aria-modal={isDrawerViewport ? "true" : undefined}
-        aria-hidden={isDrawerViewport && !isDrawerOpen ? "true" : undefined}
-        className={`flex-shrink-0 flex-col overflow-hidden border border-gray-200 bg-gray-50 shadow-sm max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-50 max-lg:h-dvh max-lg:max-h-dvh max-lg:w-[min(92vw,24rem)] max-lg:rounded-none max-lg:border-y-0 max-lg:border-r-0 lg:flex lg:h-[var(--editor-inspector-height)] lg:max-h-[var(--editor-inspector-height)] lg:w-[272px] lg:rounded-xl xl:w-80 ${
-          isDrawerOpen ? "max-lg:flex" : "max-lg:hidden"
-        }`}
-        style={{ "--editor-inspector-height": inspectorHeight }}
-        data-guide="property-region"
-        aria-label="編輯器檢查器"
-      >
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-gray-50" data-guide="property-region">
       <div className="z-10 flex-shrink-0 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-1 p-1.5">
           <div className="grid min-w-0 flex-1 grid-cols-2 gap-1" role="tablist" aria-label="右側面板">
@@ -225,7 +83,7 @@ export default function EditorInspector({
               data-guide="inspector-tab-properties"
               onClick={() => onTabChange("properties")}
               onKeyDown={handleTabKeyDown}
-              className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
                 activeTab === "properties"
                   ? "bg-indigo-50 text-indigo-700"
                   : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
@@ -245,7 +103,7 @@ export default function EditorInspector({
               data-guide="inspector-tab-layers"
               onClick={() => onTabChange("layers")}
               onKeyDown={handleTabKeyDown}
-              className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
                 activeTab === "layers"
                   ? "bg-indigo-50 text-indigo-700"
                   : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
@@ -255,21 +113,23 @@ export default function EditorInspector({
               圖層
             </button>
           </div>
-          <button
-            type="button"
-            aria-label="關閉編輯器檢查器"
-            onClick={handleCloseDrawer}
-            className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 lg:hidden"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {isModal && (
+            <button
+              type="button"
+              aria-label="關閉編輯器檢查器"
+              onClick={onClose}
+              className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         <div className="border-t border-gray-100 px-4 py-2.5" aria-live="polite">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-gray-800">{selectionSummary.title}</p>
-              <p className="mt-0.5 truncate text-xs text-gray-400">{selectionSummary.description}</p>
+              <p className="mt-0.5 truncate text-xs text-gray-500">{selectionSummary.description}</p>
             </div>
             <span className="flex-shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
               第 {currentPageIndex + 1} 頁
@@ -280,7 +140,7 @@ export default function EditorInspector({
 
       <div
         id="editor-inspector-properties-panel"
-        className="min-h-0 flex-1 overflow-y-auto p-3"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3"
         role="tabpanel"
         aria-labelledby="editor-inspector-properties-tab"
         aria-label="屬性"
@@ -290,7 +150,7 @@ export default function EditorInspector({
       </div>
       <div
         id="editor-inspector-layers-panel"
-        className="min-h-0 flex-1 overflow-y-auto p-3"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3"
         role="tabpanel"
         aria-labelledby="editor-inspector-layers-tab"
         aria-label="圖層"
@@ -304,14 +164,138 @@ export default function EditorInspector({
           <button
             type="button"
             onClick={onDeleteSelection}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:border-red-300 hover:bg-red-50"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
           >
             <Trash2 className="h-4 w-4" />
             {selectedRefs.length > 1 ? `刪除 ${selectedRefs.length} 個選取物件` : "刪除選取"}
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+export default function EditorInspector({
+  activeTab,
+  onTabChange,
+  selectedRefs,
+  currentPageIndex,
+  maxHeight,
+  propertyPanel,
+  layerPanel,
+  onDeleteSelection,
+  presentation,
+  isOpen: controlledIsOpen,
+  onOpenChange,
+  showTrigger = true,
+}) {
+  const viewportMode = useEditorViewportMode();
+  const resolvedPresentation = presentation ?? presentationForViewport(viewportMode);
+  const isStatic = resolvedPresentation === "static";
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = isStatic || (controlledIsOpen ?? internalIsOpen);
+  const previousPageIndexRef = useRef(currentPageIndex);
+  const previousPresentationRef = useRef(resolvedPresentation);
+  const propertiesTabRef = useRef(null);
+  const layersTabRef = useRef(null);
+
+  const setIsOpen = useCallback((nextIsOpen) => {
+    if (controlledIsOpen === undefined) setInternalIsOpen(nextIsOpen);
+    onOpenChange?.(nextIsOpen);
+  }, [controlledIsOpen, onOpenChange]);
+
+  useEffect(() => {
+    if (previousPageIndexRef.current === currentPageIndex) return;
+    previousPageIndexRef.current = currentPageIndex;
+    if (!isStatic) setIsOpen(false);
+  }, [currentPageIndex, isStatic, setIsOpen]);
+
+  useEffect(() => {
+    if (previousPresentationRef.current === resolvedPresentation) return;
+    previousPresentationRef.current = resolvedPresentation;
+    if (!isStatic) setIsOpen(false);
+  }, [isStatic, resolvedPresentation, setIsOpen]);
+
+  useEffect(() => {
+    if (isStatic || !isOpen) return undefined;
+    const focusFrame = requestAnimationFrame(() => {
+      (activeTab === "properties" ? propertiesTabRef : layersTabRef).current?.focus();
+    });
+    return () => cancelAnimationFrame(focusFrame);
+  }, [activeTab, isOpen, isStatic]);
+
+  const activeTabLabel = activeTab === "properties" ? "屬性" : "圖層";
+  const ActiveTabIcon = activeTab === "properties" ? SlidersHorizontal : Layers3;
+  const inspectorHeight = typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight;
+  const content = (
+    <InspectorContent
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      selectedRefs={selectedRefs}
+      currentPageIndex={currentPageIndex}
+      propertyPanel={propertyPanel}
+      layerPanel={layerPanel}
+      onDeleteSelection={onDeleteSelection}
+      onClose={() => setIsOpen(false)}
+      isModal={!isStatic}
+      propertiesTabRef={propertiesTabRef}
+      layersTabRef={layersTabRef}
+    />
+  );
+
+  if (isStatic) {
+    return (
+      <aside
+        id="editor-inspector"
+        className="flex h-[var(--editor-inspector-height)] max-h-[var(--editor-inspector-height)] w-[272px] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-gray-50 shadow-sm xl:w-80"
+        style={{ "--editor-inspector-height": inspectorHeight }}
+        aria-label="編輯器檢查器"
+      >
+        {content}
       </aside>
+    );
+  }
+
+  return (
+    <>
+      {showTrigger && (
+        <button
+          type="button"
+          aria-controls="editor-inspector"
+          aria-expanded={isOpen}
+          aria-hidden={isOpen ? "true" : undefined}
+          tabIndex={isOpen ? -1 : undefined}
+          aria-label={`開啟${activeTabLabel}面板`}
+          onClick={(event) => {
+            // Safari 不保證點擊按鈕後會留下焦點；先記住這個觸發器，
+            // drawer 關閉時 useDialogA11y 才能一致地還原焦點。
+            event.currentTarget.focus({ preventScroll: true });
+            setIsOpen(true);
+          }}
+          className={`fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-40 inline-flex min-h-11 items-center gap-2 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg transition-opacity hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 ${
+            isOpen ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
+        >
+          <ActiveTabIcon className="h-4 w-4" />
+          {activeTabLabel}
+          {selectedRefs.length > 0 && (
+            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">{selectedRefs.length}</span>
+          )}
+        </button>
+      )}
+
+      <EditorSheet
+        isOpen={isOpen}
+        onClose={() => setIsOpen(false)}
+        presentation={resolvedPresentation}
+        id="editor-inspector"
+        ariaLabel="編輯器檢查器"
+        showHeader={false}
+        panelClassName="bg-gray-50"
+        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {content}
+      </EditorSheet>
     </>
   );
 }

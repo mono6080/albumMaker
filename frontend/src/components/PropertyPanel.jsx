@@ -22,7 +22,7 @@ function InspectorSection({ title, children, defaultOpen = true, dataGuide, clas
           aria-expanded={isOpen}
           aria-controls={contentId}
           onClick={() => setIsOpen(currentValue => !currentValue)}
-          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+          className="flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
         >
           <span>{title}</span>
           <span aria-hidden="true" className="text-base leading-none text-gray-400">
@@ -66,11 +66,11 @@ function LockedPropertyNotice() {
 }
 
 // 滑桿 + 數字輸入的組合控制項
-function SliderInput({ min, max, step = 1, value, onChange, numWidth = "w-14" }) {
+function SliderInput({ label, min, max, step = 1, value, onChange, numWidth = "w-14" }) {
   return (
     <div className="flex items-center gap-2">
-      <input type="range" min={min} max={max} step={step} value={value} onChange={onChange} className="flex-1" />
-      <input type="number" min={min} max={max} step={step} value={value} onChange={onChange} className={`border rounded px-1 py-1 text-sm ${numWidth} text-center`} />
+      <input aria-label={`${label}滑桿`} type="range" min={min} max={max} step={step} value={value} onChange={onChange} className="h-11 flex-1" />
+      <input aria-label={`${label}數值`} type="number" min={min} max={max} step={step} value={value} onChange={onChange} className={`min-h-11 rounded border px-1 py-1 text-center text-sm ${numWidth}`} />
     </div>
   );
 }
@@ -86,9 +86,10 @@ function FontPicker({ value, onChange, guideId, recentFonts = [] }) {
       type="button"
       onClick={() => onChange(fontOption.value)}
       aria-label={fontOption.label}
+      aria-pressed={value === fontOption.value}
       title={isRecent ? `${fontOption.label}（最近使用）` : fontOption.label}
       style={{ fontFamily: fontOption.css, fontWeight: fontOption.bold ? "bold" : "normal" }}
-      className={`flex min-w-0 items-center gap-1 rounded border px-2 py-1.5 text-left text-sm transition-colors ${
+      className={`flex min-h-11 min-w-0 items-center gap-1 rounded border px-2 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
         value === fontOption.value
           ? "border-indigo-500 bg-indigo-50 text-indigo-700"
           : "border-gray-200 text-gray-700 hover:border-gray-300"
@@ -136,7 +137,7 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
           type="button"
           onClick={handleInsertName}
           data-guide={guideId ? `${guideId}-insert-name` : undefined}
-          className="px-2 py-1 text-xs rounded border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+          className="min-h-11 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-100"
         >
           插入 {NAME_VARIABLE}
         </button>
@@ -147,7 +148,7 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
         rows={rows}
         value={value ?? ""}
         onChange={onChange}
-        className="border rounded px-2 py-1 text-sm"
+        className="min-h-11 rounded border px-2 py-1 text-sm"
       />
     </div>
   );
@@ -158,12 +159,13 @@ function TextShadowControls({ elementData, onPropertyChange, recentColors }) {
 
   return (
     <div className="space-y-2" data-guide="text-shadow-controls">
-      <label className="flex items-center gap-2">
+      <label className="flex min-h-11 items-center gap-2">
         <input
           type="checkbox"
           checked={enabled}
           onChange={event => onPropertyChange({ text_shadow_enabled: event.target.checked })}
           data-guide="text-shadow-toggle"
+          className="h-5 w-5"
         />
         <span className="text-sm font-medium text-gray-700">文字陰影</span>
       </label>
@@ -182,20 +184,22 @@ function TextShadowControls({ elementData, onPropertyChange, recentColors }) {
             { key: "text_shadow_offset_y", label: "偏移 Y", defaultValue: 3, min: -30, max: 30 },
             { key: "text_shadow_blur",     label: "模糊",   defaultValue: 4, min: 0,   max: 40 },
           ].map(shadowField => (
-            <label key={shadowField.key} className="flex flex-col gap-0.5">
+            <div key={shadowField.key} className="flex flex-col gap-0.5">
               <span className="text-xs text-gray-500">{shadowField.label}</span>
               <SliderInput
+                label={shadowField.label}
                 min={shadowField.min}
                 max={shadowField.max}
                 value={elementData[shadowField.key] ?? shadowField.defaultValue}
                 onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
               />
-            </label>
+            </div>
           ))}
 
-          <label className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-0.5">
             <span className="text-xs text-gray-500">不透明度（%）</span>
             <SliderInput
+              label="不透明度"
               min={0}
               max={100}
               value={Math.round(((elementData.text_shadow_opacity ?? 120) / 255) * 100)}
@@ -203,7 +207,7 @@ function TextShadowControls({ elementData, onPropertyChange, recentColors }) {
                 text_shadow_opacity: Math.round(Number(event.target.value) / 100 * 255),
               })}
             />
-          </label>
+          </div>
         </div>
       )}
     </div>
@@ -218,7 +222,7 @@ function IsolationBreadcrumb({ trail, onNavigate, tailLabel }) {
         type="button"
         onClick={() => onNavigate?.(-1)}
         aria-label="回到根圖層"
-        className="font-medium hover:underline"
+        className="inline-flex min-h-11 items-center rounded px-1 font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
       >
         圖層
       </button>
@@ -229,7 +233,7 @@ function IsolationBreadcrumb({ trail, onNavigate, tailLabel }) {
             type="button"
             onClick={() => onNavigate?.(index)}
             aria-current={index === trail.length - 1 ? "location" : undefined}
-            className="font-medium hover:underline"
+            className="inline-flex min-h-11 items-center rounded px-1 font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
           >
             {trailItem.label || `群組 ${index + 1}`}
           </button>
@@ -262,7 +266,7 @@ function FavoriteStyleControls({
           type="button"
           onClick={() => onSaveFavoriteStyle?.(elementType, elementData)}
           disabled={!onSaveFavoriteStyle}
-          className="rounded border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+          className="min-h-11 rounded border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
         >
           儲存目前樣式
         </button>
@@ -282,7 +286,7 @@ function FavoriteStyleControls({
                   onClick={() => onApplyFavoriteStyle?.(favoriteStyle)}
                   disabled={!onApplyFavoriteStyle}
                   title={`套用${label}`}
-                  className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+                  className="min-h-11 min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
                 >
                   {label}
                 </button>
@@ -291,7 +295,7 @@ function FavoriteStyleControls({
                   onClick={() => onRemoveFavoriteStyle?.(favoriteStyle.id)}
                   disabled={!onRemoveFavoriteStyle}
                   aria-label={`刪除常用樣式 ${label}`}
-                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center border-l border-gray-200 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-gray-300"
+                  className="flex h-11 w-11 flex-shrink-0 items-center justify-center border-l border-gray-200 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-gray-300"
                 >
                   ×
                 </button>
@@ -337,7 +341,7 @@ function GroupPropertyPanel({
       <button
         type="button"
         onClick={() => onEnterGroup?.(group?.id)}
-        className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+        className="min-h-11 w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
       >
         進入群組
       </button>
@@ -362,7 +366,7 @@ function GroupPropertyPanel({
                 key={dir}
                 type="button"
                 onClick={() => onLayerChange?.(dir)}
-                className="flex-1 rounded border border-gray-200 px-1 py-1 text-xs hover:bg-gray-50"
+                className="min-h-11 flex-1 rounded border border-gray-200 px-1 py-1 text-xs hover:bg-gray-50"
               >
                 {label}
               </button>
@@ -373,7 +377,7 @@ function GroupPropertyPanel({
         <button
           type="button"
           onClick={() => onUngroup?.(group?.id)}
-          className="w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+          className="min-h-11 w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
         >
           解除群組
         </button>
@@ -400,7 +404,7 @@ function LayerOrderSection({ onLayerChange }) {
             key={dir}
             type="button"
             onClick={() => onLayerChange(dir)}
-            className="rounded border border-gray-200 px-1 py-1 text-xs hover:bg-gray-50"
+            className="min-h-11 rounded border border-gray-200 px-1 py-1 text-xs hover:bg-gray-50"
           >
             {label}
           </button>
@@ -427,7 +431,7 @@ function TransformSection({ isPhotoSlot, elementData, onPropertyChange }) {
               height: elementData.width ?? 0,
             })}
             data-guide="flip-size"
-            className="rounded border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+            className="min-h-11 rounded border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
           >
             翻轉長寬
           </button>
@@ -466,7 +470,7 @@ function TransformSection({ isPhotoSlot, elementData, onPropertyChange }) {
                   }
                   onPropertyChange({ [field.key]: nextValue });
                 }}
-                className="rounded border px-2 py-1 text-sm"
+                className="min-h-11 rounded border px-2 py-1 text-sm"
               />
             </label>
           ))}
@@ -480,7 +484,7 @@ function TransformSection({ isPhotoSlot, elementData, onPropertyChange }) {
           step="0.5"
           value={elementData.rotation ?? 0}
           onChange={event => onPropertyChange({ rotation: Number(event.target.value) })}
-          className="w-24 rounded border px-2 py-1 text-sm"
+          className="min-h-11 w-24 rounded border px-2 py-1 text-sm"
         />
       </label>
     </InspectorSection>
@@ -490,11 +494,12 @@ function TransformSection({ isPhotoSlot, elementData, onPropertyChange }) {
 function PhotoAppearanceSection({ elementData, onPropertyChange }) {
   return (
     <InspectorSection title="外觀" dataGuide="photo-appearance">
-      <label className="flex items-center gap-2">
+      <label className="flex min-h-11 items-center gap-2">
         <input
           type="checkbox"
           checked={elementData.border ?? true}
           onChange={event => onPropertyChange({ border: event.target.checked })}
+          className="h-5 w-5"
         />
         <span className="text-sm">白色外框（拍立得風格）</span>
       </label>
@@ -506,20 +511,21 @@ function PhotoAppearanceSection({ elementData, onPropertyChange }) {
             type="number"
             value={elementData.border_width ?? 8}
             onChange={event => onPropertyChange({ border_width: Number(event.target.value) })}
-            className="w-24 rounded border px-2 py-1 text-sm"
+            className="min-h-11 w-24 rounded border px-2 py-1 text-sm"
           />
         </label>
       )}
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">圓角半徑（px）</span>
         <SliderInput
+          label="圓角半徑"
           min={0}
           max={Math.round(Math.min(elementData.width, elementData.height) / 2)}
           value={elementData.border_radius ?? 0}
           onChange={event => onPropertyChange({ border_radius: Number(event.target.value) })}
         />
-      </label>
+      </div>
     </InspectorSection>
   );
 }
@@ -533,11 +539,12 @@ function PhotoEffectsSection({ elementData, onPropertyChange }) {
       dataGuide="property-section-effects"
     >
       <div className="space-y-2" data-guide="photo-visual-style">
-        <label className="flex items-center gap-2">
+        <label className="flex min-h-11 items-center gap-2">
           <input
             type="checkbox"
             checked={shadowEnabled}
             onChange={event => onPropertyChange({ shadow_enabled: event.target.checked })}
+            className="h-5 w-5"
           />
           <span className="text-sm font-medium text-gray-700">陰影</span>
         </label>
@@ -549,20 +556,22 @@ function PhotoEffectsSection({ elementData, onPropertyChange }) {
               { key: "shadow_offset_y", label: "偏移 Y", defaultValue: 8, min: -30, max: 30 },
               { key: "shadow_blur", label: "模糊", defaultValue: 14, min: 0, max: 40 },
             ].map(shadowField => (
-              <label key={shadowField.key} className="flex flex-col gap-0.5">
+              <div key={shadowField.key} className="flex flex-col gap-0.5">
                 <span className="text-xs text-gray-500">{shadowField.label}</span>
                 <SliderInput
+                  label={shadowField.label}
                   min={shadowField.min}
                   max={shadowField.max}
                   value={elementData[shadowField.key] ?? shadowField.defaultValue}
                   onChange={event => onPropertyChange({ [shadowField.key]: Number(event.target.value) })}
                 />
-              </label>
+              </div>
             ))}
 
-            <label className="flex flex-col gap-0.5">
+            <div className="flex flex-col gap-0.5">
               <span className="text-xs text-gray-500">不透明度（%）</span>
               <SliderInput
+                label="不透明度"
                 min={0}
                 max={100}
                 value={Math.round(((elementData.shadow_opacity ?? 120) / 255) * 100)}
@@ -570,7 +579,7 @@ function PhotoEffectsSection({ elementData, onPropertyChange }) {
                   shadow_opacity: Math.round(Number(event.target.value) / 100 * 255),
                 })}
               />
-            </label>
+            </div>
           </div>
         )}
       </div>
@@ -593,7 +602,7 @@ function TextContentSection({ elementData, onPropertyChange }) {
               type="button"
               aria-pressed={getTextLabelRole(elementData) === roleOption.value}
               onClick={() => onPropertyChange({ text_role: roleOption.value })}
-              className={`rounded border px-2 py-1.5 text-sm transition-colors ${
+              className={`min-h-11 rounded border px-2 py-1.5 text-sm transition-colors ${
                 getTextLabelRole(elementData) === roleOption.value
                   ? "border-indigo-600 bg-indigo-600 text-white"
                   : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
@@ -631,8 +640,9 @@ function TextTypographySection({ elementData, onPropertyChange, recentColors, re
             <button
               key={alignOption.value}
               type="button"
+              aria-pressed={(elementData.text_align ?? "center") === alignOption.value}
               onClick={() => onPropertyChange({ text_align: alignOption.value })}
-              className={`rounded border px-2 py-1 text-sm transition-colors ${
+              className={`min-h-11 rounded border px-2 py-1 text-sm transition-colors ${
                 (elementData.text_align ?? "center") === alignOption.value
                   ? "border-indigo-600 bg-indigo-600 text-white"
                   : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
@@ -654,19 +664,21 @@ function TextTypographySection({ elementData, onPropertyChange, recentColors, re
         />
       </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">字級（pt）</span>
         <SliderInput
+          label="字級"
           min={10}
           max={96}
           value={elementData.font_size ?? 28}
           onChange={event => onPropertyChange({ font_size: Number(event.target.value) })}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">行距</span>
         <SliderInput
+          label="行距"
           min={0.8}
           max={3.0}
           step={0.1}
@@ -674,18 +686,19 @@ function TextTypographySection({ elementData, onPropertyChange, recentColors, re
           value={elementData.line_height ?? 1.4}
           onChange={event => onPropertyChange({ line_height: Number(event.target.value) })}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">字間距（px）</span>
         <SliderInput
+          label="字間距"
           min={0}
           max={30}
           step={1}
           value={elementData.letter_spacing ?? 0}
           onChange={event => onPropertyChange({ letter_spacing: Number(event.target.value) })}
         />
-      </label>
+      </div>
 
       <ColorPicker
         label="文字顏色"
@@ -780,7 +793,7 @@ export default function PropertyPanel({
               type="button"
               disabled={isAnalyzingMaterial}
               onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
-              className="w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isAnalyzingMaterial
                 ? "分析圖片中…"

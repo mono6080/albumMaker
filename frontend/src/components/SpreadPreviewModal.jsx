@@ -38,7 +38,7 @@ export default function SpreadPreviewModal({ templateId, pageCount, initialPageI
             onClick={onClose}
             aria-label="關閉雙頁預覽"
             data-guide="spread-close"
-            className="ml-auto w-8 h-8 inline-flex items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+            className="ml-auto inline-flex h-11 w-11 items-center justify-center rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
           >
             <X className="w-4 h-4" />
           </button>
@@ -63,7 +63,7 @@ export default function SpreadPreviewModal({ templateId, pageCount, initialPageI
             }}
             disabled={spreadStartIndex <= 0}
             data-guide="spread-prev"
-            className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+            className="inline-flex min-h-11 items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             <ChevronLeft className="w-4 h-4" />
             上一組
@@ -76,7 +76,7 @@ export default function SpreadPreviewModal({ templateId, pageCount, initialPageI
             }}
             disabled={spreadStartIndex >= lastSpreadStartIndex}
             data-guide="spread-next"
-            className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+            className="inline-flex min-h-11 items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             下一組
             <ChevronRight className="w-4 h-4" />

@@ -31,15 +31,22 @@ const ROLE_LABELS = {
   none: "無權限",
 };
 
-function Nav() {
+function Nav({ hideOnPhone = false }) {
   const loc = useLocation();
   const navigate = useNavigate();
   const { currentUser, logout } = useAuth();
   const isActive = (path) => loc.pathname.startsWith(path);
 
   const handleLogout = async () => {
-    await logout();
-    navigate("/login");
+    const proceed = async () => {
+      await logout();
+      navigate("/login");
+    };
+    const navigationRequest = new CustomEvent("album-maker:navigation-request", {
+      cancelable: true,
+      detail: { proceed },
+    });
+    if (window.dispatchEvent(navigationRequest)) await proceed();
   };
 
   // 登入頁不顯示 Nav
@@ -62,7 +69,7 @@ function Nav() {
   }
 
   return (
-    <nav className="bg-white border-b border-gray-200 shadow-sm">
+    <nav className={`bg-white border-b border-gray-200 shadow-sm ${hideOnPhone ? "max-md:hidden" : ""}`}>
       <div className="flex min-w-0 items-center gap-1 px-3 sm:px-6">
         <Link to="/" className="flex min-h-12 min-w-10 flex-shrink-0 items-center justify-center gap-2 mr-1 sm:mr-3">
           <span className="text-xl leading-none">🎨</span>
@@ -141,16 +148,19 @@ function StudentEditRoute() {
 
 function AppContent() {
   const loc = useLocation();
+  const isTemplateEditorRoute = /^\/templates\/[^/]+\/edit\/?$/.test(loc.pathname);
   const mainClassName = loc.pathname === "/login"
     ? "w-full flex-1"
-    : "p-4 sm:p-8 w-full flex-1";
+    : isTemplateEditorRoute
+      ? "min-h-0 w-full flex-1 p-0 md:p-4 lg:p-8"
+      : "p-4 sm:p-8 w-full flex-1";
 
   return (
     <AuthProvider>
       {/* toast 純提示用途，關閉 pointer events 避免蓋住其下方的按鈕（如雙頁預覽關閉鈕） */}
       <Toaster position="top-right" toastOptions={{ style: { pointerEvents: "none" } }} />
       <PwaUpdateBanner />
-      <Nav />
+      <Nav hideOnPhone={isTemplateEditorRoute} />
       <main className={mainClassName}>
         {/* lazy 頁面載入中的輕量 fallback（核心路徑不經過這裡） */}
         <Suspense
