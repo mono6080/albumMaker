@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from tests.helpers import (
+    append_template_page_with_layout,
     assert_status,
     create_template_with_page,
     login,
@@ -11,15 +12,7 @@ from tests.helpers import (
 
 
 def _add_page_with_layout(client, template_id: int, layout: dict) -> int:
-    page_response = client.post(f"/api/templates/{template_id}/pages")
-    assert_status(page_response, 200)
-    page_id = page_response.json()["id"]
-    layout_response = client.put(
-        f"/api/templates/{template_id}/pages/{page_id}/layout",
-        json=layout,
-    )
-    assert_status(layout_response, 200)
-    return page_id
+    return append_template_page_with_layout(client, template_id, layout)
 
 
 def _template_pages(client, template_id: int) -> list[dict]:

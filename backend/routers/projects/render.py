@@ -17,10 +17,10 @@ from services.label_texts import merge_project_label_texts_into_pages
 from services.output_keys import (
     build_combined_stem,
     build_content_disposition_header,
-    student_pdf_key_for_mode,
 )
 from services.project_export_service import (
     build_zip_of_student_images,
+    get_student_pdf_download,
     get_student_image_entries,
     open_all_student_images_zip_stream,
     open_all_student_pdfs_zip_stream,
@@ -36,7 +36,6 @@ from services.preview_cache import (
 )
 from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.render_service import PREVIEW_RENDER_SCALE
-from services.storage import get_storage
 
 from ._helpers import (
     _parse_json_field,
@@ -239,25 +238,15 @@ def download_student_pdf(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
 
-    # 非 admin 強制降為螢幕畫質
-
-    if not student.output_filename:
-        raise HTTPException(status_code=404, detail="尚未產生 PDF，請先渲染")
-
-    # output_filename 為列印版 key，如 "projects/proj1/output/stem.pdf"
-    pdf_key = student_pdf_key_for_mode(student.output_filename, effective_mode)
-
-    storage = get_storage()
-    if not storage.exists(pdf_key):
-        raise HTTPException(status_code=404, detail="PDF file missing — please render first")
-
-    combined_stem = build_combined_stem(project.name, student.name)
-    screen_suffix = "_screen" if effective_mode == "screen" else ""
-    download_filename = f"{combined_stem}{screen_suffix}.pdf"
+    pdf_bytes, download_filename = get_student_pdf_download(
+        project,
+        student,
+        effective_mode,
+    )
     content_disposition = build_content_disposition_header(download_filename)
 
     return Response(
-        content=storage.get_bytes(pdf_key),
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": content_disposition},
     )

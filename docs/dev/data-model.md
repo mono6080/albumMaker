@@ -58,8 +58,8 @@ TemplateProjectSyncBackup (id, sync_id, template_id, project_id nullable,
 跨專案識別「同一個孩子」，供學期彙整匯出分組。設計原則：老師流程零改動，
 名冊由學生建立/改名時自動長出，admin 只處理例外。
 
-- **正規化**：`roster_service.normalize_child_name()` 移除所有空白（含全形）後比對
-- **自動連結**（`roster_service.resolve_roster_child_id()`，掛在學生批次新增與改名）：
+- **正規化**：`roster_identity_service.normalize_child_name()` 移除所有空白（含全形）後比對
+- **自動連結**（`roster_identity_service.resolve_roster_child_id()`，掛在學生批次新增與改名）：
   同名唯一命中 → 連既有名冊項；查無 → 自動建立；同名多筆（admin 拆分過）→
   `roster_child_id = NULL` 待確認，由學期匯出頁的複核流程處理
 - **name 不設 UNIQUE**：同名不同人時 admin 用 link `create_new` 拆成兩筆

@@ -35,6 +35,7 @@ import {
 } from "../components/ui";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
+import { prefetchProjectWorkspaceRoutes } from "../routeLoaders";
 
 const PROJECT_LIST_GUIDE_STEPS = [
   {
@@ -646,6 +647,7 @@ export default function ProjectList() {
               onEditCancel={handleEditCancel}
               onEditNameChange={setEditingName}
               onDelete={handleDelete}
+              onPrefetch={prefetchProjectWorkspaceRoutes}
             />
           ))}
         </div>

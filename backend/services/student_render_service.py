@@ -6,7 +6,7 @@ from pathlib import Path
 
 from database import Project, Student
 from services.label_texts import merge_project_label_texts_into_pages
-from services.layout_groups import layout_for_render_fingerprint
+from services.layout_group_traversal import layout_for_render_fingerprint
 from services.output_keys import build_combined_stem, get_project_output_prefix
 from services.render_service import (
     PRINT_OUTPUT_SIZE,
@@ -35,7 +35,8 @@ _RENDER_PIPELINE_FILES = (
     _SERVICES_DIR / "render_service.py",
     _SERVICES_DIR / "student_render_service.py",
     _SERVICES_DIR / "label_texts.py",
-    _SERVICES_DIR / "layout_groups.py",
+    _SERVICES_DIR / "layout_group_validation.py",
+    _SERVICES_DIR / "layout_group_traversal.py",
     _SERVICES_DIR / "element_renderers.py",
     _SERVICES_DIR / "draw_helpers.py",
     _SERVICES_DIR / "photo_frame_geometry.py",

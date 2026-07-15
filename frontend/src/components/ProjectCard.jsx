@@ -30,6 +30,7 @@ const ProjectCard = memo(function ProjectCard({
   onEditCancel,
   onEditNameChange,
   onDelete,
+  onPrefetch,
 }) {
   const isEditing = editingId === project.id;
   const canEdit = canEditProject(project.owner_id);
@@ -39,6 +40,8 @@ const ProjectCard = memo(function ProjectCard({
       padding="none"
       className="group overflow-hidden transition-all hover:border-indigo-200 hover:shadow-md"
       data-guide="project-card"
+      onMouseEnter={onPrefetch}
+      onFocusCapture={onPrefetch}
     >
       <div className="p-4">
         <div className="flex items-start justify-between gap-2">

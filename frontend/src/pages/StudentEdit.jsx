@@ -11,21 +11,10 @@ import { fetchProjectTemplatePair } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
-import {
-  Camera,
-  ChevronRight,
-  CircleHelp,
-  Eye,
-  Type,
-} from "lucide-react";
-import AlbumPageNav from "../components/AlbumPageNav";
+import AlbumEditorLayout from "../components/AlbumEditorLayout";
 import PhotoManager from "../components/PhotoManager";
-import PanelSwitcher from "../components/PanelSwitcher";
-import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
-import ScopeSwitcher from "../components/ScopeSwitcher";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
 import StudentTextPanel from "../components/StudentTextPanel";
-import { Badge, Button, PageHeader } from "../components/ui";
 import { startProductGuide } from "../utils/productGuide";
 import { filterFillableLabelTexts } from "../utils/textLabelRoles";
 import { handleApiError, isProjectTemplateRevisionError } from "../utils/apiError";
@@ -308,93 +297,27 @@ export default function StudentEdit() {
 
   return (
     <div className="w-full">
-      <PageHeader
+      <AlbumEditorLayout
         title={student.name}
-        badge={<Badge tone="review">編輯學生</Badge>}
-        meta={(
-          // 與全班編輯完全一致的麵包屑：只到「相本專案」，互切走右上按鈕
-          <>
-            <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
-              <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
-              相本專案
-            </Button>
-          </>
-        )}
-        actions={(
-        // 下載集中在班級總覽；右上與班級總覽的「編輯相本」互為對稱切換按鈕
-        <ResponsiveActionGroup mobileColumns={2}>
-          <Button
-            as={Link}
-            to={`/projects/${projectId}/review`}
-            data-guide="editor-review-link"
-            variant="review"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            <Eye className="w-4 h-4" />
-            <span className="hidden sm:inline">班級總覽</span>
-            <span className="sm:hidden">總覽</span>
-          </Button>
-          <Button
-            type="button"
-            onClick={startGuide}
-            variant="secondary"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            <CircleHelp className="w-4 h-4" />
-            <span className="hidden sm:inline">製作教學</span>
-            <span className="sm:hidden">教學</span>
-          </Button>
-        </ResponsiveActionGroup>
-        )}
-      />
-
-      {isProjectCompleted && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <span className="font-medium">此專案已標記全班完成，內容已鎖定</span>
-          <span className="text-emerald-600">仍可預覽，下載請到班級總覽；需主管或管理員退回才能修改</span>
-        </div>
-      )}
-
-      {/* 編輯範圍切換：全班/個別＋學生切換；存檔狀態常駐於此 */}
-      <ScopeSwitcher
+        badgeLabel="編輯學生"
+        projectId={projectId}
+        onStartGuide={startGuide}
+        isProjectCompleted={isProjectCompleted}
+        completedDescription="仍可預覽，下載請到班級總覽；需主管或管理員退回才能修改"
         students={students}
         currentStudentId={studentId}
-        onSwitch={handleScopeSwitch}
-        isBusy={isSwitchingStudent || isPhotoSaving}
+        onScopeSwitch={handleScopeSwitch}
+        isScopeBusy={isSwitchingStudent || isPhotoSaving}
         saveStatus={saveStatus}
-      />
-
-      {/* 行動裝置分頁切換 */}
-      <PanelSwitcher
-        value={mobileTab}
-        onChange={setMobileTab}
-        tabs={[
-          { value: "photo",   label: "照片", icon: Camera },
-          { value: "text",    label: "文字", icon: Type },
-          { value: "preview", label: "預覽", icon: Eye },
-        ]}
-      />
-
-      {/* 全域頁碼導航：預覽、照片、文字三個面板同步跟著同一頁；
-          行動版跟著分頁列一起 sticky，往下捲仍看得到目前頁碼 */}
-      {pageCount > 1 && (
-        <div
-          className="mb-4 max-lg:sticky max-lg:top-14 max-lg:z-10 max-lg:-mx-4 max-lg:bg-[#f8fafc]/95 max-lg:px-4 max-lg:pb-2 max-lg:backdrop-blur-sm"
-          data-guide="student-page-nav"
-        >
-          <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-        </div>
-      )}
-
-      {/* 桌面版：預覽 / 照片 / 文字工作台；行動版：單頁面板切換 */}
-      <div className="lg:grid lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] lg:gap-6 lg:items-start xl:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)_minmax(320px,0.9fr)]">
-        {/* 預覽面板 */}
-        <div
-          className={`lg:sticky lg:top-20 lg:col-start-1 lg:row-span-2 xl:row-span-1 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`}
-          data-guide="student-preview-panel"
-        >
+        mobileTab={mobileTab}
+        onMobileTabChange={setMobileTab}
+        activePage={activePage}
+        pageCount={pageCount}
+        onPageChange={setActivePage}
+        pageNavGuide="student-page-nav"
+        previewGuide="student-preview-panel"
+        textGuide="student-text-panel"
+        previewPanel={(
           <StudentPreviewPanel
             activePage={activePage}
             projectId={projectId}
@@ -407,10 +330,8 @@ export default function StudentEdit() {
             onRefresh={refreshPreview}
             isLocked={isProjectCompleted}
           />
-        </div>
-
-        {/* 照片面板 */}
-        <div className={`lg:block lg:col-start-2 lg:row-start-1 lg:min-w-0 xl:col-start-2 ${mobileTab === "photo" ? "block" : "hidden lg:block"}`}>
+        )}
+        photoPanel={(
           <PhotoManager
             projectId={projectId}
             templateRevision={project.template_revision}
@@ -425,13 +346,8 @@ export default function StudentEdit() {
             onTemplateRevisionChanged={loadStudentData}
             onPhotoSaved={() => { refreshAllPreviews(); }}
           />
-        </div>
-
-        {/* 文字面板只有一份實例；由版面 class 在手機分頁與桌面欄位間切換 */}
-        <div
-          className={`lg:col-start-2 lg:row-start-2 lg:min-w-0 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1 ${mobileTab === "text" ? "block" : "hidden lg:block"}`}
-          data-guide="student-text-panel"
-        >
+        )}
+        textPanel={(
           <div data-guide="student-text-panel-mobile">
             <StudentTextPanel
               activePage={activePage}
@@ -449,8 +365,8 @@ export default function StudentEdit() {
               isLocked={isProjectCompleted}
             />
           </div>
-        </div>
-      </div>
+        )}
+      />
     </div>
   );
 }

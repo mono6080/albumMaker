@@ -1,7 +1,8 @@
-"""以 AST 稽核 audited routers 的 use-case 邊界與既有 debt。
+"""以 AST 稽核完整 route inventory 與零債務 HTTP adapter 邊界。
 
-新增或移除 route 必須同步更新 ROUTE_INVENTORY；尚未下移的禁止操作則必須逐 route、
-逐操作種類精確列入 EXPECTED_DEBT。import alias 與單純的函式 alias 都會解析，避免改名繞過。
+所有 ``backend/routers/**/*.py`` 採 source-level fail-closed：禁止 transaction attribute、
+Storage／lock owner import、wildcard 與動態解析。唯一例外是 render_all 的一筆 rollback；
+因此 helper re-export、local import 或未呼叫 nested helper 都不能藏住禁止操作。
 """
 
 from __future__ import annotations
@@ -202,55 +203,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
 
 # 格式："相對路徑::route function::操作種類": 精確呼叫次數。
 # 只容納尚未下移的歷史 debt；新 use-case 不得加入這裡掩蓋回歸。
-EXPECTED_DEBT: dict[str, int] = {
-    "routers/projects/comments.py::add_comment::transaction.commit": 1,
-    "routers/projects/comments.py::delete_comment::transaction.commit": 1,
-    "routers/projects/crud.py::batch_add_students::lock.project": 1,
-    "routers/projects/crud.py::batch_add_students::transaction.commit": 1,
-    "routers/projects/crud.py::batch_add_students::transaction.rollback": 1,
-    "routers/projects/crud.py::copy_students_from_project::lock.project": 1,
-    "routers/projects/crud.py::copy_students_from_project::transaction.commit": 1,
-    "routers/projects/crud.py::copy_students_from_project::transaction.rollback": 1,
-    "routers/projects/crud.py::delete_student::lock.project": 1,
-    "routers/projects/crud.py::delete_student::lock.student": 1,
-    "routers/projects/crud.py::delete_student::storage.get_storage": 1,
-    "routers/projects/crud.py::delete_student::transaction.commit": 1,
-    "routers/projects/crud.py::delete_student::transaction.flush": 1,
-    "routers/projects/crud.py::delete_student::transaction.rollback": 1,
-    "routers/projects/crud.py::set_page_skip::lock.project_template_revision": 1,
-    "routers/projects/crud.py::update_student::lock.project": 1,
-    "routers/projects/crud.py::update_student::lock.student": 1,
-    "routers/projects/crud.py::update_student::storage.get_storage": 1,
-    "routers/projects/crud.py::update_student::transaction.commit": 1,
-    "routers/projects/crud.py::update_student::transaction.flush": 1,
-    "routers/projects/crud.py::update_student::transaction.rollback": 2,
-    "routers/projects/photos.py::batch_upload_photos::lock.project_template_revision": 1,
-    "routers/projects/photos.py::batch_upload_photos::storage.get_storage": 1,
-    "routers/projects/photos.py::get_photo::storage.get_storage": 2,
-    "routers/projects/photos.py::update_photo_mapping::lock.project_template_revision": 1,
-    "routers/projects/photos.py::update_photo_mapping::storage.get_storage": 1,
-    "routers/projects/photos.py::upload_photo::lock.project_template_revision": 1,
-    "routers/projects/photos.py::upload_photo::storage.get_storage": 1,
-    "routers/projects/photos.py::upload_shared_project_photo::lock.project_template_revision": 1,
-    "routers/projects/photos.py::upload_shared_project_photo::storage.get_storage": 1,
-    "routers/projects/render.py::download_student_pdf::storage.get_storage": 1,
-    "routers/projects/texts.py::batch_update_texts::lock.project_template_revision": 1,
-    "routers/projects/texts.py::batch_update_texts::transaction.commit": 1,
-    "routers/projects/texts.py::update_project_label_texts::lock.project_template_revision": 1,
-    "routers/projects/texts.py::update_project_label_texts::transaction.commit": 1,
-    "routers/projects/texts.py::update_student_label_texts::lock.project_template_revision": 1,
-    "routers/roster.py::link_student_to_roster_child::transaction.commit": 1,
-    "routers/roster.py::link_student_to_roster_child::transaction.flush": 1,
-    "routers/roster.py::merge_roster_child_into::transaction.commit": 1,
-    "routers/templates/assets.py::get_background::storage.get_storage": 1,
-    "routers/templates/assets.py::upload_background::lock.template": 1,
-    "routers/templates/assets.py::upload_background::storage.get_storage": 1,
-    "routers/templates/assets.py::upload_background::transaction.rollback": 2,
-    "routers/templates/crud.py::create_template::transaction.commit": 1,
-    "routers/templates/crud.py::create_template::transaction.flush": 1,
-    "routers/templates/periods.py::create_template_period::transaction.commit": 1,
-    "routers/templates/periods.py::update_template_period::transaction.commit": 1,
-}
+EXPECTED_DEBT: dict[str, int] = {}
 
 TRANSACTION_METHODS = {"commit", "rollback", "flush"}
 STORAGE_FACTORIES = {
@@ -264,13 +217,6 @@ LOCK_SYMBOLS = {
     "services.project_template_revision.lock_project_template_revision": "lock.project_template_revision",
     "services.student_render_service._lock_student_render": "lock.render",
 }
-ALLOWED_BY_POLICY = {
-    AUDITED: frozenset(),
-    PREVIEW_CACHE: frozenset({"storage.get_storage"}),
-    RENDER_ALL: frozenset({"transaction.rollback"}),
-}
-
-
 def _qualified_name(node: ast.AST, aliases: dict[str, str]) -> str | None:
     if isinstance(node, ast.Name):
         return aliases.get(node.id, node.id)
@@ -280,64 +226,114 @@ def _qualified_name(node: ast.AST, aliases: dict[str, str]) -> str | None:
     return None
 
 
-def _is_aliasable_operation_symbol(qualified: str | None) -> bool:
-    if not qualified:
+def _resolve_import_module(
+    module_name: str | None,
+    imported_module: str | None,
+    level: int,
+    *,
+    is_package: bool = False,
+) -> str | None:
+    if level == 0:
+        return imported_module
+    if module_name is None:
+        return imported_module
+    package_parts = module_name.split(".") if is_package else module_name.split(".")[:-1]
+    parent_count = level - 1
+    if parent_count > len(package_parts):
+        return imported_module
+    base_parts = package_parts[: len(package_parts) - parent_count]
+    if imported_module:
+        base_parts.extend(imported_module.split("."))
+    return ".".join(base_parts)
+
+
+def _bind_alias(
+    target: ast.AST,
+    value: ast.AST,
+    aliases: dict[str, str],
+) -> bool:
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        return any(
+            _bind_alias(target_item, value_item, aliases)
+            for target_item, value_item in zip(target.elts, value.elts, strict=True)
+        )
+    if not isinstance(target, ast.Name):
         return False
-    return (
-        qualified in STORAGE_FACTORIES
-        or qualified in LOCK_SYMBOLS
-        or qualified.rsplit(".", 1)[-1] in TRANSACTION_METHODS
+    qualified = _qualified_name(value, aliases)
+    if qualified is None or aliases.get(target.id) == qualified:
+        return False
+    aliases[target.id] = qualified
+    return True
+
+
+def _apply_import(
+    node: ast.Import | ast.ImportFrom,
+    aliases: dict[str, str],
+    module_name: str | None,
+    *,
+    is_package: bool = False,
+) -> bool:
+    changed = False
+    if isinstance(node, ast.Import):
+        for imported in node.names:
+            local_name = imported.asname or imported.name.split(".")[0]
+            qualified = imported.name if imported.asname else local_name
+            if aliases.get(local_name) != qualified:
+                aliases[local_name] = qualified
+                changed = True
+        return changed
+
+    imported_module = _resolve_import_module(
+        module_name,
+        node.module,
+        node.level,
+        is_package=is_package,
     )
+    for imported in node.names:
+        if imported.name == "*":
+            continue
+        qualified = (
+            f"{imported_module}.{imported.name}"
+            if imported_module
+            else imported.name
+        )
+        local_name = imported.asname or imported.name
+        if aliases.get(local_name) != qualified:
+            aliases[local_name] = qualified
+            changed = True
+    return changed
 
 
-def _module_aliases(tree: ast.Module) -> dict[str, str]:
+def _module_aliases(
+    tree: ast.Module,
+    module_name: str | None = None,
+    *,
+    is_package: bool = False,
+) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for imported in node.names:
-                aliases[imported.asname or imported.name] = f"{node.module}.{imported.name}"
-        elif isinstance(node, ast.Import):
-            for imported in node.names:
-                local_name = imported.asname or imported.name.split(".")[0]
-                aliases[local_name] = imported.name if imported.asname else local_name
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            _apply_import(node, aliases, module_name, is_package=is_package)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             value = node.value
             if value is None:
                 continue
-            if isinstance(value, ast.Call) and _qualified_name(value.func, aliases) == "fastapi.APIRouter":
-                qualified = ROUTER_INSTANCE
-            else:
-                qualified = _qualified_name(value, aliases)
+            qualified = _qualified_name(value.func, aliases) if isinstance(value, ast.Call) else None
+            if qualified == "fastapi.APIRouter":
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = ROUTER_INSTANCE
+                continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
-                if isinstance(target, ast.Name) and qualified:
-                    # 依 Python module 執行順序解析任意 namespace/function/router alias chain。
-                    aliases[target.id] = qualified
-    return aliases
-
-
-def _route_aliases(function: ast.FunctionDef | ast.AsyncFunctionDef, base: dict[str, str]) -> dict[str, str]:
-    aliases = dict(base)
-    # 支援 route 內簡單 alias；Call、subscript 等動態賦值不猜測。
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(function):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            value = node.value
-            if value is None:
-                continue
-            qualified = _qualified_name(value, aliases)
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if (
-                    isinstance(target, ast.Name)
-                    and _is_aliasable_operation_symbol(qualified)
-                    and aliases.get(target.id) != qualified
-                ):
-                    aliases[target.id] = qualified
-                    changed = True
+                _bind_alias(target, value, aliases)
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.NamedExpr):
+            _bind_alias(node.value.target, node.value.value, aliases)
     return aliases
 
 
@@ -346,18 +342,50 @@ def _route_decorators(
     aliases: dict[str, str],
 ) -> list[tuple[str, str]]:
     routes: list[tuple[str, str]] = []
+    direct_methods = {
+        "get",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "head",
+        "options",
+        "trace",
+        "websocket",
+        "websocket_route",
+    }
     for decorator in function.decorator_list:
         if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
             continue
         if _qualified_name(decorator.func.value, aliases) != ROUTER_INSTANCE:
             continue
         method = decorator.func.attr.lower()
-        if method not in {"get", "post", "put", "patch", "delete"}:
+        if method not in direct_methods | {"api_route"}:
             continue
-        if not decorator.args or not isinstance(decorator.args[0], ast.Constant):
-            routes.append((method, "<dynamic>"))
+        path = (
+            str(decorator.args[0].value)
+            if decorator.args and isinstance(decorator.args[0], ast.Constant)
+            else "<dynamic>"
+        )
+        if method != "api_route":
+            routes.append((method, path))
             continue
-        routes.append((method, str(decorator.args[0].value)))
+        methods_node = next(
+            (keyword.value for keyword in decorator.keywords if keyword.arg == "methods"),
+            None,
+        )
+        if not isinstance(methods_node, (ast.List, ast.Tuple, ast.Set)):
+            routes.append(("api_route", path))
+            continue
+        parsed_methods = [
+            str(element.value).lower()
+            for element in methods_node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        ]
+        if len(parsed_methods) != len(methods_node.elts) or not parsed_methods:
+            routes.append(("api_route", path))
+            continue
+        routes.extend((parsed_method, path) for parsed_method in parsed_methods)
     return routes
 
 
@@ -371,60 +399,306 @@ def _module_functions(
     }
 
 
-def _route_operations(
-    route_function: ast.FunctionDef | ast.AsyncFunctionDef,
-    module_aliases: dict[str, str],
-    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
-) -> Counter[str]:
-    """掃 route 與其直接/間接呼叫的同模組 helper，外部 service 不展開。"""
-    operations: Counter[str] = Counter()
-    pending = [route_function]
-    visited: set[str] = set()
-    while pending:
-        function = pending.pop()
-        if function.name in visited:
-            continue
-        visited.add(function.name)
-        aliases = _route_aliases(function, module_aliases)
-        for node in ast.walk(function):
-            if not isinstance(node, ast.Call):
+def _module_name_for_path(relative_path: str) -> str:
+    parts = list(Path(relative_path).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+_FORBIDDEN_NAMESPACE_MODULES = {
+    "services.storage",
+    "services.storage_factory",
+    "services.template_sync_locks",
+    "services.project_template_revision",
+}
+_FORBIDDEN_SYMBOLS_BY_MODULE = {
+    "services.student_pages": {"lock_student_page_writes"},
+    "services.student_render_service": {"_lock_student_render"},
+}
+_FORBIDDEN_OWNER_MODULES = _FORBIDDEN_NAMESPACE_MODULES | set(
+    _FORBIDDEN_SYMBOLS_BY_MODULE
+)
+_ALLOWED_STATIC_OPERATIONS = {
+    ("routers/projects/render.py", "render_all_students", "transaction.rollback"): 1,
+}
+_DYNAMIC_RESOLUTION_NAMES = {
+    "__import__",
+    "__getattribute__",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "import_module",
+    "importlib",
+    "locals",
+    "setattr",
+}
+
+
+def _forbidden_imports(
+    tree: ast.Module,
+    relative_path: str,
+    module_name: str,
+    *,
+    is_package: bool,
+) -> list[str]:
+    errors: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if imported.name in _FORBIDDEN_OWNER_MODULES:
+                    errors.append(
+                        f"forbidden namespace import：backend/{relative_path}:{node.lineno} "
+                        f"{imported.name}"
+                    )
+        elif isinstance(node, ast.ImportFrom):
+            if any(imported.name == "*" for imported in node.names):
+                errors.append(
+                    f"router 禁止 wildcard import：backend/{relative_path}:{node.lineno}"
+                )
                 continue
-            operation = _operation(node, aliases)
-            if operation:
-                operations[operation] += 1
-            called_name = _qualified_name(node.func, aliases)
-            if called_name in functions and called_name not in visited:
-                pending.append(functions[called_name])
-    return operations
+            imported_module = _resolve_import_module(
+                module_name,
+                node.module,
+                node.level,
+                is_package=is_package,
+            )
+            if imported_module in _FORBIDDEN_NAMESPACE_MODULES:
+                errors.append(
+                    f"forbidden owner import：backend/{relative_path}:{node.lineno} "
+                    f"{imported_module}"
+                )
+                continue
+            if imported_module in _FORBIDDEN_SYMBOLS_BY_MODULE:
+                forbidden_symbols = _FORBIDDEN_SYMBOLS_BY_MODULE[imported_module]
+                for imported in node.names:
+                    if imported.name in forbidden_symbols:
+                        errors.append(
+                            f"forbidden symbol import：backend/{relative_path}:{node.lineno} "
+                            f"{imported_module}.{imported.name}"
+                        )
+            if imported_module == "services":
+                for imported in node.names:
+                    imported_namespace = f"services.{imported.name}"
+                    if imported_namespace in _FORBIDDEN_OWNER_MODULES:
+                        errors.append(
+                            f"forbidden namespace re-export：backend/{relative_path}:"
+                            f"{node.lineno} {imported_namespace}"
+                        )
+    return errors
 
 
-def _operation(call: ast.Call, aliases: dict[str, str]) -> str | None:
-    if isinstance(call.func, ast.Attribute) and call.func.attr in TRANSACTION_METHODS:
-        return f"transaction.{call.func.attr}"
-    qualified = _qualified_name(call.func, aliases)
-    if qualified and qualified.rsplit(".", 1)[-1] in TRANSACTION_METHODS:
-        return f"transaction.{qualified.rsplit('.', 1)[-1]}"
-    if qualified in STORAGE_FACTORIES:
-        return "storage.get_storage"
-    if qualified in LOCK_SYMBOLS:
-        return LOCK_SYMBOLS[qualified]
+def _raw_qualified_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _raw_qualified_name(node.value)
+        return f"{base}.{node.attr}" if base else None
     return None
 
 
-def _debt_key(relative_path: str, function: str, operation: str) -> str:
-    return f"{relative_path}::{function}::{operation}"
+def _direct_function_scope_node_ids(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[int]:
+    """回傳 function 直接 scope 節點；nested helper／lambda／class body 不納入。"""
+    node_ids: set[int] = set()
+
+    def visit(node: ast.AST) -> None:
+        node_ids.add(id(node))
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+        ):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in function.body:
+        visit(statement)
+    return node_ids
+
+
+def _is_exact_allowed_render_rollback(
+    relative_path: str,
+    function_name: str,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.Attribute,
+    parents: dict[int, ast.AST],
+    direct_scope_node_ids: set[int],
+) -> bool:
+    if relative_path != "routers/projects/render.py" or function_name != "render_all_students":
+        return False
+    parameter_names = {
+        argument.arg
+        for argument in [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+    }
+    if "db" not in parameter_names or id(node) not in direct_scope_node_ids:
+        return False
+    if node.attr != "rollback" or not isinstance(node.value, ast.Name) or node.value.id != "db":
+        return False
+    parent = parents.get(id(node))
+    return (
+        isinstance(parent, ast.Call)
+        and parent.func is node
+        and not parent.args
+        and not parent.keywords
+    )
+
+
+def _dynamic_resolution_errors(tree: ast.Module, relative_path: str) -> list[str]:
+    errors: list[str] = []
+    for node in ast.walk(tree):
+        reference: str | None = None
+        if isinstance(node, ast.Name) and node.id in _DYNAMIC_RESOLUTION_NAMES:
+            reference = node.id
+        elif isinstance(node, ast.Attribute) and node.attr in _DYNAMIC_RESOLUTION_NAMES:
+            reference = node.attr
+        elif isinstance(node, ast.Import):
+            imported_root = next(
+                (
+                    imported.name
+                    for imported in node.names
+                    if imported.name.split(".", 1)[0] in _DYNAMIC_RESOLUTION_NAMES
+                ),
+                None,
+            )
+            reference = imported_root
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".", 1)[0] in _DYNAMIC_RESOLUTION_NAMES:
+                reference = node.module
+            else:
+                reference = next(
+                    (
+                        imported.name
+                        for imported in node.names
+                        if imported.name in _DYNAMIC_RESOLUTION_NAMES
+                    ),
+                    None,
+                )
+        if reference:
+            errors.append(
+                f"router 禁止 dynamic resolution reference：backend/{relative_path}:"
+                f"{node.lineno} {reference}"
+            )
+    return errors
+
+
+def _static_operation_counts(
+    tree: ast.Module,
+    relative_path: str,
+) -> Counter[tuple[str, str, str]]:
+    counts: Counter[tuple[str, str, str]] = Counter()
+    functions = _module_functions(tree)
+    covered_attributes: set[int] = set()
+    for function_name, function in functions.items():
+        parents = {
+            id(child): parent
+            for parent in ast.walk(function)
+            for child in ast.iter_child_nodes(parent)
+        }
+        direct_scope_node_ids = _direct_function_scope_node_ids(function)
+        for node in ast.walk(function):
+            if isinstance(node, ast.Attribute):
+                covered_attributes.add(id(node))
+                if node.attr in TRANSACTION_METHODS:
+                    operation = f"transaction.{node.attr}"
+                    if operation == "transaction.rollback" and not _is_exact_allowed_render_rollback(
+                        relative_path,
+                        function_name,
+                        function,
+                        node,
+                        parents,
+                        direct_scope_node_ids,
+                    ):
+                        operation = "transaction.rollback.invalid_receiver_or_scope"
+                    counts[(relative_path, function_name, operation)] += 1
+                raw_name = _raw_qualified_name(node)
+                if raw_name in STORAGE_FACTORIES:
+                    counts[(relative_path, function_name, "storage.get_storage")] += 1
+                if raw_name in LOCK_SYMBOLS:
+                    counts[(relative_path, function_name, LOCK_SYMBOLS[raw_name])] += 1
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and id(node) not in covered_attributes:
+            if node.attr in TRANSACTION_METHODS:
+                counts[(relative_path, "<module>", f"transaction.{node.attr}")] += 1
+            raw_name = _raw_qualified_name(node)
+            if raw_name in STORAGE_FACTORIES:
+                counts[(relative_path, "<module>", "storage.get_storage")] += 1
+            if raw_name in LOCK_SYMBOLS:
+                counts[(relative_path, "<module>", LOCK_SYMBOLS[raw_name])] += 1
+    return counts
+
+
+def _static_boundary_errors(
+    tree: ast.Module,
+    relative_path: str,
+    module_name: str,
+    *,
+    is_package: bool,
+) -> list[str]:
+    errors = _forbidden_imports(
+        tree,
+        relative_path,
+        module_name,
+        is_package=is_package,
+    )
+    errors.extend(_dynamic_resolution_errors(tree, relative_path))
+    counts = _static_operation_counts(tree, relative_path)
+    allowed_keys = {
+        key for key in _ALLOWED_STATIC_OPERATIONS if key[0] == relative_path
+    }
+    keys = counts.keys() | allowed_keys
+    for key in sorted(keys):
+        actual = counts[key]
+        expected = _ALLOWED_STATIC_OPERATIONS.get(key, 0)
+        if actual != expected:
+            errors.append(
+                f"router static boundary 不符：backend/{key[0]}::{key[1]}::{key[2]} "
+                f"expected={expected} actual={actual}"
+            )
+    return errors
 
 
 def audit_routes() -> tuple[list[str], Counter[str]]:
     errors: list[str] = []
     debt: Counter[str] = Counter()
+    actual_files = {
+        path.relative_to(AUDITED_ROOT).as_posix()
+        for path in (AUDITED_ROOT / "routers").rglob("*.py")
+    }
+    module_trees: dict[str, ast.Module] = {}
+    module_aliases_by_path: dict[str, dict[str, str]] = {}
+    for relative_path in actual_files:
+        source_path = AUDITED_ROOT / relative_path
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        module_name = _module_name_for_path(relative_path)
+        module_trees[relative_path] = tree
+        module_aliases_by_path[relative_path] = _module_aliases(
+            tree,
+            module_name,
+            is_package=Path(relative_path).name == "__init__.py",
+        )
+        errors.extend(
+            _static_boundary_errors(
+                tree,
+                relative_path,
+                module_name,
+                is_package=Path(relative_path).name == "__init__.py",
+            )
+        )
+
     for relative_path, expected_specs in ROUTE_INVENTORY.items():
         source_path = AUDITED_ROOT / relative_path
         if not source_path.exists():
             errors.append(f"缺少 audited router：backend/{relative_path}")
             continue
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        module_aliases = _module_aliases(tree)
+        tree = module_trees[relative_path]
+        module_aliases = module_aliases_by_path[relative_path]
         functions = _module_functions(tree)
         discovered: set[tuple[str, str, str]] = set()
         for function in functions.values():
@@ -437,28 +711,14 @@ def audit_routes() -> tuple[list[str], Counter[str]]:
         for route in sorted(expected - discovered):
             errors.append(f"inventory route 不存在：backend/{relative_path} {route[0].upper()} {route[1]} ({route[2]})")
 
-        for spec in expected_specs:
-            function = functions.get(spec.function)
-            if function is None:
-                continue
-            allowed = ALLOWED_BY_POLICY[spec.policy]
-            for operation, count in _route_operations(function, module_aliases, functions).items():
-                if operation not in allowed:
-                    debt[_debt_key(relative_path, spec.function, operation)] += count
-
     expected_files = set(ROUTE_INVENTORY)
-    actual_files = {
-        path.relative_to(AUDITED_ROOT).as_posix()
-        for path in (AUDITED_ROOT / "routers").rglob("*.py")
-    }
     if not expected_files <= actual_files:
         errors.append("audited router 檔案 inventory 與實際檔案不一致")
 
     # 掃完整 backend/routers tree；任何新根層/子目錄 route 檔都必須先進 inventory。
     for relative_path in sorted(actual_files - expected_files):
-        source_path = AUDITED_ROOT / relative_path
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        aliases = _module_aliases(tree)
+        tree = module_trees[relative_path]
+        aliases = module_aliases_by_path[relative_path]
         has_routes = any(
             _route_decorators(node, aliases)
             for node in tree.body

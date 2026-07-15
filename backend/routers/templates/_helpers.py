@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from crud.template_crud import get_period_or_404
 from database import Template, TemplatePage, TemplatePeriod
-from services.layout_groups import iter_layout_render_elements
+from services.layout_group_traversal import iter_layout_render_elements
 from template_periods import (
     DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
     DEFAULT_TEMPLATE_PERIOD_NAME,

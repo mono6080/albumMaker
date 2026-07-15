@@ -9,12 +9,17 @@ import PrivateRoute from "./components/PrivateRoute";
 import PwaUpdateBanner from "./components/PwaUpdateBanner";
 import { Button } from "./components/ui";
 import { ROLE_GROUPS, ROLE_LABELS } from "./utils/userRoles";
-// 老師的核心路徑（登入→專案→總覽→編輯）維持同步載入，換頁零延遲
+// 登入與專案清單維持同步載入；編輯／總覽由專案卡片預載
 import Login from "./pages/Login";
 import ProjectList from "./pages/ProjectList";
-import ClassEdit from "./pages/ClassEdit";
-import ProjectReview from "./pages/ProjectReview";
-import StudentEdit from "./pages/StudentEdit";
+import {
+  loadClassEditRoute,
+  loadProjectReviewRoute,
+  loadStudentEditRoute,
+} from "./routeLoaders";
+const ClassEdit = lazy(loadClassEditRoute);
+const ProjectReview = lazy(loadProjectReviewRoute);
+const StudentEdit = lazy(loadStudentEditRoute);
 // 管理端/設計組頁面 lazy 拆出：konva 三件套（~300KB，佔 bundle 31%）
 // 只有模板編輯器用得到，老師端不需要下載與 parse
 const TemplateList = lazy(() => import("./pages/TemplateList"));
@@ -161,7 +166,7 @@ function AppContent() {
       <PwaUpdateBanner />
       <Nav hideOnPhone={isTemplateEditorRoute} />
       <main className={mainClassName}>
-        {/* lazy 頁面載入中的輕量 fallback（核心路徑不經過這裡） */}
+        {/* lazy 頁面載入中的輕量 fallback */}
         <Suspense
           fallback={
             <div className="flex h-64 items-center justify-center text-gray-400">載入中...</div>

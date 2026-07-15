@@ -64,6 +64,11 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   commit，因此純 pan／pinch frame 不得重 render TemplateEditor／Artwork。Camera、sheet、responsive
   panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload；手勢尾端的
   synthetic tap 也不得清除既有選取。此契約由 `template-editor-mobile.spec.js` 的 render probe 釘住。
+- TemplateEditor 只協調 route 與 responsive composition；selection、clipboard、shortcuts、素材分析、
+  文件／完整快照 CAS、離頁保護分別由 `useEditorSelection.js`、`useLayoutClipboard.js`、
+  `useEditorShortcuts.js`、`useMaterialTextSuggestion.js`、`useTemplateEditorDocument.js`、
+  `useTemplateEditorNavigationGuard.js` 持有。Header／空狀態／模板使用提示在 `components/editor/`；
+  save-in-flight 期間新增的 draft 必須由文件 hook 繼續送下一輪 snapshot，不可被前一輪 response 清掉。
 - TemplateEditor 的 UI 模式固定為 phone `<768px`、tablet `768–1023px`、desktop `>=1024px`；phone
   使用 canvas-first top bar、bottom dock/sheets，tablet 使用左欄與手動 side drawer，desktop 使用三欄
   static inspector。Phone/tablet 選取物件不會自動開 inspector；完整互動與驗收契約見
@@ -76,8 +81,9 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   grouped leaf 不再從 root 重複畫。前端 contract/graph、query、geometry、command 分別在
   `utils/layoutGroupContractGraph.js`、`layoutGroupQueries.js`、`layoutGroupGeometry.js`、
   `layoutGroupCommands.js`，`layoutGroups.js` 只保相容 exports；TemplateEditor 對同一 immutable
-  page layout 以 `editorLayoutModel.js` 單次建圖。後端 traversal 在 `services/layout_groups.py`；
-  若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
+  page layout 以 `editorLayoutModel.js` 單次建圖。後端驗證與正式 traversal 分別在
+  `services/layout_group_validation.py`、`services/layout_group_traversal.py`，`layout_groups.py`
+  只保相容 exports；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
   元素仍只畫一次。前端 export/model 契約由 `frontend/tests/unit/groups-contract.test.mjs` 釘住。
   圖層可見性契約見
   [data-model.md 的 layout_json](data-model.md#layout_json-格式)。

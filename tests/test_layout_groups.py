@@ -27,7 +27,9 @@ from tests.helpers import (
     create_template_with_page,
     login,
     png_bytes,
+    replace_template_page_layout,
     started_client,
+    template_page_snapshot_payload,
     use_tmp_uploads,
 )
 
@@ -197,8 +199,8 @@ def test_layout_save_rejects_invalid_groups_without_mutating_stored_layout():
         invalid["groups"][0]["children"][1]["id"] = "missing"
 
         response = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=invalid,
+            f"/api/templates/{template_id}/pages",
+            json=template_page_snapshot_payload(client, template_id, page_id, invalid),
         )
 
         assert_status(response, 422)
@@ -225,10 +227,7 @@ def test_layout_save_strips_empty_legacy_bubbles_and_rejects_nonempty_values():
             "text_bubbles": [],
         }
 
-        response = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=layout,
-        )
+        response = replace_template_page_layout(client, template_id, page_id, layout)
         assert_status(response, 200)
         db = SessionLocal()
         try:
@@ -239,8 +238,8 @@ def test_layout_save_strips_empty_legacy_bubbles_and_rejects_nonempty_values():
 
         layout["text_bubbles"] = [{"id": "legacy-bubble"}]
         response = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=layout,
+            f"/api/templates/{template_id}/pages",
+            json=template_page_snapshot_payload(client, template_id, page_id, layout),
         )
         assert_status(response, 422)
         assert response.json()["detail"]["code"] == "removed_layout_element"
@@ -350,7 +349,9 @@ def test_template_copy_preserves_group_refs_and_asset_revision_while_rewriting_p
 
 
 def test_group_traversal_participates_in_render_and_preview_cache_versions():
-    assert "layout_groups.py" in {path.name for path in _RENDER_PIPELINE_FILES}
+    source_names = {path.name for path in _RENDER_PIPELINE_FILES}
+    assert "layout_group_validation.py" in source_names
+    assert "layout_group_traversal.py" in source_names
     assert PREVIEW_CACHE_VERSION == "project-preview-v7-layer-visibility"
 
 
@@ -419,8 +420,8 @@ def test_layout_save_rejects_unknown_contract_without_groups():
         layout["group_contract"] = "future-world-v99"
 
         response = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=layout,
+            f"/api/templates/{template_id}/pages",
+            json=template_page_snapshot_payload(client, template_id, page_id, layout),
         )
 
         assert_status(response, 422)
@@ -730,8 +731,8 @@ def test_layout_save_returns_422_for_unhashable_child_types():
                 layout["groups"][0]["children"][0]["type"] = invalid_child_type
 
                 response = client.put(
-                    f"/api/templates/{template_id}/pages/{page_id}/layout",
-                    json=layout,
+                    f"/api/templates/{template_id}/pages",
+                    json=template_page_snapshot_payload(client, template_id, page_id, layout),
                 )
 
                 assert_status(response, 422)
@@ -787,10 +788,16 @@ def test_layout_save_returns_json_safe_422_for_nonfinite_raw_child_ids():
         for raw_value, expected_diagnostic in raw_cases:
             layout = _nested_v2_layout()
             layout["groups"][0]["children"][0]["id"] = "__RAW_ID__"
-            raw_body = json.dumps(layout).replace('"__RAW_ID__"', raw_value, 1)
+            snapshot_payload = template_page_snapshot_payload(
+                client,
+                template_id,
+                page_id,
+                layout,
+            )
+            raw_body = json.dumps(snapshot_payload).replace('"__RAW_ID__"', raw_value, 1)
 
             response = client.put(
-                f"/api/templates/{template_id}/pages/{page_id}/layout",
+                f"/api/templates/{template_id}/pages",
                 content=raw_body,
                 headers={"content-type": "application/json"},
             )

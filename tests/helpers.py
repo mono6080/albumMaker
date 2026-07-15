@@ -191,14 +191,15 @@ def create_template_with_page(
     name: str | None = None,
     *,
     photo_slot_count: int = 1,
+    period_id: int | None = None,
 ) -> tuple[int, int]:
-    template_response = client.post("/api/templates/", data={"name": name or unique_name("template")})
+    template_data = {"name": name or unique_name("template")}
+    if period_id is not None:
+        template_data["period_id"] = str(period_id)
+    template_response = client.post("/api/templates/", data=template_data)
     assert_status(template_response, 200)
-    template_id = template_response.json()["id"]
-
-    page_response = client.post(f"/api/templates/{template_id}/pages")
-    assert_status(page_response, 200)
-    page_id = page_response.json()["id"]
+    template_payload = template_response.json()
+    template_id = template_payload["id"]
 
     layout = smoke_layout()
     if photo_slot_count >= 2:
@@ -211,14 +212,87 @@ def create_template_with_page(
             "border": True,
             "border_width": 8,
         })
-    layout_response = client.put(
-        f"/api/templates/{template_id}/pages/{page_id}/layout",
-        json=layout,
+    snapshot_response = client.put(
+        f"/api/templates/{template_id}/pages",
+        json={
+            "expected_page_ids": [],
+            "expected_revision": template_payload["revision"],
+            "pages": [{"client_id": unique_name("fixture-page"), "layout": layout}],
+        },
     )
-    assert_status(layout_response, 200)
-    assert layout_response.json() == {"ok": True}
+    assert_status(snapshot_response, 200)
+    page_id = snapshot_response.json()["pages"][0]["id"]
 
     return template_id, page_id
+
+
+def append_template_page_with_layout(client: TestClient, template_id: int, layout: dict) -> int:
+    """正式測資一律以完整 snapshot 追加頁面。"""
+    template_response = client.get(f"/api/templates/{template_id}")
+    assert_status(template_response, 200)
+    template = template_response.json()
+    client_id = unique_name("fixture-page")
+    snapshot_response = client.put(
+        f"/api/templates/{template_id}/pages",
+        json={
+            "expected_page_ids": [page["id"] for page in template["pages"]],
+            "expected_revision": template["revision"],
+            "pages": [
+                {"id": page["id"], "layout": page["layout"]}
+                for page in template["pages"]
+            ] + [{"client_id": client_id, "layout": layout}],
+        },
+    )
+    assert_status(snapshot_response, 200)
+    return next(
+        page["id"]
+        for page in snapshot_response.json()["pages"]
+        if page["client_id"] == client_id
+    )
+
+
+def replace_template_page_layout(
+    client: TestClient,
+    template_id: int,
+    page_id: int,
+    layout: dict,
+):
+    """正式測資一律以完整 snapshot 更新單頁 layout。"""
+    snapshot_payload = template_page_snapshot_payload(
+        client,
+        template_id,
+        page_id,
+        layout,
+    )
+    snapshot_response = client.put(
+        f"/api/templates/{template_id}/pages",
+        json=snapshot_payload,
+    )
+    assert_status(snapshot_response, 200)
+    return snapshot_response
+
+
+def template_page_snapshot_payload(
+    client: TestClient,
+    template_id: int,
+    page_id: int,
+    layout: dict,
+) -> dict:
+    """建立保留其他頁面的單頁 layout snapshot payload。"""
+    template_response = client.get(f"/api/templates/{template_id}")
+    assert_status(template_response, 200)
+    template = template_response.json()
+    return {
+        "expected_page_ids": [page["id"] for page in template["pages"]],
+        "expected_revision": template["revision"],
+        "pages": [
+            {
+                "id": page["id"],
+                "layout": layout if page["id"] == page_id else page["layout"],
+            }
+            for page in template["pages"]
+        ],
+    }
 
 
 def create_project(client: TestClient, template_id: int, name: str | None = None) -> int:

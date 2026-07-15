@@ -7,8 +7,7 @@ import pytest
 from sqlalchemy.orm import Session as OrmSession
 
 from database import Project, SessionLocal, Template, utc_now
-from routers.projects import crud as project_crud
-from services import template_sync_locks
+from services import project_student_service, template_sync_locks
 from services.storage import get_storage
 from tests.helpers import (
     assert_status,
@@ -18,6 +17,7 @@ from tests.helpers import (
     jpeg_bytes,
     login,
     png_bytes,
+    replace_template_page_layout,
     revisioned_project_url,
     smoke_layout,
     started_client,
@@ -206,7 +206,11 @@ def test_copy_students_rechecks_target_after_waiting_for_real_project_locks(monk
             with real_project_locks(project_ids):
                 yield
 
-        monkeypatch.setattr(project_crud, "lock_project_content_writes", observed_project_locks)
+        monkeypatch.setattr(
+            project_student_service,
+            "lock_project_content_writes",
+            observed_project_locks,
+        )
         result: dict = {}
 
         def run_copy() -> None:
@@ -282,12 +286,11 @@ def test_template_copy_storage_mid_failure_rolls_back_database_but_leaves_prior_
             "width": 40,
             "height": 20,
         }]
-        assert_status(
-            client.put(
-                f"/api/templates/{source_template_id}/pages/{source_page_id}/layout",
-                json=layout,
-            ),
-            200,
+        replace_template_page_layout(
+            client,
+            source_template_id,
+            source_page_id,
+            layout,
         )
 
         storage = get_storage()

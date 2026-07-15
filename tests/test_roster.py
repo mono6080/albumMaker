@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from tests.helpers import (
     assert_status,
+    create_template_with_page,
     create_user,
     jpeg_bytes,
     login,
@@ -20,6 +21,7 @@ from tests.helpers import (
 )
 
 from database import SessionLocal, Student
+from services import semester_render_service
 from services.teacher_overview_service import _summarize_student_progress
 
 
@@ -34,20 +36,10 @@ def create_active_period(client: TestClient, department: str = "infant") -> dict
 
 def create_period_template_project(client: TestClient, period_id: int) -> int:
     """建立掛在指定期別下的模板（含一頁版型）與專案，回傳 project_id。"""
-    template_response = client.post(
-        "/api/templates/",
-        data={"name": unique_name("template"), "period_id": str(period_id)},
+    template_id, _ = create_template_with_page(
+        client,
+        period_id=period_id,
     )
-    assert_status(template_response, 200)
-    template_id = template_response.json()["id"]
-
-    page_response = client.post(f"/api/templates/{template_id}/pages")
-    assert_status(page_response, 200)
-    layout_response = client.put(
-        f"/api/templates/{template_id}/pages/{page_response.json()['id']}/layout",
-        json=smoke_layout(),
-    )
-    assert_status(layout_response, 200)
 
     project_response = client.post(
         "/api/projects/",
@@ -606,6 +598,50 @@ def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
         # 不存在的 job 回 404
         missing_job = client.get("/api/roster/semester-export/render-missing/nonexistent")
         assert_status(missing_job, 404)
+
+
+def test_render_missing_keeps_partial_success_and_progress_after_one_failure(
+    monkeypatch,
+    tmp_path,
+):
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        period = create_active_period(client)
+        project_id = create_period_template_project(client, period["id"])
+        student_ids = add_students(client, project_id, ["第一位失敗", "第二位成功"])
+
+    rendered_students = []
+
+    def render_one(project, student, requested_project_id, db):
+        rendered_students.append(student.name)
+        if student.id == student_ids["第一位失敗"]:
+            raise RuntimeError("simulated single render failure")
+        return {"pdf": "unused", "pages": 1}
+
+    monkeypatch.setattr(
+        semester_render_service,
+        "render_and_save_student_album",
+        render_one,
+    )
+    progress = []
+    db = SessionLocal()
+    try:
+        result = semester_render_service.render_missing_semester_albums(
+            db,
+            [period["id"]],
+            progress_callback=lambda done, total: progress.append((done, total)),
+        )
+    finally:
+        db.close()
+
+    assert rendered_students == ["第一位失敗", "第二位成功"]
+    assert result["rendered"] == 1
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["student"] == "第一位失敗"
+    assert result["errors"][0]["project"]
+    assert result["errors"][0]["error"] == "產生失敗"
+    assert progress == [(0, 2), (1, 2), (2, 2)]
 
 
 def test_semester_export_zip_structure(monkeypatch, tmp_path):

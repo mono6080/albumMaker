@@ -27,6 +27,7 @@ from tests.helpers import (
     jpeg_bytes,
     login,
     png_bytes,
+    replace_template_page_layout,
     revisioned_project_url,
     scale_box_for_image,
     smoke_layout,
@@ -625,11 +626,7 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
             "footer": None,
             "logo": None,
         }
-        layout_response = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=blank_layout,
-        )
-        assert_status(layout_response, 200)
+        replace_template_page_layout(client, template_id, page_id, blank_layout)
 
         background_upload = client.post(
             f"/api/templates/{template_id}/pages/{page_id}/background",
@@ -644,11 +641,7 @@ def test_template_spread_preview_uses_page_background_column(monkeypatch, tmp_pa
             assert background_image.size == (20, 20)
 
         # 模擬 TemplateEditor 後續儲存版面時只送元素 layout，導致 layout_json 不含 background_filename。
-        layout_without_background = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=blank_layout,
-        )
-        assert_status(layout_without_background, 200)
+        replace_template_page_layout(client, template_id, page_id, blank_layout)
 
         client.cookies.clear()
         assert_status(client.get(background_url), 401)
@@ -773,11 +766,12 @@ def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
             "width": 80,
             "height": 40,
         }]
-        update_source_layout = client.put(
-            f"/api/templates/{source_template_id}/pages/{source_page_id}/layout",
-            json=copied_layout,
+        replace_template_page_layout(
+            client,
+            source_template_id,
+            source_page_id,
+            copied_layout,
         )
-        assert_status(update_source_layout, 200)
 
         copied_template = client.post(
             "/api/templates/",
@@ -880,11 +874,7 @@ def test_hidden_group_photo_slot_is_not_counted_or_writable(monkeypatch, tmp_pat
                 {"type": "text", "id": 1},
             ],
         }]
-        update_layout = client.put(
-            f"/api/templates/{template_id}/pages/{page_id}/layout",
-            json=layout,
-        )
-        assert_status(update_layout, 200)
+        replace_template_page_layout(client, template_id, page_id, layout)
 
         templates = client.get("/api/templates/")
         assert_status(templates, 200)

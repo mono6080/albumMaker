@@ -1,6 +1,8 @@
 import io
 import zipfile
 
+from fastapi import HTTPException
+
 from database import Project, Student
 from services.output_keys import (
     build_combined_stem,
@@ -8,6 +10,23 @@ from services.output_keys import (
 )
 from services.storage_factory import get_storage
 from services.zip_stream import open_zip_stream
+
+
+def get_student_pdf_download(
+    project: Project,
+    student: Student,
+    output_mode: str,
+) -> tuple[bytes, str]:
+    """讀取學生 PDF 並回傳 bytes 與下載檔名。"""
+    if not student.output_filename:
+        raise HTTPException(status_code=404, detail="尚未產生 PDF，請先渲染")
+    pdf_key = student_pdf_key_for_mode(student.output_filename, output_mode)
+    storage = get_storage()
+    if not storage.exists(pdf_key):
+        raise HTTPException(status_code=404, detail="PDF file missing — please render first")
+    combined_stem = build_combined_stem(project.name, student.name)
+    screen_suffix = "_screen" if output_mode == "screen" else ""
+    return storage.get_bytes(pdf_key), f"{combined_stem}{screen_suffix}.pdf"
 
 
 def _student_pdf_zip_entry(

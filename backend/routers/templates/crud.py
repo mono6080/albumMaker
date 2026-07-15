@@ -19,6 +19,7 @@ from services.photo_frame_geometry import (
     PHOTO_SLOT_DIMENSION_MODE_KEY,
 )
 from services.template_lifecycle_service import (
+    create_template as create_template_use_case,
     delete_template as delete_template_use_case,
     rename_template as rename_template_use_case,
 )
@@ -26,7 +27,6 @@ from services.template_page_snapshot_service import (
     normalize_template_page_layout,
     replace_template_pages_snapshot,
 )
-from services.template_service import copy_template_pages
 from template_periods import department_label, period_status_label
 
 from ._helpers import (
@@ -81,13 +81,12 @@ def create_template(
     if source_template_id is not None:
         source_template = get_template_or_404(source_template_id, db)
 
-    new_template = Template(name=template_name, period_id=period.id)
-    db.add(new_template)
-    db.flush()
-    if source_template:
-        copy_template_pages(source_template, new_template, db)
-    db.commit()
-    db.refresh(new_template)
+    new_template = create_template_use_case(
+        db,
+        name=template_name,
+        period=period,
+        source_template=source_template,
+    )
     return _serialize_template_summary(new_template)
 
 

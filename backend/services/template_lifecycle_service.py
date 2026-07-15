@@ -6,11 +6,30 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from crud.template_crud import get_period_or_404, get_template_or_404
-from database import Project
+from database import Project, Template, TemplatePeriod
 from services.storage_factory import get_storage
+from services.template_service import copy_template_pages
 
 
 logger = logging.getLogger(__name__)
+
+
+def create_template(
+    db: Session,
+    *,
+    name: str,
+    period: TemplatePeriod,
+    source_template: Template | None,
+) -> Template:
+    """建立空白或複製模板，維持單次 commit 與素材複製失敗現況。"""
+    new_template = Template(name=name, period_id=period.id)
+    db.add(new_template)
+    db.flush()
+    if source_template:
+        copy_template_pages(source_template, new_template, db)
+    db.commit()
+    db.refresh(new_template)
+    return new_template
 
 
 def rename_template(

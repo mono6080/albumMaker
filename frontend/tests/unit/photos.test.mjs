@@ -8,7 +8,17 @@ import {
 } from "../../src/utils/photoUtils.js";
 import { PHOTO_SLOT_CONTENT_BOX_MODE, getPhotoContentRect, getPhotoFrameRect } from "../../src/utils/photoFrameGeometry.js";
 import { matchPersonalFilesToSlots, matchByNamePageSlot, matchByNameSlotSequence } from "../../src/utils/photoMatcher.js";
+import { getUploadStatusLabel } from "../../src/utils/batchPhotoWizardPresentation.js";
 import { test } from "./harness.mjs";
+
+
+test("batch photo wizard keeps upload progress labels stable", () => {
+  assert.equal(getUploadStatusLabel(null), "");
+  assert.equal(getUploadStatusLabel({ phase: "uploading" }), "上傳中");
+  assert.equal(getUploadStatusLabel({ phase: "processing" }), "處理中");
+  assert.equal(getUploadStatusLabel({ phase: "saving" }), "整理結果中");
+  assert.equal(getUploadStatusLabel({ phase: "processing", retrying: true }), "重試中");
+});
 
 
 test("photo utilities normalize records and build slot items", () => {

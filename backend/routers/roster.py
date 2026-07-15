@@ -7,17 +7,17 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import require_role
-from crud.roster_crud import get_any_student_or_404, get_roster_child_or_404
 from crud.user_crud import get_visible_owner_ids
 from database import User, get_db
 from services.export_jobs import get_render_job_state, start_render_missing_job
 from services.output_keys import build_content_disposition_header
-from services.roster_service import (
+from services.semester_export_service import (
     build_semester_export_preview,
-    delete_roster_child_if_orphaned,
-    link_student_to_new_child,
-    merge_roster_children,
     open_semester_export_zip_stream,
+)
+from services.roster_identity_service import (
+    link_student_to_roster_child as link_student_to_roster_child_use_case,
+    merge_roster_child_into as merge_roster_child_into_use_case,
 )
 from services.teacher_overview_service import (
     build_teacher_overview_workbook,
@@ -88,19 +88,12 @@ def link_student_to_roster_child(
     current_user: User = Depends(require_role("admin")),
 ):
     """把學生連到指定名冊項，或建立新名冊項（同名不同人的拆分）。"""
-    student = get_any_student_or_404(student_id, db)
-    previous_child_id = student.roster_child_id
-    if payload.create_new:
-        new_child = link_student_to_new_child(db, student)
-    else:
-        new_child = get_roster_child_or_404(payload.roster_child_id, db)
-        student.roster_child_id = new_child.id
-    # 換連結後舊名冊項變孤兒則清掉
-    if previous_child_id != new_child.id:
-        db.flush()
-        delete_roster_child_if_orphaned(db, previous_child_id)
-    db.commit()
-    return {"ok": True, "roster_child_id": new_child.id}
+    return link_student_to_roster_child_use_case(
+        db,
+        student_id,
+        roster_child_id=payload.roster_child_id,
+        create_new=payload.create_new,
+    )
 
 
 @router.post("/children/{child_id}/merge/{target_child_id}")
@@ -111,13 +104,7 @@ def merge_roster_child_into(
     current_user: User = Depends(require_role("admin")),
 ):
     """把一個名冊項的所有學生併入另一個名冊項（改名/誤拆修正）。"""
-    if child_id == target_child_id:
-        raise HTTPException(status_code=400, detail="不能將名冊項併入自己")
-    source_child = get_roster_child_or_404(child_id, db)
-    target_child = get_roster_child_or_404(target_child_id, db)
-    moved_count = merge_roster_children(db, source_child, target_child)
-    db.commit()
-    return {"ok": True, "moved": moved_count}
+    return merge_roster_child_into_use_case(db, child_id, target_child_id)
 
 
 @router.post("/semester-export/render-missing")

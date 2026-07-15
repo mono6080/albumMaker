@@ -1,7 +1,9 @@
 """模板貼圖寫入、讀取與素材文字框分析 use cases。"""
 
+import hashlib
 import io
 import json
+import logging
 import re
 from pathlib import PurePosixPath
 
@@ -10,17 +12,94 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from crud.template_crud import get_template_page_or_404
-from services.file_service import content_versioned_filename, get_sticker_key
-from services.layout_groups import canonical_id
+from services.file_service import (
+    content_versioned_filename,
+    get_background_key,
+    get_sticker_key,
+)
+from services.layout_group_validation import canonical_id
 from services.material_text_box import (
     analyze_material_text_box,
     decode_rgba_image,
     rgba_asset_revision,
 )
 from services.storage_factory import get_storage
+from services.template_project_sync_service import commit_direct_template_render_change
+from services.template_sync_locks import lock_template_write
 
 
 _ASSET_REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+logger = logging.getLogger(__name__)
+
+
+def upload_background(
+    db: Session,
+    template_id: int,
+    page_id: int,
+    filename: str | None,
+    file_bytes: bytes,
+    expected_revision: int,
+) -> dict:
+    """在 T→P→S 鎖內更新背景與 revision，失敗時清除未綁定的新 key。"""
+    storage = get_storage()
+    content_revision = hashlib.sha256(file_bytes).hexdigest()
+    versioned_filename = content_versioned_filename(
+        filename,
+        content_revision,
+        "background",
+    )
+    key = get_background_key(template_id, page_id, versioned_filename)
+    old_key = None
+
+    with lock_template_write(template_id):
+        db.rollback()
+        db.expire_all()
+        template_page = get_template_page_or_404(page_id, template_id, db)
+        template = template_page.template
+        if template.revision != expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "template_revision_changed",
+                    "message": "模板已被其他操作更新，請重新整理後再試",
+                    "current_revision": template.revision,
+                },
+            )
+        old_key = template_page.background_filename
+        storage.put(key, file_bytes)
+        try:
+            def apply_background_change() -> None:
+                current_page = get_template_page_or_404(page_id, template_id, db)
+                current_page.background_filename = key
+                page_layout = json.loads(current_page.layout_json)
+                page_layout["background_filename"] = key
+                page_layout["background_version"] = f"sha256:{content_revision}"
+                current_page.layout_json = json.dumps(page_layout)
+
+            sync_result = commit_direct_template_render_change(
+                template,
+                db,
+                expected_revision=expected_revision,
+                apply_template_change=apply_background_change,
+            )
+        except Exception:
+            db.rollback()
+            if key != old_key:
+                try:
+                    storage.delete(key)
+                except Exception as storage_error:
+                    logger.warning(
+                        "背景 DB rollback 後清理新檔失敗 key=%s: %s",
+                        key,
+                        storage_error,
+                    )
+            raise
+
+    return {
+        "filename": key,
+        "revision": template.revision,
+        "sync": sync_result,
+    }
 
 
 def store_sticker(template_id: int, filename: str | None, file_bytes: bytes) -> dict:
@@ -156,3 +235,14 @@ def serve_sticker(template_id: int, filename: str):
     if not storage.exists(key):
         raise HTTPException(status_code=404, detail="找不到貼圖")
     return storage.serve(key)
+
+
+def serve_background(db: Session, template_id: int, page_id: int):
+    """回傳已綁定且存在的模板背景。"""
+    template_page = get_template_page_or_404(page_id, template_id, db)
+    if not template_page.background_filename:
+        raise HTTPException(status_code=404, detail="此頁尚未設定背景圖")
+    storage = get_storage()
+    if not storage.exists(template_page.background_filename):
+        raise HTTPException(status_code=404, detail="找不到檔案")
+    return storage.serve(template_page.background_filename)

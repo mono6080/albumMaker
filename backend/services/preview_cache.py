@@ -10,7 +10,7 @@ import io
 import json
 import logging
 
-from services.layout_groups import layout_for_render_fingerprint
+from services.layout_group_traversal import layout_for_render_fingerprint
 from services.render_service import render_preview_page
 from services.request_limiter import preview_render_limiter
 from services.storage import get_storage

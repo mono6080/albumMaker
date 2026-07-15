@@ -13,31 +13,23 @@ import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
 import { usePermissions } from "../hooks/usePermissions";
 import {
-  Camera,
   ChevronLeft,
-  ChevronRight,
-  CircleHelp,
   Crop,
-  Eye,
   ImagePlus,
   Loader2,
   RefreshCw,
-  Type,
   Upload,
   X,
 } from "lucide-react";
-import AlbumPageNav from "../components/AlbumPageNav";
+import AlbumEditorLayout from "../components/AlbumEditorLayout";
 import BatchPhotoWizard from "../components/BatchPhotoWizard";
 import ClassPhotoPanel from "../components/ClassPhotoPanel";
 import ClassPhotoStrategyPicker from "../components/ClassPhotoStrategyPicker";
 import ClassTextPanel from "../components/ClassTextPanel";
 import FormModal from "../components/FormModal";
 import ImageCropModal from "../components/ImageCropModal";
-import PanelSwitcher from "../components/PanelSwitcher";
-import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
-import ScopeSwitcher from "../components/ScopeSwitcher";
 import PagePreview from "../components/PagePreview";
-import { Badge, Button, IconButton, PageHeader } from "../components/ui";
+import { Button, IconButton } from "../components/ui";
 import { getPhotoFrameRect, getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { getPhotoCropBox } from "../utils/photoUtils";
 import { handleApiError, isProjectTemplateRevisionError } from "../utils/apiError";
@@ -354,7 +346,7 @@ export default function ClassEdit() {
   // 與個別編輯的預覽面板同款（PagePreview＋頁尾動作列），
   // 只差來源是專案層級樣版、且沒有「刪除此頁」（頁面刪除是個別學生的事）
   const previewPanel = (
-    <div className="space-y-3 lg:sticky lg:top-20" data-guide="class-preview-panel">
+    <>
       <PagePreview
         pageIndex={activePage}
         timestamp={previewTimestamp}
@@ -374,7 +366,7 @@ export default function ClassEdit() {
           <RefreshCw className="w-3 h-3" />重新整理預覽
         </Button>
       </div>
-    </div>
+    </>
   );
 
   // ── 照片面板（策略選擇 → 選格 → 上傳） ──────────────────────────────────
@@ -627,96 +619,29 @@ export default function ClassEdit() {
         />
       )}
 
-      <PageHeader
+      <AlbumEditorLayout
         title={project.name}
-        badge={<Badge tone="review">編輯相本</Badge>}
-        meta={(
-          // 編輯相本與班級總覽是同層兄弟頁：麵包屑一律只到「相本專案」，互切走右上按鈕
-          <>
-            <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
-              <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
-              相本專案
-            </Button>
-          </>
-        )}
-        actions={(
-          <ResponsiveActionGroup mobileColumns={2}>
-            <Button
-              as={Link}
-              to={`/projects/${projectId}/review`}
-              data-guide="editor-review-link"
-              variant="review"
-              size="touch"
-              className={responsiveActionItemClass}
-            >
-              <Eye className="w-4 h-4" />
-              <span className="hidden sm:inline">班級總覽</span>
-              <span className="sm:hidden">總覽</span>
-            </Button>
-            <Button
-              type="button"
-              onClick={startGuide}
-              variant="secondary"
-              size="touch"
-              className={responsiveActionItemClass}
-            >
-              <CircleHelp className="w-4 h-4" />
-              <span className="hidden sm:inline">製作教學</span>
-              <span className="sm:hidden">教學</span>
-            </Button>
-          </ResponsiveActionGroup>
-        )}
-      />
-
-      {isProjectCompleted && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <span className="font-medium">此專案已標記全班完成，內容已鎖定</span>
-          <span className="text-emerald-600">仍可預覽；需主管或管理員退回才能修改</span>
-        </div>
-      )}
-
-      <ScopeSwitcher
+        badgeLabel="編輯相本"
+        projectId={projectId}
+        onStartGuide={startGuide}
+        isProjectCompleted={isProjectCompleted}
+        completedDescription="仍可預覽；需主管或管理員退回才能修改"
         students={project.students || []}
         currentStudentId={null}
-        onSwitch={handleScopeSwitch}
-        isBusy={isSharedPhotoUploading}
+        onScopeSwitch={handleScopeSwitch}
+        isScopeBusy={isSharedPhotoUploading}
         saveStatus={saveStatus}
+        mobileTab={mobileTab}
+        onMobileTabChange={setMobileTab}
+        activePage={activePage}
+        pageCount={pageCount}
+        onPageChange={setActivePage}
+        pageNavGuide="class-page-nav"
+        previewGuide="class-preview-panel"
+        previewPanel={previewPanel}
+        photoPanel={photoPanel}
+        textPanel={textPanel}
       />
-
-      {/* 行動裝置分頁切換 */}
-      <PanelSwitcher
-        value={mobileTab}
-        onChange={setMobileTab}
-        tabs={[
-          { value: "photo",   label: "照片", icon: Camera },
-          { value: "text",    label: "文字", icon: Type },
-          { value: "preview", label: "預覽", icon: Eye },
-        ]}
-      />
-
-      {/* 全域頁碼導航：預覽、照片、文字三個面板同步跟著同一頁；
-          行動版跟著分頁列一起 sticky，往下捲仍看得到目前頁碼 */}
-      {pageCount > 1 && (
-        <div
-          className="mb-4 max-lg:sticky max-lg:top-14 max-lg:z-10 max-lg:-mx-4 max-lg:bg-[#f8fafc]/95 max-lg:px-4 max-lg:pb-2 max-lg:backdrop-blur-sm"
-          data-guide="class-page-nav"
-        >
-          <AlbumPageNav page={activePage} total={pageCount} onChange={setActivePage} />
-        </div>
-      )}
-
-      {/* 桌面版：預覽 / 照片 / 文字工作台；行動版：單頁面板切換 */}
-      <div className="lg:grid lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] lg:gap-6 lg:items-start xl:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)_minmax(320px,0.9fr)]">
-        <div className={`lg:col-start-1 lg:row-span-2 xl:row-span-1 ${mobileTab === "preview" ? "block" : "hidden lg:block"}`}>
-          {previewPanel}
-        </div>
-        <div className={`lg:col-start-2 lg:row-start-1 lg:min-w-0 xl:col-start-2 ${mobileTab === "photo" ? "block" : "hidden lg:block"}`}>
-          {photoPanel}
-        </div>
-        <div className={`lg:col-start-2 lg:row-start-2 lg:min-w-0 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1 ${mobileTab === "text" ? "block" : "hidden lg:block"}`}>
-          {textPanel}
-        </div>
-      </div>
     </div>
   );
 }

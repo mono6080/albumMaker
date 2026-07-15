@@ -8,7 +8,7 @@ import time
 import uuid
 
 from database import SessionLocal
-from services.roster_service import render_missing_semester_albums
+from services.semester_render_service import render_missing_semester_albums
 
 logger = logging.getLogger(__name__)
 

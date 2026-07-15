@@ -734,7 +734,7 @@ def _migrate_single_supervisors_to_many(connection):
 def _add_roster_children_and_backfill(connection):
     """建立孩子名冊表、為 students 加名冊連結欄位，並依正規化姓名回填既有學生。
 
-    回填規則與 roster_service 相同：姓名去除空白後同名視為同一個孩子。
+    回填規則與 roster_identity_service 相同：姓名去除空白後同名視為同一個孩子。
     冪等：students.roster_child_id 已存在則整段跳過（避免覆蓋 admin 事後的手動拆分）。
     """
     existing_columns = {
@@ -767,7 +767,7 @@ def _add_roster_children_and_backfill(connection):
     ))
 
     # 回填：同正規化姓名的學生連到同一個名冊項
-    from services.roster_service import normalize_child_name
+    from services.roster_identity_service import normalize_child_name
 
     all_students = connection.execute(text("SELECT id, name FROM students")).fetchall()
     child_id_by_name: dict[str, int] = {}

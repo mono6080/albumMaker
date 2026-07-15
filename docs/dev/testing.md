@@ -13,7 +13,7 @@ python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
-python scripts/check_backend_route_boundaries.py  # 路由／service 邊界與既有債務清單
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；74 routes、零債務）
 
 # 前端
 cd frontend
@@ -22,6 +22,7 @@ npm run test:unit            # 自製 node runner 單元測試
 npm run test:render-parity   # 前後端渲染一致性（見 rendering.md）
 npm run test:e2e             # 乾淨 Playwright run（自起 e2e 後端與 Vite）
 npm run build                # production bundle（改前端後必跑）
+npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
 ```
 
 ## 測試防線現況
@@ -50,7 +51,12 @@ npm run build                # production bundle（改前端後必跑）
     使用者批次匯入、刪除的 transaction 邊界
   - `test_backend_route_boundaries.py` + `scripts/check_backend_route_boundaries.py`：完整掃描
     `backend/routers/**/*.py` 的 route inventory，禁止新路由把 commit、storage mutation 或重業務邏輯
-    留在 HTTP adapter；既有債務採精確 manifest，只能減少不能擴張
+    留在 HTTP adapter；包含跨檔 router-local helper／alias／re-export 的 adversarial case，
+    `EXPECTED_DEBT` 為空，新增任何債務都直接失敗
+  - `test_template_sync_typed_contracts.py`：duplicate last-wins、orphans、raw JSON、完整 impact/hash、
+    結構備份 payload 與 render fingerprint owner／穩定性
+  - `test_roster_module_boundaries.py`：identity／semester render／semester export 單向 DAG、facade exports；
+    `test_roster.py` 另釘補渲染 partial-success 與 ZIP／manifest 行為
 - **前端**：lint / unit / render-parity / Playwright E2E；無 vitest / RTL 元件測試。
   `tests/e2e/illustrator-groups.spec.js` 在 Chromium/WebKit 覆蓋通用／巢狀群組、逐層 isolation、marquee、
   Ctrl/Cmd+G、固定 typography、isolation 內 undo，以及分析建立／重設普通文字框、不改 topology、
@@ -58,6 +64,8 @@ npm run build                # production bundle（改前端後必跑）
   `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
+  `scripts/check_frontend_bundle_budget.mjs` 從實際 `index.html` import graph 找本次 active chunks，
+  防止 lazy routes 退回首包；外部 lane build 目錄即使殘留舊 hash chunk 也不會誤判。
 - **pre-commit**：`.pre-commit-config.yaml`（ruff check/format + mypy）；
   是否已在本機 install 不由 repo 保證
 - `pyproject.toml` 關閉 pytest cache provider（本 repo 的 Windows ACL 對

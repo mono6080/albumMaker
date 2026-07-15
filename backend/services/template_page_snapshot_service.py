@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from database import Template, TemplatePage
-from services.layout_groups import validate_layout_groups
+from services.layout_group_validation import validate_layout_groups
 from services.student_pages import lock_student_page_writes
 from services.template_project_sync_service import (
     apply_template_project_sync,

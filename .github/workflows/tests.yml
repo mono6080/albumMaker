@@ -34,6 +34,9 @@ jobs:
       - name: Banned patterns
         run: python scripts/check_banned_patterns.py
 
+      - name: Backend route boundaries
+        run: python scripts/check_backend_route_boundaries.py
+
       - name: Mypy
         run: python -m mypy backend tests
 
@@ -90,3 +93,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Bundle budget
+        run: npm run test:bundle-budget

@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from crud.user_crud import get_subordinate_user_ids
-from database import Project, User
+from database import Project, ProjectComment, User
 
 
 def assert_project_readable(
@@ -58,3 +58,10 @@ def assert_project_completion_revertible(
         if project.owner_id in get_subordinate_user_ids(current_user.id, db):
             return
     raise HTTPException(status_code=403, detail="只有主管或管理員能退回已完成的專案")
+
+
+def assert_comment_deletable(comment: ProjectComment, current_user: User) -> None:
+    """admin 可刪任何留言；其他角色只能刪自己的留言。"""
+    if current_user.role == "admin" or comment.author_id == current_user.id:
+        return
+    raise HTTPException(status_code=403, detail="只能刪除自己的留言")

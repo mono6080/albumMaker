@@ -1,38 +1,21 @@
-# 照片路由
-# 處理照片上傳、縮圖、讀取與欄位對應關係更新
-
-import json
-from urllib.parse import quote
+# 照片 HTTP adapters
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi import HTTPException
-from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
-from crud.project_crud import get_project_or_404, get_student_or_404
-from database import User, get_db, utc_now
-from services.file_service import (
-    PHOTO_THUMBNAIL_SIZE,
-    build_photo_thumbnail_jpeg,
-    get_photo_thumbnail_key,
-    read_and_process_photo_upload,
+from database import User, get_db
+from services.file_service import PHOTO_THUMBNAIL_SIZE
+from services.project_photo_service import (
+    batch_upload_project_photos,
+    serve_student_photo,
+    serve_student_photo_thumbnail,
+    update_student_photo_mapping,
+    upload_shared_project_photo as upload_shared_project_photo_use_case,
+    upload_student_photo,
 )
-from services.layout_groups import iter_layout_render_elements
-from services.project_template_revision import lock_project_template_revision
 from services.request_limiter import require_photo_upload_slot
-from services.storage import get_storage
-from services.student_pages import (
-    apply_photo_mapping,
-    apply_photo_to_page,
-    mutate_student_pages,
-    page_has_photo,
-    parse_pages_data,
-    photo_record_key,
-)
 
-from ._helpers import _parse_json_field, assert_project_content_writable, assert_project_readable
 from .schemas import (
     BatchPhotoUploadResult,
     PhotoMappingPayload,
@@ -41,93 +24,14 @@ from .schemas import (
     SharedPhotoUploadResult,
 )
 
+
 router = APIRouter()
 
-PHOTO_THUMBNAIL_HEADERS = {"Cache-Control": "private, max-age=86400"}
 
-
-def _get_photo_key_or_404(
-    project_id: int,
-    student_id: int,
-    page_index: int,
-    slot_id: int,
-    db: Session,
-    current_user: User,
-) -> str:
-    project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
-    student = get_student_or_404(student_id, project_id, db)
-
-    pages_data = parse_pages_data(student.pages_data_json)
-    if page_index < 0 or page_index >= len(pages_data):
-        raise HTTPException(status_code=404, detail="找不到頁面")
-
-    photo_record = pages_data[page_index].get("photos", {}).get(str(slot_id))
-    if not photo_record:
-        raise HTTPException(status_code=404, detail="找不到照片")
-
-    photo_key = photo_record_key(photo_record)
-    if not photo_key:
-        raise HTTPException(status_code=404, detail="找不到照片")
-
-    storage = get_storage()
-    if not storage.exists(photo_key):
-        raise HTTPException(status_code=404, detail="找不到照片")
-
-    return photo_key
-
-
-def _assert_project_photo_slot_exists(project, page_index: int, slot_id: int) -> None:
-    if page_index < 0 or page_index >= len(project.template.pages):
-        raise HTTPException(status_code=404, detail="找不到頁面")
-
-    template_page = project.template.pages[page_index]
-    layout = _parse_json_field(template_page.layout_json, "layout_json")
-    visible_photo_slots = (
-        element
-        for element_type, element, _ in iter_layout_render_elements(layout)
-        if element_type == "photo"
-    )
-    if not any(str(slot.get("id")) == str(slot_id) for slot in visible_photo_slots):
-        raise HTTPException(status_code=404, detail="找不到照片格")
-
-
-def _validate_photo_mapping(project, student, pages_data: list, mapping: dict) -> dict:
-    allowed_prefix = f"projects/proj{project.id}/photos/student{student.id}/"
-    existing_paths = {
-        photo_record_key(record)
-        for page_data in pages_data
-        for record in (page_data.get("photos") or {}).values()
-        if photo_record_key(record)
-    }
-    validated_mapping = {}
-    for page_index_text, slot_updates in mapping.items():
-        try:
-            page_index = int(page_index_text)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="照片頁面索引格式錯誤")
-        if page_index < 0:
-            raise HTTPException(status_code=400, detail="照片頁面索引不可為負數")
-        validated_slots = {}
-        for slot_id_text, slot_value in slot_updates.items():
-            try:
-                slot_id = int(slot_id_text)
-            except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="照片格位格式錯誤")
-            _assert_project_photo_slot_exists(project, page_index, slot_id)
-            if slot_value is None:
-                validated_slots[str(slot_id)] = None
-                continue
-            photo_value = slot_value.model_dump()
-            photo_path = photo_value["path"]
-            if not photo_path.startswith(allowed_prefix) or photo_path not in existing_paths:
-                raise HTTPException(status_code=400, detail="照片路徑不屬於目前學生")
-            validated_slots[str(slot_id)] = photo_value
-        validated_mapping[str(page_index)] = validated_slots
-    return validated_mapping
-
-
-@router.post("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}", response_model=PhotoUploadResult)
+@router.post(
+    "/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}",
+    response_model=PhotoUploadResult,
+)
 async def upload_photo(
     project_id: int,
     student_id: int,
@@ -139,32 +43,16 @@ async def upload_photo(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """上傳學生照片至指定頁面的指定欄位，並更新頁面資料記錄。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_content_writable(project, current_user)
-    student = get_student_or_404(student_id, project_id, db)
-    processed_upload = await read_and_process_photo_upload(file)
-
-    storage = get_storage()
-    now = utc_now()
-
-    def _write_photo() -> str:
-        with lock_project_template_revision(db, project, expected_template_revision):
-            assert_project_content_writable(project, current_user)
-            _assert_project_photo_slot_exists(project, page_index, slot_id)
-
-            def _mutate(pages_data) -> str:
-                key = apply_photo_to_page(
-                    pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
-                )
-                project.updated_at = now
-                return key
-
-            return mutate_student_pages(db, student, _mutate)
-
-    # CAS、storage 與 DB 寫入一起下放 threadpool，避免持有同步鎖時阻塞 event loop。
-    key = await run_in_threadpool(_write_photo)
-
+    key = await upload_student_photo(
+        db,
+        current_user,
+        project_id,
+        student_id,
+        page_index,
+        slot_id,
+        expected_template_revision,
+        file,
+    )
     return {"filename": key.split("/")[-1], "path": key}
 
 
@@ -182,47 +70,22 @@ async def upload_shared_project_photo(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """上傳專案共用照片，並套用到所有學生的同一頁同一照片格。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_content_writable(project, current_user)
-    processed_upload = await read_and_process_photo_upload(file)
-
-    storage = get_storage()
-    now = utc_now()
-
-    def _fanout_to_all_students() -> int:
-        with lock_project_template_revision(db, project, expected_template_revision):
-            assert_project_content_writable(project, current_user)
-            _assert_project_photo_slot_exists(project, page_index, slot_id)
-            # 第 1 位實際上傳 bytes，其餘用 storage.copy（R2 為 server-side copy），
-            # 30 人班從 30 次上傳變 1 次上傳＋29 次輕量複製
-            count = 0
-            first_key: str | None = None
-            project.updated_at = now
-            for student in project.students:
-                # 逐學生進寫鎖並 commit：與其他上傳併發時不互相蓋寫 pages_data
-                key = mutate_student_pages(
-                    db, student,
-                    lambda pages_data, student=student: apply_photo_to_page(
-                        pages_data, student, project_id, page_index, slot_id,
-                        processed_upload, storage, now, source_key=first_key,
-                    ),
-                )
-                if first_key is None:
-                    first_key = key
-                count += 1
-            return count
-
-    # 整段 fanout（可能數十次 storage 操作）下放 threadpool，不凍結 event loop
-    updated = await run_in_threadpool(_fanout_to_all_students)
-
+    outcome = await upload_shared_project_photo_use_case(
+        db,
+        current_user,
+        project_id,
+        page_index,
+        slot_id,
+        expected_template_revision,
+        file,
+    )
     return {
         "ok": True,
-        "updated": updated,
-        "filename": processed_upload.filename,
+        "updated": outcome.updated,
+        "filename": outcome.filename,
         "page_index": page_index,
         "slot_id": slot_id,
-        "compressed": processed_upload.compressed,
+        "compressed": outcome.compressed,
     }
 
 
@@ -242,112 +105,24 @@ async def batch_upload_photos(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """批次上傳照片並依 mapping 分配給對應學生的同一照片格。
-
-    - mapping：JSON 字串，格式 {"<student_id>": "<filename>"}
-    - overwrite_existing=false 時跳過已有照片的學生（記入 skipped）
-    - 單筆失敗不中斷整批；逐筆進學生寫鎖 commit（容忍多 chunk 併發）
-    """
-    project = get_project_or_404(project_id, db)
-    assert_project_content_writable(project, current_user)
-
-    try:
-        mapping_data: dict[str, str] = json.loads(mapping)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="mapping 必須是合法 JSON")
-    if not isinstance(mapping_data, dict):
-        raise HTTPException(status_code=400, detail="mapping 必須是 student_id→filename 字典")
-
-    files_by_name = {f.filename: f for f in files}
-    students_by_id = {str(s.id): s for s in project.students}
-
-    storage = get_storage()
-    now = utc_now()
-    failed: list[dict] = []
-    prepared_assignments: list[tuple[object, str, object]] = []
-
-    for student_id_str, filename in mapping_data.items():
-        if student_id_str not in students_by_id:
-            failed.append({
-                "student_id": int(student_id_str) if student_id_str.isdigit() else -1,
-                "filename": filename or "",
-                "reason": "student_not_in_project",
-            })
-            continue
-
-        student = students_by_id[student_id_str]
-        upload_file = files_by_name.get(filename)
-        if upload_file is None:
-            failed.append({
-                "student_id": student.id, "filename": filename or "",
-                "reason": "file_not_uploaded",
-            })
-            continue
-
-        try:
-            processed_upload = await read_and_process_photo_upload(upload_file)
-        except HTTPException as exc:
-            failed.append({
-                "student_id": student.id, "filename": filename,
-                "reason": f"upload_rejected:{exc.detail}",
-            })
-            continue
-        except Exception:
-            failed.append({
-                "student_id": student.id, "filename": filename,
-                "reason": "image_decode_failed",
-            })
-            continue
-
-        prepared_assignments.append((student, filename, processed_upload))
-
-    def _write_batch() -> tuple[list[dict], list[dict]]:
-        succeeded: list[dict] = []
-        skipped: list[dict] = []
-        with lock_project_template_revision(db, project, expected_template_revision):
-            assert_project_content_writable(project, current_user)
-            _assert_project_photo_slot_exists(project, page_index, slot_id)
-            for student, filename, processed_upload in prepared_assignments:
-                # 寫入（含 skip 判斷）進學生寫鎖並逐筆 commit：
-                # 精靈的兩個 chunk 併發打同一學生時不會互相蓋寫格位
-                def _mutate(pages_data) -> str | None:
-                    if not overwrite_existing and page_has_photo(pages_data, page_index, slot_id):
-                        return None
-                    key = apply_photo_to_page(
-                        pages_data, student, project_id, page_index, slot_id, processed_upload, storage, now,
-                    )
-                    project.updated_at = now
-                    return key
-
-                try:
-                    key = mutate_student_pages(db, student, _mutate)
-                except Exception:
-                    failed.append({
-                        "student_id": student.id, "filename": filename,
-                        "reason": "storage_write_failed",
-                    })
-                    continue
-
-                if key is None:
-                    skipped.append({
-                        "student_id": student.id, "filename": filename,
-                        "reason": "already_has_photo",
-                    })
-                    continue
-
-                succeeded.append({"student_id": student.id, "filename": filename, "path": key})
-        return succeeded, skipped
-
-    # 影像解碼完成後才取得模板鎖；CAS 失敗時 storage 與 DB 都維持零寫入。
-    succeeded, skipped = await run_in_threadpool(_write_batch)
-
+    outcome = await batch_upload_project_photos(
+        db,
+        current_user,
+        project_id,
+        page_index,
+        slot_id,
+        expected_template_revision,
+        files,
+        mapping,
+        overwrite_existing,
+    )
     return {
         "ok": True,
         "page_index": page_index,
         "slot_id": slot_id,
-        "succeeded": succeeded,
-        "failed": failed,
-        "skipped": skipped,
+        "succeeded": outcome.succeeded,
+        "failed": outcome.failed,
+        "skipped": outcome.skipped,
     }
 
 
@@ -360,13 +135,19 @@ def get_photo(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """回傳學生指定欄位的照片檔案。"""
-    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db, current_user)
-    storage = get_storage()
-    return storage.serve(photo_key)
+    return serve_student_photo(
+        db,
+        current_user,
+        project_id,
+        student_id,
+        page_index,
+        slot_id,
+    )
 
 
-@router.get("/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}/thumbnail")
+@router.get(
+    "/{project_id}/students/{student_id}/pages/{page_index}/photos/{slot_id}/thumbnail"
+)
 def get_photo_thumbnail(
     project_id: int,
     student_id: int,
@@ -376,39 +157,21 @@ def get_photo_thumbnail(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """回傳學生照片縮圖，供照片管理列表使用。"""
-    photo_key = _get_photo_key_or_404(project_id, student_id, page_index, slot_id, db, current_user)
-    storage = get_storage()
-    thumbnail_key = get_photo_thumbnail_key(photo_key, size)
-    # HTTP header 只能用 latin-1，含中文檔名時需 URL-encode
-    headers = {**PHOTO_THUMBNAIL_HEADERS, "X-Photo-Thumbnail-Key": quote(thumbnail_key, safe="/")}
-
-    try:
-        # 直接 get、缺檔再生成：省掉 R2 模式下每次多一趟 head_object 的 RTT
-        return Response(
-            content=storage.get_bytes(thumbnail_key),
-            media_type="image/jpeg",
-            headers={**headers, "X-Photo-Thumbnail": "HIT"},
-        )
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-
-    thumbnail_bytes = build_photo_thumbnail_jpeg(storage, photo_key, size)
-    try:
-        storage.put(thumbnail_key, thumbnail_bytes)
-    except Exception:
-        pass
-
-    return Response(
-        content=thumbnail_bytes,
-        media_type="image/jpeg",
-        headers={**headers, "X-Photo-Thumbnail": "MISS"},
+    return serve_student_photo_thumbnail(
+        db,
+        current_user,
+        project_id,
+        student_id,
+        page_index,
+        slot_id,
+        size,
     )
 
 
-@router.put("/{project_id}/students/{student_id}/photos/mapping", response_model=PhotoMappingResult)
+@router.put(
+    "/{project_id}/students/{student_id}/photos/mapping",
+    response_model=PhotoMappingResult,
+)
 def update_photo_mapping(
     project_id: int,
     student_id: int,
@@ -417,34 +180,12 @@ def update_photo_mapping(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    更新照片欄位對應關係，支援跨頁移動、位移縮放與清除。
-
-    兩步驟協議（前後端共同約定）：
-    1. 寫入（第一步）：所有非 null 項目先寫入目標格位資料，但不重命名檔案。
-       storage key 只代表檔案位置，不需要跟目前格位同步；避免 R2 互動操作變成 copy/delete。
-    2. 清除（第二步）：所有 null 項目統一刪除，但只刪除未被移走的檔案。
-       跨頁互換時先收集 incoming_paths，確保「A 移到 B、B 移到 A」不誤刪。
-
-    Payload 格式：
-      pages: { "頁面索引": { "slot_id": { path, scale, offset_x, offset_y } | null } }
-    - 非 null：寫入（自動重命名至新格位前綴）
-    - null：清除此格位並刪除對應檔案
-    """
-    project = get_project_or_404(project_id, db)
-    assert_project_content_writable(project, current_user)
-    with lock_project_template_revision(db, project, expected_template_revision):
-        assert_project_content_writable(project, current_user)
-        student = get_student_or_404(student_id, project_id, db)
-        storage = get_storage()
-
-        # mapping 也是 pages_data 的 read-modify-write：與上傳共用學生寫鎖
-        def _mutate(pages_data) -> None:
-            validated_mapping = _validate_photo_mapping(project, student, pages_data, payload.pages)
-            apply_photo_mapping(pages_data, validated_mapping, storage)
-            now = utc_now()
-            student.updated_at = now
-            project.updated_at = now
-
-        mutate_student_pages(db, student, _mutate)
+    update_student_photo_mapping(
+        db,
+        current_user,
+        project_id,
+        student_id,
+        payload.pages,
+        expected_template_revision,
+    )
     return {"ok": True, "renames": {}}

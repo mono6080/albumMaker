@@ -68,6 +68,10 @@ backend/
     project_service.py   舊 import 相容 facade；新程式直接 import 下列責任 owner
     project_access_service.py  專案 read/write/content/completion 權限判斷
     project_lifecycle_service.py  專案建立、改名、封存、還原、完成與退回 use case
+    project_student_service.py  學生新增／複製／改名／刪除與頁面 skip use case
+    project_photo_service.py  單張／共用／批次照片、讀取、縮圖與 mapping use case
+    project_text_service.py  專案／學生／批次文字 use case
+    project_comment_service.py  審閱留言 use case
     output_keys.py       輸出 key、安全檔名與 Content-Disposition
     project_archive_service.py  到期封存專案的 Storage cleanup 與 DB purge
     student_render_service.py   單一學生渲染、dirty-skip、發布 CAS 與 render fingerprint
@@ -77,11 +81,18 @@ backend/
     preview_cache.py     預覽圖內容定址快取（cache-aside、limiter 內二次查）
     file_service.py      Storage key 計算、上傳驗證與壓縮、照片縮圖（支援 HEIF）
     label_texts.py       label_texts 資料結構工具與專案／學生／模板文字合併
-    roster_service.py    孩子名冊：姓名正規化、自動連結、學期匯出分組與 ZIP 規劃
+    roster_service.py    舊 import 相容 facade；新程式直接 import 下列責任 owner
+    roster_identity_service.py  名冊姓名正規化、自動連結、歧義與 link／merge
+    semester_render_service.py  學期缺漏相本逐本補渲染與 partial-success 進度
+    semester_export_service.py  學期預覽、分組、ZIP planning／manifest／stream
     teacher_overview_service.py  老師進度總覽與 Excel 匯出
     template_service.py  模板複製（頁面、背景、貼圖資產）
     template_lifecycle_service.py  模板改名與刪除 use case
-    template_asset_service.py  貼圖保存／讀取與素材文字框分析
+    template_period_service.py  部門與期別 CRUD use case
+    template_asset_service.py  背景／貼圖資產與素材文字框分析
+    template_project_sync_service.py  typed template sync plan、影響摘要、備份與 apply
+    layout_group_validation.py / layout_group_traversal.py  後端群組驗證與正式渲染 traversal
+    layout_groups.py     舊 import 相容 facade
     user_service.py      使用者建立／更新／刪除與 Excel 批次匯入 use case
     export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
@@ -110,6 +121,12 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 - 照片儲存生命週期由 `hooks/usePhotoAutoSave.js` 對接 React，純狀態與 single-flight
   協調器分別在 `utils/photoSaveModel.js`、`utils/photoSaveCoordinator.js`；契約由
   `frontend/tests/unit/photo-save.test.mjs` 釘住
+- ClassEdit／StudentEdit 共用 `components/AlbumEditorLayout.jsx` 的 responsive shell；
+  ProjectReview 的進度、學生、預覽、留言與下載分散在 `components/review/` 與對應 hooks，
+  不把兩種 scope 的資料模型合併
+- Login／ProjectList 同步載入；ClassEdit／StudentEdit／ProjectReview 由 `routeLoaders.js`
+  lazy load，專案卡片 hover／focus 顯式 prefetch。首包上限由
+  `scripts/check_frontend_bundle_budget.mjs` 在 CI 驗證
 
 - API consumer 直接 import `api/authApi.js`、`projectApi.js`、`templateApi.js` 或 `urls.js`；
   不另設跨 domain barrel

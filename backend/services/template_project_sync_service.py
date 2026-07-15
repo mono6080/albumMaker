@@ -11,29 +11,105 @@ import hashlib
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
-from database import Project, Template, TemplatePage, TemplateProjectSyncBackup, utc_now
-from services.layout_groups import canonical_id, iter_layout_render_elements, layout_for_render_fingerprint
+from database import Project, Student, Template, TemplatePage, TemplateProjectSyncBackup, utc_now
+from services.layout_group_traversal import iter_layout_render_elements, layout_for_render_fingerprint
+from services.layout_group_validation import canonical_id
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes
 
 
 @dataclass
+class TemplatePageDelta:
+    page_id: int
+    added_photo_ids: set[str]
+    removed_photo_ids: set[str]
+    added_text_ids: set[str]
+    removed_text_ids: set[str]
+
+
+@dataclass
+class StudentSyncState:
+    student: Student
+    raw_pages_json: str | None
+    entries_by_page_id: dict[int, dict] = field(default_factory=dict)
+    old_indices: dict[int, int] = field(default_factory=dict)
+    orphan_entries: list[object] = field(default_factory=list)
+
+
+@dataclass
+class ProjectSyncState:
+    project: Project
+    raw_labels_json: str | None
+    student_states: list[StudentSyncState]
+    labels_by_page_id: dict[int, object] = field(default_factory=dict)
+    orphan_labels: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class TemplateSyncImpact:
+    project_count: int
+    student_count: int
+    completed_project_count: int
+    reopen_project_count: int
+    archived_project_count: int
+    added_page_count: int
+    deleted_page_count: int
+    reordered_page_count: int
+    added_photo_slot_count: int
+    removed_photo_slot_count: int
+    added_label_count: int
+    removed_label_count: int
+    affected_photo_count: int
+    affected_project_label_count: int
+    affected_student_label_count: int
+    affected_skip_count: int
+    legacy_orphan_entry_count: int
+    change_summary: list[str]
+
+    def to_response_dict(self) -> dict:
+        return {
+            "project_count": self.project_count,
+            "student_count": self.student_count,
+            "completed_project_count": self.completed_project_count,
+            "reopen_project_count": self.reopen_project_count,
+            "archived_project_count": self.archived_project_count,
+            "added_page_count": self.added_page_count,
+            "deleted_page_count": self.deleted_page_count,
+            "reordered_page_count": self.reordered_page_count,
+            "added_photo_slot_count": self.added_photo_slot_count,
+            "removed_photo_slot_count": self.removed_photo_slot_count,
+            "added_label_count": self.added_label_count,
+            "removed_label_count": self.removed_label_count,
+            "affected_photo_count": self.affected_photo_count,
+            "affected_project_label_count": self.affected_project_label_count,
+            "affected_student_label_count": self.affected_student_label_count,
+            "affected_skip_count": self.affected_skip_count,
+            "legacy_orphan_entry_count": self.legacy_orphan_entry_count,
+            "change_summary": self.change_summary,
+        }
+
+
+@dataclass
 class TemplateSyncPlan:
-    projects: list[Project]
-    project_states: list[dict]
+    project_states: list[ProjectSyncState]
+    page_deltas_by_id: dict[int, TemplatePageDelta]
     old_pages_snapshot: list[dict]
     structural_change: bool
     render_changed: bool
     any_change: bool
     change_hash: str
-    impact: dict
+    impact: TemplateSyncImpact
+
+    @property
+    def projects(self) -> list[Project]:
+        return [state.project for state in self.project_states]
 
 
 def _invalid_project_data(message: str, *, project_id: int, student_id: int | None = None):
@@ -180,7 +256,7 @@ def _content_counts(entry: dict | None) -> tuple[int, int, int]:
 def _change_hash(
     template: Template,
     normalized_items: list[dict],
-    project_states: list[dict],
+    project_states: list[ProjectSyncState],
 ) -> str:
     payload = {
         "template_id": template.id,
@@ -197,13 +273,13 @@ def _change_hash(
         # 修改文字或新增專案，retry 必須重新顯示最新 impact，不能沿用舊同意。
         "projects": [
             {
-                "id": state["project"].id,
-                "completed_at": str(state["project"].completed_at),
-                "deleted_at": str(state["project"].deleted_at),
-                "labels": state.get("raw_labels"),
+                "id": state.project.id,
+                "completed_at": str(state.project.completed_at),
+                "deleted_at": str(state.project.deleted_at),
+                "labels": state.raw_labels_json,
                 "students": [
-                    {"id": item["student"].id, "pages": item.get("raw")}
-                    for item in state.get("students", [])
+                    {"id": student_state.student.id, "pages": student_state.raw_pages_json}
+                    for student_state in state.student_states
                 ],
             }
             for state in project_states
@@ -255,7 +331,7 @@ def prepare_template_sync_plan(
     )
 
     current_by_id = {page.id: page for page in old_pages}
-    binding_changes: dict[int, dict[str, set[str]]] = {}
+    page_deltas_by_id: dict[int, TemplatePageDelta] = {}
     render_changed = old_tokens != proposed_tokens
     any_change = render_changed
     added_photo_slots = removed_photo_slots = 0
@@ -275,12 +351,13 @@ def prepare_template_sync_plan(
             render_changed = True
         old_photos, old_labels = _visible_binding_ids(old_layout)
         new_photos, new_labels = _visible_binding_ids(new_layout)
-        binding_changes[page_id] = {
-            "removed_photos": old_photos - new_photos,
-            "removed_labels": old_labels - new_labels,
-            "added_photos": new_photos - old_photos,
-            "added_labels": new_labels - old_labels,
-        }
+        page_deltas_by_id[page_id] = TemplatePageDelta(
+            page_id=page_id,
+            removed_photo_ids=old_photos - new_photos,
+            removed_text_ids=old_labels - new_labels,
+            added_photo_ids=new_photos - old_photos,
+            added_text_ids=new_labels - old_labels,
+        )
         removed_photo_slots += len(old_photos - new_photos)
         removed_labels += len(old_labels - new_labels)
         added_photo_slots += len(new_photos - old_photos)
@@ -289,25 +366,33 @@ def prepare_template_sync_plan(
     structural_change = (
         old_tokens != proposed_tokens
         or any(
-            changes[change_type]
-            for changes in binding_changes.values()
-            for change_type in ("removed_photos", "removed_labels", "added_photos", "added_labels")
+            binding_ids
+            for page_delta in page_deltas_by_id.values()
+            for binding_ids in (
+                page_delta.removed_photo_ids,
+                page_delta.removed_text_ids,
+                page_delta.added_photo_ids,
+                page_delta.added_text_ids,
+            )
         )
     )
 
-    project_states: list[dict] = []
+    project_states: list[ProjectSyncState] = []
     affected_photos = affected_project_labels = affected_student_labels = affected_skips = 0
     legacy_orphan_entries = 0
     for project in projects:
         if not structural_change:
-            project_states.append({
-                "project": project,
-                "raw_labels": project.label_texts_json,
-                "students": [
-                    {"student": student, "raw": student.pages_data_json}
+            project_states.append(ProjectSyncState(
+                project=project,
+                raw_labels_json=project.label_texts_json,
+                student_states=[
+                    StudentSyncState(
+                        student=student,
+                        raw_pages_json=student.pages_data_json,
+                    )
                     for student in project.students
                 ],
-            })
+            ))
             continue
         labels = _parse_json(
             project.label_texts_json,
@@ -321,7 +406,7 @@ def prepare_template_sync_plan(
             project_id=project.id,
         )
         legacy_orphan_entries += len(orphan_labels)
-        students = []
+        student_states: list[StudentSyncState] = []
         for student in project.students:
             pages_data = _parse_json(
                 student.pages_data_json,
@@ -342,27 +427,27 @@ def prepare_template_sync_plan(
                 affected_photos += photos
                 affected_student_labels += labels_count
                 affected_skips += skips
-            for page_id, changes in binding_changes.items():
+            for page_id, page_delta in page_deltas_by_id.items():
                 entry = entries_by_page_id.get(page_id) or {}
                 photos = entry.get("photos") or {}
                 student_labels = entry.get("label_texts") or {}
                 if isinstance(photos, dict):
                     affected_photos += sum(
-                        str(slot_id) in changes["removed_photos"] and bool(value)
+                        str(slot_id) in page_delta.removed_photo_ids and bool(value)
                         for slot_id, value in photos.items()
                     )
                 if isinstance(student_labels, dict):
                     affected_student_labels += sum(
-                        str(label_id) in changes["removed_labels"]
+                        str(label_id) in page_delta.removed_text_ids
                         for label_id in student_labels
                     )
-            students.append({
-                "student": student,
-                "raw": student.pages_data_json,
-                "entries_by_page_id": entries_by_page_id,
-                "entry_old_indices": entry_old_indices,
-                "orphan_entries": orphan_entries,
-            })
+            student_states.append(StudentSyncState(
+                student=student,
+                raw_pages_json=student.pages_data_json,
+                entries_by_page_id=entries_by_page_id,
+                old_indices=entry_old_indices,
+                orphan_entries=orphan_entries,
+            ))
 
         for page_id in deleted_ids:
             page_labels = labels_by_page_id.get(page_id)
@@ -370,21 +455,21 @@ def prepare_template_sync_plan(
                 affected_project_labels += len(page_labels)
             elif page_labels is not None:
                 affected_project_labels += 1
-        for page_id, changes in binding_changes.items():
+        for page_id, page_delta in page_deltas_by_id.items():
             page_labels = labels_by_page_id.get(page_id) or {}
             if isinstance(page_labels, dict):
                 affected_project_labels += sum(
-                    str(label_id) in changes["removed_labels"]
+                    str(label_id) in page_delta.removed_text_ids
                     for label_id in page_labels
                 )
 
-        project_states.append({
-            "project": project,
-            "raw_labels": project.label_texts_json,
-            "labels_by_page_id": labels_by_page_id,
-            "orphan_labels": orphan_labels,
-            "students": students,
-        })
+        project_states.append(ProjectSyncState(
+            project=project,
+            raw_labels_json=project.label_texts_json,
+            labels_by_page_id=labels_by_page_id,
+            orphan_labels=orphan_labels,
+            student_states=student_states,
+        ))
 
     old_pages_snapshot = [
         {
@@ -407,33 +492,33 @@ def prepare_template_sync_plan(
     if added_labels or removed_labels:
         change_summary.append(f"文字欄 +{added_labels} / -{removed_labels}")
 
-    impact = {
-        "project_count": len(projects),
-        "student_count": sum(len(project.students) for project in projects),
-        "completed_project_count": sum(project.completed_at is not None for project in projects),
-        "reopen_project_count": (
+    impact = TemplateSyncImpact(
+        project_count=len(projects),
+        student_count=sum(len(project.students) for project in projects),
+        completed_project_count=sum(project.completed_at is not None for project in projects),
+        reopen_project_count=(
             sum(project.completed_at is not None for project in projects)
             if added_photo_slots > 0
             else 0
         ),
-        "archived_project_count": sum(project.deleted_at is not None for project in projects),
-        "added_page_count": added_page_count,
-        "deleted_page_count": len(deleted_ids),
-        "reordered_page_count": reordered_page_count,
-        "added_photo_slot_count": added_photo_slots,
-        "removed_photo_slot_count": removed_photo_slots,
-        "added_label_count": added_labels,
-        "removed_label_count": removed_labels,
-        "affected_photo_count": affected_photos,
-        "affected_project_label_count": affected_project_labels,
-        "affected_student_label_count": affected_student_labels,
-        "affected_skip_count": affected_skips,
-        "legacy_orphan_entry_count": legacy_orphan_entries,
-        "change_summary": change_summary,
-    }
+        archived_project_count=sum(project.deleted_at is not None for project in projects),
+        added_page_count=added_page_count,
+        deleted_page_count=len(deleted_ids),
+        reordered_page_count=reordered_page_count,
+        added_photo_slot_count=added_photo_slots,
+        removed_photo_slot_count=removed_photo_slots,
+        added_label_count=added_labels,
+        removed_label_count=removed_labels,
+        affected_photo_count=affected_photos,
+        affected_project_label_count=affected_project_labels,
+        affected_student_label_count=affected_student_labels,
+        affected_skip_count=affected_skips,
+        legacy_orphan_entry_count=legacy_orphan_entries,
+        change_summary=change_summary,
+    )
     return TemplateSyncPlan(
-        projects=projects,
         project_states=project_states,
+        page_deltas_by_id=page_deltas_by_id,
         old_pages_snapshot=old_pages_snapshot,
         structural_change=structural_change,
         render_changed=render_changed,
@@ -460,7 +545,7 @@ def require_structural_sync_confirmation(
                 "code": "template_structure_data_conflict",
                 "message": "確認後專案內容又有更新，請重新檢查最新影響範圍。",
                 "change_hash": plan.change_hash,
-                **plan.impact,
+                **plan.impact.to_response_dict(),
             },
         )
     raise HTTPException(
@@ -469,7 +554,7 @@ def require_structural_sync_confirmation(
             "code": "template_structure_confirmation_required",
             "message": "這次修改會改變既有專案結構，確認影響範圍後才能同步儲存。",
             "change_hash": plan.change_hash,
-            **plan.impact,
+            **plan.impact.to_response_dict(),
         },
     )
 
@@ -496,19 +581,19 @@ def _backup_structural_change(
         ))
         return sync_id
     for project_index, state in enumerate(plan.project_states):
-        project = state["project"]
+        project = state.project
         students_backup = [
             {
-                "id": student_state["student"].id,
-                "pages_data_json": student_state["raw"],
-                "output_filename": student_state["student"].output_filename,
+                "id": student_state.student.id,
+                "pages_data_json": student_state.raw_pages_json,
+                "output_filename": student_state.student.output_filename,
                 "updated_at": (
-                    student_state["student"].updated_at.isoformat()
-                    if isinstance(student_state["student"].updated_at, datetime)
+                    student_state.student.updated_at.isoformat()
+                    if isinstance(student_state.student.updated_at, datetime)
                     else None
                 ),
             }
-            for student_state in state["students"]
+            for student_state in state.student_states
         ]
         db.add(TemplateProjectSyncBackup(
             sync_id=sync_id,
@@ -519,7 +604,7 @@ def _backup_structural_change(
             old_pages_json=old_pages_json if project_index == 0 else "[]",
             new_page_ids_json=new_page_ids_json,
             project_completed_at=project.completed_at,
-            project_label_texts_json=state["raw_labels"],
+            project_label_texts_json=state.raw_labels_json,
             students_json=json.dumps(students_backup, ensure_ascii=False),
         ))
     return sync_id
@@ -535,7 +620,7 @@ def apply_template_project_sync(
     if not plan.any_change:
         return {
             "project_count": len(plan.projects),
-            "student_count": plan.impact["student_count"],
+            "student_count": plan.impact.student_count,
             "migrated_page_entry_count": 0,
             "created_page_entry_count": 0,
             "removed_page_entry_count": 0,
@@ -553,11 +638,11 @@ def apply_template_project_sync(
     reopened_projects = 0
 
     for state in plan.project_states:
-        project = state["project"]
+        project = state.project
         if plan.structural_change:
             remapped_labels = {
                 str(new_index_by_id[page_id]): value
-                for page_id, value in state["labels_by_page_id"].items()
+                for page_id, value in state.labels_by_page_id.items()
                 if page_id in retained_ids
             }
             project.label_texts_json = json.dumps(remapped_labels, ensure_ascii=False)
@@ -565,17 +650,17 @@ def apply_template_project_sync(
         if plan.render_changed:
             project.updated_at = now
         if (
-            plan.impact["added_photo_slot_count"] > 0
+            plan.impact.added_photo_slot_count > 0
             and project.completed_at is not None
         ):
             project.completed_at = None
             reopened_projects += 1
 
-        for student_state in state["students"]:
-            student = student_state["student"]
+        for student_state in state.student_states:
+            student = student_state.student
             if plan.structural_change:
-                entries = student_state["entries_by_page_id"]
-                old_indices = student_state["entry_old_indices"]
+                entries = student_state.entries_by_page_id
+                old_indices = student_state.old_indices
                 next_pages_data = []
                 for new_index, page in enumerate(ordered_pages):
                     source = entries.get(page.id)
@@ -601,7 +686,7 @@ def apply_template_project_sync(
     template.revision = next_revision
     return {
         "project_count": len(plan.projects),
-        "student_count": plan.impact["student_count"],
+        "student_count": plan.impact.student_count,
         "migrated_page_entry_count": migrated_entries,
         "created_page_entry_count": created_entries,
         "removed_page_entry_count": removed_entries,

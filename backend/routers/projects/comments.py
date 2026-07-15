@@ -2,14 +2,17 @@
 # 處理專案留言的列表、新增與刪除
 
 from fastapi import APIRouter, Depends, Form
-from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user, require_role
 from crud.project_crud import get_project_or_404
 from database import ProjectComment, User, get_db
+from services.project_comment_service import (
+    add_comment as add_comment_use_case,
+    delete_comment as delete_comment_use_case,
+)
 
-from ._helpers import assert_comment_deletable, assert_project_readable
+from ._helpers import assert_project_readable
 from .schemas import CommentOut
 
 router = APIRouter()
@@ -52,28 +55,7 @@ def add_comment(
     current_user: User = Depends(require_role("admin", "art_team", "supervisor")),
 ):
     """新增審閱意見（限 admin、美學組、主管）。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
-
-    if not content.strip():
-        raise HTTPException(status_code=400, detail="留言內容不可為空")
-
-    new_comment = ProjectComment(
-        project_id=project_id,
-        author_id=current_user.id,
-        content=content.strip(),
-    )
-    db.add(new_comment)
-    db.commit()
-    db.refresh(new_comment)
-
-    return {
-        "id": new_comment.id,
-        "author_id": new_comment.author_id,
-        "author_name": current_user.display_name,
-        "content": new_comment.content,
-        "created_at": new_comment.created_at,
-    }
+    return add_comment_use_case(db, current_user, project_id, content)
 
 
 @router.delete("/{project_id}/comments/{comment_id}")
@@ -84,13 +66,4 @@ def delete_comment(
     current_user: User = Depends(get_current_user),
 ):
     """刪除留言（只能刪自己的留言，admin 可刪任何人的）。"""
-    comment = db.query(ProjectComment).filter(
-        ProjectComment.id == comment_id,
-        ProjectComment.project_id == project_id,
-    ).first()
-    if not comment:
-        raise HTTPException(status_code=404, detail="留言不存在")
-    assert_comment_deletable(comment, current_user)
-    db.delete(comment)
-    db.commit()
-    return {"ok": True}
+    return delete_comment_use_case(db, current_user, project_id, comment_id)

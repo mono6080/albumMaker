@@ -15,8 +15,17 @@ from database import (
     Template,
     TemplatePage,
     TemplateProjectSyncBackup,
+    init_db,
 )
-from services import template_page_snapshot_service
+from services import project_student_service, template_page_snapshot_service
+from services.template_project_sync_service import (
+    ProjectSyncState,
+    StudentSyncState,
+    TemplatePageDelta,
+    TemplateSyncImpact,
+    TemplateSyncPlan,
+    prepare_template_sync_plan,
+)
 from services.template_sync_locks import lock_project_content_writes
 from tests.helpers import assert_status, login, started_client, unique_name
 
@@ -190,6 +199,43 @@ def _database_snapshot(template_id: int, project_id: int, student_id: int) -> di
                 .count()
             ),
         }
+    finally:
+        db.close()
+
+
+def test_template_sync_plan_uses_typed_nested_state_without_changing_raw_payloads():
+    init_db()
+    seeded = _seed_linked_template(page_count=2)
+    db = SessionLocal()
+    try:
+        template = db.get(Template, seeded["template_id"])
+        old_pages = list(template.pages)
+        first_layout = deepcopy(seeded["layouts"][0])
+        first_layout["photo_slots"] = []
+        normalized_items = [
+            {"id": old_pages[0].id, "client_id": None, "layout": first_layout},
+            {"id": old_pages[1].id, "client_id": None, "layout": seeded["layouts"][1]},
+        ]
+
+        plan = prepare_template_sync_plan(template, old_pages, normalized_items, db)
+
+        assert isinstance(plan, TemplateSyncPlan)
+        assert isinstance(plan.impact, TemplateSyncImpact)
+        assert isinstance(plan.project_states[0], ProjectSyncState)
+        assert isinstance(plan.project_states[0].student_states[0], StudentSyncState)
+        assert isinstance(plan.page_deltas_by_id[old_pages[0].id], TemplatePageDelta)
+        assert plan.page_deltas_by_id[old_pages[0].id].removed_photo_ids == {
+            str(seeded["layouts"][0]["photo_slots"][0]["id"])
+        }
+        assert plan.project_states[0].raw_labels_json == json.dumps(
+            seeded["project_labels"],
+            ensure_ascii=False,
+        )
+        assert plan.project_states[0].student_states[0].raw_pages_json == json.dumps(
+            seeded["page_entries"],
+            ensure_ascii=False,
+        )
+        assert plan.impact.to_response_dict()["affected_photo_count"] == 1
     finally:
         db.close()
 
@@ -674,9 +720,11 @@ def test_confirmation_retry_rereads_after_waiting_for_project_lock(monkeypatch):
             with lock_project_content_writes(project_ids):
                 yield
 
-        from routers.projects import crud as project_crud
-
-        monkeypatch.setattr(project_crud, "lock_project_content_writes", delayed_student_writer_lock)
+        monkeypatch.setattr(
+            project_student_service,
+            "lock_project_content_writes",
+            delayed_student_writer_lock,
+        )
         monkeypatch.setattr(
             template_page_snapshot_service,
             "lock_project_content_writes",

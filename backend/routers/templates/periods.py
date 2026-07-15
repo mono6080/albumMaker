@@ -6,8 +6,11 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from sqlalchemy.orm import Session, selectinload
 
 from auth import get_current_user, require_role
-from crud.template_crud import ensure_period_name_unique, get_period_or_404
 from database import TemplatePeriod, User, get_db
+from services.template_period_service import (
+    create_template_period as create_template_period_use_case,
+    update_template_period as update_template_period_use_case,
+)
 from template_periods import TEMPLATE_DEPARTMENTS
 
 from ._helpers import _serialize_period, _validate_department, _validate_period_status
@@ -58,16 +61,12 @@ def create_template_period(
         raise HTTPException(status_code=400, detail="期別名稱不可空白")
     period_department = _validate_department(department)
     period_status = _validate_period_status(status)
-    ensure_period_name_unique(period_department, period_name, db)
-
-    period = TemplatePeriod(
-        department=period_department,
+    period = create_template_period_use_case(
+        db,
         name=period_name,
+        department=period_department,
         status=period_status,
     )
-    db.add(period)
-    db.commit()
-    db.refresh(period)
     return _serialize_period(period)
 
 
@@ -80,14 +79,16 @@ def update_template_period(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """更新期別名稱或狀態；狀態屬於期別，不屬於單一模板。"""
-    period = get_period_or_404(period_id, db)
+    period_name = None
     if name is not None:
         period_name = name.strip()
         if not period_name:
             raise HTTPException(status_code=400, detail="期別名稱不可空白")
-        period.name = period_name
-    if status is not None:
-        period.status = _validate_period_status(status)
-    db.commit()
-    db.refresh(period)
+    period_status = _validate_period_status(status) if status is not None else None
+    period = update_template_period_use_case(
+        db,
+        period_id,
+        name=period_name,
+        status=period_status,
+    )
     return _serialize_period(period)

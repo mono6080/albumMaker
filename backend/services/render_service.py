@@ -59,7 +59,7 @@ from services.element_renderers import (
     render_sticker,
     render_text_label,
 )
-from services.layout_groups import iter_layout_render_elements
+from services.layout_group_traversal import iter_layout_render_elements
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
