@@ -1,294 +1,416 @@
-// 學期彙整匯出頁（admin 匯出；supervisor 唯讀檢視管轄老師）
-// 選擇部門與期別範圍 → 整備度摘要 + 搜尋過濾 → 依名冊孩子分組預覽各期相本狀態 →
-// 處理待確認配對、補產生缺漏 PDF → 勾選並下載「班級/孩子/期別.pdf」結構的 ZIP
+// 學期彙整匯出：正式學期＋校班 snapshot 分組。
+// 孩子的未入園、離園、無相本、PDF 與重複狀態全部由後端 cells 回傳。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Archive, Download, Loader2, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  Archive,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 
 import {
-  fetchTemplateDepartments,
-  fetchTemplatePeriods,
-} from "../api/templateApi";
-import {
   buildSemesterExportDownloadUrl,
+  fetchAcademicTerms,
   fetchRenderMissingProgress,
   fetchSemesterExportPreview,
-  linkStudentToNewRosterChild,
-  linkStudentToRosterChild,
-  mergeRosterChildren,
   renderMissingSemesterAlbums,
 } from "../api/rosterApi";
 import { usePermissions } from "../hooks/usePermissions";
-import { showRetryToast } from "../utils/retryToast";
 import { triggerNativeDownload } from "../utils/browserFiles";
+import AcademicTermReportFilters from "../components/AcademicTermReportFilters";
 import ConfirmModal from "../components/ConfirmModal";
 import SemesterSummaryBar from "../components/SemesterSummaryBar";
 import SemesterRenderErrorsBanner from "../components/SemesterRenderErrorsBanner";
 import SemesterUnlinkedSection from "../components/SemesterUnlinkedSection";
 import SemesterChildrenTable from "../components/SemesterChildrenTable";
-import { Button, PageHeader, SegmentedControl, Surface } from "../components/ui";
+import { Badge, Button, PageHeader, Surface } from "../components/ui";
 
-const PERIOD_STATUS_LABELS = { draft: "草稿", active: "使用中", archived: "已封存" };
+const CLASSROOM_GROUPS_PER_PAGE = 8;
+
+function normalizeSearchText(value) {
+  return String(value ?? "").replace(/[\s\u3000]+/g, "").toLocaleLowerCase("zh-TW");
+}
+
+function periodTemplateId(period) {
+  return period.template_period_id ?? period.id;
+}
+
+function periodLabel(period) {
+  return period.period_name ?? period.name ?? "未命名期別";
+}
+
+function groupCampusId(group) {
+  return group.campus_id ?? group.classroom?.campus_id;
+}
+
+function groupCampusName(group) {
+  return group.campus_name ?? group.classroom?.campus_name ?? "未命名校別";
+}
+
+function groupClassroomId(group) {
+  return group.classroom_id ?? group.classroom?.classroom_id;
+}
+
+function groupClassroomName(group) {
+  return group.classroom_name ?? group.classroom?.classroom_name ?? "未命名班級";
+}
+
+function buildServerQuerySignature(academicTermId, periodIds) {
+  return JSON.stringify({
+    academicTermId: String(academicTermId),
+    periodIds: [...periodIds].map(String).sort(),
+  });
+}
+
+function childMatchesQuickFilter(child, quickFilter) {
+  if (quickFilter === "all") return true;
+  return (child.cells ?? []).some(cell => cell.status === quickFilter);
+}
+
+function computeExportStats(classroomGroups, identityAnomalyCount) {
+  const childIds = new Set();
+  let readyCount = 0;
+  let notRenderedCount = 0;
+  let noAlbumCount = 0;
+  let duplicateCount = 0;
+  let departedCount = 0;
+  for (const group of classroomGroups) {
+    for (const child of group.children ?? []) {
+      childIds.add(child.roster_child_id);
+      for (const cell of child.cells ?? []) {
+        if (cell.status === "ready") readyCount += 1;
+        else if (cell.status === "not_rendered") notRenderedCount += 1;
+        else if (cell.status === "no_album") noAlbumCount += 1;
+        else if (cell.status === "duplicate") duplicateCount += 1;
+        else if (cell.status === "departed") departedCount += 1;
+      }
+    }
+  }
+  return {
+    childCount: childIds.size,
+    readyCount,
+    notRenderedCount,
+    noAlbumCount,
+    duplicateCount,
+    departedCount,
+    identityAnomalyCount,
+  };
+}
+
+function Pagination({ page, pageCount, onChange }) {
+  if (pageCount <= 1) return null;
+  return (
+    <nav aria-label="班級分頁" className="flex shrink-0 items-center justify-center gap-3 py-2">
+      <Button size="sm" variant="neutral" disabled={page === 1} onClick={() => onChange(page - 1)}>
+        <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+        上一頁
+      </Button>
+      <span className="text-sm tabular-nums text-gray-500">第 {page}／{pageCount} 頁</span>
+      <Button size="sm" variant="neutral" disabled={page === pageCount} onClick={() => onChange(page + 1)}>
+        下一頁
+        <ChevronRight aria-hidden="true" className="h-4 w-4" />
+      </Button>
+    </nav>
+  );
+}
+
+function waitForPollInterval(signal) {
+  return new Promise(resolve => {
+    const timer = window.setTimeout(resolve, 1500);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
 
 export default function SemesterExport() {
   const { isAdmin } = usePermissions();
-  const [departments, setDepartments] = useState([]);
-  const [activeDepartment, setActiveDepartment] = useState(null);
-  const [allPeriods, setAllPeriods] = useState([]);
+  const [terms, setTerms] = useState([]);
+  const [academicTermId, setAcademicTermId] = useState("");
+  const [department, setDepartment] = useState("");
   const [selectedPeriodIds, setSelectedPeriodIds] = useState([]);
+  const [campusId, setCampusId] = useState("");
+  const [selectedClassroomId, setSelectedClassroomId] = useState("");
   const [preview, setPreview] = useState(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  // 進行中的補渲染背景 job 狀態（null＝沒有 job 在跑）
-  const [renderJob, setRenderJob] = useState(null);
-  // 最近一次補產生的失敗清單（讓使用者知道是哪幾本，而不只有數字）
-  const [renderJobErrors, setRenderJobErrors] = useState([]);
-  const [confirmModal, setConfirmModal] = useState(null);
-  // 各孩子列的合併目標選擇（roster_child_id → 目標 id 字串）
-  const [mergeTargets, setMergeTargets] = useState({});
-  // 勾選要匯出的孩子（roster_child_id 集合），載入預覽時預設全選
+  const [previewSignature, setPreviewSignature] = useState("");
   const [selectedChildIds, setSelectedChildIds] = useState(new Set());
-  // 搜尋與快速過濾（all / unrendered / missingPeriod）
   const [searchText, setSearchText] = useState("");
   const [quickFilter, setQuickFilter] = useState("all");
-  // 「待確認」chip 點擊時捲動到待確認配對區塊
-  const unlinkedSectionRef = useRef(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [renderJob, setRenderJob] = useState(null);
+  const [renderJobErrors, setRenderJobErrors] = useState([]);
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [isLoadingTerms, setIsLoadingTerms] = useState(true);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [termsError, setTermsError] = useState("");
+  const [previewError, setPreviewError] = useState("");
+  const anomalySectionRef = useRef(null);
+  const termsRequestSequence = useRef(0);
+  const previewRequestSequence = useRef(0);
+  const renderRequestSequence = useRef(0);
+  const termsAbortController = useRef(null);
+  const previewAbortController = useRef(null);
+  const renderAbortController = useRef(null);
+  const activeScopeSignature = useRef("");
+  const lastSelectionScopeSignature = useRef("");
 
-  useEffect(() => {
-    const loadOptions = async () => {
-      try {
-        const [departmentsRes, periodsRes] = await Promise.all([
-          fetchTemplateDepartments(),
-          fetchTemplatePeriods(),
-        ]);
-        setDepartments(departmentsRes.data);
-        setActiveDepartment(departmentsRes.data[0]?.code ?? null);
-        setAllPeriods(periodsRes.data);
-      } catch {
-        toast.error("載入期別清單失敗");
-      }
-    };
-    loadOptions();
+  const setTermDefaults = useCallback((term) => {
+    const departments = [...new Set((term?.periods ?? []).map(period => period.department))];
+    const defaultDepartment = departments[0] ?? "";
+    const periodIds = (term?.periods ?? [])
+      .filter(period => period.department === defaultDepartment)
+      .map(periodTemplateId);
+    setDepartment(defaultDepartment);
+    setSelectedPeriodIds(periodIds);
   }, []);
 
-  const departmentPeriods = useMemo(
-    () => allPeriods.filter(period => period.department === activeDepartment),
-    [allPeriods, activeDepartment],
+  const loadTerms = useCallback(async () => {
+    termsAbortController.current?.abort();
+    const abortController = new AbortController();
+    termsAbortController.current = abortController;
+    const requestSequence = termsRequestSequence.current + 1;
+    termsRequestSequence.current = requestSequence;
+    setIsLoadingTerms(true);
+    setTermsError("");
+    try {
+      const response = await fetchAcademicTerms({ signal: abortController.signal });
+      if (termsRequestSequence.current !== requestSequence) return;
+      const loadedTerms = response.data.terms ?? [];
+      setTerms(loadedTerms);
+      const activeTerm = loadedTerms.find(term => (
+        term.is_current || ["active", "imported"].includes(term.status)
+      )) ?? loadedTerms[0];
+      setAcademicTermId(activeTerm ? String(activeTerm.id) : "");
+      setTermDefaults(activeTerm);
+    } catch {
+      if (abortController.signal.aborted || termsRequestSequence.current !== requestSequence) return;
+      setTerms([]);
+      setAcademicTermId("");
+      setDepartment("");
+      setSelectedPeriodIds([]);
+      setTermsError("載入正式學期失敗，請檢查網路後重試。");
+    } finally {
+      if (termsRequestSequence.current === requestSequence) setIsLoadingTerms(false);
+    }
+  }, [setTermDefaults]);
+
+  useEffect(() => {
+    void loadTerms();
+    return () => termsAbortController.current?.abort();
+  }, [loadTerms]);
+
+  const serverQuerySignature = buildServerQuerySignature(academicTermId, selectedPeriodIds);
+
+  const loadPreview = useCallback(async (filters, requestedSignature) => {
+    previewAbortController.current?.abort();
+    const abortController = new AbortController();
+    previewAbortController.current = abortController;
+    const requestSequence = previewRequestSequence.current + 1;
+    previewRequestSequence.current = requestSequence;
+    setIsLoadingPreview(true);
+    setPreviewError("");
+    setPreview(null);
+    setPreviewSignature("");
+    try {
+      const response = await fetchSemesterExportPreview(filters, { signal: abortController.signal });
+      if (previewRequestSequence.current !== requestSequence) return;
+      setPreview(response.data);
+      setPreviewSignature(requestedSignature);
+    } catch {
+      if (abortController.signal.aborted || previewRequestSequence.current !== requestSequence) return;
+      setPreviewError("載入學期彙整預覽失敗，請檢查網路後重試。");
+    } finally {
+      if (previewRequestSequence.current === requestSequence) setIsLoadingPreview(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!academicTermId || selectedPeriodIds.length === 0 || isLoadingTerms || termsError) return undefined;
+    const filters = { academicTermId, periodIds: selectedPeriodIds };
+    void loadPreview(filters, serverQuerySignature);
+    return () => previewAbortController.current?.abort();
+  }, [academicTermId, isLoadingTerms, loadPreview, selectedPeriodIds, serverQuerySignature, termsError]);
+
+  useEffect(() => () => {
+    previewAbortController.current?.abort();
+    renderAbortController.current?.abort();
+  }, []);
+
+  const selectedTerm = terms.find(term => String(term.id) === String(academicTermId));
+  const departments = useMemo(() => (
+    [...new Set((selectedTerm?.periods ?? []).map(period => period.department))]
+  ), [selectedTerm]);
+  const departmentPeriods = useMemo(() => (
+    (selectedTerm?.periods ?? [])
+      .filter(period => period.department === department)
+      .sort((firstPeriod, secondPeriod) => (
+        (firstPeriod.position ?? 0) - (secondPeriod.position ?? 0)
+      ))
+  ), [department, selectedTerm]);
+  const currentPreview = previewSignature === serverQuerySignature ? preview : null;
+  const periods = useMemo(() => (
+    (currentPreview?.periods ?? departmentPeriods)
+      .filter(period => selectedPeriodIds.includes(periodTemplateId(period)))
+      .sort((firstPeriod, secondPeriod) => (
+        (firstPeriod.position ?? 0) - (secondPeriod.position ?? 0)
+      ))
+  ), [currentPreview, departmentPeriods, selectedPeriodIds]);
+  const identityAnomalies = currentPreview?.unlinked ?? [];
+
+  const departmentGroups = useMemo(() => (
+    (currentPreview?.classroom_groups ?? []).filter(group => (
+      !department || group.department === department
+    ))
+  ), [currentPreview, department]);
+  const filterClassrooms = useMemo(() => departmentGroups.map(group => ({
+    campus_id: groupCampusId(group),
+    campus_name: groupCampusName(group),
+    classroom_id: groupClassroomId(group),
+    classroom_name: groupClassroomName(group),
+    department: group.department,
+  })), [departmentGroups]);
+  const scopeGroups = useMemo(() => departmentGroups.filter(group => (
+    (!campusId || String(groupCampusId(group)) === String(campusId))
+    && (!selectedClassroomId || String(groupClassroomId(group)) === String(selectedClassroomId))
+  )), [campusId, departmentGroups, selectedClassroomId]);
+
+  const searchedGroups = useMemo(() => {
+    const query = normalizeSearchText(searchText);
+    if (!query) return scopeGroups;
+    return scopeGroups.map(group => {
+      const isGroupMatch = normalizeSearchText(groupCampusName(group)).includes(query)
+        || normalizeSearchText(groupClassroomName(group)).includes(query);
+      const children = (group.children ?? []).filter(child => {
+        if (isGroupMatch || normalizeSearchText(child.name).includes(query)) return true;
+        return (child.cells ?? []).some(cell => (cell.entries ?? []).some(entry => (
+          normalizeSearchText(entry.project_name).includes(query)
+          || normalizeSearchText(entry.owner_name).includes(query)
+          || normalizeSearchText(entry.campus_name).includes(query)
+          || normalizeSearchText(entry.classroom_name).includes(query)
+        )));
+      });
+      return { ...group, children };
+    }).filter(group => group.children.length > 0);
+  }, [scopeGroups, searchText]);
+  const filteredGroups = useMemo(() => searchedGroups.map(group => ({
+    ...group,
+    children: (group.children ?? []).filter(child => childMatchesQuickFilter(child, quickFilter)),
+  })).filter(group => group.children.length > 0), [quickFilter, searchedGroups]);
+  const exportStats = useMemo(() => (
+    computeExportStats(searchedGroups, identityAnomalies.length)
+  ), [identityAnomalies.length, searchedGroups]);
+
+  const selectionScopeSignature = `${serverQuerySignature}:${department}:${campusId}:${selectedClassroomId}`;
+  activeScopeSignature.current = selectionScopeSignature;
+  useEffect(() => {
+    if (!currentPreview || lastSelectionScopeSignature.current === selectionScopeSignature) return;
+    lastSelectionScopeSignature.current = selectionScopeSignature;
+    setSelectedChildIds(new Set(scopeGroups.flatMap(group => (
+      (group.children ?? []).map(child => child.roster_child_id)
+    ))));
+  }, [currentPreview, scopeGroups, selectionScopeSignature]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [academicTermId, department, campusId, selectedClassroomId, searchText, quickFilter, selectedPeriodIds]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredGroups.length / CLASSROOM_GROUPS_PER_PAGE));
+  const effectivePage = Math.min(currentPage, pageCount);
+  const pagedGroups = filteredGroups.slice(
+    (effectivePage - 1) * CLASSROOM_GROUPS_PER_PAGE,
+    effectivePage * CLASSROOM_GROUPS_PER_PAGE,
   );
+  const displayedChildIds = filteredGroups.flatMap(group => (
+    (group.children ?? []).map(child => child.roster_child_id)
+  ));
+  const displayedChildIdSet = new Set(displayedChildIds);
+  const hiddenSelectedCount = [...selectedChildIds].filter(
+    childId => !displayedChildIdSet.has(childId),
+  ).length;
+  const allPreviewChildIds = scopeGroups.flatMap(group => (
+    (group.children ?? []).map(child => child.roster_child_id)
+  ));
+  const renderableChildIds = searchedGroups.flatMap(group => (
+    (group.children ?? [])
+      .filter(child => (child.cells ?? []).some(cell => cell.status === "not_rendered"))
+      .map(child => child.roster_child_id)
+  ));
+  const isRenderingMissing = renderJob?.status === "running";
+
+  const resetScopeSelection = () => {
+    lastSelectionScopeSignature.current = "";
+    setSelectedChildIds(new Set());
+  };
+
+  const handleTermChange = (nextTermId) => {
+    previewRequestSequence.current += 1;
+    previewAbortController.current?.abort();
+    const nextTerm = terms.find(term => String(term.id) === String(nextTermId));
+    setAcademicTermId(nextTermId);
+    setTermDefaults(nextTerm);
+    setCampusId("");
+    setSelectedClassroomId("");
+    setSearchText("");
+    setQuickFilter("all");
+    resetScopeSelection();
+  };
+
+  const handleDepartmentChange = (nextDepartment) => {
+    setDepartment(nextDepartment);
+    setSelectedPeriodIds((selectedTerm?.periods ?? [])
+      .filter(period => period.department === nextDepartment)
+      .map(periodTemplateId));
+    setCampusId("");
+    setSelectedClassroomId("");
+    setSearchText("");
+    setQuickFilter("all");
+    resetScopeSelection();
+  };
+
+  const handleCampusChange = (nextCampusId) => {
+    setCampusId(nextCampusId);
+    setSelectedClassroomId("");
+    resetScopeSelection();
+  };
+
+  const handleClassroomChange = (nextClassroomId) => {
+    setSelectedClassroomId(nextClassroomId);
+    resetScopeSelection();
+  };
 
   const togglePeriod = (periodId) => {
-    setSelectedPeriodIds(prev =>
-      prev.includes(periodId) ? prev.filter(id => id !== periodId) : [...prev, periodId]
-    );
-    setPreview(null);
+    setSelectedPeriodIds(current => {
+      if (current.includes(periodId) && current.length === 1) {
+        toast("至少保留一個期別");
+        return current;
+      }
+      resetScopeSelection();
+      return current.includes(periodId)
+        ? current.filter(selectedId => selectedId !== periodId)
+        : [...current, periodId];
+    });
   };
 
-  // 全選/清除本部門全部期別（期末典型操作是整學期一次匯出）
-  const isAllPeriodsSelected =
-    departmentPeriods.length > 0 && departmentPeriods.every(period => selectedPeriodIds.includes(period.id));
   const toggleAllPeriods = () => {
-    setSelectedPeriodIds(isAllPeriodsSelected ? [] : departmentPeriods.map(period => period.id));
-    setPreview(null);
-  };
-
-  const handleDepartmentChange = (departmentCode) => {
-    setActiveDepartment(departmentCode);
-    setSelectedPeriodIds([]);
-    setPreview(null);
-  };
-
-  const loadPreview = useCallback(async () => {
-    if (selectedPeriodIds.length === 0) return;
-    setIsLoadingPreview(true);
-    try {
-      const response = await fetchSemesterExportPreview(selectedPeriodIds);
-      setPreview(response.data);
-      setMergeTargets({});
-      setSearchText("");
-      setQuickFilter("all");
-      setSelectedChildIds(new Set(response.data.children.map(group => group.roster_child_id)));
-    } catch {
-      toast.error("載入匯出預覽失敗");
+    const departmentPeriodIds = departmentPeriods.map(periodTemplateId);
+    const isAllSelected = departmentPeriodIds.every(periodId => selectedPeriodIds.includes(periodId));
+    if (isAllSelected && departmentPeriodIds.length > 1) {
+      setSelectedPeriodIds([departmentPeriodIds[0]]);
+    } else {
+      setSelectedPeriodIds(departmentPeriodIds);
     }
-    setIsLoadingPreview(false);
-  }, [selectedPeriodIds]);
-
-  // 勾選期別後自動載入預覽（防抖 600ms），不必再手動按載入
-  useEffect(() => {
-    if (selectedPeriodIds.length === 0) return;
-    const timer = setTimeout(() => { loadPreview(); }, 600);
-    return () => clearTimeout(timer);
-  }, [selectedPeriodIds, loadPreview]);
-
-  // ── 整備度統計與缺期判斷 ────────────────────────────────────────────────────
-  // 缺期定義：孩子首次出現的期別之後（含中斷與後段）沒有資料的期別
-
-  const exportStats = useMemo(() => {
-    if (!preview) return null;
-    const periodIndexById = new Map(preview.periods.map((period, index) => [period.id, index]));
-    let readyBooks = 0;
-    let missingBooks = 0;
-    const unrenderedChildIds = new Set();
-    const missingPeriodChildIds = new Set();
-    const firstPresentIndexByChild = new Map();
-    for (const group of preview.children) {
-      const presentIndexes = new Set(group.entries.map(entry => periodIndexById.get(entry.period_id)));
-      const firstPresentIndex = Math.min(...presentIndexes);
-      firstPresentIndexByChild.set(group.roster_child_id, firstPresentIndex);
-      for (const entry of group.entries) {
-        if (entry.has_pdf) readyBooks += 1;
-        else missingBooks += 1;
-      }
-      if (group.entries.some(entry => !entry.has_pdf)) {
-        unrenderedChildIds.add(group.roster_child_id);
-      }
-      for (let periodIndex = firstPresentIndex + 1; periodIndex < preview.periods.length; periodIndex++) {
-        if (!presentIndexes.has(periodIndex)) {
-          missingPeriodChildIds.add(group.roster_child_id);
-          break;
-        }
-      }
-    }
-    return { readyBooks, missingBooks, unrenderedChildIds, missingPeriodChildIds, firstPresentIndexByChild };
-  }, [preview]);
-
-  // ── 搜尋與快速過濾 ──────────────────────────────────────────────────────────
-
-  const filteredChildren = useMemo(() => {
-    if (!preview || !exportStats) return [];
-    const query = searchText.replace(/[\s\u3000]+/g, "");  // u3000＝全形空白
-    return preview.children.filter(group => {
-      if (query) {
-        const haystack = `${group.name}${group.latest_project_name}${group.latest_project_owner_name ?? ""}`;
-        if (!haystack.includes(query)) return false;
-      }
-      if (quickFilter === "unrendered") return exportStats.unrenderedChildIds.has(group.roster_child_id);
-      if (quickFilter === "missingPeriod") return exportStats.missingPeriodChildIds.has(group.roster_child_id);
-      return true;
-    });
-  }, [preview, exportStats, searchText, quickFilter]);
-
-  // ── 名冊配對與合併（admin） ──────────────────────────────────────────────────
-
-  const handleLinkStudent = async (studentId, rosterChildId) => {
-    try {
-      await linkStudentToRosterChild(studentId, rosterChildId);
-      toast.success("已完成配對");
-      await loadPreview();
-    } catch {
-      showRetryToast("配對失敗", () => handleLinkStudent(studentId, rosterChildId));
-    }
+    resetScopeSelection();
   };
-
-  const handleCreateNewChild = (entry) => {
-    setConfirmModal({
-      message: `確定「${entry.student_name}」（${entry.project_name}）是另一個新的孩子？將建立新的名冊項。`,
-      confirmLabel: "建立新名冊項",
-      confirmVariant: "primary",
-      onConfirm: async () => {
-        try {
-          await linkStudentToNewRosterChild(entry.student_id);
-          toast.success("已建立新名冊項");
-          await loadPreview();
-        } catch {
-          showRetryToast("建立失敗", () => handleCreateNewChild(entry));
-        }
-      },
-    });
-  };
-
-  // 拆分：這筆學生其實是另一個同名孩子 → 拆成新名冊項（錯誤合併的反向操作）
-  const handleSplitEntry = (entry) => {
-    setConfirmModal({
-      message: `確定「${entry.project_name}」的「${entry.student_name}」不是同一個孩子？將把這筆拆成新的名冊項，其他期別不受影響。`,
-      confirmLabel: "拆分",
-      confirmVariant: "primary",
-      onConfirm: async () => {
-        try {
-          await linkStudentToNewRosterChild(entry.student_id);
-          toast.success("已拆成新名冊項");
-          await loadPreview();
-        } catch {
-          showRetryToast("拆分失敗", () => handleSplitEntry(entry));
-        }
-      },
-    });
-  };
-
-  const handleMerge = (sourceChild, targetChildId) => {
-    const targetChild = preview.children.find(
-      group => group.roster_child_id === Number(targetChildId)
-    );
-    if (!targetChild) return;
-    setConfirmModal({
-      message: `確定「${sourceChild.name}」和「${targetChild.name}」是同一個孩子？合併後以「${targetChild.name}」為準。`,
-      confirmLabel: "合併",
-      confirmVariant: "primary",
-      onConfirm: async () => {
-        try {
-          await mergeRosterChildren(sourceChild.roster_child_id, targetChild.roster_child_id);
-          toast.success("已合併名冊項");
-          await loadPreview();
-        } catch {
-          showRetryToast("合併失敗", () => handleMerge(sourceChild, targetChildId));
-        }
-      },
-    });
-  };
-
-  // ── 補產生缺漏 PDF（admin）：後端背景 job ＋ 前端輪詢進度 ───────────────────
-
-  const pollRenderJob = async (jobId) => {
-    for (;;) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const response = await fetchRenderMissingProgress(jobId);
-      setRenderJob(response.data);
-      if (response.data.status !== "running") return response.data;
-    }
-  };
-
-  const handleRenderMissing = (rosterChildIds, missingCount, scopeLabel) => {
-    setConfirmModal({
-      message: `將在背景補產生${scopeLabel}缺漏的 ${missingCount} 本相本 PDF，依數量可能需要數分鐘，進度會顯示在按鈕上。`,
-      confirmLabel: "開始產生",
-      confirmVariant: "primary",
-      onConfirm: async () => {
-        try {
-          const startResponse = await renderMissingSemesterAlbums(selectedPeriodIds, rosterChildIds);
-          setRenderJob(startResponse.data);
-          const finalState = await pollRenderJob(startResponse.data.job_id);
-          if (finalState.status === "failed") toast.error("補產生失敗");
-          else if (finalState.errors.length > 0) toast.error(`完成 ${finalState.rendered} 本，失敗 ${finalState.errors.length} 本`);
-          else toast.success(`已產生 ${finalState.rendered} 本`);
-          setRenderJobErrors(finalState.errors ?? []);
-          await loadPreview();
-        } catch {
-          toast.error("補產生失敗");
-        } finally {
-          setRenderJob(null);
-        }
-      },
-    });
-  };
-  const isRenderingMissing = renderJob !== null;
-
-  const handleDownload = () => {
-    // 全選時不帶篩選參數，避免大量孩子撐爆 query string
-    const isAllSelected = selectedChildIds.size === preview.children.length;
-    const downloadUrl = buildSemesterExportDownloadUrl(
-      selectedPeriodIds,
-      "print",
-      isAllSelected ? null : [...selectedChildIds],
-    );
-    triggerNativeDownload(downloadUrl);
-    toast.success("已開始產生並下載，請留意瀏覽器的下載列");
-  };
-
-  // ── 匯出勾選：單一孩子 / 整班 / 全部 ────────────────────────────────────────
 
   const toggleChildSelected = (rosterChildId) => {
-    setSelectedChildIds(prev => {
-      const next = new Set(prev);
+    setSelectedChildIds(current => {
+      const next = new Set(current);
       if (next.has(rosterChildId)) next.delete(rosterChildId);
       else next.add(rosterChildId);
       return next;
@@ -296,182 +418,312 @@ export default function SemesterExport() {
   };
 
   const setManySelected = (rosterChildIds, isSelected) => {
-    setSelectedChildIds(prev => {
-      const next = new Set(prev);
-      rosterChildIds.forEach(childId => (isSelected ? next.add(childId) : next.delete(childId)));
+    setSelectedChildIds(current => {
+      const next = new Set(current);
+      for (const rosterChildId of rosterChildIds) {
+        if (isSelected) next.add(rosterChildId);
+        else next.delete(rosterChildId);
+      }
       return next;
     });
   };
 
-  const visibleChildIds = filteredChildren.map(group => group.roster_child_id);
-  const visibleSelectedCount = visibleChildIds.filter(childId => selectedChildIds.has(childId)).length;
-  // 過濾中：表頭 checkbox 與數字都以「畫面上的孩子」為視角，全域勾選數只在下載鈕呈現
-  const isFilterActive = Boolean(preview) && filteredChildren.length !== preview.children.length;
-  // 被篩選藏住的勾選（畫面外仍勾著的孩子），下載前要讓使用者知道
-  const hiddenSelectedCount = selectedChildIds.size - visibleSelectedCount;
+  const pollRenderJob = async (jobId, renderSequence, filterSignature, abortController) => {
+    for (;;) {
+      await waitForPollInterval(abortController.signal);
+      if (abortController.signal.aborted) return;
+      const response = await fetchRenderMissingProgress(jobId, { signal: abortController.signal });
+      if (renderRequestSequence.current !== renderSequence) return;
+      setRenderJob(response.data);
+      if (response.data.status === "running") continue;
 
-  /** 只保留畫面上的勾選（把畫面外的勾選全部取消） */
-  const keepOnlyVisibleSelected = () => {
-    setSelectedChildIds(new Set(visibleChildIds.filter(childId => selectedChildIds.has(childId))));
+      if (response.data.status === "failed") toast.error("補產生失敗");
+      else if ((response.data.errors ?? []).length > 0) {
+        toast.error(`完成 ${response.data.rendered} 本，失敗 ${response.data.errors.length} 本`);
+      } else {
+        toast.success(`已產生 ${response.data.rendered} 本`);
+      }
+      setRenderJobErrors(response.data.errors ?? []);
+      setRenderJob(null);
+      if (activeScopeSignature.current === filterSignature) {
+        await loadPreview(
+          { academicTermId, periodIds: selectedPeriodIds },
+          buildServerQuerySignature(academicTermId, selectedPeriodIds),
+        );
+      }
+      return;
+    }
+  };
+
+  const handleRenderMissing = (rosterChildIds, missingCount, scopeLabel) => {
+    const requestedChildIds = rosterChildIds ?? renderableChildIds;
+    const filterSignature = selectionScopeSignature;
+    setConfirmModal({
+      message: `將在背景補產生${scopeLabel}缺漏的 ${missingCount} 本相本 PDF。重複相本與無相本工作格會略過，完成前會鎖定學期與校班篩選。`,
+      confirmLabel: "開始產生",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        if (activeScopeSignature.current !== filterSignature) {
+          toast.error("篩選範圍已變更，請重新確認");
+          return;
+        }
+        try {
+          const response = await renderMissingSemesterAlbums({
+            academicTermId,
+            periodIds: selectedPeriodIds,
+            rosterChildIds: requestedChildIds,
+          });
+          renderAbortController.current?.abort();
+          const abortController = new AbortController();
+          renderAbortController.current = abortController;
+          const renderSequence = renderRequestSequence.current + 1;
+          renderRequestSequence.current = renderSequence;
+          setRenderJob(response.data);
+          void pollRenderJob(
+            response.data.job_id,
+            renderSequence,
+            filterSignature,
+            abortController,
+          ).catch(() => {
+            if (!abortController.signal.aborted) {
+              setRenderJob(null);
+              toast.error("查詢補產生進度失敗");
+            }
+          });
+        } catch (error) {
+          if (error.response?.status === 503) toast.error("已有補產生工作進行中，請稍後再試");
+          else toast.error("啟動補產生失敗");
+        }
+      },
+    });
+  };
+
+  const handleDownload = () => {
+    const isAllScopeSelected = allPreviewChildIds.length === selectedChildIds.size
+      && allPreviewChildIds.every(childId => selectedChildIds.has(childId));
+    const canOmitChildIds = !campusId && !selectedClassroomId && isAllScopeSelected;
+    triggerNativeDownload(buildSemesterExportDownloadUrl(
+      { academicTermId, periodIds: selectedPeriodIds },
+      "print",
+      canOmitChildIds ? null : [...selectedChildIds],
+    ));
+    toast.success("已開始產生並下載，請留意瀏覽器的下載列");
+  };
+
+  const keepOnlyDisplayedSelected = () => {
+    setSelectedChildIds(new Set(
+      displayedChildIds.filter(childId => selectedChildIds.has(childId)),
+    ));
   };
 
   return (
-    // 滿版直欄佈局：表格吃剩餘高度並內部滾動，X 卷軸落在表格底、下載列上方不被遮蓋
-    <div className="mx-auto flex h-[calc(100svh-6rem)] max-w-6xl flex-col sm:h-[calc(100svh-8rem)]">
+    <div className="mx-auto flex min-h-[calc(100svh-6rem)] max-w-7xl flex-col sm:min-h-[calc(100svh-8rem)]">
       <PageHeader
         icon={Archive}
         iconTone="review"
         title="學期彙整匯出"
         subtitle={isAdmin
-          ? "選擇期別範圍，依名冊孩子分組下載整學期相本 PDF"
-          : "檢視管轄老師各期相本的完成進度（唯讀）"}
+          ? "依正式學期與校班快照，核對孩子各期狀態並下載列印 PDF"
+          : "依園所主管範圍檢視正式學期相本整備狀態（唯讀）"}
       />
 
-      {/* 期別選擇 */}
-      <Surface className="mb-4 shrink-0">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          {departments.length > 0 && (
-            <SegmentedControl
-              value={activeDepartment}
-              onChange={handleDepartmentChange}
-              options={departments.map(department => ({ value: department.code, label: department.name }))}
-              size="sm"
-              className="sm:w-56"
-            />
-          )}
-          <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-            {departmentPeriods.length > 1 && (
-              <button
-                type="button"
-                onClick={toggleAllPeriods}
-                className="inline-flex items-center rounded-lg border border-dashed border-indigo-300 px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-50"
-              >
-                {isAllPeriodsSelected ? "清除全選" : "全選期別"}
-              </button>
-            )}
-            {departmentPeriods.map(period => (
-              <label
-                key={period.id}
-                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                  selectedPeriodIds.includes(period.id)
-                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                    : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  className="accent-indigo-600"
-                  checked={selectedPeriodIds.includes(period.id)}
-                  onChange={() => togglePeriod(period.id)}
-                />
-                <span>{period.name}</span>
-                <span className="text-xs text-gray-400">{PERIOD_STATUS_LABELS[period.status] ?? period.status}</span>
-              </label>
-            ))}
-            {departmentPeriods.length === 0 && (
-              <span className="text-sm text-gray-400">此部門尚無期別</span>
-            )}
+      {isLoadingTerms && (
+        <Surface className="mb-4">
+          <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
+            <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            正在載入正式學期...
           </div>
-          <Button
-            variant="neutral"
-            size="sm"
-            onClick={loadPreview}
-            disabled={selectedPeriodIds.length === 0 || isLoadingPreview}
-            className="sm:flex-shrink-0"
-          >
-            {isLoadingPreview
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <RefreshCw className="h-4 w-4" />}
-            重新整理
-          </Button>
-        </div>
-      </Surface>
-
-      {/* 整備度摘要 + 搜尋過濾 */}
-      {preview && exportStats && (
-        <SemesterSummaryBar
-          preview={preview}
-          exportStats={exportStats}
-          searchText={searchText}
-          onSearchTextChange={setSearchText}
-          quickFilter={quickFilter}
-          onQuickFilterChange={setQuickFilter}
-          onJumpToUnlinked={() => unlinkedSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          isAdmin={isAdmin}
-          isRenderingMissing={isRenderingMissing}
-          renderJob={renderJob}
-          onRenderMissing={handleRenderMissing}
-        />
+        </Surface>
       )}
 
-      {/* 補產生失敗清單：講清楚是哪幾本，不是只給數字 */}
-      {renderJobErrors.length > 0 && (
-        <SemesterRenderErrorsBanner errors={renderJobErrors} onDismiss={() => setRenderJobErrors([])} />
+      {termsError && !isLoadingTerms && (
+        <Surface className="mb-4 border-red-200 bg-red-50">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p role="alert" className="flex items-center gap-2 text-sm text-red-700">
+              <AlertCircle aria-hidden="true" className="h-4 w-4" />
+              {termsError}
+            </p>
+            <Button size="sm" variant="dangerSoft" onClick={() => void loadTerms()}>重新載入</Button>
+          </div>
+        </Surface>
       )}
 
-      {/* 待確認配對 */}
-      {preview && preview.unlinked.length > 0 && (
-        <SemesterUnlinkedSection
-          sectionRef={unlinkedSectionRef}
-          unlinked={preview.unlinked}
-          isAdmin={isAdmin}
-          onLinkStudent={handleLinkStudent}
-          onCreateNewChild={handleCreateNewChild}
-        />
+      {!isLoadingTerms && !termsError && terms.length === 0 && (
+        <Surface className="text-center text-sm text-gray-500">尚未建立正式學期。</Surface>
       )}
 
-      {/* 分組預覽表 */}
-      {preview && (
-        <SemesterChildrenTable
-          preview={preview}
-          exportStats={exportStats}
-          filteredChildren={filteredChildren}
-          isAdmin={isAdmin}
-          selectedChildIds={selectedChildIds}
-          visibleChildIds={visibleChildIds}
-          visibleSelectedCount={visibleSelectedCount}
-          isFilterActive={isFilterActive}
-          mergeTargets={mergeTargets}
-          setMergeTargets={setMergeTargets}
-          isRenderingMissing={isRenderingMissing}
-          onToggleChildSelected={toggleChildSelected}
-          onSetManySelected={setManySelected}
-          onRenderMissing={handleRenderMissing}
-          onSplitEntry={handleSplitEntry}
-          onMerge={handleMerge}
-        />
-      )}
-
-      {/* 下載（admin；常駐佈局底部，不覆蓋表格卷軸） */}
-      {isAdmin && preview && preview.children.length > 0 && (
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
-          {preview.unlinked.length > 0 && (
-            <span className="text-xs text-amber-600">
-              尚有 {preview.unlinked.length} 位學生未配對，不會納入匯出
-            </span>
-          )}
-          {/* 過濾把已勾選的孩子藏在畫面外時，下載前明確提示並提供一鍵修正 */}
-          {isFilterActive && hiddenSelectedCount > 0 && (
-            <span className="flex items-center gap-1.5 text-xs text-amber-600">
-              勾選中含 {hiddenSelectedCount} 位不在目前篩選的孩子
-              <Button variant="neutral" size="xs" onClick={keepOnlyVisibleSelected}>
-                只保留畫面上的
+      {!isLoadingTerms && !termsError && terms.length > 0 && (
+        <>
+          <AcademicTermReportFilters
+            terms={terms}
+            academicTermId={academicTermId}
+            onAcademicTermChange={handleTermChange}
+            departments={departments}
+            department={department}
+            onDepartmentChange={handleDepartmentChange}
+            classrooms={filterClassrooms}
+            campusId={campusId}
+            onCampusChange={handleCampusChange}
+            classroomId={selectedClassroomId}
+            onClassroomChange={handleClassroomChange}
+            disabled={isRenderingMissing}
+            actions={(
+              <Button
+                variant="neutral"
+                size="md"
+                className="w-full"
+                onClick={() => void loadPreview(
+                  { academicTermId, periodIds: selectedPeriodIds },
+                  serverQuerySignature,
+                )}
+                disabled={isLoadingPreview || isRenderingMissing || selectedPeriodIds.length === 0}
+              >
+                {isLoadingPreview
+                  ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  : <RefreshCw aria-hidden="true" className="h-4 w-4" />}
+                重新整理
               </Button>
-            </span>
+            )}
+          />
+
+          <Surface padding="sm" className="mb-4 shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-xs font-medium text-gray-500">匯出期別</span>
+              {departmentPeriods.length > 1 && (
+                <Button size="xs" variant="ghost" disabled={isRenderingMissing} onClick={toggleAllPeriods}>
+                  {departmentPeriods.every(period => selectedPeriodIds.includes(periodTemplateId(period)))
+                    ? "只留第一期"
+                    : "全選期別"}
+                </Button>
+              )}
+              {departmentPeriods.map(period => {
+                const periodId = periodTemplateId(period);
+                const isSelected = selectedPeriodIds.includes(periodId);
+                return (
+                  <label
+                    key={periodId}
+                    className={`inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11 ${
+                      isSelected
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                        : "border-gray-200 bg-white text-gray-600"
+                    } ${isRenderingMissing ? "pointer-events-none opacity-50" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={isRenderingMissing}
+                      onChange={() => togglePeriod(periodId)}
+                      className="accent-indigo-600"
+                    />
+                    {periodLabel(period)}
+                  </label>
+                );
+              })}
+            </div>
+          </Surface>
+        </>
+      )}
+
+      {(isLoadingPreview || (!currentPreview && !previewError && academicTermId && selectedPeriodIds.length > 0)) && (
+        <Surface>
+          <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
+            <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+            正在載入學期彙整預覽...
+          </div>
+        </Surface>
+      )}
+
+      {previewError && !isLoadingPreview && (
+        <Surface className="border-red-200 bg-red-50">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p role="alert" className="flex items-center gap-2 text-sm text-red-700">
+              <AlertCircle aria-hidden="true" className="h-4 w-4" />
+              {previewError}
+            </p>
+            <Button
+              size="sm"
+              variant="dangerSoft"
+              onClick={() => void loadPreview(
+                { academicTermId, periodIds: selectedPeriodIds },
+                serverQuerySignature,
+              )}
+            >
+              重試
+            </Button>
+          </div>
+        </Surface>
+      )}
+
+      {currentPreview && (
+        <>
+          <SemesterSummaryBar
+            exportStats={exportStats}
+            searchText={searchText}
+            onSearchTextChange={setSearchText}
+            quickFilter={quickFilter}
+            onQuickFilterChange={setQuickFilter}
+            onJumpToAnomalies={() => anomalySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            isAdmin={isAdmin}
+            isRenderingMissing={isRenderingMissing}
+            renderJob={renderJob}
+            onRenderMissing={handleRenderMissing}
+          />
+
+          {renderJobErrors.length > 0 && (
+            <SemesterRenderErrorsBanner errors={renderJobErrors} onDismiss={() => setRenderJobErrors([])} />
           )}
-          <Button variant="primary" size="lg" onClick={handleDownload} disabled={selectedChildIds.size === 0}>
-            <Download className="h-4 w-4" />
-            下載學期彙整 ZIP（{selectedChildIds.size} 位孩子・列印畫質）
-          </Button>
-        </div>
+
+          {identityAnomalies.length > 0 && (
+            <SemesterUnlinkedSection sectionRef={anomalySectionRef} unlinked={identityAnomalies} />
+          )}
+
+          <SemesterChildrenTable
+            classroomGroups={pagedGroups}
+            periods={periods}
+            isAdmin={isAdmin}
+            selectedChildIds={selectedChildIds}
+            isRenderingMissing={isRenderingMissing}
+            onToggleChildSelected={toggleChildSelected}
+            onSetManySelected={setManySelected}
+            onRenderMissing={handleRenderMissing}
+          />
+
+          <Pagination page={effectivePage} pageCount={pageCount} onChange={setCurrentPage} />
+
+          {isAdmin && allPreviewChildIds.length > 0 && (
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-gray-100 bg-white py-2">
+              {hiddenSelectedCount > 0 && (
+                <span className="flex items-center gap-1.5 text-xs text-amber-700">
+                  已選取中有 {hiddenSelectedCount} 位不在目前搜尋／狀態結果
+                  <Button size="xs" variant="neutral" onClick={keepOnlyDisplayedSelected}>只保留目前結果</Button>
+                </span>
+              )}
+              {identityAnomalies.length > 0 && (
+                <Badge tone="warning">{identityAnomalies.length} 筆身分異常不匯出</Badge>
+              )}
+              <Button
+                variant="primary"
+                size="lg"
+                disabled={selectedChildIds.size === 0 || isRenderingMissing}
+                onClick={handleDownload}
+              >
+                <Download aria-hidden="true" className="h-4 w-4" />
+                下載學期 ZIP（{selectedChildIds.size} 位孩子）
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       <ConfirmModal
-        isOpen={!!confirmModal}
+        isOpen={Boolean(confirmModal)}
         message={confirmModal?.message}
         confirmLabel={confirmModal?.confirmLabel}
         confirmVariant={confirmModal?.confirmVariant}
-        onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
+        onConfirm={async () => {
+          await confirmModal?.onConfirm();
+          setConfirmModal(null);
+        }}
         onCancel={() => setConfirmModal(null)}
       />
     </div>

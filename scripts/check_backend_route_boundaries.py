@@ -39,7 +39,6 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
     "routers/projects/crud.py": _routes(
         ("get", "/", "list_projects"),
         ("get", "/archive", "list_archived_projects"),
-        ("post", "/", "create_project"),
         ("get", "/{project_id}", "get_project"),
         ("get", "/{project_id}/students/{student_id}/editor", "get_student_editor_detail"),
         ("patch", "/{project_id}", "rename_project"),
@@ -47,10 +46,21 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("post", "/{project_id}/restore", "restore_project"),
         ("post", "/{project_id}/complete", "complete_project"),
         ("post", "/{project_id}/reopen", "reopen_project"),
-        ("post", "/{project_id}/students/batch", "batch_add_students"),
-        ("post", "/{project_id}/students/copy", "copy_students_from_project"),
-        ("put", "/{project_id}/students/{student_id}", "update_student"),
-        ("delete", "/{project_id}/students/{student_id}", "delete_student"),
+        (
+            "post",
+            "/{project_id}/students/album-names/auto-fill",
+            "auto_fill_student_album_names",
+        ),
+        (
+            "post",
+            "/{project_id}/students/{student_id}/album-name/auto-fill",
+            "auto_fill_student_album_name",
+        ),
+        (
+            "put",
+            "/{project_id}/students/{student_id}/album-name",
+            "update_student_album_name",
+        ),
         (
             "patch",
             "/{project_id}/students/{student_id}/pages/{page_index}/skip",
@@ -104,6 +114,14 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("get", "/{project_id}/comments", "list_comments"),
         ("post", "/{project_id}/comments", "add_comment"),
         ("delete", "/{project_id}/comments/{comment_id}", "delete_comment"),
+    ),
+    "routers/projects/assignments.py": _routes(
+        ("post", "/{project_id}/assignment", "assign_project_owner"),
+        (
+            "get",
+            "/{project_id}/assignment-history",
+            "list_project_assignment_history",
+        ),
     ),
     "routers/projects/render.py": _routes(
         ("get", "/{project_id}/preview/{page_index}", "preview_project_page", PREVIEW_CACHE),
@@ -176,15 +194,10 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("delete", "/{user_id}", "delete_user"),
     ),
     "routers/roster.py": _routes(
+        ("get", "/academic-terms", "get_reporting_terms"),
         ("get", "/semester-export", "get_semester_export_preview"),
         ("get", "/teacher-progress", "get_teacher_progress"),
         ("get", "/teacher-overview/export", "export_teacher_overview_excel"),
-        ("put", "/students/{student_id}/link", "link_student_to_roster_child"),
-        (
-            "post",
-            "/children/{child_id}/merge/{target_child_id}",
-            "merge_roster_child_into",
-        ),
         ("post", "/semester-export/render-missing", "render_missing_albums"),
         (
             "get",
@@ -197,6 +210,80 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("post", "/login", "login"),
         ("post", "/logout", "logout"),
         ("get", "/me", "get_me"),
+    ),
+    "routers/organization.py": _routes(
+        ("get", "/overview", "get_organization_overview"),
+        ("get", "/my-classrooms", "get_my_classrooms"),
+        ("get", "/academic-terms", "list_academic_terms"),
+        ("post", "/campuses", "create_campus"),
+        ("patch", "/campuses/{campus_id}", "update_campus"),
+        (
+            "put",
+            "/campuses/{campus_id}/supervisors",
+            "replace_campus_supervisors",
+        ),
+        (
+            "put",
+            "/projects/{project_id}/classroom",
+            "assign_project_to_classroom",
+        ),
+        (
+            "get",
+            "/projects/{project_id}/classroom-migration-preview",
+            "get_project_classroom_migration_preview",
+        ),
+        ("post", "/classrooms", "create_classroom"),
+        ("patch", "/classrooms/{classroom_id}", "update_classroom"),
+        (
+            "post",
+            "/classrooms/{classroom_id}/members/batch",
+            "batch_add_classroom_members",
+        ),
+        (
+            "patch",
+            "/classrooms/{classroom_id}/members/{member_id}",
+            "update_classroom_member",
+        ),
+        (
+            "post",
+            "/classrooms/{classroom_id}/projects",
+            "create_classroom_project",
+        ),
+        (
+            "put",
+            "/classrooms/{classroom_id}/teachers",
+            "replace_classroom_teachers",
+        ),
+        (
+            "post",
+            "/term-reclassification-plans",
+            "create_term_reclassification_plan",
+        ),
+        (
+            "get",
+            "/term-reclassification-plans/{plan_id}",
+            "get_term_reclassification_plan",
+        ),
+        (
+            "put",
+            "/term-reclassification-plans/{plan_id}",
+            "update_term_reclassification_plan",
+        ),
+        (
+            "post",
+            "/term-reclassification-plans/{plan_id}/validate",
+            "validate_term_reclassification_plan",
+        ),
+        (
+            "post",
+            "/term-reclassification-plans/{plan_id}/apply",
+            "apply_term_reclassification_plan",
+        ),
+        (
+            "post",
+            "/term-reclassification-plans/{plan_id}/cancel",
+            "cancel_term_reclassification_plan",
+        ),
     ),
 }
 

@@ -7,6 +7,7 @@ import json
 import sqlite3
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 
 
 def test_migrations_idempotent():
@@ -18,22 +19,40 @@ def test_migrations_idempotent():
     run_migrations()
 
     with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO users (username, display_name, hashed_password, role)
-            VALUES ('migration_supervisor', 'Migration Supervisor', 'hashed', 'supervisor')
-        """))
-        supervisor_id = conn.execute(
-            text("SELECT id FROM users WHERE username = 'migration_supervisor'")
+        template_id = conn.execute(
+            text("INSERT INTO templates (name) VALUES ('Migration layout') RETURNING id")
+        ).scalar_one()
+        template_period_id = conn.execute(
+            text("SELECT id FROM template_periods ORDER BY id LIMIT 1")
         ).scalar_one()
         conn.execute(
             text("""
-                INSERT INTO users (username, display_name, hashed_password, role, supervisor_id)
-                VALUES ('migration_teacher', 'Migration Teacher', 'hashed', 'teacher', :supervisor_id)
+                UPDATE templates
+                SET revision = 7, period_id = :template_period_id
+                WHERE id = :template_id
             """),
-            {"supervisor_id": supervisor_id},
+            {
+                "template_id": template_id,
+                "template_period_id": template_period_id,
+            },
         )
-        template_id = conn.execute(
-            text("INSERT INTO templates (name) VALUES ('Migration layout') RETURNING id")
+        project_id = conn.execute(
+            text("""
+                INSERT INTO projects (
+                    name, template_id, template_revision, department,
+                    template_period_id, completed_at, label_texts_json
+                )
+                VALUES (
+                    'Migration project', :template_id, 7, 'sensory',
+                    :template_period_id, '2026-07-16 10:00:00',
+                    '{"0":{"1":"保留文字"}}'
+                )
+                RETURNING id
+            """),
+            {
+                "template_id": template_id,
+                "template_period_id": template_period_id,
+            },
         ).scalar_one()
         conn.execute(
             text("""
@@ -66,17 +85,39 @@ def test_migrations_idempotent():
         tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
         assert "users" in tables
         assert "projects" in tables
-        assert "teacher_supervisors" in tables
+        assert "legacy_teacher_supervisor_links" in tables
+        assert "teacher_supervisors" not in tables
         assert "template_project_sync_backups" in tables
         user_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
         assert "ui_font_scale" in user_columns
         assert "auth_version" in user_columns
+        assert "supervisor_id" not in user_columns
+        assert list(conn.execute(text(
+            "PRAGMA foreign_key_list(legacy_teacher_supervisor_links)"
+        ))) == []
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM legacy_teacher_supervisor_links"
+        )).scalar_one() == 0
         template_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(templates)"))}
         assert "revision" in template_columns
         project_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
         assert "deleted_at" in project_columns
         assert "archive_expires_at" in project_columns
         assert "template_revision" in project_columns
+        assert "bubble_texts_json" not in project_columns
+        preserved_project = conn.execute(text("""
+            SELECT template_revision, department, template_period_id,
+                   completed_at, label_texts_json
+            FROM projects
+            WHERE id = :project_id
+        """), {"project_id": project_id}).one()
+        assert preserved_project == (
+            7,
+            "sensory",
+            template_period_id,
+            "2026-07-16 10:00:00",
+            '{"0":{"1":"保留文字"}}',
+        )
         backup_columns = {
             row[1]
             for row in conn.execute(text(
@@ -107,16 +148,6 @@ def test_migrations_idempotent():
             WHERE migration_name = 'remove_empty_text_bubbles_v1'
         """)).scalar_one()
         assert backup_count == 1
-
-        migrated_assignment = conn.execute(text("""
-            SELECT ts.supervisor_id
-            FROM teacher_supervisors ts
-            JOIN users teacher ON teacher.id = ts.teacher_id
-            WHERE teacher.username = 'migration_teacher'
-        """)).fetchone()
-        assert migrated_assignment is not None
-        assert migrated_assignment[0] == supervisor_id
-
 
 def test_template_revision_migration_upgrades_nonempty_legacy_database(tmp_path, monkeypatch):
     """舊資料與遷移後新資料都必須取得整數型別的 revision 預設值。"""
@@ -225,3 +256,160 @@ def test_template_revision_migration_upgrades_nonempty_legacy_database(tmp_path,
             "idx_template_sync_backups_template_id",
             "idx_template_sync_backups_project_id",
         } <= backup_indexes
+
+
+def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations():
+    """舊欄位殘留時，重跑 migration 不得把後來新增的 project 欄位／索引／FK 丟掉。"""
+    from database import engine, init_db
+    import migrations
+
+    init_db()
+    migrations.run_migrations()
+    with engine.begin() as connection:
+        connection.execute(text(
+            "ALTER TABLE projects "
+            "ADD COLUMN bubble_texts_json TEXT NOT NULL DEFAULT '{}'"
+        ))
+        template_id = connection.execute(text(
+            "INSERT INTO templates (name, revision) "
+            "VALUES ('Interrupted template', 8) RETURNING id"
+        )).scalar_one()
+        period_id = connection.execute(text(
+            "SELECT id FROM template_periods ORDER BY id LIMIT 1"
+        )).scalar_one()
+        owner_id = connection.execute(text(
+            "SELECT id FROM users WHERE username = 'admin'"
+        )).scalar_one()
+        project_id = connection.execute(
+            text("""
+                INSERT INTO projects (
+                    name, template_id, department, template_period_id,
+                    template_revision, owner_id, deleted_at, archive_expires_at,
+                    completed_at, label_texts_json, bubble_texts_json
+                )
+                VALUES (
+                    'Interrupted project', :template_id, 'academy', :period_id,
+                    8, :owner_id, '2026-07-01 00:00:00', '2026-07-31 00:00:00',
+                    '2026-07-02 00:00:00', '{"0":{"1":"modern"}}',
+                    '{"0":{"1":"legacy"}}'
+                )
+                RETURNING id
+            """),
+            {
+                "template_id": template_id,
+                "period_id": period_id,
+                "owner_id": owner_id,
+            },
+        ).scalar_one()
+        connection.execute(
+            text("""
+                INSERT INTO students (project_id, name, pages_data_json)
+                VALUES (:project_id, 'Interrupted student', '[]')
+            """),
+            {"project_id": project_id},
+        )
+        connection.execute(text(
+            "CREATE INDEX idx_projects_interrupted_name ON projects(name)"
+        ))
+
+    class _LegacyDropConnection:
+        """只攔原生 DROP COLUMN，強制走舊 SQLite 動態重建 fallback。"""
+
+        def __init__(self, connection):
+            self.connection = connection
+            self.intercepted = False
+
+        def execute(self, statement, *args, **kwargs):
+            if (
+                not self.intercepted
+                and str(statement).strip().upper()
+                == "ALTER TABLE PROJECTS DROP COLUMN BUBBLE_TEXTS_JSON"
+            ):
+                self.intercepted = True
+                raise OperationalError(
+                    str(statement),
+                    {},
+                    RuntimeError("simulated legacy SQLite"),
+                )
+            return self.connection.execute(statement, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    with engine.connect() as connection:
+        legacy_connection = _LegacyDropConnection(connection)
+        migrations._drop_bubble_texts_json_column(legacy_connection)
+        assert legacy_connection.intercepted
+        rebuilt_triggers = {
+            row[0]
+            for row in connection.execute(text("""
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name IN (
+                      'trg_students_freeze_class_backed_identity',
+                      'trg_projects_require_identity_migration_ledger'
+                  )
+            """))
+        }
+        assert rebuilt_triggers == {
+            "trg_students_freeze_class_backed_identity",
+            "trg_projects_require_identity_migration_ledger",
+        }
+
+    # fallback 完成後再跑完整序列，確認 interrupted state 已收斂且可冪等。
+    migrations.run_migrations()
+
+    with engine.connect() as connection:
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
+        }
+        assert "bubble_texts_json" not in columns
+        assert {
+            "department",
+            "template_period_id",
+            "template_revision",
+            "owner_id",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "archive_expires_at",
+            "completed_at",
+            "label_texts_json",
+        } <= columns
+        preserved = connection.execute(
+            text("""
+                SELECT department, template_period_id, template_revision, owner_id,
+                       deleted_at, archive_expires_at, completed_at, label_texts_json
+                FROM projects
+                WHERE id = :project_id
+            """),
+            {"project_id": project_id},
+        ).one()
+        assert preserved == (
+            "academy",
+            period_id,
+            8,
+            owner_id,
+            "2026-07-01 00:00:00",
+            "2026-07-31 00:00:00",
+            "2026-07-02 00:00:00",
+            '{"0":{"1":"modern"}}',
+        )
+        indexes = {
+            row[1] for row in connection.execute(text("PRAGMA index_list(projects)"))
+        }
+        assert {
+            "idx_projects_interrupted_name",
+            "idx_projects_owner_id",
+            "idx_projects_department",
+            "idx_projects_template_period_id",
+        } <= indexes
+        foreign_key_targets = {
+            row[2] for row in connection.execute(text("PRAGMA foreign_key_list(projects)"))
+        }
+        assert {"templates", "template_periods", "users"} <= foreign_key_targets
+        assert connection.execute(text(
+            "SELECT COUNT(*) FROM students WHERE project_id = :project_id"
+        ), {"project_id": project_id}).scalar_one() == 1
+        assert list(connection.execute(text("PRAGMA foreign_key_check"))) == []

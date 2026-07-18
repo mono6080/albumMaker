@@ -24,10 +24,11 @@ def configure_environment() -> None:
     E2E_TMP_DIR.mkdir(parents=True, exist_ok=True)
     E2E_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-    os.environ.setdefault("DATABASE_URL", f"sqlite:///{E2E_DB_FILE.as_posix()}")
-    os.environ.setdefault("SECRET_KEY", "e2e-secret-do-not-use")
-    os.environ.setdefault("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")
-    os.environ.setdefault("ALBUM_MAKER_UPLOADS_DIR", str(E2E_UPLOADS_DIR))
+    # E2E 必須固定使用隔離資源，不能繼承開發或正式環境的連線設定。
+    os.environ["DATABASE_URL"] = f"sqlite:///{E2E_DB_FILE.as_posix()}"
+    os.environ["SECRET_KEY"] = "e2e-secret-do-not-use"
+    os.environ["ALLOWED_ORIGINS"] = "http://127.0.0.1:5173,http://localhost:5173"
+    os.environ["ALBUM_MAKER_UPLOADS_DIR"] = str(E2E_UPLOADS_DIR)
 
     sys.path.insert(0, str(BACKEND_DIR))
 

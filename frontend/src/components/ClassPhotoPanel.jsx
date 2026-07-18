@@ -74,11 +74,11 @@ export default function ClassPhotoPanel({
         <Surface>
           <div className="py-8 text-center text-gray-400">
             <Users className="mx-auto mb-3 h-10 w-10 opacity-30" />
-            <p className="text-sm">尚未新增任何學生</p>
-            <p className="mt-1 text-xs">先在班級總覽新增學生名單，再回來放全班照片。</p>
+            <p className="text-sm">此相本沒有學生快照</p>
+            <p className="mt-1 text-xs">請管理員確認遷移資料，或從正確班級重新建立本期相本。</p>
             <Button as={Link} to={`/projects/${projectId}/review`} variant="primary" className="mt-4">
               <Users className="h-4 w-4" />
-              回班級總覽新增名單
+              回班級總覽查看
             </Button>
           </div>
         </Surface>

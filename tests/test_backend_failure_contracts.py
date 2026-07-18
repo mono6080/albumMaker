@@ -1,19 +1,14 @@
 """結構重構前的 Storage／DB 失敗順序與鎖順序 characterization。"""
 
-import threading
-from contextlib import contextmanager
-
 import pytest
 from sqlalchemy.orm import Session as OrmSession
 
-from database import Project, SessionLocal, Template, utc_now
-from services import project_student_service, template_sync_locks
+from database import SessionLocal, Template
 from services.storage import get_storage
 from tests.helpers import (
     assert_status,
     create_project,
     create_template_with_page,
-    create_user,
     jpeg_bytes,
     login,
     png_bytes,
@@ -60,12 +55,13 @@ def test_single_photo_commit_failure_leaves_storage_orphan_without_database_bind
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("single_commit_fail"))
-        assert_status(
-            client.post(f"/api/projects/{project_id}/students/batch", json=["Commit Failure"]),
-            200,
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("single_commit_fail"),
+            student_names=["CommitFailure"],
         )
-        student = _students_by_name(client, project_id)["Commit Failure"]
+        student = _students_by_name(client, project_id)["CommitFailure"]
         storage = get_storage()
 
         def fail_commit(_session) -> None:
@@ -83,7 +79,7 @@ def test_single_photo_commit_failure_leaves_storage_orphan_without_database_bind
                     files={"file": ("orphan.jpg", jpeg_bytes(), "image/jpeg")},
                 )
 
-        updated = _students_by_name(client, project_id)["Commit Failure"]
+        updated = _students_by_name(client, project_id)["CommitFailure"]
         assert _photo_path(updated) is None
         orphan_keys = storage.list_keys(
             f"projects/proj{project_id}/photos/student{student['id']}"
@@ -102,9 +98,13 @@ def test_shared_photo_second_storage_failure_keeps_first_commit_and_stops_fanout
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("shared_partial"))
-        names = ["Shared Before", "Shared Failure", "Shared After"]
-        assert_status(client.post(f"/api/projects/{project_id}/students/batch", json=names), 200)
+        names = ["SharedBefore", "SharedFailure", "SharedAfter"]
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("shared_partial"),
+            student_names=names,
+        )
         storage = get_storage()
         original_copy = storage.copy
         copy_calls = 0
@@ -128,131 +128,11 @@ def test_shared_photo_second_storage_failure_keeps_first_commit_and_stops_fanout
             )
 
         updated = _students_by_name(client, project_id)
-        first_path = _photo_path(updated["Shared Before"])
+        first_path = _photo_path(updated["SharedBefore"])
         assert first_path and storage.exists(first_path)
-        assert _photo_path(updated["Shared Failure"]) is None
-        assert _photo_path(updated["Shared After"]) is None
+        assert _photo_path(updated["SharedFailure"]) is None
+        assert _photo_path(updated["SharedAfter"]) is None
         assert copy_calls == 1
-
-
-def test_copy_students_acquires_both_project_locks_in_sorted_order(monkeypatch):
-    """跨專案複製固定由小到大拿 P 鎖，並以相反順序釋放。"""
-    with started_client() as client:
-        login(client)
-        template_id, _ = create_template_with_page(client)
-        first_project_id = create_project(client, template_id, name=unique_name("copy_lock_first"))
-        second_project_id = create_project(client, template_id, name=unique_name("copy_lock_second"))
-        assert_status(
-            client.post(f"/api/projects/{first_project_id}/students/batch", json=["Lock Child"]),
-            200,
-        )
-
-        acquired: list[int] = []
-        released: list[int] = []
-
-        class RecordingLock:
-            def __init__(self, project_id: int):
-                self.project_id = project_id
-
-            def acquire(self) -> None:
-                acquired.append(self.project_id)
-
-            def release(self) -> None:
-                released.append(self.project_id)
-
-        def recording_lock_for(_registry, _guard, project_id: int):
-            return RecordingLock(project_id)
-
-        monkeypatch.setattr(template_sync_locks, "_lock_for", recording_lock_for)
-        response = client.post(
-            f"/api/projects/{second_project_id}/students/copy",
-            json={"source_project_id": first_project_id},
-        )
-
-        assert_status(response, 200)
-        expected_order = sorted([first_project_id, second_project_id])
-        assert acquired == expected_order
-        assert released == list(reversed(expected_order))
-        assert response.json() == {"created": ["Lock Child"], "skipped": []}
-
-
-def test_copy_students_rechecks_target_after_waiting_for_real_project_locks(monkeypatch):
-    """等待 P 鎖期間 target 完成後，鎖內 rollback/requery 必須看到最新狀態並拒絕。"""
-    with started_client() as client:
-        login(client)
-        supervisor, _ = create_user(client, "supervisor")
-        teacher, teacher_password = create_user(
-            client,
-            "teacher",
-            supervisor_ids=[supervisor["id"]],
-        )
-        template_id, _ = create_template_with_page(client)
-
-        client.cookies.clear()
-        login(client, teacher["username"], teacher_password)
-        source_project_id = create_project(client, template_id, name=unique_name("copy_wait_source"))
-        target_project_id = create_project(client, template_id, name=unique_name("copy_wait_target"))
-        assert_status(
-            client.post(f"/api/projects/{source_project_id}/students/batch", json=["Wait Child"]),
-            200,
-        )
-
-        waiting_for_lock = threading.Event()
-        real_project_locks = template_sync_locks.lock_project_content_writes
-
-        @contextmanager
-        def observed_project_locks(project_ids):
-            waiting_for_lock.set()
-            with real_project_locks(project_ids):
-                yield
-
-        monkeypatch.setattr(
-            project_student_service,
-            "lock_project_content_writes",
-            observed_project_locks,
-        )
-        result: dict = {}
-
-        def run_copy() -> None:
-            try:
-                result["response"] = client.post(
-                    f"/api/projects/{target_project_id}/students/copy",
-                    json={"source_project_id": source_project_id},
-                )
-            except BaseException as error:  # pragma: no cover - 失敗時帶回主執行緒斷言
-                result["error"] = error
-
-        with real_project_locks([source_project_id, target_project_id]):
-            copy_thread = threading.Thread(target=run_copy)
-            copy_thread.start()
-            assert waiting_for_lock.wait(5), "copy request 未進入 P 鎖等待點"
-            assert copy_thread.is_alive()
-
-            concurrent_db = SessionLocal()
-            try:
-                target_project = concurrent_db.get(Project, target_project_id)
-                assert target_project is not None
-                target_project.completed_at = utc_now()
-                concurrent_db.commit()
-            finally:
-                concurrent_db.close()
-
-        copy_thread.join(5)
-        assert not copy_thread.is_alive()
-        assert "error" not in result
-        assert_status(result["response"], 403)
-        assert result["response"].json()["detail"] == (
-            "專案已標記完成，內容已鎖定；需主管或管理員退回才能修改"
-        )
-
-        db = SessionLocal()
-        try:
-            target_project = db.get(Project, target_project_id)
-            assert target_project is not None
-            assert target_project.completed_at is not None
-            assert target_project.students == []
-        finally:
-            db.close()
 
 
 def test_template_copy_storage_mid_failure_rolls_back_database_but_leaves_prior_copy(
@@ -387,9 +267,13 @@ def test_batch_text_second_commit_failure_keeps_first_and_stops_remaining_studen
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("batch_text_partial"))
-        names = ["Text Before", "Text Failure", "Text After"]
-        assert_status(client.post(f"/api/projects/{project_id}/students/batch", json=names), 200)
+        names = ["TextBefore", "TextFailure", "TextAfter"]
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("batch_text_partial"),
+            student_names=names,
+        )
         students = _students_by_name(client, project_id)
         original_commit = OrmSession.commit
         commit_calls = 0
@@ -420,9 +304,9 @@ def test_batch_text_second_commit_failure_keeps_first_and_stops_remaining_studen
                 )
 
         updated = _students_by_name(client, project_id)
-        assert _label_text(updated["Text Before"]) == "updated Text Before"
-        assert _label_text(updated["Text Failure"]) is None
-        assert _label_text(updated["Text After"]) is None
+        assert _label_text(updated["TextBefore"]) == "updated TextBefore"
+        assert _label_text(updated["TextFailure"]) is None
+        assert _label_text(updated["TextAfter"]) is None
         assert commit_calls == 2
 
 

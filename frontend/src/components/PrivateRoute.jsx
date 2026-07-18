@@ -3,16 +3,19 @@
 
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { usePermissions } from "../hooks/usePermissions";
 
 /**
  * @param {React.ReactNode} children - 受保護的頁面元件
  * @param {string[]} [allowedRoles]  - 允許存取的角色清單；省略表示任何已登入用戶皆可
+ * @param {string} [requiredPermission] - 依園所指派解析出的必要能力
  */
-export default function PrivateRoute({ children, allowedRoles }) {
+export default function PrivateRoute({ children, allowedRoles, requiredPermission }) {
   const { currentUser, isLoading, authError, refreshSession } = useAuth();
+  const permissions = usePermissions();
 
   // 等待 token 驗證完成，避免短暫閃爍跳轉
-  if (isLoading) {
+  if (isLoading || (requiredPermission && permissions.isOrganizationPermissionsLoading)) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
         驗證中...
@@ -52,6 +55,15 @@ export default function PrivateRoute({ children, allowedRoles }) {
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <p className="text-gray-500 font-medium">您沒有存取此頁面的權限</p>
         <p className="text-sm text-gray-400">目前角色：{currentUser.role}</p>
+      </div>
+    );
+  }
+
+  if (requiredPermission && permissions[requiredPermission] !== true) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-gray-500 font-medium">您沒有存取此頁面的權限</p>
+        <p className="text-sm text-gray-400">請由管理員在園所設定安排主管範圍</p>
       </div>
     );
   }

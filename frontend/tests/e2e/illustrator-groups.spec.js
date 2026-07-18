@@ -866,6 +866,11 @@ test("sticker analysis creates and linked text resets without changing topology 
   await canvas.click({ position: canvasPoint(210, 270) });
   await page.getByRole("button", { name: "分析圖片並建立文字框" }).click();
   await expect(page.getByText("已建立文字框")).toBeVisible();
+  const capacityNotice = page.locator('[data-guide="material-text-capacity"]');
+  await expect(capacityNotice)
+    .toHaveText(/目前文字框約可放\s*\d+\s*個全形中文字（不縮字）/);
+  const createdCapacity = Number((await capacityNotice.innerText()).match(/\d+/)?.[0]);
+  expect(createdCapacity).toBeGreaterThan(0);
   await saveTemplateLayout(page);
 
   let saved = await fetchTemplatePageLayout(page, templateId);
@@ -889,6 +894,11 @@ test("sticker analysis creates and linked text resets without changing topology 
   await positionInputs.nth(0).fill(String(createdText.x + 40));
   await page.getByRole("button", { name: "重新分析並重設文字框" }).click();
   await expect(page.getByText("已重設文字框")).toBeVisible();
+  await expect(capacityNotice)
+    .toHaveText(/目前文字框約可放\s*\d+\s*個全形中文字（不縮字）/);
+  const resetCapacity = Number((await capacityNotice.innerText()).match(/\d+/)?.[0]);
+  expect(resetCapacity).toBeGreaterThan(0);
+  expect(resetCapacity).toBeLessThan(createdCapacity);
   await saveTemplateLayout(page);
 
   saved = await fetchTemplatePageLayout(page, templateId);

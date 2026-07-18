@@ -31,8 +31,8 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   },
   {
     element: '[data-guide="review-roster-button"]',
-    title: "學生名單",
-    description: "在這裡管理學生：批次貼上新增、行內改名或刪除。名單就緒後再放素材與照片。",
+    title: "本期學生快照",
+    description: "核對建立相本時從班級目前名單帶入的固定快照；完整姓名只讀，這裡只調整相本稱呼。",
     side: "bottom",
     align: "end",
   },
@@ -77,11 +77,11 @@ export default function ProjectReview() {
   const { id: projectId } = useParams();
   const {
     canDownloadPrint,
-    canComment,
+    canCommentProject,
+    canDownloadProject,
     canEditProject,
+    canReopenProject: canReopenProjectByCapability,
     isAdmin,
-    isSupervisor,
-    isTeacher,
   } = usePermissions();
   const { currentUser } = useAuth();
 
@@ -140,6 +140,10 @@ export default function ProjectReview() {
     handleDeleteComment,
   } = useProjectReviewComments(projectId, setConfirmModal);
 
+  const canEditCurrentProject = project ? canEditProject(project) : false;
+  const canDownloadCurrentProject = project ? canDownloadProject(project) : false;
+  const canCommentCurrentProject = project ? canCommentProject(project) : false;
+  const hasRenderedStudents = project?.students.some(student => student.output_filename) ?? false;
   const effectiveMode = canDownloadPrint ? outputMode : "screen";
   const downloadState = useProjectReviewDownloads({
     projectId,
@@ -148,9 +152,8 @@ export default function ProjectReview() {
     getVisiblePageIndexes,
     reloadProject: loadProject,
     projectLoadSequence,
+    canRender: canEditCurrentProject,
   });
-
-  const canEditCurrentProject = project ? canEditProject(project.owner_id) : false;
 
   const handleCompleteProject = () => {
     setConfirmModal({
@@ -187,16 +190,15 @@ export default function ProjectReview() {
   };
 
   const handleStartGuide = () => {
-    const editOnlyGuideElements = [
-      '[data-guide="review-roster-button"]',
-      '[data-guide="review-download-student"]',
-      '[data-guide="review-download-all"]',
-    ];
-    const guideSteps = canEditCurrentProject
-      ? PROJECT_REVIEW_GUIDE_STEPS
-      : PROJECT_REVIEW_GUIDE_STEPS.filter(
-          step => !editOnlyGuideElements.includes(step.element),
-        );
+    const unavailableGuideElements = new Set();
+    if (!canEditCurrentProject) unavailableGuideElements.add('[data-guide="review-roster-button"]');
+    if (!canDownloadCurrentProject || (!canEditCurrentProject && !hasRenderedStudents)) {
+      unavailableGuideElements.add('[data-guide="review-download-student"]');
+      unavailableGuideElements.add('[data-guide="review-download-all"]');
+    }
+    const guideSteps = PROJECT_REVIEW_GUIDE_STEPS.filter(
+      step => !unavailableGuideElements.has(step.element),
+    );
     startProductGuide(guideSteps);
   };
 
@@ -215,7 +217,7 @@ export default function ProjectReview() {
 
   const pageCount = template.pages.length;
   const isProjectCompleted = Boolean(project.completed_at);
-  const canReopenProject = isAdmin || isSupervisor;
+  const canReopenProject = project ? canReopenProjectByCapability(project) : false;
   const photoProgressByStudentId = new Map(
     project.students.map(student => [
       student.id,
@@ -270,7 +272,7 @@ export default function ProjectReview() {
         meta={(
           <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
             <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
-            相本專案
+            相本工作
           </Button>
         )}
         actions={(
@@ -299,8 +301,8 @@ export default function ProjectReview() {
                 className={responsiveActionItemClass}
               >
                 <Users className="w-4 h-4" />
-                <span className="hidden sm:inline">學生名單</span>
-                <span className="sm:hidden">名單</span>
+                <span className="hidden sm:inline">本期學生</span>
+                <span className="sm:hidden">學生</span>
               </Button>
             )}
             <Button
@@ -327,6 +329,8 @@ export default function ProjectReview() {
           incompleteStudentCount={incompleteStudents.length}
           commentsCount={comments.length}
           canEditCurrentProject={canEditCurrentProject}
+          canDownloadCurrentProject={canDownloadCurrentProject}
+          hasRenderedStudents={hasRenderedStudents}
           canReopenProject={canReopenProject}
           canDownloadPrint={canDownloadPrint}
           isBatchRendering={downloadState.isBatchRendering}
@@ -368,6 +372,7 @@ export default function ProjectReview() {
         previewTimestamp={previewTimestamp}
         templateRevision={project.template_revision}
         canEditCurrentProject={canEditCurrentProject}
+        canDownloadCurrentProject={canDownloadCurrentProject}
         photoProgressByStudentId={photoProgressByStudentId}
         rendering={downloadState.rendering}
         renderingImages={downloadState.renderingImages}
@@ -378,16 +383,15 @@ export default function ProjectReview() {
         emptyFilteredStudentMessage={emptyFilteredStudentMessage}
         getVisiblePageIndexes={getVisiblePageIndexes}
         isImageShareReady={downloadState.isImageShareReady}
-        onOpenRoster={() => setIsRosterOpen(true)}
         onPreview={(studentId, pageIndex) => setPreview({ studentId, pageIndex })}
         onDownloadPdf={downloadState.handleDownloadOne}
         onDownloadImages={downloadState.handleDownloadOneImages}
       />
 
-      {(canComment || isTeacher) && (
+      {canDownloadCurrentProject && (
         <ReviewCommentsPanel
           comments={comments}
-          canComment={canComment}
+          canComment={canCommentCurrentProject}
           isAdmin={isAdmin}
           currentUser={currentUser}
           newCommentText={newCommentText}

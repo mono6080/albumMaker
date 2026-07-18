@@ -46,7 +46,7 @@ export default function AlbumEditorLayout({
         meta={(
           <Button as={Link} to="/projects" variant="ghost" size="xs" className="text-gray-400">
             <ChevronRight className="inline h-4 w-4 rotate-180 sm:hidden" />
-            相本專案
+            相本工作
           </Button>
         )}
         actions={(

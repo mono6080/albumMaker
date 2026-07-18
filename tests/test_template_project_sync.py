@@ -1,10 +1,7 @@
 # 已上線模板同步契約：確認、identity remap、版本、備份與原子 rollback
 
 import json
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from copy import deepcopy
-from threading import Event
 
 import pytest
 
@@ -17,7 +14,7 @@ from database import (
     TemplateProjectSyncBackup,
     init_db,
 )
-from services import project_student_service, template_page_snapshot_service
+from services import template_page_snapshot_service
 from services.template_project_sync_service import (
     ProjectSyncState,
     StudentSyncState,
@@ -26,7 +23,6 @@ from services.template_project_sync_service import (
     TemplateSyncPlan,
     prepare_template_sync_plan,
 )
-from services.template_sync_locks import lock_project_content_writes
 from tests.helpers import assert_status, login, started_client, unique_name
 
 
@@ -448,6 +444,65 @@ def test_editor_metadata_only_change_advances_revision_without_invalidating_outp
         assert after["backup_count"] == 0
 
 
+def test_material_text_link_only_change_advances_revision_without_invalidating_output():
+    with started_client() as client:
+        login(client)
+        seeded = _seed_linked_template(page_count=1)
+        db = SessionLocal()
+        try:
+            page = db.get(TemplatePage, seeded["page_ids"][0])
+            layout = json.loads(page.layout_json)
+            text_label = layout["text_labels"][0]
+            sticker = {
+                "id": 999,
+                "path": "templates/tmpl1/stickers/bubble.png",
+                "filename": "bubble.png",
+                "x": text_label["x"] - 20,
+                "y": text_label["y"] - 20,
+                "width": text_label["width"] + 40,
+                "height": text_label["height"] + 40,
+                "z_index": 1,
+            }
+            text_label["z_index"] = 2
+            layout["stickers"].append(sticker)
+            page.layout_json = json.dumps(layout)
+            db.commit()
+        finally:
+            db.close()
+
+        linked_layout = deepcopy(layout)
+        linked_layout["group_contract"] = "nested-world-v2"
+        linked_layout["material_text_links"] = [{
+            "kind": "material-text-v1",
+            "material_id": sticker["id"],
+            "text_id": text_label["id"],
+        }]
+        before = _database_snapshot(
+            seeded["template_id"], seeded["project_id"], seeded["student_id"]
+        )
+
+        response = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(
+                seeded,
+                [_existing_page_item(seeded["page_ids"][0], linked_layout)],
+            ),
+        )
+
+        assert_status(response, 200)
+        assert response.json()["revision"] == 2
+        assert response.json()["sync"]["invalidated_output_count"] == 0
+        assert response.json()["sync"]["backup_id"] is None
+        after = _database_snapshot(
+            seeded["template_id"], seeded["project_id"], seeded["student_id"]
+        )
+        assert after["template_revision"] == after["project_revision"] == 2
+        assert json.loads(after["pages"][0][2]) == linked_layout
+        assert after["student_output"] == seeded["output_filename"]
+        assert after["student_updated_at"] == before["student_updated_at"]
+        assert after["backup_count"] == 0
+
+
 def test_stale_expected_revision_returns_409_without_any_write():
     with started_client() as client:
         login(client)
@@ -629,7 +684,6 @@ def test_confirmation_hash_expires_when_affected_student_content_changes():
     [
         ("complete", "completed_project_count", 0, 1),
         ("reopen", "completed_project_count", 1, 0),
-        ("add_student", "student_count", 1, 2),
     ],
 )
 def test_confirmation_hash_expires_when_project_lifecycle_or_student_list_changes(
@@ -657,13 +711,8 @@ def test_confirmation_hash_expires_when_project_lifecycle_or_student_list_change
 
         if lifecycle_change == "complete":
             changed = client.post(f"/api/projects/{seeded['project_id']}/complete")
-        elif lifecycle_change == "reopen":
-            changed = client.post(f"/api/projects/{seeded['project_id']}/reopen")
         else:
-            changed = client.post(
-                f"/api/projects/{seeded['project_id']}/students/batch",
-                json=["確認後新增學生"],
-            )
+            changed = client.post(f"/api/projects/{seeded['project_id']}/reopen")
         assert_status(changed, 200)
         after_lifecycle_change = _database_snapshot(
             seeded["template_id"], seeded["project_id"], seeded["student_id"]
@@ -686,88 +735,6 @@ def test_confirmation_hash_expires_when_project_lifecycle_or_student_list_change
         assert _database_snapshot(
             seeded["template_id"], seeded["project_id"], seeded["student_id"]
         ) == after_lifecycle_change
-
-
-def test_confirmation_retry_rereads_after_waiting_for_project_lock(monkeypatch):
-    """拿到 project lock 後必須重讀；等待期間完成的名單寫入會讓舊 hash 失效。"""
-    with started_client() as client:
-        login(client)
-        seeded = _seed_linked_template(page_count=2)
-        retained_pages = [
-            _existing_page_item(seeded["page_ids"][0], seeded["layouts"][0]),
-        ]
-        confirmation = client.put(
-            f"/api/templates/{seeded['template_id']}/pages",
-            json=_snapshot_payload(seeded, retained_pages),
-        )
-        assert_status(confirmation, 409)
-        old_detail = confirmation.json()["detail"]
-
-        template_waiting_for_project = Event()
-        release_student_writer = Event()
-        student_writer_holds_project = Event()
-
-        @contextmanager
-        def delayed_student_writer_lock(project_ids):
-            with lock_project_content_writes(project_ids):
-                student_writer_holds_project.set()
-                assert release_student_writer.wait(timeout=5)
-                yield
-
-        @contextmanager
-        def observed_snapshot_lock(project_ids):
-            template_waiting_for_project.set()
-            with lock_project_content_writes(project_ids):
-                yield
-
-        monkeypatch.setattr(
-            project_student_service,
-            "lock_project_content_writes",
-            delayed_student_writer_lock,
-        )
-        monkeypatch.setattr(
-            template_page_snapshot_service,
-            "lock_project_content_writes",
-            observed_snapshot_lock,
-        )
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            student_write = executor.submit(
-                client.post,
-                f"/api/projects/{seeded['project_id']}/students/batch",
-                json=["等待鎖期間新增學生"],
-            )
-            try:
-                assert student_writer_holds_project.wait(timeout=5)
-                stale_retry = executor.submit(
-                    client.put,
-                    f"/api/templates/{seeded['template_id']}/pages",
-                    json=_snapshot_payload(
-                        seeded,
-                        retained_pages,
-                        confirm_project_sync=True,
-                        project_sync_change_hash=old_detail["change_hash"],
-                    ),
-                )
-                assert template_waiting_for_project.wait(timeout=5)
-            finally:
-                release_student_writer.set()
-
-            assert_status(student_write.result(timeout=5), 200)
-            stale_response = stale_retry.result(timeout=5)
-
-        assert_status(stale_response, 409)
-        latest_detail = stale_response.json()["detail"]
-        assert latest_detail["code"] == "template_structure_data_conflict"
-        assert latest_detail["change_hash"] != old_detail["change_hash"]
-        assert latest_detail["student_count"] == old_detail["student_count"] + 1
-
-        after = _database_snapshot(
-            seeded["template_id"], seeded["project_id"], seeded["student_id"]
-        )
-        assert after["template_revision"] == 1
-        assert [page_id for page_id, *_ in after["pages"]] == seeded["page_ids"]
-        assert after["backup_count"] == 0
 
 
 def test_linked_template_cannot_delete_its_final_page():
@@ -842,5 +809,155 @@ def test_legacy_out_of_range_page_data_is_backed_up_instead_of_blocking_sync():
                 .first()
             )
             assert "legacy_marker" in backup.students_json
+        finally:
+            db.close()
+
+
+def test_structural_slot_deletion_clears_active_bindings_but_backup_keeps_raw_payloads():
+    with started_client() as client:
+        login(client)
+        seeded = _seed_linked_template(page_count=1)
+        deleted_layout = deepcopy(seeded["layouts"][0])
+        deleted_layout["photo_slots"] = []
+        deleted_layout["text_labels"] = []
+        pages = [_existing_page_item(seeded["page_ids"][0], deleted_layout)]
+
+        confirmation = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(seeded, pages),
+        )
+        assert_status(confirmation, 409)
+        detail = confirmation.json()["detail"]
+        assert detail["affected_photo_count"] == 1
+        assert detail["affected_project_label_count"] == 1
+        assert detail["affected_student_label_count"] == 1
+
+        applied = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(
+                seeded,
+                pages,
+                confirm_project_sync=True,
+                project_sync_change_hash=detail["change_hash"],
+            ),
+        )
+        assert_status(applied, 200)
+
+        db = SessionLocal()
+        try:
+            project = db.get(Project, seeded["project_id"])
+            student = db.get(Student, seeded["student_id"])
+            page_entry = json.loads(student.pages_data_json)[0]
+            assert json.loads(project.label_texts_json) == {"0": {}}
+            assert page_entry["photos"] == {}
+            assert page_entry["label_texts"] == {}
+
+            backup = (
+                db.query(TemplateProjectSyncBackup)
+                .filter(
+                    TemplateProjectSyncBackup.template_id == seeded["template_id"],
+                    TemplateProjectSyncBackup.project_id == seeded["project_id"],
+                )
+                .one()
+            )
+            assert json.loads(backup.project_label_texts_json) == seeded["project_labels"]
+            assert json.loads(
+                json.loads(backup.students_json)[0]["pages_data_json"]
+            ) == seeded["page_entries"]
+        finally:
+            db.close()
+
+
+def test_visible_false_keeps_photo_and_text_bindings_for_future_reappearance():
+    with started_client() as client:
+        login(client)
+        seeded = _seed_linked_template(page_count=1)
+        hidden_layout = deepcopy(seeded["layouts"][0])
+        hidden_layout["photo_slots"][0]["visible"] = False
+        hidden_layout["text_labels"][0]["visible"] = False
+        pages = [_existing_page_item(seeded["page_ids"][0], hidden_layout)]
+
+        confirmation = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(seeded, pages),
+        )
+        assert_status(confirmation, 409)
+        detail = confirmation.json()["detail"]
+
+        applied = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(
+                seeded,
+                pages,
+                confirm_project_sync=True,
+                project_sync_change_hash=detail["change_hash"],
+            ),
+        )
+        assert_status(applied, 200)
+
+        db = SessionLocal()
+        try:
+            project = db.get(Project, seeded["project_id"])
+            student = db.get(Student, seeded["student_id"])
+            page_entry = json.loads(student.pages_data_json)[0]
+            slot_id = str(seeded["layouts"][0]["photo_slots"][0]["id"])
+            label_id = str(seeded["layouts"][0]["text_labels"][0]["id"])
+            assert json.loads(project.label_texts_json) == seeded["project_labels"]
+            assert page_entry["photos"][slot_id] == seeded["page_entries"][0]["photos"][slot_id]
+            assert page_entry["label_texts"][label_id] == (
+                seeded["page_entries"][0]["label_texts"][label_id]
+            )
+        finally:
+            db.close()
+
+
+def test_deleting_an_already_hidden_slot_still_confirms_and_clears_bindings():
+    with started_client() as client:
+        login(client)
+        seeded = _seed_linked_template(page_count=1)
+        db = SessionLocal()
+        try:
+            page = db.get(TemplatePage, seeded["page_ids"][0])
+            hidden_layout = json.loads(page.layout_json)
+            hidden_layout["photo_slots"][0]["visible"] = False
+            hidden_layout["text_labels"][0]["visible"] = False
+            page.layout_json = json.dumps(hidden_layout)
+            db.commit()
+        finally:
+            db.close()
+
+        deleted_layout = deepcopy(hidden_layout)
+        deleted_layout["photo_slots"] = []
+        deleted_layout["text_labels"] = []
+        pages = [_existing_page_item(seeded["page_ids"][0], deleted_layout)]
+        confirmation = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(seeded, pages),
+        )
+        assert_status(confirmation, 409)
+        detail = confirmation.json()["detail"]
+        assert detail["affected_photo_count"] == 1
+        assert detail["affected_project_label_count"] == 1
+        assert detail["affected_student_label_count"] == 1
+
+        applied = client.put(
+            f"/api/templates/{seeded['template_id']}/pages",
+            json=_snapshot_payload(
+                seeded,
+                pages,
+                confirm_project_sync=True,
+                project_sync_change_hash=detail["change_hash"],
+            ),
+        )
+        assert_status(applied, 200)
+
+        db = SessionLocal()
+        try:
+            project = db.get(Project, seeded["project_id"])
+            student = db.get(Student, seeded["student_id"])
+            assert json.loads(project.label_texts_json) == {"0": {}}
+            page_entry = json.loads(student.pages_data_json)[0]
+            assert page_entry["photos"] == {}
+            assert page_entry["label_texts"] == {}
         finally:
             db.close()

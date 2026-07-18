@@ -1,7 +1,6 @@
 // 批次照片精靈 e2e：依檔名整批匯入走完三步、多 chunk 上傳全數成功
 import { expect, test } from "@playwright/test";
 import {
-  addStudents,
   createProject,
   createTemplateWithLayout,
   loadFixtureLayout,
@@ -13,9 +12,8 @@ test("批次精靈依檔名整批匯入：5 檔多 chunk 全數成功", async ({
   const layout = await loadFixtureLayout();
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, `批次精靈模板 ${Date.now()}`, layout);
-  const project = await createProject(page, `批次精靈專案 ${Date.now()}`, templateId);
   const names = ["小明", "小華", "小美", "小強", "小芳"];
-  await addStudents(page, project.id, names);
+  const project = await createProject(page, `批次精靈專案 ${Date.now()}`, templateId, names);
 
   // 進全班編輯 → 開「依檔名整批匯入」
   await page.goto(`/projects/${project.id}/edit`);

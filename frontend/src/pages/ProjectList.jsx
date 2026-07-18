@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { Link } from "react-router-dom";
 import {
   fetchAllProjects,
   fetchArchivedProjects,
@@ -7,9 +8,14 @@ import {
   renameProject,
   restoreProject,
 } from "../api/projectApi";
+import {
+  createClassroomProject,
+  fetchMyClassrooms,
+} from "../api/organizationApi";
 import { fetchAvailableTemplates, fetchTemplateDepartments } from "../api/templateApi";
 import {
   ArchiveRestore,
+  Building2,
   ChevronRight,
   CircleHelp,
   FolderOpen,
@@ -18,9 +24,10 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 import { usePermissions } from "../hooks/usePermissions";
 import ConfirmModal from "../components/ConfirmModal";
-import CreateProjectModal from "../components/CreateProjectModal";
+import FormModal from "../components/FormModal";
 import ProjectCard, { ArchivedProjectRow } from "../components/ProjectCard";
 import ResponsiveActionGroup, {
   responsiveActionItemClass,
@@ -36,26 +43,31 @@ import {
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
 import { prefetchProjectWorkspaceRoutes } from "../routeLoaders";
+import {
+  findCurrentTeacherAssignment,
+  getProjectsOutsideClassrooms,
+  getTeacherAssignedClassrooms,
+} from "../utils/classroomAssignments";
 
 const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-create-button"]',
-    title: "新建專案",
-    description: "每個班級每個月建立一個相本專案。先點這裡選模板，再補分校、班級或月份名稱。",
+    title: "建立新一期相本",
+    description: "主教直接在目前任教班級建立新一期；學生快照與製作權限直接由園所設定形成。",
     side: "left",
     align: "center",
   },
   {
     element: '[data-guide="project-create-form"]',
     title: "選模板與命名",
-    description: "先選部門與目前使用中的期別，再選設計組提供的模板並補上專案名稱。",
+    description: "選擇該班部門目前使用中的期別與模板，再填入相本名稱。",
     side: "bottom",
     align: "start",
   },
   {
     element: '[data-guide="project-search"]',
     title: "搜尋與篩選",
-    description: "可用專案名稱、建立者、學生數或日期搜尋；管理員可再用部門、期別與建立者篩選，同樣會套用到封存復原清單。",
+    description: "可用專案名稱、目前負責人、學生數或日期搜尋；管理員可再用部門、期別與目前負責人篩選，同樣會套用到封存復原清單。",
     side: "bottom",
     align: "start",
   },
@@ -69,7 +81,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-card"]',
     title: "專案卡片",
-    description: "卡片會顯示學生數、建立日期與建立者。可直接改名、封存或進入後續流程。",
+    description: "卡片會顯示學生數、建立日期與目前負責人。可直接改名、封存或進入後續流程。",
     side: "bottom",
     align: "start",
   },
@@ -83,7 +95,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-review-link"]',
     title: "班級總覽",
-    description: "看全班進度、管理學生名單、標記全班完成並下載 PDF 或圖片。",
+    description: "看全班進度、核對本期學生快照與相本稱呼、標記全班完成並下載 PDF 或圖片。",
     side: "bottom",
     align: "end",
   },
@@ -154,16 +166,22 @@ function buildEmptyListMessage(searchQuery, hasSearch, hasActiveFilters, targetL
 // ── 專案清單頁面 ──────────────────────────────────────────────────────────────
 
 export default function ProjectList() {
-  const { canCreateProject, canEditProject, isAdmin, isTeacher } = usePermissions();
-  // teacher 只能看自己的專案，顯示建立者無意義；其餘角色顯示
-  const showOwner = !isTeacher;
+  const { currentUser } = useAuth();
+  const {
+    canEditProject,
+    canViewReports,
+    isAdmin,
+    isSupervisor,
+    isTeacher,
+  } = usePermissions();
+  // 老師只看目前任教班級的相本；班級卡已顯示主教，因此相本卡不重複顯示 owner。
+  const showOwner = !isTeacher || canViewReports;
   const canUseProjectFilters = isAdmin;
   const [projects, setProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [listLoadError, setListLoadError] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
-  const [showForm, setShowForm] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
@@ -171,6 +189,9 @@ export default function ProjectList() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState(DEFAULT_PROJECT_FILTERS);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [myClassrooms, setMyClassrooms] = useState([]);
+  const [classProjectDraft, setClassProjectDraft] = useState(null);
+  const [isCreatingClassProject, setIsCreatingClassProject] = useState(false);
 
   const searchTerms = useMemo(
     () => normalizeSearchText(searchQuery).split(/\s+/).filter(Boolean),
@@ -245,6 +266,42 @@ export default function ProjectList() {
   const listCountLabel = hasListFilters
     ? `找到 ${filteredProjects.length} / ${projects.length} 個專案`
     : `共 ${projects.length} 個專案`;
+  const teacherAssignedClassrooms = useMemo(
+    () => getTeacherAssignedClassrooms(myClassrooms, currentUser?.id),
+    [myClassrooms, currentUser?.id],
+  );
+  const availableTemplateById = useMemo(
+    () => new Map(templates.map(template => [template.id, template])),
+    [templates],
+  );
+  const getCreatableWorkSlots = useCallback((classroom) => (
+    (classroom.work_slots ?? []).filter(workSlot => (
+      workSlot.can_create_project
+      && ["imported", "active"].includes(workSlot.academic_term_status)
+      && workSlot.template_ids.some(templateId => availableTemplateById.has(templateId))
+    ))
+  ), [availableTemplateById]);
+  const openClassProjectDraft = useCallback((classroom) => {
+    const firstWorkSlot = getCreatableWorkSlots(classroom)[0];
+    const firstTemplateId = firstWorkSlot?.template_ids.find(templateId => (
+      availableTemplateById.has(templateId)
+    ));
+    setClassProjectDraft({
+      classroom,
+      name: "",
+      workSlotId: firstWorkSlot ? String(firstWorkSlot.id) : "",
+      templateId: firstTemplateId ? String(firstTemplateId) : "",
+    });
+  }, [availableTemplateById, getCreatableWorkSlots]);
+  const hasTeacherWorkflow = isTeacher || teacherAssignedClassrooms.length > 0;
+  const supervisorOnlyProjects = useMemo(
+    () => getProjectsOutsideClassrooms(projects, teacherAssignedClassrooms),
+    [projects, teacherAssignedClassrooms],
+  );
+  const visibleSupervisorOnlyProjects = useMemo(
+    () => getProjectsOutsideClassrooms(filteredProjects, teacherAssignedClassrooms),
+    [filteredProjects, teacherAssignedClassrooms],
+  );
 
   const updateFilter = useCallback((key, value) => {
     setFilters(current => ({ ...current, [key]: value }));
@@ -283,7 +340,42 @@ export default function ProjectList() {
     fetchTemplateDepartments()
       .then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS))
       .catch(() => setDepartments(FALLBACK_DEPARTMENTS));
-  }, [loadProjectLists]);
+    if (isTeacher || isSupervisor) {
+      fetchMyClassrooms()
+        .then(response => setMyClassrooms(response.data.classrooms ?? []))
+        .catch(() => toast.error("載入我的班級失敗"));
+    }
+  }, [isSupervisor, isTeacher, loadProjectLists]);
+
+  const handleCreateClassProject = async (event) => {
+    event.preventDefault();
+    const name = classProjectDraft.name.trim();
+    const leadTeacher = classProjectDraft.classroom.current_teachers.find(
+      teacher => teacher.duty === "lead",
+    );
+    if (!name || !classProjectDraft.workSlotId || !classProjectDraft.templateId || !leadTeacher) return;
+    setIsCreatingClassProject(true);
+    try {
+      await createClassroomProject(classProjectDraft.classroom.id, {
+        name,
+        template_id: Number(classProjectDraft.templateId),
+        owner_id: leadTeacher.teacher_id,
+        work_slot_id: Number(classProjectDraft.workSlotId),
+      });
+      toast.success("已依班級目前名單建立新一期相本");
+      setClassProjectDraft(null);
+      const [, classroomResponse] = await Promise.all([
+        loadProjectLists(),
+        fetchMyClassrooms(),
+      ]);
+      setMyClassrooms(classroomResponse.data.classrooms ?? []);
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : detail?.message ?? "建立班級相本失敗");
+    } finally {
+      setIsCreatingClassProject(false);
+    }
+  };
 
   // ── 重命名（樂觀更新）
   const { editingId, editingValue: editingName, setEditingValue: setEditingName,
@@ -373,22 +465,22 @@ export default function ProjectList() {
         </select>
       </FormField>
       {showOwner && (
-        <FormField label="建立者">
+        <FormField label="目前負責人">
           <div className="relative">
             <input
               list={ownerDatalistId}
               className={`${fieldControlClass} pr-10`}
               value={filters.ownerQuery ?? ""}
               onChange={event => updateFilter("ownerQuery", event.target.value)}
-              placeholder="輸入建立者"
-              aria-label="篩選建立者"
+              placeholder="輸入目前負責人"
+              aria-label="篩選目前負責人"
             />
             {filters.ownerQuery && (
               <button
                 type="button"
                 onClick={() => updateFilter("ownerQuery", "")}
                 className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                aria-label="清除建立者篩選"
+                aria-label="清除目前負責人篩選"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -417,11 +509,100 @@ export default function ProjectList() {
         confirmLabel={confirmModal?.confirmLabel}
         confirmVariant={confirmModal?.confirmVariant}
       />
+      <FormModal
+        isOpen={!!classProjectDraft}
+        title={`建立新一期相本：${classProjectDraft?.classroom.name ?? ""}`}
+        onClose={() => {
+          if (!isCreatingClassProject) setClassProjectDraft(null);
+        }}
+        maxWidthClass="max-w-lg"
+      >
+        {classProjectDraft && (
+          <form className="space-y-4" onSubmit={handleCreateClassProject} data-guide="project-create-form">
+            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
+              會以目前 {classProjectDraft.classroom.members.length} 位學生形成本期固定快照；主教是進度負責人，所有目前當班老師都可直接製作本班相本。
+            </p>
+            <FormField label="相本名稱">
+              <input
+                autoFocus
+                required
+                className={fieldControlClass}
+                value={classProjectDraft.name}
+                maxLength={100}
+                onChange={event => setClassProjectDraft(current => ({ ...current, name: event.target.value }))}
+                placeholder={`${classProjectDraft.classroom.name} 新一期相本`}
+              />
+            </FormField>
+            <FormField label="正式學期期別">
+              <select
+                required
+                className={fieldControlClass}
+                value={classProjectDraft.workSlotId}
+                onChange={event => {
+                  const workSlotId = event.target.value;
+                  const workSlot = getCreatableWorkSlots(classProjectDraft.classroom)
+                    .find(item => String(item.id) === workSlotId);
+                  const firstTemplateId = workSlot?.template_ids.find(templateId => (
+                    availableTemplateById.has(templateId)
+                  ));
+                  setClassProjectDraft(current => ({
+                    ...current,
+                    workSlotId,
+                    templateId: firstTemplateId ? String(firstTemplateId) : "",
+                  }));
+                }}
+              >
+                <option value="">請選擇可開工的期別</option>
+                {getCreatableWorkSlots(classProjectDraft.classroom)
+                  .map(workSlot => (
+                    <option key={workSlot.id} value={workSlot.id}>
+                      {workSlot.academic_term_label}／{workSlot.period_name}
+                    </option>
+                  ))}
+              </select>
+            </FormField>
+            <FormField label="此期模板">
+              <select
+                required
+                className={fieldControlClass}
+                value={classProjectDraft.templateId}
+                onChange={event => setClassProjectDraft(current => ({ ...current, templateId: event.target.value }))}
+              >
+                <option value="">請選擇模板</option>
+                {templates
+                  .filter(template => {
+                    const workSlot = getCreatableWorkSlots(classProjectDraft.classroom)
+                      .find(item => String(item.id) === classProjectDraft.workSlotId);
+                    return workSlot?.template_ids.includes(template.id);
+                  })
+                  .map(template => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+              </select>
+            </FormField>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+              主要負責：{classProjectDraft.classroom.current_teachers.find(teacher => teacher.duty === "lead")?.teacher_name}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setClassProjectDraft(null)} disabled={isCreatingClassProject}>取消</Button>
+              <Button
+                type="submit"
+                variant="success"
+                disabled={isCreatingClassProject || !classProjectDraft.name.trim() || !classProjectDraft.workSlotId || !classProjectDraft.templateId}
+              >
+                {isCreatingClassProject ? "建立中..." : "建立班級相本"}
+              </Button>
+            </div>
+          </form>
+        )}
+      </FormModal>
       <PageHeader
         icon={FolderOpen}
         iconTone="success"
-        title="相本專案"
-        subtitle="每個班級每個月一個專案"
+        title="相本工作"
+        subtitle={teacherAssignedClassrooms.length > 0 ? "你的班級就是相本工作入口；各期相本直接依園所編制歸在班級下。" : "依班級與負責人查看、製作及審閱各期相本。"}
         actions={(
         <ResponsiveActionGroup mobileColumns={2}>
           <Button
@@ -454,19 +635,6 @@ export default function ProjectList() {
             )}
           </Button>
           )}
-        {canCreateProject && (
-          <Button
-            onClick={() => setShowForm(v => !v)}
-            data-guide="project-create-button"
-            variant="primary"
-            size="touch"
-            // 三顆鈕時新建跨兩欄補滿第二列；只剩兩顆（無封存）時與教學同列，避免孤懸半寬
-            className={`${responsiveActionItemClass} ${showArchiveButton ? "col-span-2 sm:col-span-1" : ""}`}
-          >
-            <Plus className="w-4 h-4" />
-            <span className="whitespace-nowrap">新建專案</span>
-          </Button>
-        )}
         </ResponsiveActionGroup>
         )}
       />
@@ -513,15 +681,6 @@ export default function ProjectList() {
         </Surface>
       )}
 
-      {/* Create form（Modal；關閉不清空輸入，誤觸不失資料） */}
-      <CreateProjectModal
-        isOpen={showForm}
-        onClose={() => setShowForm(false)}
-        templates={templates}
-        departments={departments}
-        projects={projects}
-      />
-
       {/* 零專案時搜尋列是噪音，藏起來讓空狀態引導成為焦點 */}
       {projects.length > 0 && (
       <Surface
@@ -538,7 +697,7 @@ export default function ProjectList() {
                 type="search"
                 value={searchQuery}
                 onChange={event => setSearchQuery(event.target.value)}
-                placeholder="專案名稱、建立者、日期"
+                placeholder="專案名稱、目前負責人、日期"
                 aria-label="搜尋專案"
                 className={`${fieldControlClass} pl-9 pr-10`}
               />
@@ -597,17 +756,159 @@ export default function ProjectList() {
           <p className="mb-4 text-sm">{listLoadError}</p>
           <Button variant="secondary" size="sm" onClick={loadProjectLists}>重新載入</Button>
         </div>
+      ) : hasTeacherWorkflow ? (
+        <div className="space-y-5">
+          {teacherAssignedClassrooms.length === 0 && !canViewReports && (
+            <Surface className="border-amber-200 bg-amber-50">
+              <h2 className="font-semibold text-amber-900">尚未安排目前班級</h2>
+              <p className="mt-1 text-sm text-amber-800">
+                請管理員到「園所設定」安排班級與帶班職責；設定完成後，班級與各期相本會直接出現在這裡。
+              </p>
+            </Surface>
+          )}
+
+          {teacherAssignedClassrooms.map(classroom => {
+            const currentAssignment = findCurrentTeacherAssignment(classroom, currentUser?.id);
+            const leadTeacher = classroom.current_teachers.find(teacher => teacher.duty === "lead");
+            const allClassProjects = projects.filter(project => project.classroom_id === classroom.id);
+            const visibleClassProjects = filteredProjects.filter(project => project.classroom_id === classroom.id);
+            const creatableWorkSlots = getCreatableWorkSlots(classroom);
+            const canCreateForClass = (
+              currentAssignment?.duty === "lead"
+              && classroom.members.length > 0
+              && creatableWorkSlots.length > 0
+            );
+            const createDisabledMessage = classroom.members.length === 0
+              ? "班級目前沒有學生，請先由管理員完成名單設定"
+              : creatableWorkSlots.length === 0
+                ? "目前沒有可開工的正式學期期別，請管理員先完成學期與模板設定"
+                : null;
+            return (
+              <Surface key={classroom.id} as="section" className="overflow-hidden" padding="none">
+                <div className="border-b border-gray-100 bg-gradient-to-r from-indigo-50/80 to-white p-4 sm:p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Building2 className="h-5 w-5 flex-shrink-0 text-indigo-600" />
+                        <h2 className="text-lg font-bold text-gray-900">{classroom.name}</h2>
+                        <Badge tone={currentAssignment?.duty === "lead" ? "primary" : "info"}>
+                          {currentAssignment?.duty === "lead" ? "主教" : "協同"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-gray-500">
+                        {classroom.campus_name} · {classroom.members.length} 位目前學生 · {allClassProjects.length} 期可見相本
+                      </p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        主教：{leadTeacher?.teacher_name ?? "尚未設定"}
+                        {classroom.members.length > 0 && (
+                          <span className="ml-2 text-gray-400">
+                            學生：{classroom.members.map(member => member.name).join("、")}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    {currentAssignment?.duty === "lead" && (
+                      <div className="flex max-w-xs flex-col items-start gap-1 sm:items-end">
+                        <Button
+                          size="sm"
+                          variant="success"
+                          data-guide="project-create-button"
+                          disabled={!canCreateForClass}
+                          onClick={() => openClassProjectDraft(classroom)}
+                        >
+                          <Plus className="h-4 w-4" />
+                          建立新一期相本
+                        </Button>
+                        {createDisabledMessage && (
+                          <p className="text-xs leading-5 text-amber-700 sm:text-right">
+                            {createDisabledMessage}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="p-4 sm:p-5">
+                  {visibleClassProjects.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {visibleClassProjects.map(project => (
+                        <ProjectCard
+                          key={project.id}
+                          project={project}
+                          editingId={editingId}
+                          editingName={editingName}
+                          showOwner={false}
+                          canEditProject={canEditProject}
+                          onEditStart={handleEditStart}
+                          onEditSave={handleEditSave}
+                          onEditCancel={handleEditCancel}
+                          onEditNameChange={setEditingName}
+                          onDelete={handleDelete}
+                          onPrefetch={prefetchProjectWorkspaceRoutes}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-4 py-7 text-center text-sm text-gray-400">
+                      {allClassProjects.length > 0
+                        ? "這個班級沒有符合目前搜尋的相本"
+                        : currentAssignment?.duty === "lead"
+                          ? "尚未建立本班相本，請從上方建立新一期"
+                          : "本班尚未建立相本；由主教建立後，所有當班老師都可直接製作"}
+                    </div>
+                  )}
+                </div>
+              </Surface>
+            );
+          })}
+
+          {canViewReports && supervisorOnlyProjects.length > 0 && (
+            <section className="space-y-3">
+              <div>
+                <h2 className="font-semibold text-gray-800">主管檢視範圍</h2>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  以下相本來自你的校／部門主管範圍；只有同時列入該班老師編制的相本可以製作。
+                </p>
+              </div>
+              {visibleSupervisorOnlyProjects.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {visibleSupervisorOnlyProjects.map(project => (
+                    <ProjectCard
+                      key={project.id}
+                      project={project}
+                      editingId={editingId}
+                      editingName={editingName}
+                      showOwner={showOwner}
+                      canEditProject={canEditProject}
+                      onEditStart={handleEditStart}
+                      onEditSave={handleEditSave}
+                      onEditCancel={handleEditCancel}
+                      onEditNameChange={setEditingName}
+                      onDelete={handleDelete}
+                      onPrefetch={prefetchProjectWorkspaceRoutes}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-4 py-7 text-center text-sm text-gray-400">
+                  沒有符合目前搜尋的主管範圍相本
+                </div>
+              )}
+            </section>
+          )}
+
+        </div>
       ) : projects.length === 0 ? (
         /* 零專案的首次引導：說清楚整條路，而不是一行灰字 */
         <Surface className="mx-auto mt-4 max-w-2xl text-center" padding="lg">
           <div className="mb-3 text-4xl">🎨</div>
-          <h2 className="mb-1 text-lg font-bold text-gray-900">開始製作第一本班級相本</h2>
-          <p className="mb-6 text-sm text-gray-500">跟著三個步驟，就能做出每位孩子的個人化相本</p>
+          <h2 className="mb-1 text-lg font-bold text-gray-900">尚未建立班級相本</h2>
+          <p className="mb-6 text-sm text-gray-500">先在園所設定完成分校、班級、帶班老師與學生名單，再從班級建立相本。</p>
           <div className="mb-6 grid gap-3 text-left sm:grid-cols-3">
             {[
-              { step: 1, title: "建立專案", description: "選擇行政準備好的模板" },
-              { step: 2, title: "加入學生名單", description: "貼上全班名字，一行一位" },
-              { step: 3, title: "放照片、看預覽", description: "全班或逐位學生上傳照片" },
+              { step: 1, title: "設定班級", description: "安排分校、部門與班級" },
+              { step: 2, title: "安排人員", description: "設定帶班老師與目前學生" },
+              { step: 3, title: "建立相本", description: "從班級選模板建立新一期" },
             ].map(({ step, title, description }) => (
               <div key={step} className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
                 <div className="mb-1 flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
@@ -618,13 +919,13 @@ export default function ProjectList() {
               </div>
             ))}
           </div>
-          {canCreateProject ? (
-            <Button variant="primary" size="lg" onClick={() => setShowForm(true)}>
-              <Plus className="h-4 w-4" />
-              建立第一個專案
+          {isAdmin ? (
+            <Button as={Link} to="/admin/organization" variant="primary" size="lg">
+              <Building2 className="h-4 w-4" />
+              前往園所設定
             </Button>
           ) : (
-            <p className="text-sm text-gray-400">目前帳號沒有建立專案的權限，請聯絡管理員</p>
+            <p className="text-sm text-gray-400">班級相本會由園所設定中的班級與老師編制提供</p>
           )}
         </Surface>
       ) : filteredProjects.length === 0 ? (

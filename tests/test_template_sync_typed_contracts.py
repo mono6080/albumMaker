@@ -109,6 +109,32 @@ def test_project_label_index_coercion_collision_is_last_wins_and_orphans_previou
     }
 
 
+def test_non_integer_and_boolean_persisted_page_identities_become_orphans():
+    old_pages = [
+        TemplatePage(id=101, template_id=7, page_number=0, layout_json="{}"),
+    ]
+    boolean_id = {"template_page_id": True, "marker": "boolean-id"}
+    fractional_id = {"template_page_id": 101.5, "marker": "fractional-id"}
+    boolean_index = {"page_index": False, "marker": "boolean-index"}
+    fractional_index = {"page_index": 0.5, "marker": "fractional-index"}
+    valid = {"template_page_id": 101.0, "marker": "integral-float"}
+
+    entries, _, orphans = _student_entries_by_page_id(
+        [boolean_id, fractional_id, boolean_index, fractional_index, valid],
+        old_pages,
+        project_id=303,
+        student_id=404,
+    )
+
+    assert entries == {101: valid}
+    assert orphans == [
+        boolean_id,
+        fractional_id,
+        boolean_index,
+        fractional_index,
+    ]
+
+
 def test_prepare_plan_preserves_raw_project_and_student_json_byte_for_byte():
     init_db()
     raw_labels_json = ' {\n  "00" : {"label":"專案原文"}\n } '

@@ -5,6 +5,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { fetchMe, login as apiLogin, logout as apiLogout } from "../api/authApi";
+import { fetchMyClassrooms } from "../api/organizationApi";
 import {
   applyAndStoreUiFontScale,
   normalizeUiFontScale,
@@ -27,6 +28,8 @@ export function AuthProvider({ children }) {
   // loading：true 表示尚在向後端確認 Cookie session，避免閃爍跳轉
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
+  const organizationAccessUserId = currentUser?.id;
+  const organizationAccessRole = currentUser?.role;
 
   const applyAuthenticatedUser = useCallback((userData) => {
     const normalizedUser = normalizeUserPayload(userData);
@@ -73,6 +76,29 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     refreshSession();
   }, [refreshSession]);
+
+  useEffect(() => {
+    if (!organizationAccessUserId || !["teacher", "supervisor"].includes(organizationAccessRole)) {
+      return undefined;
+    }
+    let isActive = true;
+    fetchMyClassrooms()
+      .then((response) => {
+        if (!isActive) return;
+        setCurrentUser(previousUser => previousUser?.id === organizationAccessUserId
+          ? { ...previousUser, organization_permissions: response.data.permissions ?? {} }
+          : previousUser);
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setCurrentUser(previousUser => previousUser?.id === organizationAccessUserId
+          ? { ...previousUser, organization_permissions: {} }
+          : previousUser);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [organizationAccessRole, organizationAccessUserId]);
 
   useEffect(() => {
     const retryWhenOnline = () => {

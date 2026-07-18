@@ -3,7 +3,11 @@
 // 照片、對應文字、渲染及下載相關的 API 呼叫
 
 // 使用統一的 Cookie 認證 axios clients（含 401 interceptor）
-import { apiClient, renderClient } from "./authApi";
+import { apiClient, renderClient } from "./authApi.js";
+import {
+  buildStudentAlbumNameAutoFillPath,
+  buildStudentAlbumNamesAutoFillPath,
+} from "./urls.js";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 
@@ -14,18 +18,6 @@ export const fetchAllProjects = () =>
 /** 取得 30 天內可復原的封存專案 */
 export const fetchArchivedProjects = () =>
   apiClient.get("/projects/archive");
-
-/** 建立新專案 */
-export const createProject = (projectName, templateId, department, templatePeriodId) =>
-  apiClient.post(
-    "/projects/",
-    new URLSearchParams(Object.fromEntries(Object.entries({
-      name: projectName,
-      template_id: templateId,
-      department,
-      template_period_id: templatePeriodId,
-    }).filter(([, value]) => value !== undefined && value !== null && value !== "")))
-  );
 
 /** 取得指定專案的完整資料（含所有學生） */
 export const fetchProject = (projectId) =>
@@ -55,26 +47,22 @@ export const completeProject = (projectId) =>
 export const reopenProject = (projectId) =>
   apiClient.post(`/projects/${projectId}/reopen`);
 
-// ── 學生管理 ──────────────────────────────────────────────────────────────────
+// ── 本期學生快照 ──────────────────────────────────────────────────────────────
 
-/** 批次新增多位學生（自動略過空白與重複名稱） */
-export const batchAddStudents = (projectId, studentNames) =>
-  apiClient.post(`/projects/${projectId}/students/batch`, studentNames);
+/** 僅替尚未設定相本稱呼的既有學生，自動填入可安全判斷的稱呼。 */
+export const autoFillStudentAlbumNames = (projectId) =>
+  apiClient.post(buildStudentAlbumNamesAutoFillPath(projectId));
 
-/** 從既有專案複製學生名單（含名冊連結），同名學生自動跳過 */
-export const copyStudentsFromProject = (projectId, sourceProjectId) =>
-  apiClient.post(`/projects/${projectId}/students/copy`, { source_project_id: sourceProjectId });
+/** 僅替指定且尚未設定相本稱呼的學生，自動填入可安全判斷的稱呼。 */
+export const autoFillStudentAlbumName = (projectId, studentId) =>
+  apiClient.post(buildStudentAlbumNameAutoFillPath(projectId, studentId));
 
-/** 更新學生姓名 */
-export const renameStudent = (projectId, studentId, newName) =>
+/** 更新相本內顯示的稱呼；空字串代表改回沿用完整姓名。 */
+export const updateStudentAlbumName = (projectId, studentId, albumName) =>
   apiClient.put(
-    `/projects/${projectId}/students/${studentId}`,
-    new URLSearchParams({ name: newName })
+    `/projects/${projectId}/students/${studentId}/album-name`,
+    { album_name: albumName?.trim() || null },
   );
-
-/** 刪除指定學生 */
-export const deleteStudent = (projectId, studentId) =>
-  apiClient.delete(`/projects/${projectId}/students/${studentId}`);
 
 /** 設定或取消學生某頁的跳過旗標 */
 export const setStudentPageSkip = (projectId, expectedTemplateRevision, studentId, pageIndex, skip) =>

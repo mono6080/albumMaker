@@ -7,6 +7,7 @@ import TextLabelFieldRow from "./TextLabelFieldRow";
 import { AutoSaveStatus } from "./ui";
 import { getLabelEntryAlign, getLabelEntryText } from "../utils/labelTextEntries";
 import { getFillableTextLabels } from "../utils/textLabelRoles";
+import { replaceStudentNameVariables } from "../utils/textVariables";
 
 export default function StudentTextPanel({
   activePage,
@@ -36,7 +37,7 @@ export default function StudentTextPanel({
               第 {activePage + 1} 頁文字
             </h3>
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
-              ({"{name}"} 自動代入姓名，清空會輸出空白)
+              ({"{name}"}=相本稱呼、{"{full_name}"}=完整姓名，清空會輸出空白)
             </span>
             <AutoSaveStatus status={saveStatus} className="ml-auto" />
           </div>
@@ -45,7 +46,7 @@ export default function StudentTextPanel({
               const projectEntry = projectLabelTexts[String(activePage)]?.[String(label.id)];
               const rawDefaultText =
                 getLabelEntryText(projectEntry, label.text ?? "");
-              const displayDefaultText = rawDefaultText.replace("{name}", student.name);
+              const displayDefaultText = replaceStudentNameVariables(rawDefaultText, student);
               const defaultAlign = getLabelEntryAlign(projectEntry, label.text_align ?? "center");
               const currentValue = getLabelText(activePage, label.id);
               const currentAlign = getLabelAlign(activePage, label.id, defaultAlign);

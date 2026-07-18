@@ -2,6 +2,7 @@
 # These tests exercise the real app wiring, auth cookie flow, and core route
 # contracts against the tmp SQLite database configured in conftest.py.
 
+import mimetypes
 import threading
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -13,8 +14,10 @@ from database import Project, SessionLocal
 from main import (
     FRONTEND_APP_CACHE_CONTROL,
     FRONTEND_ASSET_CACHE_CONTROL,
+    FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL,
     apply_frontend_cache_headers,
 )
+from services.project_archive_service import purge_expired_archived_projects
 from services.render_service import PRINT_OUTPUT_SIZE
 from starlette.responses import Response
 
@@ -22,6 +25,7 @@ from tests.helpers import (
     assert_status,
     count_non_whiteish_pixels,
     create_project,
+    create_project_for_owner,
     create_template_with_page,
     create_user,
     jpeg_bytes,
@@ -83,6 +87,13 @@ def test_frontend_static_cache_headers_policy():
     apply_frontend_cache_headers(asset_response, "/assets/index-a1b2c3.js")
     assert asset_response.headers["cache-control"] == FRONTEND_ASSET_CACHE_CONTROL
 
+    font_response = Response()
+    apply_frontend_cache_headers(font_response, "/fonts/NotoSansTC-VF.ttf")
+    assert (
+        font_response.headers["cache-control"]
+        == FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL
+    )
+
     shell_response = Response()
     apply_frontend_cache_headers(shell_response, "/projects/28/review")
     assert shell_response.headers["cache-control"] == FRONTEND_APP_CACHE_CONTROL
@@ -98,6 +109,32 @@ def test_frontend_static_cache_headers_policy():
     api_response.headers["Cache-Control"] = "no-store"
     apply_frontend_cache_headers(api_response, "/api/projects/1/preview/0")
     assert api_response.headers["cache-control"] == "no-store"
+
+
+def test_frontend_font_static_files_support_conditional_revalidation():
+    with started_client() as client:
+        font_response = client.get("/fonts/NotoSansTC-VF.woff2")
+        assert_status(font_response, 200)
+        assert font_response.headers["content-type"] == "font/woff2"
+        assert font_response.headers["cache-control"] == (
+            FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL
+        )
+        assert font_response.headers["etag"]
+
+        ttf_response = client.head("/fonts/NotoSansTC-VF.ttf")
+        assert_status(ttf_response, 200)
+        assert ttf_response.headers["content-type"] == "font/ttf"
+        assert mimetypes.guess_type("font.woff")[0] == "font/woff"
+
+        not_modified = client.get(
+            "/fonts/NotoSansTC-VF.woff2",
+            headers={"If-None-Match": font_response.headers["etag"]},
+        )
+        assert_status(not_modified, 304)
+        assert not_modified.content == b""
+        assert not_modified.headers["cache-control"] == (
+            FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL
+        )
 
 
 def test_template_project_student_and_text_contracts():
@@ -119,28 +156,25 @@ def test_template_project_student_and_text_contracts():
         assert template_detail.json()["photo_count"] == 1
         assert template_detail.json()["pages"][0]["layout"]["text_labels"][0]["id"] == 1
 
-        project_id = create_project(client, template_id)
+        project_id = create_project(
+            client,
+            template_id,
+            student_names=["Alice", "Bob"],
+        )
         project_list = client.get("/api/projects/")
         assert_status(project_list, 200)
-        assert any(project["id"] == project_id and project["student_count"] == 0 for project in project_list.json())
-
-        batch_response = client.post(
-            f"/api/projects/{project_id}/students/batch",
-            json=[" Alice ", "Bob", "Alice", ""],
-        )
-        assert_status(batch_response, 200)
-        assert batch_response.json() == {"created": ["Alice", "Bob"], "skipped": ["Alice"]}
+        assert any(project["id"] == project_id and project["student_count"] == 2 for project in project_list.json())
 
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
         students_by_name = {student["name"]: student for student in detail.json()["students"]}
         student_id = students_by_name["Alice"]["id"]
 
-        rename_student = client.put(
-            f"/api/projects/{project_id}/students/{student_id}",
-            data={"name": "Alice Chen"},
+        update_album_name = client.put(
+            f"/api/projects/{project_id}/students/{student_id}/album-name",
+            json={"album_name": "Alice Chen"},
         )
-        assert_status(rename_student, 200)
+        assert_status(update_album_name, 200)
 
         skip_response = client.patch(
             revisioned_project_url(
@@ -186,72 +220,43 @@ def test_template_project_student_and_text_contracts():
         assert_status(final_detail, 200)
         final_payload = final_detail.json()
         assert final_payload["label_texts"] == project_label_texts
-        renamed_student = next(student for student in final_payload["students"] if student["id"] == student_id)
-        assert renamed_student["name"] == "Alice Chen"
-        assert renamed_student["pages_data"][0]["skip"] is True
-        assert renamed_student["pages_data"][0]["label_texts"] == {"1": "Batch label text"}
+        updated_student = next(student for student in final_payload["students"] if student["id"] == student_id)
+        assert updated_student["name"] == "Alice"
+        assert updated_student["album_name"] == "Alice Chen"
+        assert updated_student["pages_data"][0]["skip"] is True
+        assert updated_student["pages_data"][0]["label_texts"] == {"1": "Batch label text"}
 
 
-def test_user_management_allows_multiple_teacher_supervisors():
+def test_user_management_keeps_organization_scope_out_of_user_payloads():
     with started_client() as client:
         login(client)
-        first_supervisor, _ = create_user(client, "supervisor")
-        second_supervisor, _ = create_user(client, "supervisor")
-        teacher, _ = create_user(
-            client,
-            "teacher",
-            supervisor_ids=[first_supervisor["id"], second_supervisor["id"]],
-        )
-
-        assert teacher["supervisor_id"] == first_supervisor["id"]
-        assert teacher["supervisor_ids"] == [first_supervisor["id"], second_supervisor["id"]]
-        assert teacher["supervisor_names"] == [
-            first_supervisor["display_name"],
-            second_supervisor["display_name"],
-        ]
+        supervisor, _ = create_user(client, "supervisor")
+        teacher, _ = create_user(client, "teacher")
+        assert "supervisor_id" not in teacher
+        assert "supervisor_ids" not in teacher
 
         users_response = client.get("/api/users/")
         assert_status(users_response, 200)
         listed_teacher = next(user for user in users_response.json() if user["id"] == teacher["id"])
-        assert listed_teacher["supervisor_ids"] == [first_supervisor["id"], second_supervisor["id"]]
+        assert "supervisor_id" not in listed_teacher
+        assert "supervisor_ids" not in listed_teacher
 
-        third_supervisor, _ = create_user(client, "supervisor")
-        update_response = client.patch(
+        rejected_create = client.post(
+            "/api/users/",
+            json={
+                "username": unique_name("teacher"),
+                "display_name": "teacher user",
+                "password": "user-password-123",
+                "role": "teacher",
+                "supervisor_ids": [supervisor["id"]],
+            },
+        )
+        assert_status(rejected_create, 422)
+        rejected_update = client.patch(
             f"/api/users/{teacher['id']}",
-            json={"supervisor_ids": [second_supervisor["id"], third_supervisor["id"]]},
+            json={"supervisor_id": supervisor["id"]},
         )
-        assert_status(update_response, 200)
-        updated_teacher = update_response.json()
-        assert updated_teacher["supervisor_id"] == second_supervisor["id"]
-        assert updated_teacher["supervisor_ids"] == [second_supervisor["id"], third_supervisor["id"]]
-
-        legacy_update = client.patch(
-            f"/api/users/{teacher['id']}",
-            json={"supervisor_id": first_supervisor["id"]},
-        )
-        assert_status(legacy_update, 200)
-        assert legacy_update.json()["supervisor_ids"] == [first_supervisor["id"]]
-
-        invalid_supervisor = client.patch(
-            f"/api/users/{teacher['id']}",
-            json={"supervisor_ids": [teacher["id"]]},
-        )
-        assert_status(invalid_supervisor, 400)
-
-        restore_multiple = client.patch(
-            f"/api/users/{teacher['id']}",
-            json={"supervisor_ids": [first_supervisor["id"], second_supervisor["id"]]},
-        )
-        assert_status(restore_multiple, 200)
-        demote_first_supervisor = client.patch(
-            f"/api/users/{first_supervisor['id']}",
-            json={"role": "none"},
-        )
-        assert_status(demote_first_supervisor, 200)
-        after_demote_users = client.get("/api/users/")
-        assert_status(after_demote_users, 200)
-        teacher_after_demote = next(user for user in after_demote_users.json() if user["id"] == teacher["id"])
-        assert teacher_after_demote["supervisor_ids"] == [second_supervisor["id"]]
+        assert_status(rejected_update, 422)
 
 
 def test_project_delete_archives_and_restore_recovers(monkeypatch, tmp_path):
@@ -259,10 +264,11 @@ def test_project_delete_archives_and_restore_recovers(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("archive_project"))
-        assert_status(
-            client.post(f"/api/projects/{project_id}/students/batch", json=["Archived Student"]),
-            200,
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("archive_project"),
+            student_names=["Archived Student"],
         )
         project_detail = client.get(f"/api/projects/{project_id}")
         assert_status(project_detail, 200)
@@ -317,6 +323,13 @@ def test_project_delete_archives_and_restore_recovers(monkeypatch, tmp_path):
         expired_archive = client.get("/api/projects/archive")
         assert_status(expired_archive, 200)
         assert project_id not in {project["id"] for project in expired_archive.json()}
+        assert project_storage_dir.exists()
+        db = SessionLocal()
+        try:
+            assert db.query(Project).filter(Project.id == project_id).first() is not None
+            assert purge_expired_archived_projects(db) == [project_id]
+        finally:
+            db.close()
         assert not project_storage_dir.exists()
         db = SessionLocal()
         try:
@@ -333,15 +346,15 @@ def test_admin_can_import_users_from_excel():
         login(client)
         supervisor_username = unique_name("bulk_supervisor")
         teacher_username = unique_name("bulk_teacher")
-        bad_teacher_username = unique_name("bad_teacher")
+        invalid_role_username = unique_name("invalid_role")
 
         excel_payload = workbook_bytes([
-            ["帳號", "顯示名稱", "初始密碼", "角色", "主管帳號"],
-            [supervisor_username, "匯入主管", "supervisor-pass", "主管", ""],
-            [teacher_username, "匯入老師", "teacher-pass", "帶班老師", supervisor_username],
-            ["admin", "Existing Admin", "password", "管理員", ""],
-            [supervisor_username, "Duplicate Supervisor", "password", "主管", ""],
-            [bad_teacher_username, "錯誤老師", "teacher-pass", "老師", "missing_supervisor"],
+            ["帳號", "顯示名稱", "初始密碼", "角色"],
+            [supervisor_username, "匯入主管", "supervisor-pass", "主管"],
+            [teacher_username, "匯入老師", "teacher-pass", "帶班老師"],
+            ["admin", "Existing Admin", "password", "管理員"],
+            [supervisor_username, "Duplicate Supervisor", "password", "主管"],
+            [invalid_role_username, "錯誤角色", "teacher-pass", "不存在角色"],
         ])
 
         response = client.post(
@@ -360,8 +373,8 @@ def test_admin_can_import_users_from_excel():
         assert payload["skipped_count"] == 2
         assert payload["error_count"] == 1
         assert {item["username"] for item in payload["skipped"]} == {"admin", supervisor_username}
-        assert payload["errors"][0]["username"] == bad_teacher_username
-        assert "找不到主管" in payload["errors"][0]["error"]
+        assert payload["errors"][0]["username"] == invalid_role_username
+        assert "無效角色" in payload["errors"][0]["error"]
 
         users_response = client.get("/api/users/")
         assert_status(users_response, 200)
@@ -370,7 +383,7 @@ def test_admin_can_import_users_from_excel():
         teacher = users_by_username[teacher_username]
         assert supervisor["role"] == "supervisor"
         assert teacher["role"] == "teacher"
-        assert teacher["supervisor_ids"] == [supervisor["id"]]
+        assert "supervisor_ids" not in teacher
 
         client.cookies.clear()
         login_payload = login(client, teacher_username, "teacher-pass")
@@ -436,24 +449,33 @@ def test_role_access_and_none_login_contracts():
 
         supervisor, supervisor_password = create_user(client, "supervisor")
         second_supervisor, second_supervisor_password = create_user(client, "supervisor")
-        teacher, teacher_password = create_user(
-            client,
-            "teacher",
-            supervisor_ids=[supervisor["id"], second_supervisor["id"]],
-        )
-        assign_supervisor_to_supervisor = client.patch(
-            f"/api/users/{supervisor['id']}",
-            json={"supervisor_ids": [second_supervisor["id"]]},
-        )
-        assert_status(assign_supervisor_to_supervisor, 200)
-        assert assign_supervisor_to_supervisor.json()["supervisor_ids"] == [second_supervisor["id"]]
-        self_supervision = client.patch(
-            f"/api/users/{supervisor['id']}",
-            json={"supervisor_ids": [supervisor["id"]]},
-        )
-        assert_status(self_supervision, 400)
+        teacher, teacher_password = create_user(client, "teacher")
         art_team, art_team_password = create_user(client, "art_team")
         none_user, none_password = create_user(client, "none")
+        teacher_project_id = create_project_for_owner(
+            client,
+            template_id,
+            teacher["id"],
+            name=unique_name("teacher_project"),
+        )
+
+        db = SessionLocal()
+        try:
+            teacher_project = db.get(Project, teacher_project_id)
+            campus_id = teacher_project.classroom.campus_id
+        finally:
+            db.close()
+        supervisor_scope = client.put(
+            f"/api/organization/campuses/{campus_id}/supervisors",
+            json={
+                "campus_supervisor_ids": [supervisor["id"], second_supervisor["id"]],
+                "department_supervisors": [
+                    {"department": "infant", "supervisor_ids": []},
+                    {"department": "academy", "supervisor_ids": []},
+                ],
+            },
+        )
+        assert_status(supervisor_scope, 200)
 
         client.cookies.clear()
         none_login = client.post(
@@ -464,7 +486,11 @@ def test_role_access_and_none_login_contracts():
         assert not client.cookies.get("access_token")
 
         login(client, teacher["username"], teacher_password)
-        teacher_project_id = create_project(client, template_id, name=unique_name("teacher_project"))
+        teacher_generic_create = client.post(
+            "/api/projects/",
+            data={"name": unique_name("teacher_project"), "template_id": template_id},
+        )
+        assert_status(teacher_generic_create, 405)
 
         teacher_projects = client.get("/api/projects/")
         assert_status(teacher_projects, 200)
@@ -490,17 +516,6 @@ def test_role_access_and_none_login_contracts():
         assert_status(supervisor_reads_teacher, 200)
         supervisor_writes_teacher = client.patch(f"/api/projects/{teacher_project_id}", data={"name": "blocked"})
         assert_status(supervisor_writes_teacher, 403)
-        supervisor_own_project_id = create_project(client, template_id, name=unique_name("supervisor_project"))
-        supervisor_writes_own = client.patch(
-            f"/api/projects/{supervisor_own_project_id}",
-            data={"name": "supervisor updated"},
-        )
-        assert_status(supervisor_writes_own, 200)
-        supervisor_adds_own_students = client.post(
-            f"/api/projects/{supervisor_own_project_id}/students/batch",
-            json=["Supervisor Student"],
-        )
-        assert_status(supervisor_adds_own_students, 200)
 
         client.cookies.clear()
         login(client, second_supervisor["username"], second_supervisor_password)
@@ -508,25 +523,8 @@ def test_role_access_and_none_login_contracts():
         assert_status(second_supervisor_projects, 200)
         second_supervisor_project_ids = {project["id"] for project in second_supervisor_projects.json()}
         assert teacher_project_id in second_supervisor_project_ids
-        assert supervisor_own_project_id in second_supervisor_project_ids
         second_supervisor_reads_teacher = client.get(f"/api/projects/{teacher_project_id}")
         assert_status(second_supervisor_reads_teacher, 200)
-        second_supervisor_reads_supervisor_project = client.get(f"/api/projects/{supervisor_own_project_id}")
-        assert_status(second_supervisor_reads_supervisor_project, 200)
-        second_supervisor_writes_supervisor_project = client.patch(
-            f"/api/projects/{supervisor_own_project_id}",
-            data={"name": "blocked"},
-        )
-        assert_status(second_supervisor_writes_supervisor_project, 403)
-
-        client.cookies.clear()
-        login(client, teacher["username"], teacher_password)
-        teacher_projects_after_supervisor_create = client.get("/api/projects/")
-        assert_status(teacher_projects_after_supervisor_create, 200)
-        teacher_project_ids_after_supervisor_create = {
-            project["id"] for project in teacher_projects_after_supervisor_create.json()
-        }
-        assert supervisor_own_project_id not in teacher_project_ids_after_supervisor_create
 
         client.cookies.clear()
         login(client, art_team["username"], art_team_password)
@@ -536,7 +534,7 @@ def test_role_access_and_none_login_contracts():
             "/api/projects/",
             data={"name": unique_name("art_project"), "template_id": template_id},
         )
-        assert_status(art_project, 403)
+        assert_status(art_project, 405)
         art_reads_admin = client.get(f"/api/projects/{admin_project_id}")
         assert_status(art_reads_admin, 200)
         art_writes_admin = client.patch(f"/api/projects/{admin_project_id}", data={"name": "blocked"})
@@ -557,24 +555,30 @@ def test_preview_endpoints_require_auth():
         login(client)
         template_preview = client.get(f"/api/templates/{template_id}/pages/{page_id}/preview")
         assert_status(template_preview, 200)
-        assert template_preview.headers["content-type"].startswith("image/jpeg")
+        assert template_preview.headers["content-type"].startswith("image/png")
         assert "no-store" in template_preview.headers["cache-control"]
-        assert template_preview.content.startswith(b"\xff\xd8")
+        assert template_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+        with Image.open(BytesIO(template_preview.content)) as preview_image:
+            assert preview_image.format == "PNG"
 
         spread_preview = client.get(f"/api/templates/{template_id}/spread-preview/0")
         assert_status(spread_preview, 200)
-        assert spread_preview.headers["content-type"].startswith("image/jpeg")
+        assert spread_preview.headers["content-type"].startswith("image/png")
         assert "no-store" in spread_preview.headers["cache-control"]
-        assert spread_preview.content.startswith(b"\xff\xd8")
+        assert spread_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
         with Image.open(BytesIO(spread_preview.content)) as spread_image:
+            assert spread_image.format == "PNG"
             assert spread_image.size == (1588, 1123)
 
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)
-        assert project_preview.headers["content-type"].startswith("image/jpeg")
+        assert project_preview.headers["content-type"].startswith("image/png")
         assert "private" in project_preview.headers["cache-control"]
-        assert "max-age" in project_preview.headers["cache-control"]
-        assert project_preview.content.startswith(b"\xff\xd8")
+        assert "no-cache" in project_preview.headers["cache-control"]
+        assert project_preview.headers["etag"]
+        assert project_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+        with Image.open(BytesIO(project_preview.content)) as preview_image:
+            assert preview_image.format == "PNG"
 
 
 def test_student_editor_endpoint_only_returns_current_student_pages(monkeypatch, tmp_path):
@@ -582,10 +586,11 @@ def test_student_editor_endpoint_only_returns_current_student_pages(monkeypatch,
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("student_editor"))
-        assert_status(
-            client.post(f"/api/projects/{project_id}/students/batch", json=["Current", "Sibling"]),
-            200,
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("student_editor"),
+            student_names=["Current", "Sibling"],
         )
         detail = client.get(f"/api/projects/{project_id}").json()
         current = detail["students"][0]
@@ -737,11 +742,53 @@ def test_template_periods_and_copy_template_contract(monkeypatch, tmp_path):
         assert_status(unavailable, 200)
         assert draft_template_id not in {template["id"] for template in unavailable.json()}
 
-        draft_project = client.post(
-            "/api/projects/",
-            data={"name": unique_name("draft_project"), "template_id": str(draft_template_id)},
+        lead_teacher, _ = create_user(client, "teacher")
+        campus_response = client.post(
+            "/api/organization/campuses",
+            json={"name": unique_name("draft-campus"), "is_active": True},
         )
-        assert_status(draft_project, 400)
+        assert_status(campus_response, 201)
+        classroom_response = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_response.json()["id"],
+                "department": "academy",
+                "name": unique_name("draft-classroom"),
+                "is_active": True,
+            },
+        )
+        assert_status(classroom_response, 201)
+        classroom_id = classroom_response.json()["id"]
+        assert_status(
+            client.put(
+                f"/api/organization/classrooms/{classroom_id}/teachers",
+                json={
+                    "teachers": [
+                        {"teacher_id": lead_teacher["id"], "duty": "lead"}
+                    ]
+                },
+            ),
+            200,
+        )
+        overview_response = client.get("/api/organization/overview")
+        assert_status(overview_response, 200)
+        active_work_slot_id = next(
+            work_slot["id"]
+            for work_slot in overview_response.json()["work_slots"]
+            if work_slot["classroom_id"] == classroom_id
+            and work_slot["can_create_project"]
+        )
+        draft_project = client.post(
+            f"/api/organization/classrooms/{classroom_id}/projects",
+            json={
+                "name": unique_name("draft_project"),
+                "template_id": draft_template_id,
+                "work_slot_id": active_work_slot_id,
+                "owner_id": lead_teacher["id"],
+            },
+        )
+        assert_status(draft_project, 422)
+        assert draft_project.json()["detail"]["code"] == "work_slot_period_mismatch"
 
         source_template_id, source_page_id = create_template_with_page(client, name=unique_name("copy_source"))
         background_upload = client.post(
@@ -808,10 +855,12 @@ def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_pat
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("shared_photo_project"))
-
-        batch_response = client.post(f"/api/projects/{project_id}/students/batch", json=["Ava", "Ben"])
-        assert_status(batch_response, 200)
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("shared_photo_project"),
+            student_names=["Ava", "Ben"],
+        )
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
         student_ids = [student["id"] for student in detail.json()["students"]]
@@ -884,12 +933,11 @@ def test_hidden_group_photo_slot_is_not_counted_or_writable(monkeypatch, tmp_pat
         assert_status(refreshed_detail, 200)
         assert refreshed_detail.json()["photo_count"] == 1
 
-        project_id = create_project(client, template_id)
-        batch_response = client.post(
-            f"/api/projects/{project_id}/students/batch",
-            json=["Hidden Slot Student"],
+        project_id = create_project(
+            client,
+            template_id,
+            student_names=["Hidden Slot Student"],
         )
-        assert_status(batch_response, 200)
         project_detail = client.get(f"/api/projects/{project_id}")
         assert_status(project_detail, 200)
         student_id = project_detail.json()["students"][0]["id"]
@@ -934,8 +982,7 @@ def test_project_comments_contracts():
         assert_status(empty_comment, 400)
 
         art_team, art_team_password = create_user(client, "art_team")
-        supervisor, _ = create_user(client, "supervisor")
-        teacher, teacher_password = create_user(client, "teacher", supervisor_id=supervisor["id"])
+        teacher, teacher_password = create_user(client, "teacher")
 
         client.cookies.clear()
         login(client, teacher["username"], teacher_password)
@@ -968,10 +1015,12 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client, photo_slot_count=2)
-        project_id = create_project(client, template_id, name=unique_name("render_project"))
-
-        batch_response = client.post(f"/api/projects/{project_id}/students/batch", json=["Render Student"])
-        assert_status(batch_response, 200)
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("render_project"),
+            student_names=["Render Student"],
+        )
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
         student_id = detail.json()["students"][0]["id"]
@@ -995,9 +1044,11 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_preview, 200)
-        assert student_preview.headers["content-type"].startswith("image/jpeg")
+        assert student_preview.headers["content-type"].startswith("image/png")
+        assert student_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
         assert "private" in student_preview.headers["cache-control"]
-        assert "max-age" in student_preview.headers["cache-control"]
+        assert "no-cache" in student_preview.headers["cache-control"]
+        assert student_preview.headers["etag"]
 
         stale_student_default = client.put(
             revisioned_project_url(client, project_id, f"/api/projects/{project_id}/batch/texts"),
@@ -1014,11 +1065,14 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         project_blank_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview, 200)
         assert "private" in project_blank_preview.headers["cache-control"]
-        assert "max-age" in project_blank_preview.headers["cache-control"]
+        assert "no-cache" in project_blank_preview.headers["cache-control"]
         assert project_blank_preview.headers["x-preview-cache"] == "MISS"
+        assert project_blank_preview.headers["etag"]
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
+        assert project_preview_key.endswith(".png")
         assert (tmp_path / "uploads" / project_preview_key).exists()
         with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
+            assert preview_image.format == "PNG"
             assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,
@@ -1027,17 +1081,30 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         project_blank_preview_cached = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_blank_preview_cached, 200)
-        assert "max-age" in project_blank_preview_cached.headers["cache-control"]
+        assert "no-cache" in project_blank_preview_cached.headers["cache-control"]
         assert project_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert project_blank_preview_cached.content == project_blank_preview.content
+        project_blank_preview_not_modified = client.get(
+            f"/api/projects/{project_id}/preview/0",
+            headers={"If-None-Match": project_blank_preview.headers["etag"]},
+        )
+        assert_status(project_blank_preview_not_modified, 304)
+        assert project_blank_preview_not_modified.content == b""
+        assert (
+            project_blank_preview_not_modified.headers["etag"]
+            == project_blank_preview.headers["etag"]
+        )
 
         student_blank_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview, 200)
-        assert "max-age" in student_blank_preview.headers["cache-control"]
+        assert "no-cache" in student_blank_preview.headers["cache-control"]
         assert student_blank_preview.headers["x-preview-cache"] == "MISS"
+        assert student_blank_preview.headers["etag"]
         student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
+        assert student_preview_key.endswith(".png")
         assert (tmp_path / "uploads" / student_preview_key).exists()
         with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
+            assert preview_image.format == "PNG"
             assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,
@@ -1046,9 +1113,15 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         student_blank_preview_cached = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_blank_preview_cached, 200)
-        assert "max-age" in student_blank_preview_cached.headers["cache-control"]
+        assert "no-cache" in student_blank_preview_cached.headers["cache-control"]
         assert student_blank_preview_cached.headers["x-preview-cache"] == "HIT"
         assert student_blank_preview_cached.content == student_blank_preview.content
+        student_blank_preview_not_modified = client.get(
+            f"/api/projects/{project_id}/students/{student_id}/preview/0",
+            headers={"If-None-Match": student_blank_preview.headers["etag"]},
+        )
+        assert_status(student_blank_preview_not_modified, 304)
+        assert student_blank_preview_not_modified.content == b""
 
         render_response = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
         assert_status(render_response, 200)
@@ -1113,7 +1186,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)
         assert render_all.json()["errors"] == []
-        assert render_all.json()["rendered"][0]["student"] == "Render Student"
+        assert render_all.json()["rendered"][0]["student"] == "RenderStudent"
 
         download_all = client.get(f"/api/projects/{project_id}/download/all?mode=screen")
         assert_status(download_all, 200)
@@ -1173,12 +1246,12 @@ def test_preview_cache_survives_other_student_edits(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("cache_scope"))
-
-        batch_response = client.post(
-            f"/api/projects/{project_id}/students/batch", json=["Cache A", "Cache B"]
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("cache_scope"),
+            student_names=["Cache A", "Cache B"],
         )
-        assert_status(batch_response, 200)
         detail = client.get(f"/api/projects/{project_id}")
         student_a, student_b = [s["id"] for s in detail.json()["students"]]
 
@@ -1236,8 +1309,12 @@ def test_concurrent_photo_and_text_writes_do_not_clobber(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("race_project"))
-        assert_status(client.post(f"/api/projects/{project_id}/students/batch", json=["Race Student"]), 200)
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("race_project"),
+            student_names=["Race Student"],
+        )
         student_id = client.get(f"/api/projects/{project_id}").json()["students"][0]["id"]
 
         request_errors = []

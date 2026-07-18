@@ -1,33 +1,48 @@
-# 老師進度總覽服務
-# 主管/管理者檢視範圍內每位老師的各期專案完成度（照片填格、空白文字格），
-# 以及對應的 Excel 匯出（摘要 + 明細）
+"""正式學期的班級 × 期別老師進度與 Excel 匯出。"""
 
 import io
 import json
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from database import User
+from database import (
+    AcademicTerm,
+    AcademicTermClassroom,
+    AcademicTermClassroomTeacher,
+    AcademicTermPeriod,
+    ClassPeriodWorkSlot,
+    Project,
+)
 from services.label_texts import (
     get_label_entry_text,
     merge_project_label_texts_into_pages,
 )
 from services.layout_group_traversal import iter_layout_render_elements
-from services.semester_export_service import load_export_periods, load_export_projects
+from services.organization_scope_service import (
+    OrganizationReadScope,
+    REPORTING_TERM_STATUSES,
+    apply_term_classroom_report_scope,
+    load_reporting_term_or_404,
+)
+from services.semester_export_service import (
+    load_output_keys_by_project,
+    student_pdf_key,
+)
+from services.storage_factory import get_storage
 from services.student_render_service import get_template_page_layouts
 
 
 def _summarize_student_progress(
-    pages_data: list, page_layouts: list[dict], project_label_texts: dict
+    pages_data: list,
+    page_layouts: list[dict],
+    project_label_texts: dict,
 ) -> tuple[int, int, int]:
-    """單一學生的（照片已填格數, 照片總格數, 空白輸出文字格數）；略過 skip 頁。
-
-    空白輸出＝依「學生覆寫 > 專案覆寫 > 模板預設」合併後渲染會是空白的文字格
-    （含刻意設為空白），供主管抽查用。
-    """
-    # 「有效文字」走與渲染完全相同的合併機器（學生>專案，含 legacy 覆寫清理）：
-    # 自己重推優先序會與渲染分歧（例如 legacy 學生覆寫＋專案刻意空白時判錯）
-    merged_pages = merge_project_label_texts_into_pages(pages_data, project_label_texts, page_layouts)
+    """回傳單一學生的照片已填、照片總格及空白輸出文字格。"""
+    merged_pages = merge_project_label_texts_into_pages(
+        pages_data,
+        project_label_texts,
+        page_layouts,
+    )
     merged_by_index = {
         page_data.get("page_index"): page_data
         for page_data in merged_pages
@@ -51,158 +66,536 @@ def _summarize_student_progress(
                 continue
             if element_type != "text":
                 continue
-            text_label = element
-            label_id = str(text_label.get("id"))
+            label_id = str(element.get("id"))
             effective_text = get_label_entry_text(merged_label_texts.get(label_id))
             if effective_text is None:
-                # 未覆寫時 fallback 模板預設（與 render_text_label 相同）
-                effective_text = text_label.get("text")
+                effective_text = element.get("text")
             if not str(effective_text or "").strip():
                 blank_text_count += 1
     return photo_filled_count, photo_total_count, blank_text_count
 
 
-def build_teacher_progress_overview(
-    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+def _serialize_term_period(term_period: AcademicTermPeriod) -> dict:
+    return {
+        "id": term_period.template_period_id,
+        "term_period_id": term_period.id,
+        "template_period_id": term_period.template_period_id,
+        "name": term_period.period_name_snapshot,
+        "department": term_period.department,
+        "position": term_period.position,
+    }
+
+
+def _serialize_term(term: AcademicTerm) -> dict:
+    return {
+        "id": term.id,
+        "label": term.label,
+        "status": term.status,
+        "is_current": term.status in {"imported", "active"},
+        "starts_on": term.starts_on.isoformat() if term.starts_on else None,
+        "ends_on": term.ends_on.isoformat() if term.ends_on else None,
+    }
+
+
+def list_reporting_terms(
+    db: Session,
+    organization_scope: OrganizationReadScope,
 ) -> dict:
-    """老師進度總覽：範圍內每位可帶班使用者（含尚未建專案者）的各期專案與完成度。
-
-    owner_user_ids 給定時只列這些使用者（主管檢視管轄老師）。
-    尚未建立任何專案的老師以空 projects 呈現——這正是主管追進度要看的對象。
-    """
-    periods = load_export_periods(db, period_ids)
-    projects = load_export_projects(db, period_ids, owner_user_ids)
-
-    listed_users_query = db.query(User).filter(User.role.in_(("teacher", "supervisor")))
-    if owner_user_ids is not None:
-        listed_users_query = listed_users_query.filter(User.id.in_(owner_user_ids))
-    teacher_groups: dict = {}
-    for listed_user in listed_users_query.all():
-        teacher_groups[listed_user.id] = {
-            "user_id": listed_user.id,
-            "display_name": listed_user.display_name,
-            "projects": [],
-        }
-
-    # 版型逐模板讀一次；owner 是 admin（過繼）或未指定時補一組群組
-    layouts_by_template: dict[int, list[dict]] = {}
-    for project in projects:
-        if project.template_id not in layouts_by_template:
-            layouts_by_template[project.template_id] = get_template_page_layouts(project)
-        page_layouts = layouts_by_template[project.template_id]
-        try:
-            project_label_texts = json.loads(project.label_texts_json or "{}")
-        except ValueError:
-            project_label_texts = {}
-
-        owner_display_name = project.owner.display_name if project.owner else "（未指定老師）"
-        group_key = project.owner_id if project.owner_id is not None else f"name:{owner_display_name}"
-        teacher_group = teacher_groups.setdefault(group_key, {
-            "user_id": project.owner_id,
-            "display_name": owner_display_name,
-            "projects": [],
+    """列出目前主管 scope 有學期班級的正式學期；admin 看全部。"""
+    query = (
+        db.query(AcademicTerm)
+        .options(selectinload(AcademicTerm.periods))
+        .filter(
+            AcademicTerm.status.in_(REPORTING_TERM_STATUSES),
+            AcademicTerm.periods.any(),
+        )
+    )
+    visible_departments_by_term: dict[int, set[str]] | None = None
+    if not organization_scope.is_admin:
+        scoped_department_rows = apply_term_classroom_report_scope(
+            db.query(
+                AcademicTermClassroom.academic_term_id,
+                AcademicTermClassroom.department,
+            ),
+            organization_scope,
+        ).distinct().all()
+        visible_departments_by_term = {}
+        for academic_term_id, department in scoped_department_rows:
+            visible_departments_by_term.setdefault(
+                academic_term_id,
+                set(),
+            ).add(department)
+        if not visible_departments_by_term:
+            return {"terms": []}
+        query = query.filter(
+            AcademicTerm.id.in_(tuple(visible_departments_by_term))
+        )
+    terms = query.order_by(AcademicTerm.created_at.desc(), AcademicTerm.id.desc()).all()
+    terms_payload = []
+    for term in terms:
+        visible_departments = (
+            None
+            if visible_departments_by_term is None
+            else visible_departments_by_term.get(term.id, set())
+        )
+        periods = [
+            _serialize_term_period(period)
+            for period in sorted(term.periods, key=lambda row: row.position)
+            if visible_departments is None
+            or period.department in visible_departments
+        ]
+        if not periods:
+            continue
+        terms_payload.append({
+            **_serialize_term(term),
+            "periods": periods,
         })
+    return {
+        "terms": terms_payload
+    }
 
-        students_payload = []
-        project_photo_filled = 0
-        project_photo_total = 0
-        project_blank_text_count = 0
-        for student in project.students:
-            try:
-                pages_data = json.loads(student.pages_data_json or "[]")
-            except ValueError:
-                pages_data = []
-            photo_filled, photo_total, blank_text_count = _summarize_student_progress(
-                pages_data if isinstance(pages_data, list) else [],
+
+def _load_report_classrooms(
+    db: Session,
+    academic_term_id: int,
+    organization_scope: OrganizationReadScope,
+    *,
+    department: str | None = None,
+    campus_id: int | None = None,
+    classroom_id: int | None = None,
+) -> list[AcademicTermClassroom]:
+    slot_loader = selectinload(AcademicTermClassroom.work_slots)
+    query = db.query(AcademicTermClassroom).options(
+        selectinload(AcademicTermClassroom.teachers),
+        slot_loader.selectinload(ClassPeriodWorkSlot.term_period),
+        slot_loader.selectinload(ClassPeriodWorkSlot.projects).selectinload(
+            Project.students
+        ),
+        slot_loader.selectinload(ClassPeriodWorkSlot.projects).selectinload(
+            Project.owner
+        ),
+        slot_loader.selectinload(ClassPeriodWorkSlot.projects).selectinload(
+            Project.template
+        ),
+    ).filter(AcademicTermClassroom.academic_term_id == academic_term_id)
+    query = apply_term_classroom_report_scope(query, organization_scope)
+    if department is not None:
+        query = query.filter(AcademicTermClassroom.department == department)
+    if campus_id is not None:
+        query = query.filter(AcademicTermClassroom.campus_id_snapshot == campus_id)
+    if classroom_id is not None:
+        query = query.filter(AcademicTermClassroom.classroom_id == classroom_id)
+    return query.order_by(
+        AcademicTermClassroom.campus_name_snapshot,
+        AcademicTermClassroom.classroom_name_snapshot,
+        AcademicTermClassroom.id,
+    ).all()
+
+
+def _parse_json_list(value: str | None) -> list:
+    try:
+        parsed = json.loads(value or "[]")
+    except ValueError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_dict(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _serialize_project_progress(
+    project: Project,
+    page_layouts: list[dict],
+    existing_output_keys: set[str],
+) -> dict:
+    project_label_texts = _parse_json_dict(project.label_texts_json)
+    students_payload = []
+    photo_filled = 0
+    photo_total = 0
+    blank_text_count = 0
+    pdf_ready_count = 0
+    for student in project.students:
+        student_photo_filled, student_photo_total, student_blank_text_count = (
+            _summarize_student_progress(
+                _parse_json_list(student.pages_data_json),
                 page_layouts,
                 project_label_texts,
             )
-            project_photo_filled += photo_filled
-            project_photo_total += photo_total
-            project_blank_text_count += blank_text_count
-            students_payload.append({
-                "student_id": student.id,
-                "student_name": student.name,
-                "photo_filled": photo_filled,
-                "photo_total": photo_total,
-                "blank_text_count": blank_text_count,
-            })
+        )
+        print_pdf_key = student_pdf_key(student, "print")
+        has_pdf = bool(print_pdf_key and print_pdf_key in existing_output_keys)
+        pdf_ready_count += int(has_pdf)
+        photo_filled += student_photo_filled
+        photo_total += student_photo_total
+        blank_text_count += student_blank_text_count
+        students_payload.append({
+            "student_id": student.id,
+            "student_name": student.name,
+            "photo_filled": student_photo_filled,
+            "photo_total": student_photo_total,
+            "blank_text_count": student_blank_text_count,
+            "has_pdf": has_pdf,
+        })
 
-        teacher_group["projects"].append({
-            "project_id": project.id,
-            "project_name": project.name,
-            "period_id": project.template_period_id,
-            "student_count": len(students_payload),
-            "photo_filled": project_photo_filled,
-            "photo_total": project_photo_total,
-            "blank_text_count": project_blank_text_count,
-            # 全班完成時間：非 NULL 代表老師已按下「全班完成」
-            "completed_at": project.completed_at.isoformat() if project.completed_at else None,
-            "students": students_payload,
+    student_count = len(students_payload)
+    content_status = (
+        "empty"
+        if student_count == 0
+        else "ready" if photo_filled == photo_total else "incomplete"
+    )
+    workflow_status = "submitted_locked" if project.completed_at else "working"
+    if student_count == 0 or pdf_ready_count == 0:
+        export_status = "missing"
+    elif pdf_ready_count == student_count:
+        export_status = "ready"
+    else:
+        export_status = "partial"
+
+    attention_codes = []
+    if content_status == "empty":
+        attention_codes.append("empty_project")
+    if project.completed_at and content_status == "incomplete":
+        attention_codes.append("submitted_with_missing_photos")
+    if export_status == "missing":
+        attention_codes.append("missing_print_pdf")
+    elif export_status == "partial":
+        attention_codes.append("partial_print_pdf")
+
+    return {
+        "project_id": project.id,
+        "project_name": project.name,
+        "owner_id": project.owner_id,
+        "owner_name": project.owner.display_name if project.owner else None,
+        "student_count": student_count,
+        "photo_filled": photo_filled,
+        "photo_total": photo_total,
+        "blank_text_count": blank_text_count,
+        "content_status": content_status,
+        "workflow_status": workflow_status,
+        "export_status": export_status,
+        "attention_codes": attention_codes,
+        "pdf_ready_count": pdf_ready_count,
+        "pdf_total_count": student_count,
+        "completed_at": (
+            project.completed_at.isoformat() if project.completed_at else None
+        ),
+        "students": students_payload,
+    }
+
+
+def _serialize_teacher(teacher: AcademicTermClassroomTeacher) -> dict:
+    return {
+        "user_id": teacher.teacher_id,
+        "display_name": teacher.teacher_name_snapshot,
+        "duty": teacher.duty,
+    }
+
+
+def build_teacher_progress_overview(
+    db: Session,
+    academic_term_id: int,
+    organization_scope: OrganizationReadScope,
+    *,
+    department: str | None = None,
+    campus_id: int | None = None,
+    classroom_id: int | None = None,
+) -> dict:
+    """以正式工作格建立班級 × 期別進度，不按 owner 複製工作。"""
+    term = load_reporting_term_or_404(
+        db,
+        academic_term_id,
+        organization_scope,
+    )
+    term_classrooms = _load_report_classrooms(
+        db,
+        academic_term_id,
+        organization_scope,
+        department=department,
+        campus_id=campus_id,
+        classroom_id=classroom_id,
+    )
+    report_periods = [
+        period
+        for period in sorted(term.periods, key=lambda row: row.position)
+        if department is None or period.department == department
+    ]
+    allowed_term_period_ids = {period.id for period in report_periods}
+    projects = [
+        project
+        for term_classroom in term_classrooms
+        for slot in term_classroom.work_slots
+        if slot.term_period_id in allowed_term_period_ids
+        for project in slot.projects
+        if project.deleted_at is None
+    ]
+    output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
+    layouts_by_template: dict[int, list[dict]] = {}
+
+    classrooms_payload = []
+    summary = {
+        "classroom_count": len(term_classrooms),
+        "slot_count": 0,
+        "not_created_slot_count": 0,
+        "archived_slot_count": 0,
+        "single_slot_count": 0,
+        "multiple_projects_slot_count": 0,
+        "project_count": 0,
+        "content_ready_project_count": 0,
+        "submitted_project_count": 0,
+        "export_ready_project_count": 0,
+        "attention_project_count": 0,
+    }
+    for term_classroom in term_classrooms:
+        slots_payload = []
+        for slot in sorted(
+            term_classroom.work_slots,
+            key=lambda row: (row.term_period.position, row.id),
+        ):
+            if slot.term_period_id not in allowed_term_period_ids:
+                continue
+            active_projects = [
+                project for project in slot.projects if project.deleted_at is None
+            ]
+            if not active_projects:
+                creation_status = "archived" if slot.started_at else "not_created"
+            elif len(active_projects) == 1:
+                creation_status = "single"
+            else:
+                creation_status = "multiple_projects"
+            projects_payload = []
+            for project in active_projects:
+                if project.template_id not in layouts_by_template:
+                    layouts_by_template[project.template_id] = (
+                        get_template_page_layouts(project)
+                    )
+                project_payload = _serialize_project_progress(
+                    project,
+                    layouts_by_template[project.template_id],
+                    output_keys_by_project.get(project.id, set()),
+                )
+                projects_payload.append(project_payload)
+                summary["project_count"] += 1
+                summary["content_ready_project_count"] += int(
+                    project_payload["content_status"] == "ready"
+                )
+                summary["submitted_project_count"] += int(
+                    project_payload["workflow_status"] == "submitted_locked"
+                )
+                summary["export_ready_project_count"] += int(
+                    project_payload["export_status"] == "ready"
+                )
+                summary["attention_project_count"] += int(
+                    bool(project_payload["attention_codes"])
+                )
+            summary["slot_count"] += 1
+            summary[f"{creation_status}_slot_count"] += 1
+            slots_payload.append({
+                "work_slot_id": slot.id,
+                "term_period_id": slot.term_period_id,
+                "period_id": slot.term_period.template_period_id,
+                "template_period_id": slot.term_period.template_period_id,
+                "period_name": slot.term_period.period_name_snapshot,
+                "position": slot.term_period.position,
+                "started_at": (
+                    slot.started_at.isoformat() if slot.started_at else None
+                ),
+                "creation_status": creation_status,
+                "projects": projects_payload,
+            })
+        classrooms_payload.append({
+            "term_classroom_id": term_classroom.id,
+            "classroom_id": term_classroom.classroom_id,
+            "campus_id": term_classroom.campus_id_snapshot,
+            "campus_name": term_classroom.campus_name_snapshot,
+            "classroom_name": term_classroom.classroom_name_snapshot,
+            "department": term_classroom.department,
+            "teachers": [
+                _serialize_teacher(teacher)
+                for teacher in sorted(
+                    term_classroom.teachers,
+                    key=lambda row: (row.duty != "lead", row.id),
+                )
+            ],
+            "slots": slots_payload,
         })
 
     return {
-        "periods": [
-            {"id": period.id, "name": period.name, "department": period.department}
-            for period in periods
-        ],
-        "teachers": sorted(teacher_groups.values(), key=lambda group: group["display_name"]),
+        "term": _serialize_term(term),
+        "periods": [_serialize_term_period(period) for period in report_periods],
+        "summary": summary,
+        "classrooms": classrooms_payload,
     }
 
 
 def build_teacher_overview_workbook(
-    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+    db: Session,
+    academic_term_id: int,
+    organization_scope: OrganizationReadScope,
+    *,
+    department: str | None = None,
+    campus_id: int | None = None,
+    classroom_id: int | None = None,
 ) -> bytes:
-    """產出老師進度 Excel：摘要（每師一列，含完成度）與明細（每生一列）兩張工作表。"""
+    """輸出與畫面同一資料來源的摘要、班級期別與學生明細。"""
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
-    overview = build_teacher_progress_overview(db, period_ids, owner_user_ids)
-    period_names = {period["id"]: period["name"] for period in overview["periods"]}
-
+    overview = build_teacher_progress_overview(
+        db,
+        academic_term_id,
+        organization_scope,
+        department=department,
+        campus_id=campus_id,
+        classroom_id=classroom_id,
+    )
     workbook = Workbook()
     header_font = Font(bold=True)
 
+    def excel_safe(value):
+        """避免使用者文字在 Excel 被解析為公式。"""
+        if not isinstance(value, str):
+            return value
+        if value.lstrip().startswith(("=", "+", "-", "@")):
+            return f"'{value}"
+        return value
+
+    def append_safe(sheet, values) -> None:
+        sheet.append([excel_safe(value) for value in values])
+
     summary_sheet = workbook.active
     summary_sheet.title = "摘要"
-    summary_sheet.append(["老師", "專案數", "已完成專案", "學生數", "照片已填/總格數", "空白文字格"])
-    for teacher_group in overview["teachers"]:
-        teacher_projects = teacher_group["projects"]
-        photo_filled = sum(project["photo_filled"] for project in teacher_projects)
-        photo_total = sum(project["photo_total"] for project in teacher_projects)
-        summary_sheet.append([
-            teacher_group["display_name"],
-            len(teacher_projects),
-            sum(1 for project in teacher_projects if project["completed_at"]),
-            sum(project["student_count"] for project in teacher_projects),
-            f"{photo_filled}/{photo_total}" if photo_total else ("—" if teacher_projects else "尚未開始"),
-            sum(project["blank_text_count"] for project in teacher_projects),
-        ])
+    append_safe(summary_sheet, ["項目", "數量"])
+    summary_labels = {
+        "classroom_count": "班級數",
+        "slot_count": "工作格數",
+        "not_created_slot_count": "未建立工作格",
+        "archived_slot_count": "已封存工作格",
+        "single_slot_count": "單一專案工作格",
+        "multiple_projects_slot_count": "多專案工作格",
+        "project_count": "專案數",
+        "content_ready_project_count": "照片內容已齊專案",
+        "submitted_project_count": "已交件鎖定專案",
+        "export_ready_project_count": "列印 PDF 已齊專案",
+        "attention_project_count": "需注意專案",
+    }
+    for summary_key, summary_label in summary_labels.items():
+        append_safe(
+            summary_sheet,
+            [summary_label, overview["summary"][summary_key]],
+        )
 
-    detail_sheet = workbook.create_sheet("明細")
-    detail_sheet.append(["老師", "期別", "專案（班級）", "學生", "照片已填", "照片總格", "空白文字格"])
-    for teacher_group in overview["teachers"]:
-        for project in teacher_group["projects"]:
-            for student in project["students"]:
-                detail_sheet.append([
-                    teacher_group["display_name"],
-                    period_names.get(project["period_id"], "?"),
-                    project["project_name"],
-                    student["student_name"],
-                    student["photo_filled"],
-                    student["photo_total"],
-                    student["blank_text_count"],
-                ])
+    slot_sheet = workbook.create_sheet("班級期別")
+    append_safe(slot_sheet, [
+        "分校",
+        "部門",
+        "班級",
+        "期別",
+        "主教",
+        "協同老師",
+        "建立狀態",
+        "專案數",
+        "負責人",
+        "工作流",
+        "相本學生數",
+        "照片已填",
+        "照片總格",
+        "內容狀態",
+        "空白文字格",
+        "PDF 已產生",
+        "PDF 總數",
+        "匯出狀態",
+        "異常",
+    ])
+    student_sheet = workbook.create_sheet("學生明細")
+    append_safe(student_sheet, [
+        "分校",
+        "部門",
+        "班級",
+        "期別",
+        "專案 ID",
+        "專案",
+        "負責人",
+        "學生",
+        "照片已填",
+        "照片總格",
+        "空白文字格",
+        "工作流",
+        "PDF 狀態",
+    ])
 
-    for sheet in (summary_sheet, detail_sheet):
+    for classroom in overview["classrooms"]:
+        lead_names = [
+            teacher["display_name"]
+            for teacher in classroom["teachers"]
+            if teacher["duty"] == "lead"
+        ]
+        co_teacher_names = [
+            teacher["display_name"]
+            for teacher in classroom["teachers"]
+            if teacher["duty"] == "co_teacher"
+        ]
+        for slot in classroom["slots"]:
+            projects = slot["projects"]
+            append_safe(slot_sheet, [
+                classroom["campus_name"],
+                classroom["department"],
+                classroom["classroom_name"],
+                slot["period_name"],
+                "、".join(lead_names),
+                "、".join(co_teacher_names),
+                slot["creation_status"],
+                len(projects),
+                "、".join(
+                    project["owner_name"] or "未指定" for project in projects
+                ),
+                "、".join(project["workflow_status"] for project in projects),
+                sum(project["student_count"] for project in projects),
+                sum(project["photo_filled"] for project in projects),
+                sum(project["photo_total"] for project in projects),
+                "、".join(project["content_status"] for project in projects),
+                sum(project["blank_text_count"] for project in projects),
+                sum(project["pdf_ready_count"] for project in projects),
+                sum(project["pdf_total_count"] for project in projects),
+                "、".join(project["export_status"] for project in projects),
+                "、".join(
+                    code
+                    for project in projects
+                    for code in project["attention_codes"]
+                ),
+            ])
+            for project in projects:
+                for student in project["students"]:
+                    append_safe(student_sheet, [
+                        classroom["campus_name"],
+                        classroom["department"],
+                        classroom["classroom_name"],
+                        slot["period_name"],
+                        project["project_id"],
+                        project["project_name"],
+                        project["owner_name"],
+                        student["student_name"],
+                        student["photo_filled"],
+                        student["photo_total"],
+                        student["blank_text_count"],
+                        project["workflow_status"],
+                        "ready" if student["has_pdf"] else "missing",
+                    ])
+
+    for sheet in workbook.worksheets:
         for cell in sheet[1]:
             cell.font = header_font
-        # 依內容粗略調整欄寬，避免中文擠成一團
         for column_cells in sheet.columns:
             max_length = max(len(str(cell.value or "")) for cell in column_cells)
-            sheet.column_dimensions[column_cells[0].column_letter].width = min(max_length * 2 + 4, 40)
+            sheet.column_dimensions[column_cells[0].column_letter].width = min(
+                max_length * 2 + 4,
+                40,
+            )
 
     output_buffer = io.BytesIO()
     workbook.save(output_buffer)
-    output_buffer.seek(0)
-    return output_buffer.read()
+    return output_buffer.getvalue()

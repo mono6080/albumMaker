@@ -33,7 +33,7 @@ const ProjectCard = memo(function ProjectCard({
   onPrefetch,
 }) {
   const isEditing = editingId === project.id;
-  const canEdit = canEditProject(project.owner_id);
+  const canEdit = canEditProject(project);
 
   return (
     <Surface
@@ -82,6 +82,13 @@ const ProjectCard = memo(function ProjectCard({
               </div>
             )}
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-0.5">
+              {(project.classroom_name_snapshot || project.classroom_name) && (
+                <Badge tone="info">
+                  {[project.campus_name_snapshot || project.campus_name, project.classroom_name_snapshot || project.classroom_name]
+                    .filter(Boolean)
+                    .join("／")}
+                </Badge>
+              )}
               <Users className="w-3 h-3" />
               {project.student_count} 位學生 · {new Date(project.created_at).toLocaleDateString("zh-TW")}
               {project.comment_count > 0 && (
@@ -100,7 +107,7 @@ const ProjectCard = memo(function ProjectCard({
               {showOwner && project.owner_name && (
                 <>
                   <span className="text-gray-300">·</span>
-                  <span>{project.owner_name}</span>
+                  <span>目前負責：{project.owner_name}</span>
                 </>
               )}
               {project.template_period_name && (
@@ -181,7 +188,7 @@ export const ArchivedProjectRow = memo(function ArchivedProjectRow({
           {showOwner && project.owner_name && (
             <>
               <span className="text-gray-300">·</span>
-              <span>{project.owner_name}</span>
+              <span>目前負責：{project.owner_name}</span>
             </>
           )}
           <span className="text-gray-300">·</span>
@@ -189,7 +196,7 @@ export const ArchivedProjectRow = memo(function ArchivedProjectRow({
           <span>{daysLeft} 天內可復原</span>
         </div>
       </div>
-      {canEditProject(project.owner_id) && (
+      {canEditProject(project) && (
         <Button
           type="button"
           onClick={() => onRestore(project.id)}

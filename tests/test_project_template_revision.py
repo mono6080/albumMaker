@@ -2,14 +2,18 @@ import json
 import threading
 from contextlib import contextmanager
 
-from database import Project, SessionLocal, Template
+from database import Project, SessionLocal, Template, User
+from services import organization_service
 from services import project_template_revision as revision_service
+from services.organization_lock import organization_acl_lock
 from services.storage import get_storage
 from services.template_sync_locks import lock_template_write
 from tests.helpers import (
+    _find_classroom_work_slot_id,
     assert_status,
     create_project,
     create_template_with_page,
+    create_user,
     jpeg_bytes,
     login,
     project_template_revision,
@@ -35,8 +39,11 @@ def test_stale_project_content_mutations_leave_db_and_storage_unchanged(monkeypa
     with started_client() as client:
         login(client)
         template_id, page_id = create_template_with_page(client)
-        project_id = create_project(client, template_id)
-        assert_status(client.post(f"/api/projects/{project_id}/students/batch", json=["Revision Student"]), 200)
+        project_id = create_project(
+            client,
+            template_id,
+            student_names=["Revision Student"],
+        )
         student_id = client.get(f"/api/projects/{project_id}").json()["students"][0]["id"]
         stale_revision = project_template_revision(client, project_id)
 
@@ -199,5 +206,131 @@ def test_waiting_revision_guard_restarts_wal_snapshot_before_cas(monkeypatch):
             project = db.get(Project, project_id)
             assert project.template_revision == stale_revision + 1
             assert project.label_texts_json == "{}"
+        finally:
+            db.close()
+
+
+def test_waiting_content_write_rechecks_teacher_scope_after_revocation(monkeypatch):
+    """請求等待共用鎖時若任教已撤除，不得用舊 ACL snapshot 寫入。"""
+    with started_client() as client:
+        admin = login(client)
+        teacher, teacher_password = create_user(client, "teacher")
+        period = client.post(
+            "/api/templates/periods",
+            data={
+                "name": f"acl_period_{teacher['id']}",
+                "department": "infant",
+                "status": "active",
+            },
+        )
+        assert_status(period, 200)
+        template_id, _ = create_template_with_page(
+            client,
+            period_id=period.json()["id"],
+        )
+        campus = client.post(
+            "/api/organization/campuses",
+            json={"name": f"acl_campus_{teacher['id']}"},
+        )
+        assert_status(campus, 201)
+        classroom = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus.json()["id"],
+                "department": "infant",
+                "name": f"acl_classroom_{teacher['id']}",
+            },
+        )
+        assert_status(classroom, 201)
+        classroom_id = classroom.json()["id"]
+        assigned = client.put(
+            f"/api/organization/classrooms/{classroom_id}/teachers",
+            json={
+                "teachers": [
+                    {"teacher_id": teacher["id"], "duty": "lead"},
+                ],
+            },
+        )
+        assert_status(assigned, 200)
+        roster = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={"members": [{"name": f"acl_student_{teacher['id']}"}]},
+        )
+        assert_status(roster, 201)
+        project = client.post(
+            f"/api/organization/classrooms/{classroom_id}/projects",
+            json={
+                "name": f"acl_project_{teacher['id']}",
+                "template_id": template_id,
+                "work_slot_id": _find_classroom_work_slot_id(
+                    client,
+                    classroom_id,
+                    template_id,
+                ),
+                "owner_id": teacher["id"],
+            },
+        )
+        assert_status(project, 201)
+        project_id = project.json()["id"]
+        revision = project_template_revision(client, project_id)
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        real_organization_lock = organization_acl_lock
+        lock_attempted = threading.Event()
+
+        class ObservedOrganizationLock:
+            def __enter__(self):
+                lock_attempted.set()
+                real_organization_lock.acquire()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                real_organization_lock.release()
+
+        monkeypatch.setattr(
+            revision_service,
+            "organization_acl_lock",
+            ObservedOrganizationLock(),
+        )
+        request_result: dict = {}
+
+        def send_content_write() -> None:
+            try:
+                request_result["response"] = client.put(
+                    _stale_url(
+                        f"/api/projects/{project_id}/label_texts",
+                        revision,
+                    ),
+                    json={"0": {"1": "撤權後不得寫入"}},
+                )
+            except BaseException as error:
+                request_result["error"] = error
+
+        with real_organization_lock:
+            request_thread = threading.Thread(target=send_content_write)
+            request_thread.start()
+            assert lock_attempted.wait(5)
+
+            db = SessionLocal()
+            try:
+                current_admin = db.get(User, admin["user_id"])
+                organization_service.replace_classroom_teachers(
+                    db,
+                    current_admin,
+                    classroom_id,
+                    [],
+                )
+            finally:
+                db.close()
+
+        request_thread.join(5)
+        assert not request_thread.is_alive()
+        if "error" in request_result:
+            raise request_result["error"]
+        assert_status(request_result["response"], 403)
+
+        db = SessionLocal()
+        try:
+            assert db.get(Project, project_id).label_texts_json == "{}"
         finally:
             db.close()

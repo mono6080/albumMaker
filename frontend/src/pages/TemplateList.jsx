@@ -9,6 +9,7 @@ import {
   createTemplatePeriod,
   updateTemplatePeriod,
 } from "../api/templateApi";
+import { fetchAcademicTerms } from "../api/organizationApi";
 import {
   BookOpen,
   CalendarDays,
@@ -45,26 +46,30 @@ export default function TemplateList() {
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
   const [periods, setPeriods] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [academicTerms, setAcademicTerms] = useState([]);
   const [selectedDepartment, setSelectedDepartment] = useState("infant");
   const [selectedPeriodId, setSelectedPeriodId] = useState("");
   const [periodForm, setPeriodForm] = useState({
     name: "",
     department: "infant",
     status: "draft",
+    academicTermId: "",
   });
   const [showTemplateCreate, setShowTemplateCreate] = useState(false);
   const [creatingPeriod, setCreatingPeriod] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
 
   const load = useCallback(async () => {
-    const [departmentResponse, periodResponse, templateResponse] = await Promise.all([
+    const [departmentResponse, periodResponse, templateResponse, termResponse] = await Promise.all([
       fetchTemplateDepartments(),
       fetchTemplatePeriods(),
       fetchAllTemplates(),
+      fetchAcademicTerms(),
     ]);
     setDepartments(departmentResponse.data.length ? departmentResponse.data : FALLBACK_DEPARTMENTS);
     setPeriods(periodResponse.data);
     setTemplates(templateResponse.data);
+    setAcademicTerms(termResponse.data);
   }, []);
 
   useEffect(() => {
@@ -74,6 +79,25 @@ export default function TemplateList() {
   useEffect(() => {
     setPeriodForm(form => ({ ...form, department: selectedDepartment }));
   }, [selectedDepartment]);
+
+  const assignableAcademicTerms = useMemo(() => (
+    academicTerms.filter(term => ["draft", "imported", "active"].includes(term.status))
+  ), [academicTerms]);
+
+  useEffect(() => {
+    setPeriodForm(form => {
+      if (assignableAcademicTerms.some(term => String(term.id) === String(form.academicTermId))) {
+        return form;
+      }
+      const defaultTerm = assignableAcademicTerms.find(term => term.status === "draft")
+        ?? assignableAcademicTerms.find(term => ["active", "imported"].includes(term.status));
+      return { ...form, academicTermId: defaultTerm ? String(defaultTerm.id) : "" };
+    });
+  }, [assignableAcademicTerms]);
+
+  const academicTermNameById = useMemo(() => new Map(
+    academicTerms.map(term => [String(term.id), term.label]),
+  ), [academicTerms]);
 
   const departmentPeriods = useMemo(
     () => periods.filter(period => period.department === selectedDepartment),
@@ -117,6 +141,7 @@ export default function TemplateList() {
       const response = await createTemplatePeriod({
         ...periodForm,
         name: periodForm.name.trim(),
+        academicTermId: periodForm.academicTermId || undefined,
       });
       toast.success("期別已建立");
       setSelectedDepartment(response.data.department);
@@ -210,6 +235,11 @@ export default function TemplateList() {
                   <CalendarDays className="h-4 w-4 flex-shrink-0" />
                   <span className="font-medium">{period.name}</span>
                   <Badge tone={statusTone(period.status)}>{period.status_label}</Badge>
+                  {period.academic_term_id && (
+                    <span className="text-xs text-gray-400">
+                      {academicTermNameById.get(String(period.academic_term_id)) ?? "正式學期"}
+                    </span>
+                  )}
                   <span className="text-xs text-gray-400">{period.template_count} 個模板</span>
                 </button>
               ))}
@@ -240,6 +270,20 @@ export default function TemplateList() {
 
           <div className="grid grid-cols-1 gap-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <FormField label="所屬正式學期">
+                <select
+                  className={fieldControlClass}
+                  value={periodForm.academicTermId}
+                  onChange={event => setPeriodForm(form => ({ ...form, academicTermId: event.target.value }))}
+                >
+                  <option value="">尚未建立正式學期</option>
+                  {assignableAcademicTerms.map(term => (
+                    <option key={term.id} value={term.id}>
+                      {term.label}{term.status === "draft" ? "（編班草稿）" : "（目前學期）"}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
               <FormField label="新增期別">
                 <input
                   className={fieldControlClass}

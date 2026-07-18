@@ -17,6 +17,7 @@ export default function StudentReviewCard({
   ts,
   templateRevision,
   canEditCurrentProject,
+  canDownloadCurrentProject,
   photoProgress,
   isRendering,
   isImageRendering,
@@ -28,6 +29,8 @@ export default function StudentReviewCard({
 }) {
   const isStudentPhotoComplete = photoProgress.total === 0 || photoProgress.filled === photoProgress.total;
   const isStudentBusy = isRendering || isImageRendering;
+  const hasRenderedOutput = Boolean(student.output_filename);
+  const canStartDownload = canEditCurrentProject || hasRenderedOutput;
   const studentSkippedPages = new Set(
     (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
   );
@@ -119,13 +122,13 @@ export default function StudentReviewCard({
               <Pencil className="h-4 w-4" />
             </Link>
           )}
-          {/* 下載前要先渲染（owner/admin 限定），唯讀角色點了必 403，直接不顯示 */}
-          {canEditCurrentProject && (
+          {/* 唯讀角色可下載既有產物，但不能觸發需要 can_edit 的重新渲染。 */}
+          {canDownloadCurrentProject && (
             <>
               <IconButton
-                label={isRendering ? "PDF 產生中" : "下載 PDF"}
+                label={isRendering ? "PDF 產生中" : canStartDownload ? "下載 PDF" : "尚未產生 PDF"}
                 onClick={() => onDownloadPdf(student.id)}
-                disabled={isStudentBusy}
+                disabled={isStudentBusy || !canStartDownload}
                 data-guide="review-download-student"
                 variant="success"
               >
@@ -134,9 +137,9 @@ export default function StudentReviewCard({
                   : <Download className="h-4 w-4" />}
               </IconButton>
               <IconButton
-                label={isImageShareReady ? "開始分享圖片" : "下載圖片"}
+                label={isImageShareReady ? "開始分享圖片" : canStartDownload ? "下載圖片" : "尚未產生圖片"}
                 onClick={() => onDownloadImages(student.id)}
-                disabled={isStudentBusy}
+                disabled={isStudentBusy || !canStartDownload}
                 variant="info"
               >
                 {isImageRendering

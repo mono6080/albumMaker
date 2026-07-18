@@ -23,7 +23,7 @@ export default function UserExcelImportForm({
           <h2 className="font-semibold text-gray-800 text-sm">Excel 批次建立</h2>
         </div>
         <div className="text-xs text-gray-400">
-          欄位：username、display_name、password、role、supervisor_username
+          欄位：username、display_name、password、role；匯入後到園所設定安排主管與班級
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-3">

@@ -5,9 +5,9 @@ from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from openpyxl import load_workbook
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_role
 from crud.user_crud import serialize_user_identity
@@ -24,22 +24,21 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 class CreateUserBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     username: str = Field(..., min_length=1, max_length=50)
     display_name: str = Field(..., min_length=1, max_length=50)
     password: str = Field(..., min_length=8, max_length=100)
     role: str
-    supervisor_id: int | None = None
-    supervisor_ids: list[int] | None = None
 
 
 class UpdateUserBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     username: str | None = Field(None, min_length=1, max_length=50)
     display_name: str | None = Field(None, min_length=1, max_length=50)
     role: str | None = None
-    supervisor_id: int | None = None
-    supervisor_ids: list[int] | None = None
     new_password: str | None = Field(None, min_length=8, max_length=100)
-    clear_supervisor: bool = False
 
 
 class UpdateMySettingsBody(BaseModel):
@@ -51,13 +50,8 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin")),
 ):
-    """列出所有使用者（含主管顯示名稱）。"""
-    all_users = (
-        db.query(User)
-        .options(joinedload(User.supervisor), selectinload(User.supervisors))
-        .order_by(User.created_at)
-        .all()
-    )
+    """列出所有使用者。"""
+    all_users = db.query(User).order_by(User.created_at).all()
     return [_serialize_user(user) for user in all_users]
 
 
@@ -67,15 +61,13 @@ def create_user(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin")),
 ):
-    """建立新使用者。帶班老師必須指定至少一位主管。"""
+    """建立新使用者；主管權限另由園所 scope 設定。"""
     new_user = create_user_use_case(
         db,
         username=body.username,
         display_name=body.display_name,
         password=body.password,
         role=body.role,
-        supervisor_id=body.supervisor_id,
-        supervisor_ids=body.supervisor_ids,
     )
     return _serialize_user(new_user)
 
@@ -128,17 +120,15 @@ def update_user(
     db: Session = Depends(get_db),
     current_admin: User = Depends(require_role("admin")),
 ):
-    """修改使用者資料（顯示名稱、角色、主管、密碼重設）。"""
+    """修改使用者資料（顯示名稱、角色、密碼重設）。"""
     target_user = update_user_use_case(
         db,
+        current_admin,
         user_id,
         username=body.username,
         display_name=body.display_name,
         role=body.role,
-        supervisor_id=body.supervisor_id,
-        supervisor_ids=body.supervisor_ids,
         new_password=body.new_password,
-        clear_supervisor=body.clear_supervisor,
     )
     return _serialize_user(target_user)
 
@@ -156,27 +146,11 @@ def delete_user(
 
 def _serialize_user(user: User) -> dict:
     """將 User ORM 物件轉換為 API 回應格式。"""
-    supervisors_by_id = {supervisor.id: supervisor for supervisor in user.supervisors}
-    if user.supervisor:
-        supervisors_by_id[user.supervisor.id] = user.supervisor
-    supervisors = []
-    if user.supervisor_id in supervisors_by_id:
-        supervisors.append(supervisors_by_id.pop(user.supervisor_id))
-    supervisors.extend(
-        supervisor
-        for _, supervisor in sorted(supervisors_by_id.items(), key=lambda item: item[0])
-    )
-    supervisor_ids = [supervisor.id for supervisor in supervisors]
-    supervisor_names = [supervisor.display_name for supervisor in supervisors]
     return {
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name,
         "role": user.role,
-        "supervisor_id": supervisor_ids[0] if supervisor_ids else None,
-        "supervisor_ids": supervisor_ids,
-        "supervisor_name": "、".join(supervisor_names) if supervisor_names else None,
-        "supervisor_names": supervisor_names,
         "ui_font_scale": float(user.ui_font_scale or 1.0),
         "created_at": user.created_at,
     }

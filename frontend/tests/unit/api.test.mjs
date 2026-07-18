@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  appendPreviewCacheVersion,
   buildDownloadAllImagesZipUrl,
   buildDownloadAllZipUrl,
   buildDownloadImageUrl,
@@ -10,21 +11,39 @@ import {
   buildProjectPagePreviewUrl,
   buildStickerUrl,
   buildStudentPagePreviewUrl,
+  buildStudentAlbumNameAutoFillPath,
+  buildStudentAlbumNamesAutoFillPath,
   buildTemplatePagePreviewUrl,
   buildTemplateSpreadPreviewUrl,
+  PREVIEW_RENDER_BUILD_VERSION,
 } from "../../src/api/urls.js";
 import { apiClient } from "../../src/api/authApi.js";
+import { updateStudentAlbumName } from "../../src/api/projectApi.js";
 import { fetchProjectTemplatePair } from "../../src/api/templateApi.js";
 import { getApiPath, getFilenameFromDisposition, isMobileDevice } from "../../src/utils/browserFiles.js";
 import { test } from "./harness.mjs";
 
 
 test("API URL builders keep route contracts stable", () => {
-  assert.equal(buildTemplatePagePreviewUrl(1, 2), "/api/templates/1/pages/2/preview");
-  assert.equal(buildTemplateSpreadPreviewUrl(1, 0), "/api/templates/1/spread-preview/0");
+  const renderBuildQuery = `render_build=${encodeURIComponent(PREVIEW_RENDER_BUILD_VERSION)}`;
+  assert.equal(buildTemplatePagePreviewUrl(1, 2), `/api/templates/1/pages/2/preview?${renderBuildQuery}`);
+  assert.equal(buildTemplateSpreadPreviewUrl(1, 0), `/api/templates/1/spread-preview/0?${renderBuildQuery}`);
   assert.equal(buildStickerUrl(1, "star.png"), "/api/templates/1/stickers/star.png");
-  assert.equal(buildProjectPagePreviewUrl(3, 0), "/api/projects/3/preview/0");
-  assert.equal(buildStudentPagePreviewUrl(3, 4, 1), "/api/projects/3/students/4/preview/1");
+  assert.equal(buildProjectPagePreviewUrl(3, 0), `/api/projects/3/preview/0?${renderBuildQuery}`);
+  assert.equal(
+    buildStudentAlbumNamesAutoFillPath(3),
+    "/projects/3/students/album-names/auto-fill",
+  );
+  assert.equal(
+    buildStudentAlbumNameAutoFillPath(3, 4),
+    "/projects/3/students/4/album-name/auto-fill",
+  );
+  assert.equal(buildStudentPagePreviewUrl(3, 4, 1), `/api/projects/3/students/4/preview/1?${renderBuildQuery}`);
+  assert.equal(buildStudentPagePreviewUrl(3, 4, 1, 0.4), `/api/projects/3/students/4/preview/1?scale=0.4&${renderBuildQuery}`);
+  assert.equal(
+    appendPreviewCacheVersion(buildTemplateSpreadPreviewUrl(1, 0), 123, 7),
+    `/api/templates/1/spread-preview/0?${renderBuildQuery}&t=123&template_revision=7`,
+  );
   assert.equal(buildPhotoUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9");
   assert.equal(buildPhotoUrl(3, 4, 1, 9, "path/with space.png"), "/api/projects/3/students/4/pages/1/photos/9?v=path%2Fwith%20space.png");
   assert.equal(buildPhotoThumbnailUrl(3, 4, 1, 9), "/api/projects/3/students/4/pages/1/photos/9/thumbnail");
@@ -67,6 +86,32 @@ test("project/template pair loader retries a revision split without poisoning ca
     assert.equal(templateFetchCount, 2);
   } finally {
     apiClient.get = originalGet;
+  }
+});
+
+
+test("project album name update uses the dedicated snapshot field contract", async () => {
+  const originalPut = apiClient.put;
+  const calls = [];
+  apiClient.put = async (path, data) => {
+    calls.push({ path, data });
+    return { data: { ok: true } };
+  };
+  try {
+    await updateStudentAlbumName(12, 34, "  小安  ");
+    await updateStudentAlbumName(12, 34, "   ");
+    assert.deepEqual(calls, [
+      {
+        path: "/projects/12/students/34/album-name",
+        data: { album_name: "小安" },
+      },
+      {
+        path: "/projects/12/students/34/album-name",
+        data: { album_name: null },
+      },
+    ]);
+  } finally {
+    apiClient.put = originalPut;
   }
 });
 

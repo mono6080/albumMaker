@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
@@ -9,6 +9,11 @@ import PrivateRoute from "./components/PrivateRoute";
 import PwaUpdateBanner from "./components/PwaUpdateBanner";
 import { Button } from "./components/ui";
 import { ROLE_GROUPS, ROLE_LABELS } from "./utils/userRoles";
+import {
+  loadEditorFonts,
+  retryEditorFonts,
+  shouldRetryEditorFontsInPage,
+} from "./utils/editorFonts";
 // 登入與專案清單維持同步載入；編輯／總覽由專案卡片預載
 import Login from "./pages/Login";
 import ProjectList from "./pages/ProjectList";
@@ -23,11 +28,81 @@ const StudentEdit = lazy(loadStudentEditRoute);
 // 管理端/設計組頁面 lazy 拆出：konva 三件套（~300KB，佔 bundle 31%）
 // 只有模板編輯器用得到，老師端不需要下載與 parse
 const TemplateList = lazy(() => import("./pages/TemplateList"));
-const TemplateEditor = lazy(() => import("./pages/TemplateEditor"));
+let templateEditorModulePromise = null;
+const loadTemplateEditorRoute = () => {
+  if (!templateEditorModulePromise) {
+    templateEditorModulePromise = import("./pages/TemplateEditor");
+  }
+  return templateEditorModulePromise;
+};
+const TemplateEditor = lazy(loadTemplateEditorRoute);
 const UserManagement = lazy(() => import("./pages/UserManagement"));
+const OrganizationManagement = lazy(() => import("./pages/OrganizationManagement"));
+const TermReclassification = lazy(() => import("./pages/TermReclassification"));
 const SemesterExport = lazy(() => import("./pages/SemesterExport"));
 const TeacherOverview = lazy(() => import("./pages/TeacherOverview"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
+
+function TemplateEditorFontGate() {
+  const [fontState, setFontState] = useState("loading");
+  const [fontError, setFontError] = useState(null);
+  const [fontLoadAttempt, setFontLoadAttempt] = useState(0);
+
+  useEffect(() => {
+    let isActive = true;
+    setFontState("loading");
+    setFontError(null);
+    void loadTemplateEditorRoute();
+    loadEditorFonts()
+      .then(() => {
+        if (isActive) setFontState("ready");
+      })
+      .catch((error) => {
+        console.warn("[TemplateEditor] editor fonts failed to load", error);
+        if (isActive) {
+          setFontError(error);
+          setFontState("error");
+        }
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [fontLoadAttempt]);
+
+  if (fontState === "error") {
+    return (
+      <div className="mx-auto flex min-h-64 max-w-lg flex-col items-center justify-center gap-4 rounded-xl border border-amber-200 bg-amber-50 p-6 text-center">
+        <div role="alert" className="text-sm leading-6 text-amber-900">
+          編輯器字型載入失敗。為避免文字位置與輸出不一致，畫布尚未開啟。
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (shouldRetryEditorFontsInPage(fontError)) {
+              retryEditorFonts();
+              setFontLoadAttempt(attempt => attempt + 1);
+            } else {
+              window.location.reload();
+            }
+          }}
+          className="min-h-11 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          重試載入字型
+        </button>
+      </div>
+    );
+  }
+
+  if (fontState !== "ready") {
+    return (
+      <div className="flex h-64 items-center justify-center text-gray-400">
+        正在載入編輯器字型...
+      </div>
+    );
+  }
+
+  return <TemplateEditor />;
+}
 
 function Nav({ hideOnPhone = false }) {
   const loc = useLocation();
@@ -36,8 +111,8 @@ function Nav({ hideOnPhone = false }) {
   const {
     canAccessProjects,
     canManageTemplates,
-    canManageUsers,
     canViewReports,
+    isAdmin,
   } = usePermissions();
   const isActive = (path) => loc.pathname.startsWith(path);
 
@@ -61,15 +136,15 @@ function Nav({ hideOnPhone = false }) {
     navLinks.push({ path: "/templates", label: "模板" });
   }
   if (canAccessProjects) {
-    navLinks.push({ path: "/projects", label: "相本專案" });
+    navLinks.push({ path: "/projects", label: "相本工作" });
   }
-  // 老師進度 / 學期匯出：admin 看全部，supervisor 限管轄老師（匯出僅 admin）
+  // 老師進度 / 學期匯出：admin 看全部，supervisor 限園所校／部門 scope（匯出僅 admin）
   if (canViewReports) {
     navLinks.push({ path: "/admin/teacher-overview", label: "老師進度" });
     navLinks.push({ path: "/admin/semester-export", label: "學期匯出" });
   }
-  if (canManageUsers) {
-    navLinks.push({ path: "/admin/users", label: "使用者管理" });
+  if (isAdmin) {
+    navLinks.push({ path: "/admin/organization", label: "園所設定" });
   }
 
   return (
@@ -191,7 +266,7 @@ function AppContent() {
           } />
           <Route path="/templates/:id/edit" element={
             <PrivateRoute allowedRoles={ROLE_GROUPS.TEMPLATE_MANAGERS}>
-              <TemplateEditor />
+              <TemplateEditorFontGate />
             </PrivateRoute>
           } />
 
@@ -226,6 +301,18 @@ function AppContent() {
             </PrivateRoute>
           } />
 
+          {/* 園所管理（admin only） */}
+          <Route path="/admin/organization" element={
+            <PrivateRoute allowedRoles={ROLE_GROUPS.ADMIN_ONLY}>
+              <OrganizationManagement />
+            </PrivateRoute>
+          } />
+          <Route path="/admin/organization/new-term" element={
+            <PrivateRoute allowedRoles={ROLE_GROUPS.ADMIN_ONLY}>
+              <TermReclassification />
+            </PrivateRoute>
+          } />
+
           {/* 使用者管理（admin only） */}
           <Route path="/admin/users" element={
             <PrivateRoute allowedRoles={ROLE_GROUPS.ADMIN_ONLY}>
@@ -235,14 +322,14 @@ function AppContent() {
 
           {/* 學期彙整匯出（admin 匯出；supervisor 唯讀檢視） */}
           <Route path="/admin/semester-export" element={
-            <PrivateRoute allowedRoles={ROLE_GROUPS.REPORT_VIEWERS}>
+            <PrivateRoute requiredPermission="canViewReports">
               <SemesterExport />
             </PrivateRoute>
           } />
 
-          {/* 老師進度（admin 全部；supervisor 管轄老師） */}
+          {/* 老師進度（admin 全部；supervisor 依園所校／部門 scope） */}
           <Route path="/admin/teacher-overview" element={
-            <PrivateRoute allowedRoles={ROLE_GROUPS.REPORT_VIEWERS}>
+            <PrivateRoute requiredPermission="canViewReports">
               <TeacherOverview />
             </PrivateRoute>
           } />

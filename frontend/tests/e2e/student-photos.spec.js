@@ -7,7 +7,6 @@ import {
   loginViaApi,
   createTemplateWithLayout,
   createProject,
-  addStudents,
   fetchProjectDetail,
   uploadStudentPhoto,
   fetchStudentPreview,
@@ -25,11 +24,10 @@ test("student photo uploads, preview cache, and mapping swaps work through stora
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Photo Alice"]);
+  const project = await createProject(page, projectName, templateId, ["PhotoAlice"]);
 
   let detail = await fetchProjectDetail(page, project.id);
-  const student = detail.students.find(item => item.name === "Photo Alice");
+  const student = detail.students.find(item => item.name === "PhotoAlice");
   expect(student).toBeTruthy();
 
   const firstPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "first.png", redPng);
@@ -99,11 +97,10 @@ test("student photo manager keeps a pending file while refreshing a newer templa
 
   await loginViaApi(page);
   const { templateId, pageId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Revision Alice"]);
+  const project = await createProject(page, projectName, templateId, ["RevisionAlice"]);
 
   const initialDetail = await fetchProjectDetail(page, project.id);
-  const student = initialDetail.students.find(item => item.name === "Revision Alice");
+  const student = initialDetail.students.find(item => item.name === "RevisionAlice");
   expect(student).toBeTruthy();
 
   await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
@@ -159,11 +156,10 @@ test("student photo manager reconciles a moved pending photo after delayed POST 
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Delayed Alice"]);
+  const project = await createProject(page, projectName, templateId, ["DelayedAlice"]);
 
   const initialDetail = await fetchProjectDetail(page, project.id);
-  const student = initialDetail.students.find(item => item.name === "Delayed Alice");
+  const student = initialDetail.students.find(item => item.name === "DelayedAlice");
   expect(student).toBeTruthy();
 
   let releaseDelayedResponse;
@@ -245,11 +241,10 @@ test("student multi-select upload only fills remaining empty slots", async ({ pa
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Multi Alice"]);
+  const project = await createProject(page, projectName, templateId, ["MultiAlice"]);
 
   const initialDetail = await fetchProjectDetail(page, project.id);
-  const student = initialDetail.students.find(item => item.name === "Multi Alice");
+  const student = initialDetail.students.find(item => item.name === "MultiAlice");
   expect(student).toBeTruthy();
   const existingPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "existing.png", redPng);
 
@@ -293,11 +288,10 @@ test("student photo manager keeps thumbnails fresh after same-name replacement",
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Thumb Alice"]);
+  const project = await createProject(page, projectName, templateId, ["ThumbAlice"]);
 
   const detail = await fetchProjectDetail(page, project.id);
-  const student = detail.students.find(item => item.name === "Thumb Alice");
+  const student = detail.students.find(item => item.name === "ThumbAlice");
   expect(student).toBeTruthy();
   await uploadStudentPhoto(page, project.id, student.id, 1, "same-name.png", redPng);
 
@@ -329,11 +323,10 @@ test("student photo manager resyncs slot URLs after drag swap", async ({ page })
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Swap Alice"]);
+  const project = await createProject(page, projectName, templateId, ["SwapAlice"]);
 
   const detail = await fetchProjectDetail(page, project.id);
-  const student = detail.students.find(item => item.name === "Swap Alice");
+  const student = detail.students.find(item => item.name === "SwapAlice");
   expect(student).toBeTruthy();
   const firstPhoto = await uploadStudentPhoto(page, project.id, student.id, 1, "first.png", redPng);
   const secondPhoto = await uploadStudentPhoto(page, project.id, student.id, 2, "second.png", bluePng);
@@ -379,11 +372,10 @@ test("student photo manager bordered thumbnail geometry matches preview renderer
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Crop Alice"]);
+  const project = await createProject(page, projectName, templateId, ["CropAlice"]);
 
   const detail = await fetchProjectDetail(page, project.id);
-  const student = detail.students.find(item => item.name === "Crop Alice");
+  const student = detail.students.find(item => item.name === "CropAlice");
   expect(student).toBeTruthy();
   const photo = await uploadStudentPhoto(page, project.id, student.id, 1, "crop.png", redPng);
   const mappingResponse = await page.request.put(
@@ -452,11 +444,10 @@ test("student photo crop modal stays centered on mobile width", async ({ page })
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Mobile Crop Alice"]);
+  const project = await createProject(page, projectName, templateId, ["MobileCropAlice"]);
 
   const detail = await fetchProjectDetail(page, project.id);
-  const student = detail.students.find(item => item.name === "Mobile Crop Alice");
+  const student = detail.students.find(item => item.name === "MobileCropAlice");
   expect(student).toBeTruthy();
   await uploadStudentPhoto(page, project.id, student.id, 1, "mobile-crop.png", redPng);
 

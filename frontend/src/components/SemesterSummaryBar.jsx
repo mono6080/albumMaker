@@ -1,47 +1,43 @@
-// 學期彙整匯出：整備度摘要列（搜尋框、統計 chip 快速過濾、補產生全部缺漏按鈕）
-// 狀態與補渲染 job 輪詢都在 SemesterExport 頁，這裡只負責呈現與轉發事件
+// 正式學期匯出整備度摘要；所有狀態數字都由後端 cell enum 彙整，絕不推測缺期。
 
 import { Hammer, Loader2, Search } from "lucide-react";
 
-import { Button, Surface } from "./ui";
+import { Button, Surface, fieldControlClass } from "./ui";
 
-/** 整備度摘要 chip：有 onClick 時可點擊過濾，無 onClick 時為純顯示統計 */
-function StatChip({ label, count, tone, isActive, onClick }) {
+function StatChip({ label, count, tone = "neutral", isActive = false, onClick }) {
   const toneClass = {
-    success: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    warning: "bg-amber-50 text-amber-700 border-amber-200",
-    neutral: "bg-gray-50 text-gray-600 border-gray-200",
-  }[tone] ?? "bg-gray-50 text-gray-600 border-gray-200";
-  const chipContent = (
+    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    warning: "border-amber-200 bg-amber-50 text-amber-700",
+    danger: "border-red-200 bg-red-50 text-red-700",
+    neutral: "border-gray-200 bg-gray-50 text-gray-600",
+  }[tone];
+  const content = (
     <>
       {label}
       <span className="font-bold">{count}</span>
     </>
   );
-  const sharedClass = `inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${toneClass}`;
-  if (!onClick) {
-    return <span className={sharedClass}>{chipContent}</span>;
-  }
+  const className = `inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11 ${toneClass}`;
+  if (!onClick) return <span className={className}>{content}</span>;
   return (
     <button
       type="button"
+      aria-pressed={isActive}
       onClick={onClick}
-      className={`${sharedClass} transition-shadow ${isActive ? "ring-2 ring-indigo-400" : "hover:shadow-sm"}`}
+      className={`${className} transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${isActive ? "ring-2 ring-indigo-400" : "hover:shadow-sm"}`}
     >
-      {chipContent}
+      {content}
     </button>
   );
 }
 
 export default function SemesterSummaryBar({
-  preview,
   exportStats,
   searchText,
   onSearchTextChange,
   quickFilter,
   onQuickFilterChange,
-  // 點「待確認」chip 時捲動到待確認配對區塊
-  onJumpToUnlinked,
+  onJumpToAnomalies,
   isAdmin,
   isRenderingMissing,
   renderJob,
@@ -49,65 +45,76 @@ export default function SemesterSummaryBar({
 }) {
   return (
     <Surface padding="sm" className="mb-4 shrink-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+        <div className="relative min-w-0 xl:w-64">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             type="search"
+            aria-label="搜尋孩子、班級、老師或相本"
             value={searchText}
             onChange={event => onSearchTextChange(event.target.value)}
-            placeholder="搜尋孩子 / 班級 / 老師"
-            className="w-48 rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="搜尋孩子 / 班級 / 老師 / 相本"
+            className={`${fieldControlClass} pl-9`}
           />
         </div>
-        <StatChip
-          label="全部孩子"
-          count={preview.children.length}
-          tone="neutral"
-          isActive={quickFilter === "all"}
-          onClick={() => onQuickFilterChange("all")}
-        />
-        <StatChip label="已就緒" count={`${exportStats.readyBooks} 本`} tone="success" />
-        <StatChip
-          label="未產生"
-          count={`${exportStats.missingBooks} 本`}
-          tone="warning"
-          isActive={quickFilter === "unrendered"}
-          onClick={() => onQuickFilterChange(quickFilter === "unrendered" ? "all" : "unrendered")}
-        />
-        <StatChip
-          label="缺期"
-          count={`${exportStats.missingPeriodChildIds.size} 位`}
-          tone="warning"
-          isActive={quickFilter === "missingPeriod"}
-          onClick={() => onQuickFilterChange(quickFilter === "missingPeriod" ? "all" : "missingPeriod")}
-        />
-        {preview.unlinked.length > 0 && (
+        <div className="flex min-w-0 flex-1 flex-wrap gap-2">
           <StatChip
-            label="待確認"
-            count={`${preview.unlinked.length} 位`}
-            tone="warning"
-            isActive={false}
-            onClick={onJumpToUnlinked}
+            label="全部孩子"
+            count={exportStats.childCount}
+            isActive={quickFilter === "all"}
+            onClick={() => onQuickFilterChange("all")}
           />
-        )}
-        {isAdmin && exportStats.missingBooks > 0 && (
+          <StatChip label="PDF 已就緒" count={`${exportStats.readyCount} 本`} tone="success" />
+          <StatChip
+            label="未產生 PDF"
+            count={`${exportStats.notRenderedCount} 本`}
+            tone="warning"
+            isActive={quickFilter === "not_rendered"}
+            onClick={() => onQuickFilterChange(quickFilter === "not_rendered" ? "all" : "not_rendered")}
+          />
+          <StatChip
+            label="無相本"
+            count={`${exportStats.noAlbumCount} 格`}
+            tone="warning"
+            isActive={quickFilter === "no_album"}
+            onClick={() => onQuickFilterChange(quickFilter === "no_album" ? "all" : "no_album")}
+          />
+          <StatChip
+            label="重複相本"
+            count={`${exportStats.duplicateCount} 格`}
+            tone="danger"
+            isActive={quickFilter === "duplicate"}
+            onClick={() => onQuickFilterChange(quickFilter === "duplicate" ? "all" : "duplicate")}
+          />
+          {exportStats.departedCount > 0 && (
+            <StatChip label="已離園" count={`${exportStats.departedCount} 格`} />
+          )}
+          {exportStats.identityAnomalyCount > 0 && (
+            <StatChip
+              label="身分異常"
+              count={`${exportStats.identityAnomalyCount} 筆`}
+              tone="danger"
+              onClick={onJumpToAnomalies}
+            />
+          )}
+        </div>
+        {isAdmin && exportStats.notRenderedCount > 0 && (
           <Button
             variant="secondary"
-            size="xs"
-            className="ml-auto"
+            size="sm"
+            className="xl:flex-shrink-0"
             disabled={isRenderingMissing}
-            onClick={() => onRenderMissing(null, exportStats.missingBooks, "全部")}
+            onClick={() => onRenderMissing(null, exportStats.notRenderedCount, "目前範圍全部")}
           >
             {isRenderingMissing ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
                 補產生中{renderJob?.total != null ? ` ${renderJob.done}/${renderJob.total}` : "…"}
               </>
             ) : (
               <>
-                <Hammer className="h-3.5 w-3.5" />
-                補產生全部缺漏（{exportStats.missingBooks} 本）
+                <Hammer aria-hidden="true" className="h-4 w-4" />
+                補產生缺漏（{exportStats.notRenderedCount} 本）
               </>
             )}
           </Button>

@@ -2,7 +2,9 @@
 # 負責建立 FastAPI 實例、掛載中介層、路由與靜態檔案服務，
 # 以及啟動時執行資料庫初始化與遷移
 
+import asyncio
 import logging
+import mimetypes
 import os
 import time
 from contextlib import asynccontextmanager
@@ -20,10 +22,15 @@ from sqlalchemy import text
 
 from database import SessionLocal, get_db, init_db
 from migrations import run_migrations
-from routers import templates, projects, auth, users, roster
+from routers import auth, organization, projects, roster, templates, users
 from services.project_archive_service import purge_expired_archived_projects
 
 logger = logging.getLogger("album_maker.requests")
+
+# Windows 的 mimetypes registry 不一定包含 web font，先固定 StaticFiles 回應型別。
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
+mimetypes.add_type("font/ttf", ".ttf")
 
 
 def _env_float(name: str, default: float) -> float:
@@ -43,8 +50,43 @@ limiter = Limiter(key_func=get_remote_address)
 # 前端編譯輸出目錄
 FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 FRONTEND_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
+FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL = "public, no-cache, must-revalidate"
 FRONTEND_APP_CACHE_CONTROL = "no-cache, no-store, max-age=0, must-revalidate"
 SLOW_REQUEST_LOG_SECONDS = _env_float("SLOW_REQUEST_LOG_SECONDS", 1.0)
+ARCHIVE_PURGE_INTERVAL_SECONDS = max(
+    1.0,
+    _env_float("ARCHIVE_PURGE_INTERVAL_SECONDS", 300.0),
+)
+
+
+def _purge_expired_archived_projects_once() -> None:
+    """以獨立 session 執行一次到期清理，供啟動與背景循環共用。"""
+    db = SessionLocal()
+    try:
+        purge_expired_archived_projects(db)
+    finally:
+        db.close()
+
+
+async def run_archive_purge_loop(
+    stop_event: asyncio.Event,
+    *,
+    interval_seconds: float = ARCHIVE_PURGE_INTERVAL_SECONDS,
+) -> None:
+    """服務存活期間定時清除到期封存相本；單次失敗不終止後續清理。"""
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=max(0.001, interval_seconds),
+            )
+            break
+        except TimeoutError:
+            pass
+        try:
+            await asyncio.to_thread(_purge_expired_archived_projects_once)
+        except Exception:
+            logger.exception("定時清理到期封存相本失敗；下個週期會重試")
 
 
 def apply_frontend_cache_headers(response, path: str) -> None:
@@ -54,6 +96,9 @@ def apply_frontend_cache_headers(response, path: str) -> None:
 
     if path.startswith("/assets/"):
         response.headers["Cache-Control"] = FRONTEND_ASSET_CACHE_CONTROL
+        return
+    if path.startswith("/fonts/"):
+        response.headers["Cache-Control"] = FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL
         return
 
     # SPA routes, index.html, service workers, Workbox chunks, manifest, and
@@ -70,12 +115,17 @@ async def lifespan(_: FastAPI):
     """初始化 schema／migration，並在啟動時清理到期封存資料。"""
     init_db()
     run_migrations()
-    db = SessionLocal()
+    _purge_expired_archived_projects_once()
+    archive_purge_stop = asyncio.Event()
+    archive_purge_task = asyncio.create_task(
+        run_archive_purge_loop(archive_purge_stop),
+        name="archive-project-purge",
+    )
     try:
-        purge_expired_archived_projects(db)
+        yield
     finally:
-        db.close()
-    yield
+        archive_purge_stop.set()
+        await archive_purge_task
 
 
 app = FastAPI(title="幼兒園相本製作系統", lifespan=lifespan)
@@ -136,6 +186,7 @@ app.include_router(users.router)
 app.include_router(templates.router)
 app.include_router(projects.router)
 app.include_router(roster.router)
+app.include_router(organization.router)
 
 
 @app.get("/api/health")
@@ -151,6 +202,15 @@ if (FRONTEND_DIST_DIR / "assets").exists():
         "/assets",
         StaticFiles(directory=str(FRONTEND_DIST_DIR / "assets")),
         name="assets"
+    )
+
+# 共用渲染字型檔名固定，不能用 immutable；交給 StaticFiles 處理
+# ETag / If-None-Match，部署後會重驗證但未變更時只回 304。
+if (FRONTEND_DIST_DIR / "fonts").exists():
+    app.mount(
+        "/fonts",
+        StaticFiles(directory=str(FRONTEND_DIST_DIR / "fonts")),
+        name="fonts",
     )
 
 

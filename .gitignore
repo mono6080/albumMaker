@@ -19,6 +19,9 @@ frontend/dist/
 backend/uploads/
 backend/uploads_bak*/
 backend/.r2-cache/
+output/
+backups/
+teacher-overview*.xlsx
 
 # DB（含 SQLite WAL 模式的側檔）
 *.db

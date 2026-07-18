@@ -2,25 +2,69 @@
 
 import json
 import threading
-from datetime import timedelta
+from typing import cast
 
 import pytest
 from fastapi import HTTPException
 
-from database import Project, SessionLocal, Student, Template, TemplatePage, init_db
-from services import project_lifecycle_service, project_student_service, student_render_service
-from services.output_keys import build_combined_stem, get_project_output_prefix
+from database import (
+    Campus,
+    Classroom,
+    ClassroomTeacherAssignment,
+    Project,
+    SessionLocal,
+    Student,
+    Template,
+    TemplatePage,
+    TemplatePeriod,
+    User,
+    init_db,
+    utc_now,
+)
+from migrations import run_migrations
+from services import (
+    organization_service,
+    project_lifecycle_service,
+    project_student_service,
+    student_render_service,
+)
+from services.output_keys import (
+    build_combined_stem,
+    get_project_output_prefix,
+    get_student_image_key,
+    get_student_pdf_key,
+    student_pdf_key_for_mode,
+)
+from services.organization_lock import organization_acl_lock
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
 from tests.helpers import login, started_client, unique_name
 
 
+_SCHEMA_READY = False
+
+
 def _seed_render_target() -> dict:
+    global _SCHEMA_READY
     init_db()
+    if not _SCHEMA_READY:
+        run_migrations()
+        _SCHEMA_READY = True
     db = SessionLocal()
     try:
-        template = Template(name=unique_name("render_guard_template"), revision=1)
+        period = TemplatePeriod(
+            name=unique_name("render_guard_period"),
+            department="infant",
+            status="active",
+        )
+        db.add(period)
+        db.flush()
+        template = Template(
+            name=unique_name("render_guard_template"),
+            revision=1,
+            period_id=period.id,
+        )
         db.add(template)
         db.flush()
         db.add(TemplatePage(
@@ -37,6 +81,8 @@ def _seed_render_target() -> dict:
         project = Project(
             name=unique_name("render_guard_project"),
             template_id=template.id,
+            department=period.department,
+            template_period_id=period.id,
             template_revision=1,
             label_texts_json="{}",
         )
@@ -61,6 +107,67 @@ def _seed_render_target() -> dict:
         db.close()
 
 
+def _add_colliding_student(
+    seeded: dict,
+    *,
+    first_name: str,
+    second_name: str,
+) -> int:
+    db = SessionLocal()
+    try:
+        first_student = db.get(Student, seeded["student_id"])
+        first_student.name = first_name
+        second_student = Student(
+            project_id=seeded["project_id"],
+            name=second_name,
+            order_index=1,
+            pages_data_json="[]",
+        )
+        db.add(second_student)
+        db.commit()
+        return second_student.id
+    finally:
+        db.close()
+
+
+def _seed_legacy_collision_outputs(
+    seeded: dict,
+    second_student_id: int,
+    storage,
+) -> dict[str, str]:
+    output_prefix = get_project_output_prefix(seeded["project_id"])
+    first_stem = build_combined_stem(seeded["project_name"], "小明")
+    second_stem = build_combined_stem(seeded["project_name"], "小明_screen")
+    first_print_key = f"{output_prefix}/{first_stem}.pdf"
+    shared_key = f"{output_prefix}/{first_stem}_screen.pdf"
+    second_print_key = f"{output_prefix}/{second_stem}.pdf"
+    assert shared_key == second_print_key
+    second_screen_key = f"{output_prefix}/{second_stem}_screen.pdf"
+    first_image_key = f"{output_prefix}/{first_stem}/images/print/page1.jpg"
+    second_image_key = f"{output_prefix}/{second_stem}/images/print/page1.jpg"
+
+    storage.put(first_print_key, b"first-print")
+    storage.put(shared_key, b"second-print")
+    storage.put(second_screen_key, b"second-screen")
+    storage.put(first_image_key, b"first-image")
+    storage.put(second_image_key, b"second-image")
+
+    db = SessionLocal()
+    try:
+        db.get(Student, seeded["student_id"]).output_filename = first_print_key
+        db.get(Student, second_student_id).output_filename = second_print_key
+        db.commit()
+    finally:
+        db.close()
+    return {
+        "first_print": first_print_key,
+        "shared": shared_key,
+        "second_screen": second_screen_key,
+        "first_image": first_image_key,
+        "second_image": second_image_key,
+    }
+
+
 def _patch_fast_render(monkeypatch, render_album):
     monkeypatch.setattr(student_render_service, "render_album", render_album)
     monkeypatch.setattr(
@@ -83,16 +190,114 @@ def _patch_fast_render(monkeypatch, render_album):
     )
 
 
-def _run_render(project_id: int, student_id: int, result: dict) -> None:
+def _run_render(
+    project_id: int,
+    student_id: int,
+    result: dict,
+    actor_id: int | None = None,
+) -> None:
     db = SessionLocal()
     try:
         project = db.get(Project, project_id)
         student = db.get(Student, student_id)
         result["value"] = student_render_service.render_and_save_student_album(
-            project, student, project_id, db
+            project,
+            student,
+            project_id,
+            db,
+            actor_id=actor_id,
         )
     except BaseException as error:
         result["error"] = error
+    finally:
+        db.close()
+
+
+def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
+    """把直接 seed 的渲染目標歸班，並建立可在渲染途中撤除的任教編制。"""
+    db = SessionLocal()
+    try:
+        admin = User(
+            username=unique_name("render_admin"),
+            display_name="渲染管理員",
+            hashed_password="unused",
+            role="admin",
+        )
+        teacher = User(
+            username=unique_name("render_teacher"),
+            display_name="渲染老師",
+            hashed_password="unused",
+            role="teacher",
+        )
+        campus = Campus(name=unique_name("render_campus"))
+        db.add_all([admin, teacher, campus])
+        db.flush()
+        classroom = Classroom(
+            campus_id=campus.id,
+            department="infant",
+            name=unique_name("render_classroom"),
+        )
+        db.add(classroom)
+        db.flush()
+        db.add(ClassroomTeacherAssignment(
+            classroom_id=classroom.id,
+            teacher_id=teacher.id,
+            teacher_name_snapshot=teacher.display_name,
+            duty="lead",
+            started_by_id=admin.id,
+            started_by_name_snapshot=admin.display_name,
+        ))
+        db.commit()
+        preview = organization_service.get_project_classroom_migration_preview(
+            db,
+            seeded["project_id"],
+            cast(int, classroom.id),
+        )
+        organization_service.assign_project_to_classroom(
+            db,
+            admin,
+            seeded["project_id"],
+            classroom_id=cast(int, classroom.id),
+            source_fingerprint=preview["source_fingerprint"],
+            seed_current_roster=False,
+            student_identity_decisions=[{
+                "student_id": seeded["student_id"],
+                "action": "create_new",
+            }],
+        )
+        return {
+            "admin_id": cast(int, admin.id),
+            "teacher_id": cast(int, teacher.id),
+            "classroom_id": cast(int, classroom.id),
+        }
+    finally:
+        db.close()
+
+
+def test_album_name_is_captured_in_render_cas_token():
+    seeded = _seed_render_target()
+    db = SessionLocal()
+    try:
+        student = db.get(Student, seeded["student_id"])
+        student.album_name = "原本稱呼"
+        db.commit()
+
+        captured = student_render_service._capture_student_render_input(
+            seeded["project_id"],
+            seeded["student_id"],
+            db,
+        )
+        assert captured["album_name"] == "原本稱呼"
+
+        student = db.get(Student, seeded["student_id"])
+        student.album_name = "渲染途中改名"
+        db.commit()
+
+        assert student_render_service._current_student_render_token(
+            seeded["project_id"],
+            seeded["student_id"],
+            db,
+        ) != captured["state_token"]
     finally:
         db.close()
 
@@ -143,8 +348,203 @@ class _FailingOutputCleanupStorage(LocalStorageAdapter):
         super().delete(key)
 
     def delete_prefix(self, prefix: str) -> None:
+        if "/output/" in prefix:
+            self.output_cleanup_failed = True
+            raise RuntimeError("simulated output cleanup failure")
         self.deleted_prefixes.append(prefix)
         super().delete_prefix(prefix)
+
+
+def test_archived_project_during_render_cannot_publish(monkeypatch, tmp_path):
+    seeded = _seed_render_target()
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+
+    render_started = threading.Event()
+    allow_render_finish = threading.Event()
+
+    def controlled_render(*args, **kwargs):
+        render_started.set()
+        assert allow_render_finish.wait(5), "測試未釋放渲染工作"
+        return ["stale-print-image"]
+
+    _patch_fast_render(monkeypatch, controlled_render)
+    render_result: dict = {}
+    render_thread = threading.Thread(
+        target=_run_render,
+        args=(seeded["project_id"], seeded["student_id"], render_result),
+    )
+    render_thread.start()
+    assert render_started.wait(5)
+
+    db = SessionLocal()
+    try:
+        db.get(Project, seeded["project_id"]).deleted_at = utc_now()
+        db.commit()
+    finally:
+        db.close()
+
+    allow_render_finish.set()
+    render_thread.join(5)
+    assert not render_thread.is_alive()
+    assert isinstance(render_result.get("error"), HTTPException)
+    assert render_result["error"].status_code == 404
+
+    db = SessionLocal()
+    try:
+        assert db.get(Student, seeded["student_id"]).output_filename is None
+    finally:
+        db.close()
+    assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
+
+
+def test_teacher_removed_during_render_cannot_publish(monkeypatch, tmp_path):
+    seeded = _seed_render_target()
+    scope = _attach_render_teacher_scope(seeded)
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+
+    render_started = threading.Event()
+    allow_render_finish = threading.Event()
+
+    def controlled_render(*args, **kwargs):
+        render_started.set()
+        assert allow_render_finish.wait(5), "測試未釋放渲染工作"
+        return ["stale-print-image"]
+
+    _patch_fast_render(monkeypatch, controlled_render)
+    render_result: dict = {}
+    render_thread = threading.Thread(
+        target=_run_render,
+        args=(
+            seeded["project_id"],
+            seeded["student_id"],
+            render_result,
+            scope["teacher_id"],
+        ),
+    )
+    render_thread.start()
+    assert render_started.wait(5)
+
+    db = SessionLocal()
+    try:
+        admin = db.get(User, scope["admin_id"])
+        organization_service.replace_classroom_teachers(
+            db,
+            admin,
+            scope["classroom_id"],
+            [],
+        )
+    finally:
+        db.close()
+
+    allow_render_finish.set()
+    render_thread.join(5)
+    assert not render_thread.is_alive()
+    assert isinstance(render_result.get("error"), HTTPException)
+    assert render_result["error"].status_code == 403
+
+    db = SessionLocal()
+    try:
+        assert db.get(Student, seeded["student_id"]).output_filename is None
+    finally:
+        db.close()
+    assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
+
+
+def test_teacher_removed_while_album_name_write_waits_cannot_commit(monkeypatch):
+    seeded = _seed_render_target()
+    scope = _attach_render_teacher_scope(seeded)
+    real_organization_lock = organization_acl_lock
+    lock_attempted = threading.Event()
+
+    class ObservedOrganizationLock:
+        def __enter__(self):
+            lock_attempted.set()
+            real_organization_lock.acquire()
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            real_organization_lock.release()
+
+    monkeypatch.setattr(
+        project_student_service,
+        "organization_acl_lock",
+        ObservedOrganizationLock(),
+    )
+    update_result: dict = {}
+
+    def update_album_name() -> None:
+        db = SessionLocal()
+        try:
+            actor = db.get(User, scope["teacher_id"])
+            update_result["value"] = project_student_service.update_student_album_name(
+                db,
+                actor,
+                seeded["project_id"],
+                seeded["student_id"],
+                "撤權後不得寫入",
+            )
+        except BaseException as error:
+            update_result["error"] = error
+        finally:
+            db.close()
+
+    with real_organization_lock:
+        update_thread = threading.Thread(target=update_album_name)
+        update_thread.start()
+        assert lock_attempted.wait(5)
+
+        db = SessionLocal()
+        try:
+            admin = db.get(User, scope["admin_id"])
+            organization_service.replace_classroom_teachers(
+                db,
+                admin,
+                scope["classroom_id"],
+                [],
+            )
+        finally:
+            db.close()
+
+    update_thread.join(5)
+    assert not update_thread.is_alive()
+    assert isinstance(update_result.get("error"), HTTPException)
+    assert update_result["error"].status_code == 403
+
+    db = SessionLocal()
+    try:
+        assert db.get(Student, seeded["student_id"]).album_name is None
+    finally:
+        db.close()
+
+
+def test_completed_project_teacher_can_render_handoff_files(monkeypatch, tmp_path):
+    seeded = _seed_render_target()
+    scope = _attach_render_teacher_scope(seeded)
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+    _patch_fast_render(monkeypatch, lambda *args, **kwargs: ["print-image"])
+
+    db = SessionLocal()
+    try:
+        db.get(Project, seeded["project_id"]).completed_at = utc_now()
+        db.commit()
+    finally:
+        db.close()
+
+    render_result: dict = {}
+    _run_render(
+        seeded["project_id"],
+        seeded["student_id"],
+        render_result,
+        scope["teacher_id"],
+    )
+
+    assert "error" not in render_result
+    assert render_result["value"]["pdf"] == get_student_pdf_key(
+        seeded["project_id"],
+        seeded["student_id"],
+    )
 
 
 def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(monkeypatch, tmp_path):
@@ -294,8 +694,215 @@ def test_same_student_renders_are_serialized_and_second_uses_completed_output(mo
     assert render_call_count == 1
 
 
-@pytest.mark.parametrize("mutation", ["project_rename", "student_rename", "student_delete"])
-def test_rename_or_delete_waits_for_publish_then_invalidates_canonical_output(
+def test_suffix_name_students_publish_to_distinct_mode_namespaces(monkeypatch, tmp_path):
+    seeded = _seed_render_target()
+    second_student_id = _add_colliding_student(
+        seeded,
+        first_name="小明",
+        second_name="小明_screen",
+    )
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+    _patch_fast_render(monkeypatch, lambda *args, **kwargs: ["print-image"])
+
+    first_result: dict = {}
+    second_result: dict = {}
+    _run_render(seeded["project_id"], seeded["student_id"], first_result)
+    _run_render(seeded["project_id"], second_student_id, second_result)
+
+    assert "error" not in first_result
+    assert "error" not in second_result
+    first_screen_key = get_student_pdf_key(
+        seeded["project_id"],
+        seeded["student_id"],
+    )
+    first_screen_key = student_pdf_key_for_mode(
+        first_screen_key,
+        "screen",
+    )
+    second_print_key = get_student_pdf_key(
+        seeded["project_id"],
+        second_student_id,
+    )
+    assert first_screen_key != second_print_key
+    assert storage.get_bytes(first_screen_key) == b"new-screen-pdf"
+    assert storage.get_bytes(second_print_key) == b"new-print-pdf"
+
+
+def test_same_name_students_use_id_namespaces_and_keep_independent_dirty_skip(
+    monkeypatch,
+    tmp_path,
+):
+    seeded = _seed_render_target()
+    second_student_id = _add_colliding_student(
+        seeded,
+        first_name="同名學生",
+        second_name="同名學生",
+    )
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+    render_call_count = 0
+
+    def fast_render(*args, **kwargs):
+        nonlocal render_call_count
+        render_call_count += 1
+        return ["print-image"]
+
+    _patch_fast_render(monkeypatch, fast_render)
+    first_result: dict = {}
+    second_result: dict = {}
+    repeated_first_result: dict = {}
+    _run_render(seeded["project_id"], seeded["student_id"], first_result)
+    _run_render(seeded["project_id"], second_student_id, second_result)
+    _run_render(seeded["project_id"], seeded["student_id"], repeated_first_result)
+
+    first_print_key = get_student_pdf_key(
+        seeded["project_id"],
+        seeded["student_id"],
+    )
+    second_print_key = get_student_pdf_key(
+        seeded["project_id"],
+        second_student_id,
+    )
+    assert first_print_key != second_print_key
+    assert first_result["value"]["pdf"] == first_print_key
+    assert second_result["value"]["pdf"] == second_print_key
+    assert repeated_first_result["value"]["skipped"] is True
+    assert render_call_count == 2
+
+
+def test_first_canonical_render_preserves_legacy_key_referenced_by_sibling(
+    monkeypatch,
+    tmp_path,
+):
+    seeded = _seed_render_target()
+    second_student_id = _add_colliding_student(
+        seeded,
+        first_name="小明",
+        second_name="小明_screen",
+    )
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    legacy_keys = _seed_legacy_collision_outputs(
+        seeded,
+        second_student_id,
+        storage,
+    )
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+    _patch_fast_render(monkeypatch, lambda *args, **kwargs: ["print-image"])
+
+    render_result: dict = {}
+    _run_render(seeded["project_id"], seeded["student_id"], render_result)
+
+    assert "error" not in render_result
+    assert not storage.exists(legacy_keys["first_print"])
+    assert storage.get_bytes(legacy_keys["shared"]) == b"second-print"
+    assert storage.get_bytes(legacy_keys["second_screen"]) == b"second-screen"
+    assert not storage.exists(legacy_keys["first_image"])
+    assert storage.get_bytes(legacy_keys["second_image"]) == b"second-image"
+    db = SessionLocal()
+    try:
+        first_student = db.get(Student, seeded["student_id"])
+        second_student = db.get(Student, second_student_id)
+        assert first_student.output_filename == get_student_pdf_key(
+            seeded["project_id"],
+            seeded["student_id"],
+        )
+        assert second_student.output_filename == legacy_keys["shared"]
+    finally:
+        db.close()
+
+
+def test_album_name_mutation_preserves_colliding_legacy_sibling_output(
+    monkeypatch,
+    tmp_path,
+):
+    seeded = _seed_render_target()
+    second_student_id = _add_colliding_student(
+        seeded,
+        first_name="小明",
+        second_name="小明_screen",
+    )
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    legacy_keys = _seed_legacy_collision_outputs(
+        seeded,
+        second_student_id,
+        storage,
+    )
+    monkeypatch.setattr(project_student_service, "get_storage", lambda: storage)
+
+    with started_client() as client:
+        login(client)
+        response = client.put(
+            f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}/album-name",
+            json={"album_name": "相本小名"},
+        )
+        assert response.status_code == 200
+
+    assert not storage.exists(legacy_keys["first_print"])
+    assert storage.get_bytes(legacy_keys["shared"]) == b"second-print"
+    assert storage.get_bytes(legacy_keys["second_screen"]) == b"second-screen"
+    assert not storage.exists(legacy_keys["first_image"])
+    assert storage.get_bytes(legacy_keys["second_image"]) == b"second-image"
+
+
+@pytest.mark.parametrize("missing_output", ["screen_pdf", "print_image", "screen_image"])
+def test_dirty_skip_rebuilds_when_any_promised_output_is_missing(
+    monkeypatch,
+    tmp_path,
+    missing_output,
+):
+    seeded = _seed_render_target()
+    storage = LocalStorageAdapter(tmp_path / "uploads")
+    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
+    render_call_count = 0
+
+    def fast_render(*args, **kwargs):
+        nonlocal render_call_count
+        render_call_count += 1
+        return ["print-image"]
+
+    _patch_fast_render(monkeypatch, fast_render)
+    first_result = {}
+    _run_render(seeded["project_id"], seeded["student_id"], first_result)
+    assert "error" not in first_result
+    assert render_call_count == 1
+
+    missing_key_by_kind = {
+        "screen_pdf": student_pdf_key_for_mode(
+            get_student_pdf_key(
+                seeded["project_id"],
+                seeded["student_id"],
+            ),
+            "screen",
+        ),
+        "print_image": get_student_image_key(
+            seeded["project_id"],
+            seeded["student_id"],
+            "print",
+            1,
+        ),
+        "screen_image": get_student_image_key(
+            seeded["project_id"],
+            seeded["student_id"],
+            "screen",
+            1,
+        ),
+    }
+    missing_key = missing_key_by_kind[missing_output]
+    storage.delete(missing_key)
+    assert not storage.exists(missing_key)
+
+    second_result = {}
+    _run_render(seeded["project_id"], seeded["student_id"], second_result)
+
+    assert "error" not in second_result
+    assert second_result["value"].get("skipped") is not True
+    assert render_call_count == 2
+    assert storage.exists(missing_key)
+
+
+@pytest.mark.parametrize("mutation", ["project_rename", "album_name"])
+def test_identity_text_mutation_waits_for_publish_then_invalidates_canonical_output(
     monkeypatch,
     tmp_path,
     mutation,
@@ -327,21 +934,17 @@ def test_rename_or_delete_waits_for_publish_then_invalidates_canonical_output(
                     f"/api/projects/{seeded['project_id']}",
                     data={"name": "改名後專案"},
                 )
-            elif mutation == "student_rename":
-                response = client.put(
-                    f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}",
-                    data={"name": "改名後學生"},
-                )
             else:
-                response = client.delete(
-                    f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}"
+                response = client.put(
+                    f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}/album-name",
+                    json={"album_name": "相本小名"},
                 )
             mutation_response["response"] = response
             mutation_finished.set()
 
         mutation_thread = threading.Thread(target=run_mutation)
         mutation_thread.start()
-        # publish 持有 project→student locks 時，改名／刪除不得插入 CAS 與 put 之間。
+        # publish 持有 project→student locks 時，名稱寫入不得插入 CAS 與 put 之間。
         assert not mutation_finished.wait(0.2)
 
         storage.allow_publish.set()
@@ -360,167 +963,17 @@ def test_rename_or_delete_waits_for_publish_then_invalidates_canonical_output(
         if mutation == "project_rename":
             assert project.name == "改名後專案"
             assert student.output_filename is None
-        elif mutation == "student_rename":
-            assert student.name == "改名後學生"
-            assert student.output_filename is None
         else:
-            assert student is None
+            assert student.name == seeded["student_name"]
+            assert student.album_name == "相本小名"
+            assert student.output_filename is None
     finally:
         db.close()
 
     assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
 
 
-def test_student_delete_holds_project_lock_until_photo_cleanup_finishes(monkeypatch, tmp_path):
-    seeded = _seed_render_target()
-    photo_prefix = (
-        f"projects/proj{seeded['project_id']}/photos/student{seeded['student_id']}"
-    )
-    storage = _BlockingPhotoCleanupStorage(tmp_path / "uploads", photo_prefix)
-    monkeypatch.setattr(project_student_service, "get_storage", lambda: storage)
-    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
-    photo_key = f"{photo_prefix}/existing.jpg"
-    storage.put(photo_key, b"photo")
-
-    with started_client() as client:
-        login(client)
-        delete_result: dict = {}
-        batch_result: dict = {}
-        batch_finished = threading.Event()
-
-        def run_delete():
-            delete_result["response"] = client.delete(
-                f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}"
-            )
-
-        def run_batch_add():
-            batch_result["response"] = client.post(
-                f"/api/projects/{seeded['project_id']}/students/batch",
-                json=["清理期間新增"],
-            )
-            batch_finished.set()
-
-        delete_thread = threading.Thread(target=run_delete)
-        delete_thread.start()
-        assert storage.photo_cleanup_started.wait(5)
-
-        batch_thread = threading.Thread(target=run_batch_add)
-        batch_thread.start()
-        assert not batch_finished.wait(0.2)
-
-        storage.allow_photo_cleanup.set()
-        delete_thread.join(5)
-        batch_thread.join(5)
-        assert not delete_thread.is_alive()
-        assert not batch_thread.is_alive()
-        assert delete_result["response"].status_code == 200
-        assert batch_result["response"].status_code == 200
-
-    assert not storage.exists(photo_key)
-
-
-def test_student_delete_stays_successful_when_output_cleanup_fails(monkeypatch, tmp_path):
-    seeded = _seed_render_target()
-    storage = _FailingOutputCleanupStorage(tmp_path / "uploads")
-    monkeypatch.setattr(project_student_service, "get_storage", lambda: storage)
-    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
-    photo_prefix = (
-        f"projects/proj{seeded['project_id']}/photos/student{seeded['student_id']}"
-    )
-    photo_key = f"{photo_prefix}/existing.jpg"
-    storage.put(photo_key, b"photo")
-
-    with started_client() as client:
-        login(client)
-        response = client.delete(
-            f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}"
-        )
-        assert response.status_code == 200
-
-    db = SessionLocal()
-    try:
-        assert db.get(Student, seeded["student_id"]) is None
-    finally:
-        db.close()
-    assert storage.output_cleanup_failed
-    assert photo_prefix in storage.deleted_prefixes
-    assert not storage.exists(photo_key)
-
-
-def test_deleted_student_id_reuse_cannot_publish_old_render(monkeypatch, tmp_path):
-    seeded = _seed_render_target()
-    storage = LocalStorageAdapter(tmp_path / "uploads")
-    monkeypatch.setattr(student_render_service, "get_storage", lambda: storage)
-    monkeypatch.setattr(project_student_service, "get_storage", lambda: storage)
-    monkeypatch.setattr(project_lifecycle_service, "get_storage", lambda: storage)
-
-    db = SessionLocal()
-    try:
-        original_student = db.get(Student, seeded["student_id"])
-        original_created_at = original_student.created_at
-    finally:
-        db.close()
-
-    render_started = threading.Event()
-    allow_render_finish = threading.Event()
-
-    def controlled_render(*args, **kwargs):
-        render_started.set()
-        assert allow_render_finish.wait(5), "測試未釋放舊學生渲染"
-        return ["stale-print-image"]
-
-    _patch_fast_render(monkeypatch, controlled_render)
-    render_result: dict = {}
-
-    with started_client() as client:
-        login(client)
-        render_thread = threading.Thread(
-            target=_run_render,
-            args=(seeded["project_id"], seeded["student_id"], render_result),
-        )
-        render_thread.start()
-        assert render_started.wait(5)
-
-        delete_response = client.delete(
-            f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}"
-        )
-        assert delete_response.status_code == 200
-
-        replacement_db = SessionLocal()
-        try:
-            replacement_db.add(Student(
-                id=seeded["student_id"],
-                project_id=seeded["project_id"],
-                name=seeded["student_name"],
-                order_index=0,
-                pages_data_json="[]",
-                created_at=original_created_at + timedelta(microseconds=1),
-            ))
-            replacement_db.commit()
-        finally:
-            replacement_db.close()
-
-        allow_render_finish.set()
-        render_thread.join(5)
-        assert not render_thread.is_alive()
-
-    assert isinstance(render_result.get("error"), HTTPException)
-    assert render_result["error"].status_code == 409
-    assert render_result["error"].detail["code"] == "render_input_changed"
-
-    db = SessionLocal()
-    try:
-        replacement_student = db.get(Student, seeded["student_id"])
-        assert replacement_student.name == seeded["student_name"]
-        assert replacement_student.pages_data_json == "[]"
-        assert replacement_student.created_at != original_created_at
-        assert replacement_student.output_filename is None
-    finally:
-        db.close()
-    assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
-
-
-@pytest.mark.parametrize("mutation", ["project_rename", "student_rename"])
+@pytest.mark.parametrize("mutation", ["project_rename", "album_name"])
 def test_rename_stays_successful_when_output_cleanup_fails(
     monkeypatch,
     tmp_path,
@@ -540,8 +993,8 @@ def test_rename_stays_successful_when_output_cleanup_fails(
             )
         else:
             response = client.put(
-                f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}",
-                data={"name": "清理失敗後的學生"},
+                f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}/album-name",
+                json={"album_name": "清理失敗後的相本名"},
             )
         assert response.status_code == 200
 
@@ -552,7 +1005,8 @@ def test_rename_stays_successful_when_output_cleanup_fails(
         if mutation == "project_rename":
             assert project.name == "清理失敗後的專案"
         else:
-            assert student.name == "清理失敗後的學生"
+            assert student.name == seeded["student_name"]
+            assert student.album_name == "清理失敗後的相本名"
         assert student.output_filename is None
     finally:
         db.close()

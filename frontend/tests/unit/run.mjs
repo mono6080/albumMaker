@@ -1,4 +1,7 @@
 import "./api.test.mjs";
+import "./organization-api.test.mjs";
+import "./legacy-project-migration.test.mjs";
+import "./editor-fonts.test.mjs";
 import "./photos.test.mjs";
 import "./photo-save.test.mjs";
 import "./camera.test.mjs";
@@ -11,6 +14,7 @@ import "./groups-commands.test.mjs";
 import "./groups-nested.test.mjs";
 import "./text.test.mjs";
 import "./roles.test.mjs";
+import "./classroom-assignments.test.mjs";
 
 import { runTests } from "./harness.mjs";
 

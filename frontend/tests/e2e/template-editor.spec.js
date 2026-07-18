@@ -9,6 +9,7 @@ import {
   closeProductGuide,
   fetchTemplateDetail,
   fetchTemplatePageLayout,
+  redPng,
 } from "./helpers.js";
 
 
@@ -96,6 +97,271 @@ async function deleteCurrentTemplatePage(page) {
 }
 
 
+test("non-editor routes skip editor fonts and the editor waits for a successful retry", async ({ page }) => {
+  let fontRequestCount = 0;
+  await page.route("**/fonts/**", async (route) => {
+    fontRequestCount += 1;
+    await route.fulfill({
+      status: 503,
+      headers: { "Cache-Control": "no-store" },
+      contentType: "text/plain",
+      body: "font unavailable",
+    });
+  });
+
+  await page.goto("/login");
+  await expect(page.getByPlaceholder("請輸入帳號")).toBeVisible();
+  expect(fontRequestCount).toBe(0);
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E editor font fallback ${Date.now()}`,
+    createTextLayout(901, "字型失敗仍可開啟"),
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect.poll(() => fontRequestCount).toBeGreaterThan(0);
+  // WebKit 收到字型 HTTP error 後仍可能讓 FontFaceSet.load pending；
+  // 已確認真實失敗 request 後補送標準事件，不等待 production timeout。
+  await page.evaluate(() => {
+    document.fonts.dispatchEvent(new Event("loadingerror"));
+  });
+  await expect(page.getByRole("alert")).toContainText(
+    "編輯器字型載入失敗",
+    { timeout: 15_000 },
+  );
+  await expect(page.locator('[data-guide="canvas-frame"]')).toHaveCount(0);
+  await page.unroute("**/fonts/**");
+  await page.getByRole("button", { name: "重試載入字型" }).click();
+  await expect.poll(
+    () => page.evaluate(() => performance.getEntriesByType("navigation")[0]?.type),
+  ).toBe("reload");
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+  await expect(page.locator('[data-guide="canvas-frame"]')).toBeVisible();
+  expect(fontRequestCount).toBeGreaterThan(0);
+});
+
+
+test("sticker upload on the active page updates the canvas immediately", async ({ page }) => {
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E active sticker upload ${Date.now()}`,
+    createTextLayout(905, "目前頁面貼圖"),
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+
+  const stickerInput = page.locator('[data-guide="tool-panel"] input[type="file"]').nth(1);
+  await stickerInput.setInputFiles({
+    name: "active-sticker.png",
+    mimeType: "image/png",
+    buffer: redPng,
+  });
+
+  await expect(page.getByText("貼圖已上傳", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-layer-ref^="sticker:"]')).toHaveCount(1);
+  await expect(page.locator('[data-guide="save-template"]')).toHaveAttribute("data-dirty", "true");
+});
+
+
+test("pending sticker upload cannot replace the newly selected page layout", async ({ page }) => {
+  const firstText = { id: 911, value: "貼圖上傳來源頁" };
+  const secondText = { id: 912, value: "貼圖回應期間的目前頁" };
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E stale sticker upload ${Date.now()}`,
+    createTextLayout(firstText.id, firstText.value),
+  );
+  await addPersistedTemplatePage(
+    page,
+    templateId,
+    createTextLayout(secondText.id, secondText.value),
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+
+  let releaseStickerResponse;
+  const stickerResponseGate = new Promise(resolve => {
+    releaseStickerResponse = resolve;
+  });
+  let announceStickerRequest;
+  const stickerRequestSeen = new Promise(resolve => {
+    announceStickerRequest = resolve;
+  });
+  await page.route(`**/api/templates/${templateId}/stickers`, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    announceStickerRequest();
+    await stickerResponseGate;
+    // WebKit 的 route.fetch 無法完整重送 file input multipart；延後原始 request 保留圖片 bytes。
+    await route.continue();
+  });
+
+  const stickerInput = page.locator('[data-guide="tool-panel"] input[type="file"]').nth(1);
+  await stickerInput.setInputFiles({
+    name: "late-sticker.png",
+    mimeType: "image/png",
+    buffer: redPng,
+  });
+  await stickerRequestSeen;
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
+  await expect(page.getByRole("button", { name: /^第 2 頁/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(`[data-layer-ref="text:${secondText.id}"]`)).toContainText(secondText.value);
+
+  const stickerUploadResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && response.url().endsWith(`/api/templates/${templateId}/stickers`)
+  ));
+  releaseStickerResponse();
+  expect((await stickerUploadResponse).status()).toBe(200);
+  await expect(page.getByText("貼圖已加入第 1 頁")).toBeVisible();
+  await expect(page.locator(`[data-layer-ref="text:${secondText.id}"]`)).toContainText(secondText.value);
+  await expect(page.locator('[data-layer-ref^="sticker:"]')).toHaveCount(0);
+  await expect(page.locator('[data-guide="save-template"]')).toHaveAttribute("data-dirty", "true");
+  await page.getByRole("button", { name: /^第 1 頁/ }).click();
+  await expect(page.locator('[data-layer-ref^="sticker:"]')).toHaveCount(1);
+});
+
+
+test("pending sticker upload merges with text saved while its request was pending", async ({ page }) => {
+  const textId = 915;
+  const originalText = "貼圖上傳前的文字";
+  const savedText = "貼圖回應前已儲存的最新版";
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(
+    page,
+    `E2E sticker save race ${Date.now()}`,
+    createTextLayout(textId, originalText),
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+
+  let releaseStickerResponse;
+  const stickerResponseGate = new Promise(resolve => {
+    releaseStickerResponse = resolve;
+  });
+  let announceStickerRequest;
+  const stickerRequestSeen = new Promise(resolve => {
+    announceStickerRequest = resolve;
+  });
+  await page.route(`**/api/templates/${templateId}/stickers`, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    announceStickerRequest();
+    await stickerResponseGate;
+    await route.continue();
+  });
+
+  const stickerInput = page.locator('[data-guide="tool-panel"] input[type="file"]').nth(1);
+  await stickerInput.setInputFiles({
+    name: "save-race-sticker.png",
+    mimeType: "image/png",
+    buffer: redPng,
+  });
+  await stickerRequestSeen;
+
+  const textarea = await selectTextLayer(page, textId, originalText);
+  await textarea.fill(savedText);
+  await saveTemplateLayout(page);
+  let persisted = await fetchTemplateDetail(page, templateId);
+  expect(persisted.pages[0].layout.text_labels[0].text).toBe(savedText);
+  expect(persisted.pages[0].layout.stickers).toHaveLength(0);
+
+  const stickerUploadResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && response.url().endsWith(`/api/templates/${templateId}/stickers`)
+  ));
+  releaseStickerResponse();
+  expect((await stickerUploadResponse).status()).toBe(200);
+  await expect(page.getByText("貼圖已上傳", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-layer-ref^="sticker:"]')).toHaveCount(1);
+  await saveTemplateLayout(page);
+
+  persisted = await fetchTemplateDetail(page, templateId);
+  expect(persisted.pages[0].layout.text_labels[0].text).toBe(savedText);
+  expect(persisted.pages[0].layout.stickers).toHaveLength(1);
+});
+
+
+test("pending background upload updates only its original page", async ({ page }) => {
+  const firstText = { id: 921, value: "背景上傳來源頁" };
+  const secondText = { id: 922, value: "背景回應期間的目前頁" };
+  await loginViaApi(page);
+  const { templateId, pageId: firstPageId } = await createTemplateWithLayout(
+    page,
+    `E2E stale background upload ${Date.now()}`,
+    createTextLayout(firstText.id, firstText.value),
+  );
+  await addPersistedTemplatePage(
+    page,
+    templateId,
+    createTextLayout(secondText.id, secondText.value),
+  );
+  await page.goto(`/templates/${templateId}/edit`);
+  await expect(page.getByText("模板編輯器")).toBeVisible();
+
+  let releaseBackgroundResponse;
+  const backgroundResponseGate = new Promise(resolve => {
+    releaseBackgroundResponse = resolve;
+  });
+  let announceBackgroundRequest;
+  const backgroundRequestSeen = new Promise(resolve => {
+    announceBackgroundRequest = resolve;
+  });
+  await page.route(
+    `**/api/templates/${templateId}/pages/${firstPageId}/background*`,
+    async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      announceBackgroundRequest();
+      await backgroundResponseGate;
+      await route.continue();
+    },
+  );
+
+  const backgroundInput = page.locator('[data-guide="tool-panel"] input[type="file"]').first();
+  await backgroundInput.setInputFiles({
+    name: "late-background.png",
+    mimeType: "image/png",
+    buffer: redPng,
+  });
+  const cropDialog = page.getByRole("dialog", { name: "裁切背景圖" });
+  await expect(cropDialog).toBeVisible();
+  const applyCropButton = cropDialog.getByRole("button", { name: "套用裁切" });
+  await expect(applyCropButton).toBeEnabled();
+  await applyCropButton.click();
+  await backgroundRequestSeen;
+
+  await page.getByRole("button", { name: /^第 2 頁/ }).click();
+  await expect(page.getByRole("button", { name: /^第 2 頁/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(`[data-layer-ref="text:${secondText.id}"]`)).toContainText(secondText.value);
+  await expect(page.getByText("待上傳背景", { exact: true })).toBeVisible();
+
+  const backgroundUploadResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && response.url().includes(
+      `/api/templates/${templateId}/pages/${firstPageId}/background`,
+    )
+  ));
+  releaseBackgroundResponse();
+  expect((await backgroundUploadResponse).status()).toBe(200);
+  await expect(page.getByText(/背景已上傳/)).toBeVisible();
+  await expect(page.locator(`[data-layer-ref="text:${secondText.id}"]`)).toContainText(secondText.value);
+  await expect(page.getByText("待上傳背景", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /^第 1 頁/ }).click();
+  await expect(page.getByText("已有背景", { exact: true })).toBeVisible();
+});
+
+
 test("admin can create a template and place canvas elements", async ({ page }) => {
   const templateName = `E2E 模板 ${Date.now()}`;
 
@@ -180,12 +446,13 @@ test("admin can create a template and place canvas elements", async ({ page }) =
   await expect(page.getByText("純文字屬性")).toBeVisible();
   const templateTextArea = page.locator('[data-guide="property-panel"] textarea').first();
   await templateTextArea.fill("主角：");
-  await page.getByRole("button", { name: "插入 {name}" }).click();
-  await expect(templateTextArea).toHaveValue("主角：{name}");
+  await page.getByRole("button", { name: "相本稱呼 {name}" }).click();
+  await page.getByRole("button", { name: "完整姓名 {full_name}" }).click();
+  await expect(templateTextArea).toHaveValue("主角：{name}{full_name}");
   await saveTemplateLayout(page);
 
   layout = await fetchTemplatePageLayout(page, template.id);
-  expect(layout.text_labels[0].text).toBe("主角：{name}");
+  expect(layout.text_labels[0].text).toBe("主角：{name}{full_name}");
 
   await page.getByRole("button", { name: "雙頁預覽" }).click();
   await expect(page.getByRole("dialog", { name: "雙頁預覽" })).toBeVisible();

@@ -1,7 +1,8 @@
 # 資料模型
 
-> Owns：ORM 模型、label_texts 三層覆蓋、layout_json 格式、migrations 規則。
-> Storage key 格式見 [storage.md](storage.md)；端點與權限見 [api.md](api.md)。
+> Owns：ORM 模型、孩子名冊、園所／學期資料與 migrations 規則。
+> 版面資料格式見 [layout-data-model.md](layout-data-model.md)；Storage key 格式見
+> [storage.md](storage.md)；端點與權限見 [api.md](api.md)。
 
 ---
 
@@ -9,15 +10,21 @@
 
 ```
 User (id, username UNIQUE, display_name, hashed_password, role,
-      ui_font_scale, supervisor_id FK→User〔舊版單一主管，僅相容保留〕, created_at)
-  ├─ supervisors / managed_teachers  ← teacher_supervisors 多對多（現行機制）
+      ui_font_scale, auth_version, created_at)
   ├─ owned_projects → Project.owner_id
+  ├─ created_projects → Project.created_by_id
   └─ comments       → ProjectComment.author_id
-
-teacher_supervisors (teacher_id, supervisor_id)   — 一位老師可有多位主管
 
 TemplatePeriod (id, department, name, status, created_at)   — 期別；狀態掛在期別上
   └─ templates → Template.period_id
+
+AcademicTerm (id, label, status, starts_on, ends_on, actor/time snapshots)
+  ├─ periods → AcademicTermPeriod(template_period_id UNIQUE, name/department/position snapshots)
+  └─ classrooms → AcademicTermClassroom(classroom_id, campus/classroom/department snapshots)
+       ├─ teachers → AcademicTermClassroomTeacher(teacher/姓名/duty snapshots)
+       ├─ students → AcademicTermClassroomStudent(academic_term_id,
+       │              source_membership_id nullable, roster_child_id/姓名 snapshots)
+       └─ work_slots → ClassPeriodWorkSlot(term_period_id, started_at)
 
 Template (id, name, period_id FK→TemplatePeriod, revision, created_at)
   └─ pages → TemplatePage[]（cascade delete-orphan，order_by page_number）
@@ -25,22 +32,60 @@ Template (id, name, period_id FK→TemplatePeriod, revision, created_at)
 TemplatePage (id, template_id FK, page_number, background_filename, layout_json TEXT)
   └─ UNIQUE(template_id, page_number)
 
+Campus (id, name UNIQUE, is_active, created_at, updated_at)
+  ├─ classrooms → Classroom[]
+  └─ supervisor_assignments → OrganizationSupervisorAssignment[]
+
+OrganizationSupervisorAssignment (campus_id, department nullable, supervisor_id nullable, supervisor_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
+
+Classroom (id, campus_id FK→Campus, department, name, is_active,
+           created_at, updated_at)
+  ├─ roster_members → ClassRosterMember[]
+  ├─ teacher_assignments → ClassroomTeacherAssignment[]
+  └─ projects → Project.classroom_id
+
+ClassRosterMember (id, classroom_id FK→Classroom,
+                   roster_child_id FK→RosterChild,
+                   started_at, ended_at, end_reason)
+  └─ ended_at IS NULL 的同一 RosterChild 全園只能有一筆
+
+ClassroomTeacherAssignment (classroom_id, teacher_id nullable, teacher_name_snapshot, duty, started_at/ended_at, end_reason, actor snapshots)
+
 Project (id, name, template_id FK, department, template_period_id FK,
          template_revision,                   ← 已同步的 live template 版本
-         owner_id FK→User, created_at, updated_at,
+         classroom_id FK→Classroom nullable,  ← NULL=待管理員遷移，僅 admin 可讀
+         class_period_work_slot_id FK→ClassPeriodWorkSlot nullable,
+         campus_id_snapshot, campus_name_snapshot, classroom_name_snapshot,
+         owner_id FK→User,                    ← 進度負責人，不授予相本權限
+         created_by_id FK→User nullable, created_by_name nullable,
+         created_at, updated_at,
          deleted_at, archive_expires_at,      ← 軟刪除：封存 30 天後到期
          completed_at,                        ← 全班完成：非 NULL 內容鎖定（主管/admin 可退回）
          label_texts_json TEXT)
   ├─ students → Student[]（cascade delete-orphan，order_by order_index）
+  ├─ assignment_history → ProjectAssignmentHistory[]
+  ├─ editor_assignments → ProjectEditorAssignment[]〔歷史稽核，runtime 不授權〕
   └─ comments → ProjectComment[]（cascade delete-orphan）
 
-Student (id, project_id FK, name, order_index, pages_data_json TEXT,
-         output_filename, roster_child_id FK→RosterChild〔NULL=同名歧義待確認〕,
+Student (id, project_id FK, name, album_name nullable, order_index, pages_data_json TEXT,
+         output_filename, roster_child_id FK→RosterChild nullable,
          created_at, updated_at)
   └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
 
 RosterChild (id, name〔正規化後、不設 UNIQUE〕, created_at)   — 園所層級孩子名冊
-  └─ students → Student.roster_child_id
+  ├─ students → Student.roster_child_id
+  └─ class_roster_members → ClassRosterMember.roster_child_id
+
+ProjectAssignmentHistory (id, project_id FK→Project,
+         from_owner_id/to_owner_id/changed_by_id FK→User nullable,
+         from_owner_name/to_owner_name/changed_by_name 快照,
+         reason, changed_at)
+
+ProjectEditorAssignment (project_id, user_id nullable, user_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
+
+TermReclassificationPlan (label, status, revision, source_fingerprint,
+                          target_academic_term_id, actor/time snapshots)
+  ├─ student_placements → TermStudentPlacement[]（來源快照 + classroom/departed 目標） └─ classroom_plans → TermClassroomPlan[] → TermClassroomTeacherTarget[]
 
 ProjectComment (id, project_id FK, author_id FK, content, created_at)
 
@@ -49,137 +94,159 @@ TemplateProjectSyncBackup (id, sync_id, template_id, project_id nullable,
          project_completed_at, project_label_texts_json, students_json, created_at)
 ```
 
+`legacy_teacher_supervisor_links` 是 terminal migration 建立的 raw SQL 稽核封存，不屬於
+`Base.metadata` 或正式 ORM。欄位為 `teacher_id`、`supervisor_id`、雙方顯示名稱快照與
+`archived_at`，同一 id pair 唯一且完全不設 FK；刪除／改名 User 都不改寫封存。
+
+舊相本 identity migration 使用兩張不進正式 ORM 的 append-only raw SQL ledger：
+
+- `legacy_project_classroom_migrations`：每個舊 Project 一筆，保存 Project／目標校班／部門
+  快照、preview `source_fingerprint`、Student／seed 數量、操作者與套用時間；operational id
+  都是無 FK 的 snapshot。
+- `legacy_student_identity_resolutions`：每位 Student 一筆，透過 `migration_id` 以
+  `ON DELETE RESTRICT` FK 連到上述 header，保存 Project／Student／原 provisional child
+  快照、`create_new | existing` action、resolved child、是否 seed、membership、fingerprint、
+  操作者與時間；其餘 operational id 不設 FK。
+
+兩張表的 update／delete 都由 trigger 阻擋；只供稽核與 Project NULL→class-backed transition
+trigger 驗證，不參與日常 ACL、名冊或匯出查詢。
+
+`legacy_project_identity_quarantines` 也是不進正式 ORM、完全不設 FK 的 append-only raw SQL
+稽核表。同一 Project 最多一筆，保存隔離前的 Project／校／班／封存狀態與 Student 總數、
+NULL link、失效 link、同 Project 重複 child link 及不重複異常 Student 數。startup migration
+會掃描所有 class-backed Project（包含已封存者）；只要有上述異常，就保留 Student link、
+Project 校班名稱快照及封存欄位，只把 `classroom_id` 清為 NULL，回到 admin-only 明確歸班
+佇列。這避免封存相本日後還原時帶著未解析身分重新取得班級 ACL；重跑不新增第二筆稽核。
+
 - SQLite 連線啟用 `PRAGMA foreign_keys=ON`；`check_same_thread=False`
 - 不設 `text_factory`，SQLAlchemy 以 UTF-8 存取；若用 raw sqlite3 讀取需自行處理 encoding
 - 角色定義與權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
+- `User.role=teacher|supervisor` 只表示可參與園所編制的操作帳號族群；實際任教與主管能力
+  分別由兩種 active assignment 推導，同一 User 可同時擁有兩者而不改 role。
 
-## 孩子名冊（RosterChild）：自動長出、不需維護
+## 孩子名冊（RosterChild）：園所設定是唯一 authority
 
-跨專案識別「同一個孩子」，供學期彙整匯出分組。設計原則：老師流程零改動，
-名冊由學生建立/改名時自動長出，admin 只處理例外。
+`RosterChild.id` 是跨班級、跨期辨識同一個孩子的穩定身分，供目前名單、相本快照與學期
+彙整共同引用。正常 runtime 不以姓名猜身分，也不提供 Student↔RosterChild link、孩子
+split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tests/test_roster.py` 釘住。
 
-- **正規化**：`roster_identity_service.normalize_child_name()` 移除所有空白（含全形）後比對
-- **自動連結**（`roster_identity_service.resolve_roster_child_id()`，掛在學生批次新增與改名）：
-  同名唯一命中 → 連既有名冊項；查無 → 自動建立；同名多筆（admin 拆分過）→
-  `roster_child_id = NULL` 待確認，由學期匯出頁的複核流程處理
-- **name 不設 UNIQUE**：同名不同人時 admin 用 link `create_new` 拆成兩筆
-  （學期匯出頁的待確認區與各期明細的「拆分」按鈕）；誤拆或改名造成的重複用 merge 併回
-- **孤兒自動清理**：改名、換連結、刪學生後若名冊項沒有任何學生，
-  由 `delete_roster_child_if_orphaned()` 順手刪除，避免污染歧義判斷與合併選單
-- migration `_add_roster_children_and_backfill` 依同一正規化規則回填既有學生；
-  冪等檢查鎖在 `students.roster_child_id` 欄位是否存在（避免覆蓋 admin 手動拆分）
+- 在園所設定把新入園學生加入班級目前名單時，每位學生建立新的 `RosterChild` 與第一段
+  `ClassRosterMember`；`name` 不設 UNIQUE，因此同名孩子仍是不同 id。
+- 改完整姓名會更新目前名冊的 `RosterChild.name`；轉班、回班與新學期重新編班沿用原
+  `RosterChild.id`，只結束／建立 `ClassRosterMember` 區間，不另建孩子身分。
+- 從目前名單建立相本時，`Student.roster_child_id` 沿用該穩定 id，`Student.name` 則保存
+  建立當下姓名快照；兩者在 Project runtime 都不可修改。
+- fresh legacy schema 首次加入 `students.roster_child_id` 時保持 `NULL`；不得依姓名建立或
+  共用 identity。已跑過舊姓名推定 migration 的非 NULL link，在 Project 未歸班期間仍只是
+  provisional evidence，不能當 established identity、候選預設值或報表分組依據。
+- established identity 必須已有任一 `ClassRosterMember`，或已被 class-backed Project
+  Student 使用。未歸班 Student 只能在 admin 歸班 transaction 以完整 explicit decision
+  連到 established id，或建立全新 id；`create_new` 不得沿用／promote provisional id。
+- Project 一旦 class-backed，trigger 會凍結 Student `project_id`、`name`、
+  `roster_child_id`。正常 API 沒有通用 Student link、RosterChild merge 或 split 入口；
+  完整 transition 契約見[園所名單與相本權限規格的 Migration](../specs/organization-roster-management-v1.md#migration)。
+
+## 班級名單、組織權限、每期快照與相本遷移
+
+- `ClassRosterMember` 表示班級名單的一段在班區間。`ended_at = NULL` 才屬於目前名單；
+  離園寫入 `departed`，轉班在原班結束 `transfer` 區間並於目標班建立新區間。
+  回班也以同一 `RosterChild.id` 建立新 row，不覆寫舊區間。
+- 同一 `RosterChild` 全園同時只能有一筆 active membership；同分校、部門與班級名稱
+  不可重複。班級的 `department` 沿用模板部門代碼 `infant` / `academy`。
+- 新入園由班級目前名單新增流程建立全新的 `RosterChild`；從班級建立新一期 Project 時，
+  只複製當下 active members 成為 `Student` 快照並沿用
+  `roster_child_id`；相本稱呼在這次建立時推導。之後新增、離園、轉班或名冊改名都不
+  自動增刪或改寫既有 Project/Student。
+- `Student` 集合與 `Student.name` 在 Project runtime 不可新增、複製、刪除或改名；完整姓名
+  只由建立當下的班級目前名單快照決定。跨期重新編班只改目前名單區間，下一期建立新相本
+  時才形成新的學生快照。
+- `AcademicTermClassroomStudent` 是學期最終名單；冗餘 `academic_term_id`
+  由 trigger 保證與 term classroom 同期，unique index 保證同孩子每學期只落一班。
+  `imported|active` 中新增／回班會加入、改名會更新、轉班會移班，離園保留最後班；
+  `closed` 後 insert/update/delete 皆由 trigger 阻擋。這些變動不改寫既有 Project/Student。
+- 老師編制也是不可覆寫的區間：非空集合恰有一位 `lead`，可有多位 `co_teacher`；候選帳號
+  可為 `role=teacher|supervisor`。所有目前老師不論 base role 都直接取得該班全部相本讀寫權；
+  新增／移除編制會立即改變權限但不改 Project。
+  建立相本時 owner 必須是目前老師；不再建立 `ProjectEditorAssignment`。
+- `OrganizationSupervisorAssignment.department=NULL` 代表全校主管，否則只涵蓋同校該部門；
+  候選帳號可為 `role=teacher|supervisor`，相本讀取／退回、目前班級與老師進度全部由此區間
+  推導，不要求改成 supervisor role。
+- `legacy_teacher_supervisor_links` 只供稽核。它的筆數可由園所遷移狀態查看，但任何 row
+  都不會建立校／部門 scope、班級編制或相本 ACL。
+- `Project.created_by_id` / `created_by_name` 記錄實際建立者且不隨 owner 轉交改變；
+  `owner_id` 只作進度歸戶。每次轉交另寫 `ProjectAssignmentHistory`，三種姓名快照讓帳號
+  日後改名或刪除後仍可稽核。
+- 新學期編班草稿完整保存每位目前學生與每班老師的目標狀態；套用前以
+  `source_fingerprint` 與 revision 防止覆蓋並行異動，成功時在同一 transaction 結束舊區間、
+  建立新區間、學期班級／學生／老師快照及完整工作格。正式學期與報表 invariants 見
+  [正式學期、工作格與報表規格](../specs/academic-term-reporting-v1.md)，園所名單 transition 見
+  [園所名單與相本權限規格](../specs/organization-roster-management-v1.md)。
+- `ClassPeriodWorkSlot` 是「正式學期 × 班級 × 期別」的唯一開工單位；新 Project 必須由目前
+  `imported|active` 學期尚未開始的工作格建立，並在同一 transaction 寫入學生名冊快照、
+  Project 組織快照與 `started_at`。封存不清空 `started_at`，因此同一格不能重建第二本。
+- 學期班級、學生與老師 row 只供報表快照；Project ACL 永遠由目前有效老師／主管區間推導。
+- migration 只為已有 `classroom_id` 的 Project 一次補齊名稱快照，不從 owner、名稱或舊主管
+  關係猜班級／scope；NULL 者保持 admin-only，管理員逐本選班寫快照後才啟用班級權限。active
+  editor rows 以 `classroom_scope_migration` 結束，歷史 row 不刪除且 runtime 永不讀取。
+- legacy Project 的 NULL→class-backed transition 必須先有與全部 Student 相符的 resolution
+  ledger rows；trigger 阻止繞過。歸班 apply 將 ledger、resolved links、可選的全量目前名單與
+  Project 組織快照放在同一 transaction，`seed_current_roster` 不支援 subset。沒有任何
+  Student 快照的空 legacy Project 不可歸班；管理員須封存後從班級目前名單重新建立相本。
+
+## 相本稱呼與姓名變數
+
+- `Student.name` 是建立相本時固定的完整姓名快照，用於名冊身份、照片檔名配對、管理搜尋與下載檔名。
+- `Student.album_name` 是可選的相本稱呼；`NULL` 時
+  `Student.effective_album_name` 回退完整姓名。空白輸入或 JSON `null` 正規化為 `NULL`；
+  這是 Project runtime 唯一可修改的學生 identity 顯示欄位，不改完整姓名或名冊連結。
+- 從班級目前名單建立 Project 快照時，`student_album_name_policy.py` 只替一般二至三字純漢字姓名移除首字；
+  已知複姓、單字、四字以上或混合字元不自動設定。候選若撞到同專案既有學生或同批
+  其他學生的 effective 相本稱呼，碰撞候選會一起撤回並重算，直到不再碰撞；撤回者保持
+  `NULL`；規則由 `tests/test_student_album_name.py` 釘住。
+- 既有學生可手動觸發同一套批次推導：目標包含所有空白 `album_name` 的學生，
+  已有非空白稱呼則作為 protected effective 名稱，不參與更新也絕不覆寫。
+  所有目標一起經過 fixed-point 碰撞重算；實際補上稱呼者在單一 transaction
+  失效舊輸出，無法安全推導者維持原狀。
+- 單筆推導只把指定且空白 `album_name` 的學生當目標；同專案其他所有學生都作為
+  protected effective 名稱，其中空白或舊資料純空白稱呼以完整姓名回退。這可避免
+  單筆候選撞到另一位尚未設定稱呼學生的完整姓名；已設定的指定學生維持原值。
+- 模板／專案／學生文字中的 `{name}` 代入 effective 相本稱呼，`{full_name}` 一律代入
+  完整姓名。兩個 token 都在三層文字合併後、排版前解析；渲染與快取契約見
+  [rendering.md](rendering.md#相冊輸出與-dirty-skip)。
+- 現有姓名不在 startup migration 自動拆姓。既有資料的候選產生與人工審核套用流程見
+  [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)。
 
 ## 對應文字（label_texts）三層覆蓋
 
-低 → 高（高覆蓋低）：
-
-```
-模板預設        layout_json["text_labels"][i]["text"]
-   ↓
-專案層級覆蓋     projects.label_texts_json = {page_index: {label_id: text}}
-   ↓
-學生個別覆蓋     students.pages_data_json[i]["label_texts"] = {label_id: text}
-```
-
-- 合併唯一進入點：`label_texts.py` 的 `merge_project_label_texts_into_pages()`。
-  學生值優先，專案值補足未覆寫處；學生尚無對應頁時以專案值補上空 photos 頁面
-- 資料結構工具（欄位↔entry 轉換、對齊正規化、樣式覆寫合併）集中在
-  `services/label_texts.py`
-- **Pydantic 型別陷阱**：專案層級 payload 是巢狀 dict
-  （`{page_index: {label_id: text}}`），端點必須宣告 `dict[str, Any]` —
-  Pydantic v2 的 `dict[str, str]` 在 lax mode 也會拒絕 value 為 dict 的資料（422）。
-  學生／單頁層級是平坦 `{label_id: text}`，用 `dict[str, str]` 即可
+完整契約已移至[版面資料模型的 label_texts 三層覆蓋](layout-data-model.md#對應文字label_texts三層覆蓋)。
 
 ## Live template revision 與頁面結構同步
 
-- Project 直接引用 live `Template`；版面微調在模板明確按「儲存」後套用到所有關聯專案。
-  `Template.revision` 每次模板像素／結構儲存遞增，`Project.template_revision` 只在同一筆
-  同步 transaction 完成後前進。
-- `TemplatePage.id` 是頁面穩定 identity，`page_number`／`page_index` 只是目前顯示順序。
-  結構同步依 page id 重排 `Project.label_texts_json` 與 `Student.pages_data_json`；同步後學生
-  page entry 會帶 `template_page_id`，照片的 storage path 不因重排而改名。
-- 結構變更會先回傳影響摘要與內容綁定的 confirmation hash；確認後才在單一 transaction
-  更新模板、既有專案、學生資料、revision、同步前備份與輸出失效。已被舊版流程留下的
-  超界頁資料會進同步備份，不會阻擋模板或靜默套到別頁。
-- 專案完成／封存、學生增刪與內容寫入都使用同一組依 ID 排序的 project locks；同步在鎖內
-  第二次讀取 confirmation 內容，避免狀態或名單插入確認與 commit 之間。
-- 任何會新增可見照片格的同步會把已完成專案退回可編輯；有關聯專案的模板不可刪到零頁。
-- `TemplateProjectSyncBackup` 保存 DB binding、舊頁面快照與同步前的專案完成時間，供稽核／人工救援；資產 retention
-  規則見 [storage.md 的 Storage key 格式](storage.md#storage-key-格式)。
+完整契約已移至[版面資料模型的 live template revision](layout-data-model.md#live-template-revision-與頁面結構同步)。
 
 ## layout_json 格式
 
-每個 `TemplatePage.layout_json` 儲存：
-
-```jsonc
-{
-  "canvas_width": 794,          // A4 直式 @96dpi
-  "canvas_height": 1123,
-  "group_contract": "nested-world-v2",
-  "photo_slots": [              // 照片格；尺寸模式為 content-box-v1（見下）
-    { "id": 1, "x": 50, "y": 120, "width": 400, "height": 300, "rotation": -3,
-      "layer_name": "主照片", "visible": true, "locked": false }
-  ],
-  "text_labels": [              // 對應文字：可被專案/學生層覆蓋
-    { "id": 1, "x": 80, "y": 820, "width": 640, "height": 80,
-      "text": "{name}今天完成了平衡挑戰！",
-      "font_size": 28, "font_color": "#333333",
-      "text_align": "center", "line_height": 1.4 }
-  ],
-  "stickers": [
-    { "id": 1, "path": "templates/tmpl1/stickers/star.png",
-      "filename": "star.png", "asset_revision": "sha256:...",
-      "x": 10, "y": 10, "width": 60, "height": 60 }
-  ],
-  "groups": [                 // flat registry；以 group ref 表達任意深度巢狀
-    { "id": "caption", "z_index": 0, "selection_rotation": 0,
-      "layer_name": "標題組", "visible": true, "locked": false,
-      "children": [{ "type": "sticker", "id": 1 }, { "type": "text", "id": 1 }] },
-    { "id": "page-block", "z_index": 4, "selection_rotation": 0,
-      "children": [
-        { "type": "photo", "id": 1 },
-        { "type": "group", "id": "caption" }
-      ] }
-  ],
-  "material_text_links": [   // 與 group topology 無關的一次性重設捷徑
-    { "kind": "material-text-v1", "material_id": 1, "text_id": 1 }
-  ],
-  "footer": { "text": "{name} · 2026年1月" }
-}
-```
-
-- `{name}` 渲染時替換為學生姓名（變數處理見 `frontend/src/utils/textVariables.js`
-  與後端渲染層）
-- **圖層 metadata**：`photo_slots[]` / `text_labels[]` / `stickers[]` / `groups[]` 都可選存
-  `layer_name` / `visible` / `locked`。沒存 `visible` 等同可見，只有布林值 `false`
-  才隱藏；沒存 `locked` 等同未鎖定。群組隱藏會使整個 descendant subtree 不渲染，
-  也不列入專案照片格／文字格與進度統計；既有學生照片和文字覆寫仍保留，
-  重新顯示後可繼續使用。舊 layout 不需 migration。
-- 氣泡框元素已移除；`text_bubbles` 不屬於現行 layout schema。資料遷移只會自動清除空陣列，
-  非空舊資料會保留供人工檢查，儲存 API 會明確拒絕。
-- **photo_slots 尺寸模式**：現行為 `content-box-v1`（照片內容區與外框 insets 分離），
-  由 `_migrate_photo_slots_to_content_box` 遷移既有資料並寫入備份表；
-  幾何計算集中在 `services/photo_frame_geometry.py` 與前端
-  `utils/photoFrameGeometry.js`，兩邊必須同步修改
-- **通用巢狀群組**：四種 leaves 仍留在原 arrays，以 world `x/y/width/height/rotation` 作為唯一幾何
-  權威；`groups[]` 只保存 direct membership、scope order 與 selection axis，group child 可再引用 group。
-  Group bounds 每次由所有 descendant leaves 推導，禁止持久化 `x/y/width/height/scale/matrix`。群組
-  縮放會改 leaf 外框，但文字的字級、字距、行高與內容不跟著縮放。
-- `material-text-v1` 只表示素材與普通文字框的關聯；沒有安全區或持續同步 constraint。
-  圖片分析只在使用者明確執行時建立／重設文字框幾何，不建立特殊群組，也不修改圖片幾何。
-- `flat-world-v1` 保持可讀；第一次 structural／素材文字操作才以同一筆 history commit 升級 v2。
-  本功能沒有 startup migration；沒有 `groups` 的舊 layout 繼續走既有 flat traversal，舊資料配對延後
-  到群組功能驗收後另案處理。
+完整契約已移至[版面資料模型的 layout_json 格式](layout-data-model.md#layout_json-格式)。
 
 ## Migrations 規則（`backend/migrations.py`）
 
 - `run_migrations()` 在後端**每次啟動**時執行；每個子函式必須**冪等**
   （先以 `PRAGMA table_info` / `sqlite_master` 檢查存在再操作）
 - 新遷移加在 `run_migrations()` 執行序列**尾端**，不改既有遷移
+- 歷史欄位的 add→rename→drop 鏈必須以「替代欄位已存在」作為終態標記；終態成立後
+  不得在後續啟動重新建立舊欄位，避免 drop-table 流程用舊 schema 重建資料表
+- 舊逐人主管 terminal migration 以 `legacy_teacher_supervisor_links` 作終態標記：先合併
+  `users.supervisor_id` 與 `teacher_supervisors`、帶雙方顯示名稱快照封存並驗證，再移除舊表與
+  欄位；早期建立／回填函式看到標記後必須跳過，重跑不得復活舊 schema
+- legacy Student identity migration 不以姓名 backfill：fresh legacy rows 保持 NULL；已存在的
+  姓名推定 link 不在 startup 拆分或沿用，而是在管理員歸班時把 original／resolved 值寫進
+  `legacy_project_classroom_migrations`／`legacy_student_identity_resolutions`。未歸班資料在此
+  之前持續隔離於 admin-only scope
 - **SQLite ADD COLUMN 不支援非常數預設值**（如 `CURRENT_TIMESTAMP`）：
   先加無預設欄位，再 `UPDATE ... SET col = CURRENT_TIMESTAMP WHERE col IS NULL` 回填
-- **SQLite 舊版不支援 DROP COLUMN**：用「建新表 → 複製 → 刪舊 → 改名」流程，
-  期間暫時關閉外鍵約束（範例見 `_drop_bubble_texts_json_column`；這是舊專案文字欄位的歷史遷移，
+- **SQLite 舊版不支援 DROP COLUMN**：fallback 用原始 `CREATE TABLE` 動態重建，
+  並重建既有 index／trigger、驗證 foreign keys；禁止硬編碼舊欄位清單
+  （範例見 `_drop_bubble_texts_json_column`；這是舊專案文字欄位的歷史遷移，
   與已移除的 layout 氣泡框無關）
 - 大型資料遷移（如 content-box）先寫備份表
   （`template_page_layout_migration_backups`）再改寫

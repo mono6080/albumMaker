@@ -4,7 +4,16 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from services.photo_transform_policy import PHOTO_SCALE_MAX
+
+
+class ProjectPermissions(BaseModel):
+    can_read: bool
+    can_edit: bool
+    can_reopen: bool
+    can_comment: bool
 
 
 class ProjectSummary(BaseModel):
@@ -20,18 +29,26 @@ class ProjectSummary(BaseModel):
     student_count: int
     # 審閱留言數：老師端在專案卡上看到主管留言的入口（閉環提示）
     comment_count: int = 0
+    classroom_id: Optional[int] = None
+    campus_name: Optional[str] = None
+    classroom_name: Optional[str] = None
     owner_id: Optional[int] = None
     owner_name: Optional[str] = None
+    created_by_id: Optional[int] = None
+    created_by_name: Optional[str] = None
     deleted_at: Optional[datetime] = None
     archive_expires_at: Optional[datetime] = None
     # 全班完成時間：非 NULL 代表內容鎖定
     completed_at: Optional[datetime] = None
+    permissions: ProjectPermissions
 
 
 class StudentInProject(BaseModel):
     """學生資料（內嵌於 ProjectDetail）"""
     id: int
     name: str
+    album_name: Optional[str] = None
+    effective_album_name: str
     order_index: int
     pages_data: Any  # JSON 結構，不強制型別
     output_filename: Optional[str] = None
@@ -50,7 +67,13 @@ class ProjectDetail(BaseModel):
     template_period_id: Optional[int] = None
     template_period_name: Optional[str] = None
     created_at: Optional[datetime] = None
+    classroom_id: Optional[int] = None
+    campus_name: Optional[str] = None
+    classroom_name: Optional[str] = None
     owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
+    created_by_id: Optional[int] = None
+    created_by_name: Optional[str] = None
     deleted_at: Optional[datetime] = None
     archive_expires_at: Optional[datetime] = None
     # 全班完成時間：非 NULL 代表內容鎖定
@@ -59,12 +82,15 @@ class ProjectDetail(BaseModel):
     updated_at: Optional[datetime] = None
     label_texts: Any
     students: list[StudentInProject]
+    permissions: ProjectPermissions
 
 
 class StudentEditorStudentSummary(BaseModel):
     """學生切換器只需的最小資料。"""
     id: int
     name: str
+    album_name: Optional[str] = None
+    effective_album_name: str
     order_index: int
 
 
@@ -78,6 +104,7 @@ class StudentEditorProject(BaseModel):
     completed_at: Optional[datetime] = None
     label_texts: Any
     students: list[StudentEditorStudentSummary]
+    permissions: ProjectPermissions
 
 
 class StudentEditorDetail(BaseModel):
@@ -104,7 +131,7 @@ class RenderStudentResult(BaseModel):
 class PhotoSlotValue(BaseModel):
     """單一照片欄位的資料（null 表示清除）"""
     path: str = Field(..., min_length=1, max_length=500)
-    scale: float = Field(1.0, ge=0.1, le=10.0)
+    scale: float = Field(1.0, ge=0.1, le=PHOTO_SCALE_MAX)
     offset_x: float = Field(0.0, ge=-10.0, le=10.0)
     offset_y: float = Field(0.0, ge=-10.0, le=10.0)
     brightness: float = Field(1.0, ge=0.1, le=3.0)
@@ -144,23 +171,25 @@ class PhotoMappingResult(BaseModel):
     renames: dict[str, dict[str, str]] = {}
 
 
-class ProjectCreated(BaseModel):
-    """建立專案回應"""
-    id: int
+class AutoFillAlbumNamesResult(BaseModel):
+    """既有學生自動補上相本稱呼的計數結果。"""
+    updated: int
+    unresolved: int
+
+
+class StudentIdentityResult(BaseModel):
+    """更新相本稱呼後的有效身分文字。"""
+    ok: bool = True
     name: str
-    department: Optional[str] = None
-    template_period_id: Optional[int] = None
+    album_name: Optional[str] = None
+    effective_album_name: str
 
 
-class BatchAddResult(BaseModel):
-    """批次新增學生回應"""
-    created: list[str]
-    skipped: list[str]
+class StudentAlbumNameUpdate(BaseModel):
+    """相本學生唯一可編欄位。"""
+    model_config = ConfigDict(extra="forbid")
 
-
-class CopyStudentsPayload(BaseModel):
-    """從既有專案複製學生名單的 payload"""
-    source_project_id: int
+    album_name: Optional[str]
 
 
 class RenderStudentError(BaseModel):

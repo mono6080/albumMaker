@@ -1,20 +1,13 @@
 // 使用者管理：使用者清單（桌機表格 + 行動版卡片，同一份資料兩種排版）
-// 含 inline 編輯顯示名稱/帳號、角色下拉、主管摘要、重設密碼、刪除；
+// 含 inline 編輯顯示名稱/帳號、角色下拉、重設密碼、刪除；
 // 編輯狀態與 API 呼叫都在 UserManagement 頁，這裡只負責呈現與轉發事件
 
 import { Trash2, KeyRound, Pencil, Check, X } from "lucide-react";
 
-import {
-  ROLE_OPTIONS,
-  ROLE_BADGE_STYLE,
-  canHaveSupervisor,
-  getSupervisorNames,
-  getSupervisorSummary,
-} from "../utils/userRoles";
+import { ROLE_OPTIONS, ROLE_BADGE_STYLE } from "../utils/userRoles";
 
 export default function UserList({
   users,
-  supervisors,
   // inline 編輯狀態：{ userId, field: 'display_name'|'username', value }（由頁面持有）
   editingField,
   setEditingField,
@@ -28,18 +21,16 @@ export default function UserList({
   setResetPasswords,
   onResetPassword,
   onDelete,
-  onOpenSupervisorEditor,
 }) {
   return (
     <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
       <div className="hidden overflow-x-auto md:block">
-      <table className="w-full min-w-[920px] text-sm">
+      <table className="w-full min-w-[760px] text-sm">
         <thead className="bg-gray-50 border-b border-gray-100">
           <tr>
             <th className="text-left px-4 py-3 text-gray-600 font-medium">顯示名稱</th>
             <th className="text-left px-4 py-3 text-gray-600 font-medium">帳號</th>
             <th className="text-left px-4 py-3 text-gray-600 font-medium">角色</th>
-            <th className="text-left px-4 py-3 text-gray-600 font-medium">主管</th>
             <th className="text-left px-4 py-3 text-gray-600 font-medium">重設密碼</th>
             <th className="px-4 py-3"></th>
           </tr>
@@ -103,30 +94,6 @@ export default function UserList({
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
-              </td>
-              <td className="px-4 py-3">
-                {canHaveSupervisor(user) ? (
-                  <div className="flex items-center gap-2 max-w-56">
-                    {supervisors.length === 0 ? (
-                      <span className="text-xs text-gray-300">未指定</span>
-                    ) : (
-                      <>
-                        <span className="text-xs text-gray-600 truncate" title={getSupervisorNames(user).join("、")}>
-                          {getSupervisorSummary(user)}
-                        </span>
-                        <button
-                          onClick={() => onOpenSupervisorEditor(user.id)}
-                          className="p-1 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 flex-shrink-0"
-                          title="編輯主管"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <span className="text-gray-300">—</span>
-                )}
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-1.5">
@@ -231,7 +198,7 @@ export default function UserList({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div>
               <label className="min-w-0">
                 <span className="mb-1 block text-xs font-medium text-gray-400">角色</span>
                 <select
@@ -245,24 +212,6 @@ export default function UserList({
                 </select>
               </label>
 
-              <div className="min-w-0">
-                <span className="mb-1 block text-xs font-medium text-gray-400">主管</span>
-                {canHaveSupervisor(user) ? (
-                  <button
-                    onClick={() => onOpenSupervisorEditor(user.id)}
-                    className="flex min-h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2 py-2 text-left text-xs text-gray-600"
-                  >
-                    <span className="truncate" title={getSupervisorNames(user).join("、")}>
-                      {supervisors.length === 0 ? "未指定" : getSupervisorSummary(user)}
-                    </span>
-                    <Pencil className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
-                  </button>
-                ) : (
-                  <div className="flex min-h-9 items-center rounded-lg border border-gray-100 bg-gray-50 px-2 text-xs text-gray-300">
-                    不需指定
-                  </div>
-                )}
-              </div>
             </div>
 
             <div>

@@ -657,7 +657,12 @@ test.describe("phone template editor", () => {
 });
 
 test.describe("desktop template editor breakpoint", () => {
-  test.use({ viewport: { width: 1024, height: 900 }, isMobile: false, hasTouch: false });
+  test.use({
+    viewport: { width: 1024, height: 900 },
+    deviceScaleFactor: 2,
+    isMobile: false,
+    hasTouch: false,
+  });
 
   test("1024px keeps the desktop inspector and hides phone controls", async ({ page }) => {
     await createAndOpenEditor(page, createMobileLayout(), "desktop-1024");
@@ -674,10 +679,29 @@ test.describe("desktop template editor breakpoint", () => {
 
     const stageSize = await page.evaluate(() => {
       const stage = window.Konva?.stages?.[0];
-      return stage ? { width: stage.width(), scale: stage.scaleX() } : null;
+      const layer = stage?.getLayers?.()[0];
+      const sceneCanvas = layer?.getNativeCanvasElement?.();
+      return stage && layer && sceneCanvas ? {
+        width: stage.width(),
+        height: stage.height(),
+        scale: stage.scaleX(),
+        scenePixelRatio: layer.getCanvas().getPixelRatio(),
+        hitPixelRatio: layer.getHitCanvas().getPixelRatio(),
+        sceneBackingWidth: sceneCanvas.width,
+        sceneBackingHeight: sceneCanvas.height,
+        sceneCssWidth: sceneCanvas.style.width,
+        sceneCssHeight: sceneCanvas.style.height,
+      } : null;
     });
     expect(stageSize).not.toBeNull();
     expect(stageSize.width).toBe(530);
+    expect(stageSize.height).toBe(750);
     expect(stageSize.scale).toBe(1);
+    expect(stageSize.scenePixelRatio).toBeCloseTo(794 / 530, 10);
+    expect(stageSize.hitPixelRatio).toBe(1);
+    expect(stageSize.sceneBackingWidth).toBe(794);
+    expect(stageSize.sceneBackingHeight).toBe(1123);
+    expect(stageSize.sceneCssWidth).toBe("530px");
+    expect(stageSize.sceneCssHeight).toBe("750px");
   });
 });

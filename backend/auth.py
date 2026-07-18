@@ -99,6 +99,8 @@ def get_current_user(
     current_user = db.query(User).filter(User.id == user_id).first()
     if not current_user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="使用者不存在")
+    if current_user.role == "none":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登入狀態已失效，請重新登入")
     if int(payload.get("ver", 0)) != int(current_user.auth_version or 0):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登入狀態已失效，請重新登入")
     return current_user

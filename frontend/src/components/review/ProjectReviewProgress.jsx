@@ -23,6 +23,8 @@ export default function ProjectReviewProgress({
   incompleteStudentCount,
   commentsCount,
   canEditCurrentProject,
+  canDownloadCurrentProject,
+  hasRenderedStudents,
   canReopenProject,
   canDownloadPrint,
   isBatchRendering,
@@ -158,7 +160,7 @@ export default function ProjectReviewProgress({
             </>
           )}
 
-          {workStage >= 2 && canEditCurrentProject && (
+          {workStage >= 2 && canDownloadCurrentProject && (canEditCurrentProject || hasRenderedStudents) && (
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <Button

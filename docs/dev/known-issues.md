@@ -2,7 +2,7 @@
 
 > Owns：所有「已知但尚未處理」的程式碼落差（drift）、未定案設計問題與營運缺口。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-13（33 項重構＋大檔拆分＋防漂移機制後）。
+> 最後盤點：2026-07-17。
 
 ---
 
@@ -20,7 +20,8 @@
 
 - **舊資料群組 migration 尚未實作**：通用巢狀群組 v2 契約詳見
   [Illustrator 式通用巢狀群組 v2 規格](../specs/illustrator-style-nested-groups-v2.md)；v1 保持可讀，但
-  現有未群組 layout 不會依位置猜配對，自動群組 migration 明確延後到功能驗收後另案設計
+  現有未群組 layout 不會依位置建立群組，自動群組 migration 明確延後到功能驗收後另案設計。
+  `backfill_material_text_links.py` 只會回填可確定的素材文字 metadata link，不會猜或改 group topology
 
 - **多 worker 下的並發**：`render_album` 是純 PIL（無共享 mutable state），
   但 uvicorn workers > 1 時 SQLite 寫入會搶鎖。目前單 worker、低並發沒事
@@ -38,16 +39,14 @@
 - **權限矩陣的隱藏假設**：若未來引入「主管可代老師編輯專案」，
   `assert_project_writable` 要展開（現況見
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）
-- **刪除 user 的專案過繼無 audit log**：`delete_user` 把專案過繼給執行的
-  admin，未留紀錄；日後加 audit log 表時要涵蓋
 - **補渲染 job 狀態存記憶體**：`services/export_jobs.py` 的 job registry
   是程序內 dict，後端重啟即消失（補渲染冪等、重新發起即可）；
   若未來走多 worker 需改外部儲存
 
 ## 測試缺口（未來高 leverage gate）
 
-1. **Playwright browser parity 升級**：現有 render-parity 用 Konva canvas
-   backend rasterize；更嚴格可做真實 TemplateEditor full-page screenshot diff
+1. **TemplateEditor 全頁視覺回歸**：文字已有真 Chromium／Pillow local-frame
+   layout + raster parity；尚未對實際 TemplateEditor 整頁做跨瀏覽器 screenshot diff
 2. **API negative contracts 持續擴充**：malformed payload 與更多
    endpoint-specific 403/404 邊界
 3. **前端元件測試（vitest / RTL）**：目前完全沒有

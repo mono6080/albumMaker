@@ -4,6 +4,8 @@ import importlib
 import json
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException
+
 from database import Project, SessionLocal
 from services import project_archive_service
 from services.storage import LocalStorageAdapter, get_storage
@@ -46,17 +48,20 @@ def test_batch_photo_upload_reports_success_skip_and_failure_then_continues(
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("batch_partial"))
-        assert_status(
-            client.post(
-                f"/api/projects/{project_id}/students/batch",
-                json=["Success Before", "Skip Existing", "Fail Middle", "Success After"],
-            ),
-            200,
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("batch_partial"),
+            student_names=[
+                "SuccessBefore",
+                "SkipExisting",
+                "FailMiddle",
+                "SuccessAfter",
+            ],
         )
         students = _students_by_name(client, project_id)
 
-        skip_student_id = students["Skip Existing"]["id"]
+        skip_student_id = students["SkipExisting"]["id"]
         existing_upload = client.post(
             revisioned_project_url(
                 client,
@@ -78,10 +83,10 @@ def test_batch_photo_upload_reports_success_skip_and_failure_then_continues(
 
         monkeypatch.setattr(storage, "put", fail_one_photo)
         mapping = {
-            str(students["Success Before"]["id"]): "success-before.jpg",
+            str(students["SuccessBefore"]["id"]): "success-before.jpg",
             str(skip_student_id): "skip-existing.jpg",
-            str(students["Fail Middle"]["id"]): "fail-middle.jpg",
-            str(students["Success After"]["id"]): "success-after.jpg",
+            str(students["FailMiddle"]["id"]): "fail-middle.jpg",
+            str(students["SuccessAfter"]["id"]): "success-after.jpg",
         }
         batch_response = client.post(
             revisioned_project_url(
@@ -104,8 +109,8 @@ def test_batch_photo_upload_reports_success_skip_and_failure_then_continues(
         assert_status(batch_response, 200)
         payload = batch_response.json()
         assert [item["student_id"] for item in payload["succeeded"]] == [
-            students["Success Before"]["id"],
-            students["Success After"]["id"],
+            students["SuccessBefore"]["id"],
+            students["SuccessAfter"]["id"],
         ]
         assert payload["skipped"] == [{
             "student_id": skip_student_id,
@@ -114,20 +119,20 @@ def test_batch_photo_upload_reports_success_skip_and_failure_then_continues(
             "reason": "already_has_photo",
         }]
         assert payload["failed"] == [{
-            "student_id": students["Fail Middle"]["id"],
+            "student_id": students["FailMiddle"]["id"],
             "filename": "fail-middle.jpg",
             "path": None,
             "reason": "storage_write_failed",
         }]
 
         updated = _students_by_name(client, project_id)
-        before_path = _photo_path(updated["Success Before"])
-        after_path = _photo_path(updated["Success After"])
+        before_path = _photo_path(updated["SuccessBefore"])
+        after_path = _photo_path(updated["SuccessAfter"])
         assert before_path and storage.exists(before_path)
         assert after_path and storage.exists(after_path)
-        assert _photo_path(updated["Skip Existing"]) == existing_path
+        assert _photo_path(updated["SkipExisting"]) == existing_path
         assert storage.exists(existing_path)
-        assert _photo_path(updated["Fail Middle"]) is None
+        assert _photo_path(updated["FailMiddle"]) is None
 
 
 def test_expired_project_purge_commits_only_namespaces_cleaned_successfully(
@@ -250,19 +255,21 @@ def test_render_all_students_continues_after_one_student_fails(monkeypatch):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("render_partial"))
-        names = ["Render Before", "Render Failure", "Render After"]
-        assert_status(
-            client.post(f"/api/projects/{project_id}/students/batch", json=names),
-            200,
+        names = ["RenderBefore", "RenderFailure", "RenderAfter"]
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("render_partial"),
+            student_names=names,
         )
         render_calls = []
 
-        def fake_render(project, student, requested_project_id, db):
+        def fake_render(project, student, requested_project_id, db, *, actor_id):
             del project, db
             assert requested_project_id == project_id
+            assert actor_id is not None
             render_calls.append(student.name)
-            if student.name == "Render Failure":
+            if student.name == "RenderFailure":
                 raise RuntimeError("simulated render failure")
             return {"pdf": f"outputs/{student.name}.pdf", "pages": 1}
 
@@ -274,8 +281,38 @@ def test_render_all_students_continues_after_one_student_fails(monkeypatch):
         assert render_calls == names
         assert response.json() == {
             "rendered": [
-                {"student": "Render Before", "pdf": "outputs/Render Before.pdf"},
-                {"student": "Render After", "pdf": "outputs/Render After.pdf"},
+                {"student": "RenderBefore", "pdf": "outputs/RenderBefore.pdf"},
+                {"student": "RenderAfter", "pdf": "outputs/RenderAfter.pdf"},
             ],
-            "errors": [{"student": "Render Failure", "error": "產生失敗"}],
+            "errors": [{"student": "RenderFailure", "error": "產生失敗"}],
         }
+
+
+def test_render_all_students_does_not_swallow_revoked_access(monkeypatch):
+    """批次途中重驗出的撤權必須維持 403，不可偽裝成整體 200。"""
+    render_router = importlib.import_module("routers.projects.render")
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("render_revoked"),
+            student_names=["RenderRevoked"],
+        )
+
+        def reject_render(project, student, requested_project_id, db, *, actor_id):
+            del project, student, db, actor_id
+            assert requested_project_id == project_id
+            raise HTTPException(status_code=403, detail="無此專案的編輯權限")
+
+        monkeypatch.setattr(
+            render_router,
+            "render_and_save_student_album",
+            reject_render,
+        )
+
+        response = client.post(f"/api/projects/{project_id}/render/all")
+
+        assert_status(response, 403)

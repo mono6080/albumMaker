@@ -1,7 +1,8 @@
 # 系統架構
 
 > Owns：技術棧、分層設計、目錄結構、模組職責、非目標。
-> 資料形狀見 [data-model.md](data-model.md)；渲染細節見 [rendering.md](rendering.md)。
+> 資料形狀見 [核心資料模型](data-model.md)與[版面資料模型](layout-data-model.md)；
+> 渲染細節見 [rendering.md](rendering.md)。
 
 ---
 
@@ -38,12 +39,14 @@ backend/
   migrations.py        啟動時自動執行的冪等 schema 遷移（規則見 data-model.md）
   auth.py              JWT 產生/驗證、bcrypt 密碼、get_current_user / require_role
   template_periods.py  模板期別的部門常數與狀態邏輯
-  crud/                template_crud / project_crud / user_crud / roster_crud（get_or_404 輔助）
+  crud/                template_crud / project_crud / user_crud /
+                       organization_crud（get_or_404 輔助）
   schemas/             Pydantic schema（跨路由共用者）
   routers/
     auth.py            /api/auth/*（login / logout / me）
     users.py           /api/users/*（admin only，含 .xlsx 批次匯入）
-    roster.py          /api/roster/*（admin only：名冊配對、學期彙整匯出、老師進度）
+    roster.py          /api/roster/*（穩定名冊身分的 scope 學期彙整與老師進度）
+    organization.py    /api/organization/*（園所設定、scope 班級、新學期編班）
     templates/         /api/templates/*，拆分子模組：
       __init__.py        路由組合（periods 先掛載，避免被 /{template_id} 吃掉）
       _helpers.py        序列化與驗證 helper
@@ -59,6 +62,7 @@ backend/
       photos.py          照片上傳（單張/共用/批次分配）、讀取、mapping
       texts.py           對應文字讀取 / 更新 / 批次更新
       comments.py        審閱留言
+      assignments.py     進度負責人轉交、歷程與已停用的協作者入口（admin）
       render.py          渲染、PDF / 圖片 / ZIP 輸出
   services/
     render_service.py    頁面渲染 API：render_page / render_album / save_album_pdf /
@@ -68,7 +72,11 @@ backend/
     project_service.py   舊 import 相容 facade；新程式直接 import 下列責任 owner
     project_access_service.py  專案 read/write/content/completion 權限判斷
     project_lifecycle_service.py  專案建立、改名、封存、還原、完成與退回 use case
-    project_student_service.py  學生新增／複製／改名／刪除與頁面 skip use case
+    project_assignment_service.py  owner 進度歸戶轉交與歷史 editor 稽核
+    organization_service.py  校／部門主管、學生／老師區間、相本歸班與班級相本快照
+    organization_term_service.py  編班草稿、目標正式學期、fingerprint、差異驗證、快照／工作格與原子套用
+    organization_transaction.py / organization_lock.py  園所 ACL 異動的共用交易／鎖邊界
+    project_student_service.py  本期學生相本稱呼與頁面 skip use case
     project_photo_service.py  單張／共用／批次照片、讀取、縮圖與 mapping use case
     project_text_service.py  專案／學生／批次文字 use case
     project_comment_service.py  審閱留言 use case
@@ -82,10 +90,10 @@ backend/
     file_service.py      Storage key 計算、上傳驗證與壓縮、照片縮圖（支援 HEIF）
     label_texts.py       label_texts 資料結構工具與專案／學生／模板文字合併
     roster_service.py    舊 import 相容 facade；新程式直接 import 下列責任 owner
-    roster_identity_service.py  名冊姓名正規化、自動連結、歧義與 link／merge
-    semester_render_service.py  學期缺漏相本逐本補渲染與 partial-success 進度
-    semester_export_service.py  學期預覽、分組、ZIP planning／manifest／stream
-    teacher_overview_service.py  老師進度總覽與 Excel 匯出
+    roster_identity_service.py  名冊姓名正規化（不負責 identity 連結、合併或拆分）
+    semester_render_service.py  正式學期工作格缺漏 PDF 逐本補渲染與 partial-success 進度
+    semester_export_service.py  依學期校班快照與學生穩定身分建立 cell、ZIP plan／manifest／stream
+    teacher_overview_service.py  班級×期別四軸進度總覽與同源 Excel 匯出
     template_service.py  模板複製（頁面、背景、貼圖資產）
     template_lifecycle_service.py  模板改名與刪除 use case
     template_period_service.py  部門與期別 CRUD use case
@@ -139,15 +147,17 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 | 頁面 | 路徑 | 用途 |
 |------|------|------|
 | Login | `/login` | 登入 |
-| ProjectList | `/`、`/projects` | 專案清單、建立、封存/還原 |
+| ProjectList | `/`、`/projects` | 「相本工作」：teacher 以目前班級為主體，主教從尚未開工的正式學期期別工作格選模板建立相本；其他角色依 object permission 顯示 |
 | ClassEdit | `/projects/:id/edit` | 相本編輯器（全班 scope）：全班共用照片（選格→選分配方式→上傳；依檔名整批匯入為獨立入口）+ 全班對應文字；舊 `/projects/:id/batch` 轉址至此 |
 | StudentEdit | `/projects/:projectId/students/:studentId/edit` | 相本編輯器（學生 scope）：單一學生照片 + 個別文字；與 ClassEdit 以 ScopeSwitcher 的全班/個別按鈕互切；下載集中在班級總覽 |
-| ProjectReview | `/projects/:id/review` | 「班級總覽」工作台：學生名單 Modal、照片進度與階段引導（製作→全班完成→交件）、單人與全班下載、審閱留言 |
+| ProjectReview | `/projects/:id/review` | 「班級總覽」工作台：本期學生固定快照與相本稱呼、照片進度與階段引導（製作→全班完成→交件）、單人與全班下載、審閱留言 |
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
-| SemesterExport | `/admin/semester-export` | 學期彙整匯出：名冊分組預覽 + 配對複核 + ZIP 下載（admin；supervisor 唯讀） |
-| TeacherOverview | `/admin/teacher-overview` | 老師進度：各老師（含尚未建專案者）的期別專案、照片格填滿進度、空白文字提醒與全班完成狀態（admin 全部；supervisor 管轄老師；PDF 產出狀態歸學期匯出頁） |
+| OrganizationManagement | `/admin/organization` | 園所設定：校／部門主管、班級老師與學生、相本建立／逐位 identity 決策後顯式歸班，以及 owner 進度歸戶（admin） |
+| TermReclassification | `/admin/organization/new-term` | 新學期編班草稿：完整學生／老師目標、差異驗證與確認套用（admin） |
+| SemesterExport | `/admin/semester-export` | 依正式學期校／班快照與穩定學生身分顯示各期 cell 狀態；admin 補渲染與下載 ZIP，主管限 scope 唯讀 |
+| TeacherOverview | `/admin/teacher-overview` | 正式學期班級×期別矩陣；分開顯示建立、照片內容、交件、列印 PDF 與 Excel（admin 全部；主管限 active scope） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
 
 各路由的角色守衛（`PrivateRoute` + `allowedRoles`）見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)。

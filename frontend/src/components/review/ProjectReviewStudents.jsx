@@ -1,7 +1,7 @@
 import { CheckCircle2, Clock, Search, Users } from "lucide-react";
 
 import StudentReviewCard from "../StudentReviewCard";
-import { Badge, Button, SegmentedControl, fieldControlClass } from "../ui";
+import { Badge, SegmentedControl, fieldControlClass } from "../ui";
 
 const REVIEW_STATUS_FILTER_OPTIONS = [
   { value: "all", label: "全部", icon: Users, guideId: "review-filter-all" },
@@ -17,6 +17,7 @@ export default function ProjectReviewStudents({
   previewTimestamp,
   templateRevision,
   canEditCurrentProject,
+  canDownloadCurrentProject,
   photoProgressByStudentId,
   rendering,
   renderingImages,
@@ -27,7 +28,6 @@ export default function ProjectReviewStudents({
   emptyFilteredStudentMessage,
   getVisiblePageIndexes,
   isImageShareReady,
-  onOpenRoster,
   onPreview,
   onDownloadPdf,
   onDownloadImages,
@@ -65,15 +65,8 @@ export default function ProjectReviewStudents({
       {students.length === 0 ? (
         <div className="text-center py-20 text-gray-400">
           <Users className="mx-auto mb-3 h-10 w-10 opacity-30" />
-          <p className="text-sm">尚無學生</p>
-          {canEditCurrentProject ? (
-            <Button type="button" onClick={onOpenRoster} variant="primary" className="mt-4">
-              <Users className="h-4 w-4" />
-              新增學生名單
-            </Button>
-          ) : (
-            <p className="mt-1 text-xs">待老師新增學生名單</p>
-          )}
+          <p className="text-sm">此相本沒有學生快照</p>
+          <p className="mt-1 text-xs">請管理員確認遷移資料，或從正確班級重新建立本期相本</p>
         </div>
       ) : visibleStudents.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
@@ -90,6 +83,7 @@ export default function ProjectReviewStudents({
               ts={previewTimestamp}
               templateRevision={templateRevision}
               canEditCurrentProject={canEditCurrentProject}
+              canDownloadCurrentProject={canDownloadCurrentProject}
               photoProgress={photoProgressByStudentId.get(student.id)}
               isRendering={rendering[student.id]}
               isImageRendering={renderingImages[student.id]}

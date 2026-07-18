@@ -2,7 +2,7 @@
 // 各 spec 檔依需要具名 import
 import { expect } from "@playwright/test";
 import { Buffer } from "node:buffer";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
 export const E2E_SECRET_KEY = "e2e-secret-do-not-use";
+export const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 export const redPng = Buffer.from(
@@ -36,7 +37,7 @@ export async function loginViaApi(page) {
   await page.context().addCookies([{
     name: "access_token",
     value: token,
-    url: "http://127.0.0.1:5173",
+    url: E2E_BASE_URL,
     httpOnly: true,
     sameSite: "Lax",
     expires: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
@@ -83,21 +84,96 @@ export async function createTemplateWithLayout(page, templateName, layout) {
 }
 
 
-export async function createProject(page, projectName, templateId) {
-  const projectResponse = await page.request.post("/api/projects/", {
-    form: { name: projectName, template_id: String(templateId) },
+export async function createClassroomFixture(page, department, memberNames = []) {
+  const fixtureId = randomUUID().replaceAll("-", "");
+  const teacherPassword = "e2e-classroom-teacher-password";
+  const teacherResponse = await page.request.post("/api/users/", {
+    data: {
+      username: `e2e_teacher_${fixtureId}`,
+      display_name: `E2E 帶班老師 ${fixtureId.slice(0, 8)}`,
+      password: teacherPassword,
+      role: "teacher",
+    },
   });
-  expect(projectResponse.ok()).toBeTruthy();
-  return await projectResponse.json();
+  expect(teacherResponse.ok()).toBeTruthy();
+  const teacher = await teacherResponse.json();
+
+  const campusResponse = await page.request.post("/api/organization/campuses", {
+    data: { name: `E2E 分校 ${fixtureId.slice(0, 8)}` },
+  });
+  expect(campusResponse.ok()).toBeTruthy();
+  const campus = await campusResponse.json();
+
+  const classroomResponse = await page.request.post("/api/organization/classrooms", {
+    data: {
+      campus_id: campus.id,
+      department,
+      name: `E2E 班級 ${fixtureId.slice(0, 8)}`,
+    },
+  });
+  expect(classroomResponse.ok()).toBeTruthy();
+  const classroom = await classroomResponse.json();
+
+  const teachersResponse = await page.request.put(
+    `/api/organization/classrooms/${classroom.id}/teachers`,
+    { data: { teachers: [{ teacher_id: teacher.id, duty: "lead" }] } },
+  );
+  expect(teachersResponse.ok()).toBeTruthy();
+
+  if (memberNames.length > 0) {
+    const membersResponse = await page.request.post(
+      `/api/organization/classrooms/${classroom.id}/members/batch`,
+      { data: { members: memberNames.map(name => ({ name })) } },
+    );
+    expect(membersResponse.ok()).toBeTruthy();
+  }
+
+  return { teacher, teacherPassword, campus, classroom };
 }
 
 
-export async function addStudents(page, projectId, names) {
-  const batchResponse = await page.request.post(`/api/projects/${projectId}/students/batch`, {
-    data: names,
-  });
-  expect(batchResponse.ok()).toBeTruthy();
-  return await batchResponse.json();
+export async function getCreatableWorkSlot(page, classroomId, templateId) {
+  const classroomsResponse = await page.request.get("/api/organization/my-classrooms");
+  expect(classroomsResponse.ok()).toBeTruthy();
+  const payload = await classroomsResponse.json();
+  const classroom = payload.classrooms.find(item => item.id === classroomId);
+  expect(classroom, `找不到測試班級 ${classroomId}`).toBeTruthy();
+  const workSlot = classroom.work_slots.find(slot => (
+    slot.can_create_project && slot.template_ids.includes(templateId)
+  ));
+  expect(workSlot, `班級 ${classroomId} 沒有模板 ${templateId} 的可開工工作格`).toBeTruthy();
+  return workSlot;
+}
+
+
+export async function createProject(page, projectName, templateId, memberNames = []) {
+  const templateResponse = await page.request.get(`/api/templates/${templateId}`);
+  expect(templateResponse.ok()).toBeTruthy();
+  const template = await templateResponse.json();
+  expect(template.department).toBeTruthy();
+
+  const { teacher, classroom } = await createClassroomFixture(
+    page,
+    template.department,
+    memberNames,
+  );
+  const workSlot = await getCreatableWorkSlot(page, classroom.id, templateId);
+
+  const projectResponse = await page.request.post(
+    `/api/organization/classrooms/${classroom.id}/projects`,
+    {
+      data: {
+        name: projectName,
+        template_id: templateId,
+        owner_id: teacher.id,
+        work_slot_id: workSlot.id,
+      },
+    },
+  );
+  expect(projectResponse.ok()).toBeTruthy();
+  const project = await projectResponse.json();
+  expect(project.classroom_id).toBe(classroom.id);
+  return project;
 }
 
 
@@ -133,11 +209,14 @@ export async function fetchStudentPreview(page, projectId, studentId, cacheBuste
     `/api/projects/${projectId}/students/${studentId}/preview/0?t=${cacheBuster}`,
   );
   expect(previewResponse.ok()).toBeTruthy();
-  expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
-  expect(previewResponse.headers()["cache-control"]).toContain("max-age");
+  expect(previewResponse.headers()["content-type"]).toContain("image/png");
+  expect(previewResponse.headers()["cache-control"]).toBe(
+    "private, no-cache, must-revalidate",
+  );
   const body = await previewResponse.body();
-  expect(body[0]).toBe(0xff);
-  expect(body[1]).toBe(0xd8);
+  expect(body.subarray(0, 8)).toEqual(Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]));
   return previewResponse;
 }
 

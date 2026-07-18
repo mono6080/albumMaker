@@ -128,7 +128,7 @@ export default function StudentEdit() {
   const { canEditProject } = usePermissions();
   useEffect(() => {
     if (!project) return;
-    if (!canEditProject(project.owner_id)) {
+    if (!canEditProject(project)) {
       toast.error("你沒有此專案的編輯權限，已切到班級總覽");
       navigate(`/projects/${projectId}/review`, { replace: true });
     }
@@ -231,8 +231,8 @@ export default function StudentEdit() {
       },
       {
         element: '[data-guide="student-text-insert-name"]',
-        title: "插入 {name}",
-        description: "點一下就能在游標位置加入姓名變數，輸出時會替換成這位學生姓名。",
+        title: "插入姓名變數",
+        description: "{name} 會代入相本稱呼（未設定時沿用完整姓名）；{full_name} 一律代入完整姓名。",
         side: "top",
         align: "end",
         onBeforeStep: () => { setMobileTab("text"); },

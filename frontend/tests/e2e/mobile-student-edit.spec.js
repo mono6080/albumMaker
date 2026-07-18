@@ -6,7 +6,6 @@ import {
   loginViaApi,
   createTemplateWithLayout,
   createProject,
-  addStudents,
   fetchProjectDetail,
   loadFixtureLayout,
   layoutWithTwoPhotoSlots,
@@ -28,11 +27,10 @@ test.describe("mobile student edit layout", () => {
 
     await loginViaApi(page);
     const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-    const project = await createProject(page, projectName, templateId);
-    await addStudents(page, project.id, ["Mobile Alice"]);
+    const project = await createProject(page, projectName, templateId, ["MobileAlice"]);
 
     const detail = await fetchProjectDetail(page, project.id);
-    const student = detail.students.find(item => item.name === "Mobile Alice");
+    const student = detail.students.find(item => item.name === "MobileAlice");
     expect(student).toBeTruthy();
 
     await page.goto(`/projects/${project.id}/students/${student.id}/edit`);

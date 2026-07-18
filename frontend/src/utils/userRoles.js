@@ -1,4 +1,4 @@
-// 使用者角色、權限群組與主管顯示的共用常數/helpers
+// 使用者角色、路由群組與後端 object permission 的共用常數/helpers
 // 純模組供路由、權限 hook 與使用者管理共用。
 
 export const USER_ROLES = Object.freeze({
@@ -47,14 +47,6 @@ export const ROLE_GROUPS = Object.freeze({
     USER_ROLES.TEACHER,
     USER_ROLES.SUPERVISOR,
   ]),
-  PROJECT_OWNER_EDITORS: Object.freeze([USER_ROLES.TEACHER, USER_ROLES.SUPERVISOR]),
-  COMMENTERS: Object.freeze([
-    USER_ROLES.ADMIN,
-    USER_ROLES.ART_TEAM,
-    USER_ROLES.SUPERVISOR,
-  ]),
-  REPORT_VIEWERS: Object.freeze([USER_ROLES.ADMIN, USER_ROLES.SUPERVISOR]),
-  SUPERVISABLE: Object.freeze([USER_ROLES.TEACHER, USER_ROLES.SUPERVISOR]),
 });
 
 const ROLE_PERMISSIONS = Object.freeze(Object.fromEntries(
@@ -67,11 +59,12 @@ const ROLE_PERMISSIONS = Object.freeze(Object.fromEntries(
       isTeacher: role === USER_ROLES.TEACHER,
       canManageTemplates: ROLE_GROUPS.TEMPLATE_MANAGERS.includes(role),
       canAccessProjects: ROLE_GROUPS.PROJECT_READERS.includes(role),
-      canCreateProject: ROLE_GROUPS.PROJECT_EDITORS.includes(role),
+      // 建立相本是班級物件權限，不存在全域角色型建立入口。
+      canCreateProject: false,
       canDownloadPrint: role === USER_ROLES.ADMIN,
-      canComment: ROLE_GROUPS.COMMENTERS.includes(role),
       canManageUsers: role === USER_ROLES.ADMIN,
-      canViewReports: ROLE_GROUPS.REPORT_VIEWERS.includes(role),
+      // 非管理員的報表能力由校／部門主管指派提供。
+      canViewReports: role === USER_ROLES.ADMIN,
     }),
   ]),
 ));
@@ -80,29 +73,39 @@ export function getRolePermissions(role) {
   return ROLE_PERMISSIONS[role] ?? ROLE_PERMISSIONS[USER_ROLES.NONE];
 }
 
-export function canUserEditProject(role, currentUserId, ownerUserId) {
-  return role === USER_ROLES.ADMIN || (
-    ROLE_GROUPS.PROJECT_OWNER_EDITORS.includes(role)
-    && currentUserId === ownerUserId
-  );
+export function canUserEditProject(_role, _currentUserId, project) {
+  return project?.permissions?.can_edit === true;
 }
 
-export function canHaveSupervisor(userOrRole) {
-  const role = typeof userOrRole === "string" ? userOrRole : userOrRole?.role;
-  return ROLE_GROUPS.SUPERVISABLE.includes(role);
+export function canUserReadProject(_role, project) {
+  return project?.permissions?.can_read === true;
 }
 
-export function getSupervisorIds(user) {
-  return user.supervisor_ids ?? (user.supervisor_id ? [user.supervisor_id] : []);
+// PDF／圖片下載端點只要求 object read capability；產生新檔仍由 can_edit 控制。
+export function canUserDownloadProject(_role, project) {
+  return project?.permissions?.can_read === true;
 }
 
-export function getSupervisorNames(user) {
-  return user.supervisor_names ?? (user.supervisor_name ? [user.supervisor_name] : []);
+export function canUserReopenProject(_role, project) {
+  return project?.permissions?.can_reopen === true;
 }
 
-export function getSupervisorSummary(user) {
-  const names = getSupervisorNames(user);
-  if (names.length === 0) return "未指定";
-  if (names.length <= 2) return names.join("、");
-  return `${names.slice(0, 2).join("、")} +${names.length - 2}`;
+export function canUserCommentProject(_role, project) {
+  return project?.permissions?.can_comment === true;
+}
+
+export function canUserViewSupervisorReports(user) {
+  return user?.role === USER_ROLES.ADMIN
+    || user?.organization_permissions?.can_view_supervisor_reports === true;
+}
+
+export function isOrganizationPermissionsPending(user) {
+  return [USER_ROLES.TEACHER, USER_ROLES.SUPERVISOR].includes(user?.role)
+    && user.organization_permissions === undefined;
+}
+
+export function getAssignableAccountLabel(user) {
+  const displayName = user?.display_name ?? user?.username ?? `使用者 #${user?.id}`;
+  const roleLabel = ROLE_LABELS[user?.role];
+  return roleLabel ? `${displayName} · ${roleLabel}` : displayName;
 }

@@ -19,18 +19,20 @@ from tests.helpers import (
     unique_name,
     use_tmp_uploads,
 )
+from services.roster_identity_service import normalize_child_name
 
-from database import SessionLocal, Student
+from database import Project, SessionLocal, Student
 from services.storage import get_storage
 
 
 def create_student(client: TestClient, project_id: int, name: str = "Edge Student") -> int:
-    response = client.post(f"/api/projects/{project_id}/students/batch", json=[name])
-    assert_status(response, 200)
-
     detail = client.get(f"/api/projects/{project_id}")
     assert_status(detail, 200)
-    return detail.json()["students"][0]["id"]
+    return next(
+        student["id"]
+        for student in detail.json()["students"]
+        if normalize_child_name(student["name"]) == normalize_child_name(name)
+    )
 
 
 def large_jpeg_bytes() -> bytes:
@@ -61,14 +63,33 @@ def test_auth_missing_resource_and_validation_edges():
         missing_template = client.get("/api/templates/999999")
         assert_status(missing_template, 404)
 
+        fixture_template_id, _ = create_template_with_page(client)
+        fixture_project_id = create_project(client, fixture_template_id)
+        fixture_project = client.get(f"/api/projects/{fixture_project_id}").json()
+        db = SessionLocal()
+        try:
+            fixture_work_slot_id = db.get(
+                Project,
+                fixture_project_id,
+            ).class_period_work_slot_id
+        finally:
+            db.close()
         project_with_missing_template = client.post(
-            "/api/projects/",
-            data={"name": unique_name("missing_template_project"), "template_id": "999999"},
+            f"/api/organization/classrooms/{fixture_project['classroom_id']}/projects",
+            json={
+                "name": unique_name("missing_template_project"),
+                "template_id": 999999,
+                "work_slot_id": fixture_work_slot_id,
+            },
         )
         assert_status(project_with_missing_template, 404)
 
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id)
+        project_id = create_project(
+            client,
+            template_id,
+            student_names=["Edge Student"],
+        )
         student_id = create_student(client, project_id)
 
         project_page_out_of_range = client.get(f"/api/projects/{project_id}/preview/99")
@@ -101,7 +122,11 @@ def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id)
+        project_id = create_project(
+            client,
+            template_id,
+            student_names=["Edge Student"],
+        )
         student_id = create_student(client, project_id)
         photo_url = f"/api/projects/{project_id}/students/{student_id}/pages/0/photos/1"
         photo_write_url = revisioned_project_url(
@@ -203,7 +228,12 @@ def test_render_failure_edges_for_templates_without_pages():
         template_response = client.post("/api/templates/", data={"name": unique_name("empty_template")})
         assert_status(template_response, 200)
         template_id = template_response.json()["id"]
-        project_id = create_project(client, template_id, name=unique_name("empty_template_project"))
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("empty_template_project"),
+            student_names=["No Page Student"],
+        )
         student_id = create_student(client, project_id, name="No Page Student")
 
         render_student = client.post(f"/api/projects/{project_id}/students/{student_id}/render")
@@ -212,7 +242,7 @@ def test_render_failure_edges_for_templates_without_pages():
         render_all = client.post(f"/api/projects/{project_id}/render/all")
         assert_status(render_all, 200)
         assert render_all.json()["rendered"] == []
-        assert render_all.json()["errors"] == [{"student": "No Page Student", "error": "產生失敗"}]
+        assert render_all.json()["errors"] == [{"student": "NoPageStudent", "error": "產生失敗"}]
 
 
 def test_template_in_use_cannot_be_deleted(monkeypatch, tmp_path):
@@ -326,11 +356,16 @@ def test_project_mutation_role_edges(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("role_edges_project"))
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("role_edges_project"),
+            student_names=["Edge Student"],
+        )
         student_id = create_student(client, project_id)
 
         supervisor, supervisor_password = create_user(client, "supervisor")
-        teacher, teacher_password = create_user(client, "teacher", supervisor_id=supervisor["id"])
+        teacher, teacher_password = create_user(client, "teacher")
         art_team, art_team_password = create_user(client, "art_team")
 
         teacher_photo_url = revisioned_project_url(
@@ -354,8 +389,11 @@ def test_project_mutation_role_edges(monkeypatch, tmp_path):
 
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
-        supervisor_batch_add = client.post(f"/api/projects/{project_id}/students/batch", json=["Blocked"])
-        assert_status(supervisor_batch_add, 403)
+        supervisor_album_name = client.put(
+            f"/api/projects/{project_id}/students/{student_id}/album-name",
+            json={"album_name": "Blocked"},
+        )
+        assert_status(supervisor_album_name, 403)
 
         client.cookies.clear()
         login(client, art_team["username"], art_team_password)
@@ -373,7 +411,12 @@ def test_photo_mapping_swap_keeps_both_files(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client, photo_slot_count=2)
-        project_id = create_project(client, template_id, name=unique_name("mapping_swap_project"))
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("mapping_swap_project"),
+            student_names=["Edge Student"],
+        )
         student_id = create_student(client, project_id)
 
         first_upload = client.post(
@@ -429,8 +472,18 @@ def test_photo_mapping_rejects_foreign_storage_path(monkeypatch, tmp_path):
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        first_project_id = create_project(client, template_id, name=unique_name("mapping_owner"))
-        second_project_id = create_project(client, template_id, name=unique_name("mapping_foreign"))
+        first_project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("mapping_owner"),
+            student_names=["First Student"],
+        )
+        second_project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("mapping_foreign"),
+            student_names=["Second Student"],
+        )
         first_student_id = create_student(client, first_project_id, "First Student")
         second_student_id = create_student(client, second_project_id, "Second Student")
 
@@ -478,7 +531,12 @@ def test_corrupt_project_json_returns_422():
     with started_client() as client:
         login(client)
         template_id, _ = create_template_with_page(client)
-        project_id = create_project(client, template_id, name=unique_name("corrupt_json_project"))
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("corrupt_json_project"),
+            student_names=["Edge Student"],
+        )
         student_id = create_student(client, project_id)
 
         db = SessionLocal()

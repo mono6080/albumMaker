@@ -1,19 +1,14 @@
 // 使用者管理頁面（僅 admin 可存取）
-// 提供使用者清單、建立、修改角色/主管/密碼、刪除功能
+// 提供帳號清單、建立、修改角色/密碼、刪除；組織權限統一在園所設定維護。
 
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { UserPlus } from "lucide-react";
 import ConfirmModal from "../components/ConfirmModal";
-import SupervisorEditorModal from "../components/SupervisorEditorModal";
 import UserExcelImportForm from "../components/UserExcelImportForm";
 import UserList from "../components/UserList";
-import {
-  ROLE_OPTIONS,
-  USER_ROLES,
-  canHaveSupervisor,
-  getSupervisorIds,
-} from "../utils/userRoles";
+import { ROLE_OPTIONS, USER_ROLES } from "../utils/userRoles";
 import {
   fetchAllUsers,
   createUser,
@@ -33,14 +28,12 @@ function getErrorMessage(error, fallback) {
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
-  const [supervisors, setSupervisors] = useState([]);
 
   // 新增使用者表單狀態
   const [newUsername, setNewUsername] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState(USER_ROLES.TEACHER);
-  const [newSupervisorIds, setNewSupervisorIds] = useState([]);
   const [isCreating, setIsCreating] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [isImporting, setIsImporting] = useState(false);
@@ -51,21 +44,14 @@ export default function UserManagement() {
 
   // inline 編輯狀態：{ userId, field: 'display_name'|'username', value }
   const [editingField, setEditingField] = useState(null);
-  const [supervisorEditorUserId, setSupervisorEditorUserId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const editInputRef = useRef(null);
   const importFileRef = useRef(null);
-  const supervisorEditorUser = users.find((user) => user.id === supervisorEditorUserId);
-  const supervisorEditorOptions = supervisorEditorUser
-    ? supervisors.filter(supervisor => supervisor.id !== supervisorEditorUser.id)
-    : [];
 
   const loadUsers = async () => {
     try {
       const response = await fetchAllUsers();
-      const allUsers = response.data;
-      setUsers(allUsers);
-      setSupervisors(allUsers.filter((u) => u.role === USER_ROLES.SUPERVISOR));
+      setUsers(response.data);
     } catch {
       toast.error("載入使用者清單失敗");
     }
@@ -75,10 +61,6 @@ export default function UserManagement() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    if (newRole === USER_ROLES.TEACHER && newSupervisorIds.length === 0) {
-      toast.error("請至少指定一位主管");
-      return;
-    }
     setIsCreating(true);
     try {
       const params = {
@@ -86,12 +68,11 @@ export default function UserManagement() {
         display_name: newDisplayName,
         password: newPassword,
         role: newRole,
-        ...(canHaveSupervisor(newRole) ? { supervisor_ids: newSupervisorIds } : {}),
       };
       await createUser(params);
       toast.success("使用者已建立");
       setNewUsername(""); setNewDisplayName(""); setNewPassword("");
-      setNewRole(USER_ROLES.TEACHER); setNewSupervisorIds([]);
+      setNewRole(USER_ROLES.TEACHER);
       await loadUsers();
     } catch (error) {
       toast.error(getErrorMessage(error, "建立失敗"));
@@ -129,31 +110,6 @@ export default function UserManagement() {
     } catch (error) {
       toast.error(getErrorMessage(error, "更新失敗"));
     }
-  };
-
-  const handleSupervisorToggle = async (user, supervisorId, checked) => {
-    const currentSupervisorIds = getSupervisorIds(user);
-    if (user.role === USER_ROLES.TEACHER && !checked && currentSupervisorIds.length <= 1) {
-      toast.error("請至少保留一位主管");
-      return;
-    }
-    const nextSupervisorIds = checked
-      ? [...new Set([...currentSupervisorIds, supervisorId])]
-      : currentSupervisorIds.filter(id => id !== supervisorId);
-    try {
-      await updateUser(user.id, { supervisor_ids: nextSupervisorIds });
-      toast.success("主管已更新");
-      await loadUsers();
-    } catch (error) {
-      toast.error(getErrorMessage(error, "更新失敗"));
-    }
-  };
-
-  const toggleNewSupervisor = (supervisorId, checked) => {
-    setNewSupervisorIds(prev => checked
-      ? [...new Set([...prev, supervisorId])]
-      : prev.filter(id => id !== supervisorId)
-    );
   };
 
   const handleResetPassword = async (userId) => {
@@ -217,16 +173,18 @@ export default function UserManagement() {
         onConfirm={async () => { await confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
       />
-      {supervisorEditorUser && (
-        <SupervisorEditorModal
-          user={supervisorEditorUser}
-          supervisorIds={getSupervisorIds(supervisorEditorUser)}
-          options={supervisorEditorOptions}
-          onToggle={(supervisorId, checked) => handleSupervisorToggle(supervisorEditorUser, supervisorId, checked)}
-          onClose={() => setSupervisorEditorUserId(null)}
-        />
-      )}
-      <h1 className="text-xl font-bold text-gray-900">使用者管理</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">人員帳號</h1>
+          <p className="mt-1 text-sm text-gray-500">這裡只管理登入帳號與角色；實際園所權限由校、部門與班級編制決定。</p>
+        </div>
+        <Link
+          to="/admin/organization"
+          className="inline-flex min-h-10 items-center justify-center rounded-xl bg-indigo-50 px-4 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
+        >
+          前往園所設定權限
+        </Link>
+      </div>
 
       <UserExcelImportForm
         fileInputRef={importFileRef}
@@ -269,11 +227,7 @@ export default function UserManagement() {
           />
           <select
             value={newRole}
-            onChange={(e) => {
-              const role = e.target.value;
-              setNewRole(role);
-              if (!canHaveSupervisor(role)) setNewSupervisorIds([]);
-            }}
+            onChange={(e) => setNewRole(e.target.value)}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
           >
             {ROLE_OPTIONS.map((opt) => (
@@ -281,29 +235,6 @@ export default function UserManagement() {
             ))}
           </select>
         </div>
-        {canHaveSupervisor(newRole) && (
-          <div className="border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
-            <div className="text-xs font-medium text-gray-500 mb-2">
-              主管（可多選{newRole === USER_ROLES.SUPERVISOR ? "，選填" : ""}）
-            </div>
-            {supervisors.length === 0 ? (
-              <div className="text-xs text-gray-400">尚無主管</div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-36 overflow-y-auto pr-1">
-                {supervisors.map((supervisor) => (
-                  <label key={supervisor.id} className="inline-flex items-center gap-1.5 text-xs text-gray-700 bg-white border border-gray-200 rounded-lg px-2 py-1">
-                    <input
-                      type="checkbox"
-                      checked={newSupervisorIds.includes(supervisor.id)}
-                      onChange={(e) => toggleNewSupervisor(supervisor.id, e.target.checked)}
-                    />
-                    <span className="truncate">{supervisor.display_name}</span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
         <button
           type="submit"
           disabled={isCreating}
@@ -317,7 +248,6 @@ export default function UserManagement() {
       {/* 使用者清單 */}
       <UserList
         users={users}
-        supervisors={supervisors}
         editingField={editingField}
         setEditingField={setEditingField}
         editInputRef={editInputRef}
@@ -329,7 +259,6 @@ export default function UserManagement() {
         setResetPasswords={setResetPasswords}
         onResetPassword={handleResetPassword}
         onDelete={handleDelete}
-        onOpenSupervisorEditor={setSupervisorEditorUserId}
       />
     </div>
   );

@@ -29,6 +29,7 @@ export default function useProjectReviewDownloads({
   getVisiblePageIndexes,
   reloadProject,
   projectLoadSequence,
+  canRender,
 }) {
   const [rendering, setRendering] = useState({});
   const [renderingImages, setRenderingImages] = useState({});
@@ -75,17 +76,25 @@ export default function useProjectReviewDownloads({
   const handleDownloadOne = async (studentId) => {
     setRendering(previous => ({ ...previous, [studentId]: true }));
     try {
-      await renderStudent(projectId, studentId);
-      await reloadProject();
+      const studentRecord = project.students.find(student => student.id === studentId);
+      if (!studentRecord?.output_filename && !canRender) {
+        toast.error("尚未產生檔案，請由帶班老師先完成產生");
+        return;
+      }
+      if (canRender) {
+        await renderStudent(projectId, studentId);
+        await reloadProject();
+      }
       await downloadApiBlob(
         renderClient,
         buildDownloadPdfUrl(projectId, studentId, effectiveMode),
         "album.pdf",
       );
     } catch {
-      showRetryToast("產生失敗", () => handleDownloadOne(studentId));
+      showRetryToast(canRender ? "產生失敗" : "下載失敗", () => handleDownloadOne(studentId));
+    } finally {
+      setRendering(previous => ({ ...previous, [studentId]: false }));
     }
-    setRendering(previous => ({ ...previous, [studentId]: false }));
   };
 
   const handleDownloadOneImages = async (studentId) => {
@@ -93,6 +102,10 @@ export default function useProjectReviewDownloads({
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
       if (!studentRecord) return;
+      if (!studentRecord.output_filename && !canRender) {
+        toast.error("尚未產生檔案，請由帶班老師先完成產生");
+        return;
+      }
 
       if (isMobileDevice()) {
         const preparedShare = imageShareDrafts[studentId];
@@ -125,8 +138,10 @@ export default function useProjectReviewDownloads({
         return;
       }
 
-      await renderStudent(projectId, studentId);
-      await reloadProject();
+      if (canRender) {
+        await renderStudent(projectId, studentId);
+        await reloadProject();
+      }
       await downloadApiBlob(
         renderClient,
         buildDownloadImagesZipUrl(projectId, studentId, effectiveMode),
@@ -167,14 +182,25 @@ export default function useProjectReviewDownloads({
     setRenderingAll(true);
     setRenderAllProgress({ current: 0, total: students.length });
     try {
-      const stillFailed = await renderAllStudentsWithRetry(
-        students,
-        (current, total) => setRenderAllProgress({ current, total }),
-      );
-      await reloadProject();
-      if (stillFailed.length > 0) {
-        showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAll);
-        return;
+      if (canRender) {
+        const stillFailed = await renderAllStudentsWithRetry(
+          students,
+          (current, total) => setRenderAllProgress({ current, total }),
+        );
+        await reloadProject();
+        if (stillFailed.length > 0) {
+          showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAll);
+          return;
+        }
+      } else {
+        const renderedCount = students.filter(student => student.output_filename).length;
+        if (renderedCount === 0) {
+          toast.error("目前沒有已產生的檔案可下載");
+          return;
+        }
+        if (renderedCount < students.length) {
+          toast(`將下載已產生的 ${renderedCount}/${students.length} 位學生檔案`);
+        }
       }
       triggerNativeDownload(buildDownloadAllZipUrl(projectId, effectiveMode));
       toast.success("已開始下載，請留意瀏覽器的下載列");
@@ -192,6 +218,13 @@ export default function useProjectReviewDownloads({
     setRenderingAllImages(true);
     setRenderAllImagesProgress({ current: 0, total: students.length });
     try {
+      const downloadableStudents = canRender
+        ? students
+        : students.filter(student => student.output_filename);
+      if (downloadableStudents.length === 0) {
+        toast.error("目前沒有已產生的檔案可下載");
+        return;
+      }
       if (isMobileDevice()) {
         if (allImagesShareDraft?.files?.length) {
           const shareResult = await shareFiles(allImagesShareDraft.files, allImagesShareDraft.title);
@@ -205,7 +238,7 @@ export default function useProjectReviewDownloads({
         }
 
         const files = await buildShareImageFiles(
-          students,
+          downloadableStudents,
           Date.now(),
           (current, total) => setRenderAllImagesProgress({ current, total }),
         );
@@ -219,14 +252,18 @@ export default function useProjectReviewDownloads({
         return;
       }
 
-      const stillFailed = await renderAllStudentsWithRetry(
-        students,
-        (current, total) => setRenderAllImagesProgress({ current, total }),
-      );
-      await reloadProject();
-      if (stillFailed.length > 0) {
-        showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAllImages);
-        return;
+      if (canRender) {
+        const stillFailed = await renderAllStudentsWithRetry(
+          students,
+          (current, total) => setRenderAllImagesProgress({ current, total }),
+        );
+        await reloadProject();
+        if (stillFailed.length > 0) {
+          showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAllImages);
+          return;
+        }
+      } else if (downloadableStudents.length < students.length) {
+        toast(`將下載已產生的 ${downloadableStudents.length}/${students.length} 位學生檔案`);
       }
       triggerNativeDownload(buildDownloadAllImagesZipUrl(projectId, effectiveMode));
       toast.success("已開始下載，請留意瀏覽器的下載列");

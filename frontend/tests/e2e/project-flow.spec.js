@@ -1,12 +1,13 @@
-// 專案主流程 e2e：建專案/名單、共用照片、全班完成鎖定
+// 專案主流程 e2e：班級名單快照、相本稱呼、共用照片、全班完成鎖定
 import { expect, test } from "@playwright/test";
 import {
   redPng,
   bluePng,
   loginViaApi,
   createTemplateWithLayout,
+  createClassroomFixture,
+  getCreatableWorkSlot,
   createProject,
-  addStudents,
   fetchProjectDetail,
   uploadStudentPhoto,
   loadFixtureLayout,
@@ -16,34 +17,57 @@ import {
 } from "./helpers.js";
 
 
-test("admin can create a project and batch students from the browser", async ({ page }) => {
+test("lead teacher creates a class project from the current roster snapshot", async ({ page }) => {
   const layout = await loadFixtureLayout();
   const templateName = `E2E 專案模板 ${Date.now()}`;
   const projectSuffix = "東區校-十階A";
+  const projectName = `${templateName} ${projectSuffix}`;
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const templateResponse = await page.request.get(`/api/templates/${templateId}`);
+  expect(templateResponse.ok()).toBeTruthy();
+  const template = await templateResponse.json();
+  const { teacher, teacherPassword, classroom } = await createClassroomFixture(
+    page,
+    template.department,
+    ["Alice", "王小明"],
+  );
+
+  await page.context().clearCookies();
+  const loginResponse = await page.request.post("/api/auth/login", {
+    form: { username: teacher.username, password: teacherPassword },
+  });
+  expect(loginResponse.ok()).toBeTruthy();
 
   await page.goto("/projects");
-  await page.getByRole("button", { name: "新建專案" }).click();
-  await page.getByLabel("選擇模板").selectOption(String(templateId));
-  const customNameInput = page.getByLabel("自訂名稱");
-  await expect(customNameInput).toHaveAttribute("placeholder", "例：東區校-十階A");
-  await expect(page.getByText("接在模板名稱後，格式：分校-班級")).toBeVisible();
-  await customNameInput.fill(projectSuffix);
-  await expect(page.getByText(`${templateName} ${projectSuffix}`, { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "建立專案" }).click();
+  await expect(page.getByRole("heading", { name: classroom.name, exact: true })).toBeVisible();
+  const workSlot = await getCreatableWorkSlot(page, classroom.id, templateId);
+  await page.getByRole("button", { name: "建立新一期相本" }).click();
+  const createProjectDialog = page.getByRole("dialog", { name: `建立新一期相本：${classroom.name}` });
+  await createProjectDialog.getByLabel("相本名稱").fill(projectName);
+  await createProjectDialog.getByLabel("正式學期期別").selectOption(String(workSlot.id));
+  await createProjectDialog.getByLabel("此期模板").selectOption(String(templateId));
+  const createProjectResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && new URL(response.url()).pathname === `/api/organization/classrooms/${classroom.id}/projects`
+  ));
+  await createProjectDialog.getByRole("button", { name: "建立班級相本" }).click();
+  expect((await createProjectResponse).ok()).toBeTruthy();
+  await expect(createProjectDialog).toHaveCount(0);
+  await expect(page.getByText(projectName, { exact: true })).toBeVisible();
 
-  // 建立成功後直接導向班級總覽（工作台），空狀態指向名單 CTA
-  await expect(page.getByRole("button", { name: "新增學生名單" })).toBeVisible();
+  // 建立成功後由班級卡片進入總覽，名單已帶入建立當下的班級目前名單。
+  const createdProjectCard = page.locator('[data-guide="project-card"]').filter({ hasText: projectName });
+  await createdProjectCard.getByRole("link", { name: "班級總覽" }).click();
+  await expect(page.getByRole("button", { name: "本期學生" })).toBeVisible();
 
-  const projectName = `${templateName} ${projectSuffix}`;
   await page.goto("/projects");
   await expect(page.getByText(projectName)).toBeVisible();
 
   const projectSearch = page.getByLabel("搜尋專案");
   await projectSearch.fill("沒有這個專案");
-  await expect(page.getByText(`沒有符合「沒有這個專案」的專案`)).toBeVisible();
+  await expect(page.getByText("這個班級沒有符合目前搜尋的相本", { exact: true })).toBeVisible();
   await expect(page.getByText(projectName)).toHaveCount(0);
   await projectSearch.fill(projectName);
   await expect(page.getByText(projectName)).toBeVisible();
@@ -53,28 +77,78 @@ test("admin can create a project and batch students from the browser", async ({ 
   await expect(page.getByText(projectName)).toBeVisible();
 
   await page.getByRole("button", { name: "製作教學" }).click();
-  await expect(page.locator(".driver-popover")).toContainText("新建專案");
-  await expect(page.locator(".driver-popover")).toContainText("每個班級每個月建立");
+  await expect(page.locator(".driver-popover")).toContainText("建立新一期相本");
+  await expect(page.locator(".driver-popover")).toContainText("主教直接在目前任教班級建立新一期");
   await closeProductGuide(page);
 
-  // 尚無學生的專案卡顯示單一「下一步：加入學生名單」入口（進班級總覽）
+  // 從班級下的相本卡片進入總覽管理這一期學生快照。
   await page.locator(".group").filter({ hasText: projectName }).first().locator('[data-guide="project-review-link"]').click();
   await expect(page.getByText(projectName)).toBeVisible();
 
-  // 名單改為工作台上的 Modal 管理
-  await page.getByRole("button", { name: "新增學生名單" }).click();
-  const rosterDialog = page.getByRole("dialog", { name: "學生名單" });
+  // 工作台只核對本期固定快照，完整姓名唯讀；本期只設定相本稱呼。
+  await page.getByRole("button", { name: "本期學生" }).click();
+  const rosterDialog = page.getByRole("dialog", { name: "本期學生快照" });
   await expect(rosterDialog).toBeVisible();
   await expect.poll(() => rosterDialog.evaluate(dialog => dialog.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape");
   await expect(rosterDialog).toHaveCount(0);
-  await page.getByRole("button", { name: "新增學生名單" }).click();
+  await page.getByRole("button", { name: "本期學生" }).click();
   await expect(rosterDialog).toBeVisible();
-  await rosterDialog.getByPlaceholder("每行一位，或用逗號 / 頓號分隔").fill("Alice\nBob\nAlice");
-  await rosterDialog.getByRole("button", { name: "新增" }).click();
-  await expect(rosterDialog.getByText("已登記學生（2 位）")).toBeVisible();
+  await expect(rosterDialog).toContainText("建立相本當下的班級目前學生形成固定快照");
+  await expect(rosterDialog.getByText("本期學生（2 位）")).toBeVisible();
   await expect(rosterDialog.getByText("Alice", { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText("Bob", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("王小明", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("完整姓名 · 固定快照")).toHaveCount(2);
+  await expect(rosterDialog.getByRole("button", { name: "編輯 Alice 的完整姓名" })).toHaveCount(0);
+  await expect(rosterDialog.getByRole("button", { name: "新增" })).toHaveCount(0);
+
+  await rosterDialog.getByRole("button", { name: "編輯 Alice 的相本稱呼" }).click();
+  await rosterDialog.getByRole("textbox", { name: "相本稱呼：Alice" }).fill("Ally");
+  const updateAlbumNameResponse = page.waitForResponse(response => (
+    /\/students\/\d+\/album-name$/.test(new URL(response.url()).pathname)
+    && response.request().method() === "PUT"
+  ));
+  await rosterDialog.getByRole("button", { name: "儲存相本稱呼" }).click();
+  const updateAlbumNameResult = await updateAlbumNameResponse;
+  expect(updateAlbumNameResult.ok()).toBeTruthy();
+  expect(updateAlbumNameResult.request().postDataJSON()).toEqual({ album_name: "Ally" });
+  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
+
+  await rosterDialog.getByRole("button", { name: "清除 王小明 的相本稱呼" }).click();
+  await expect(rosterDialog.getByText("相本稱呼：沿用完整姓名", { exact: true })).toHaveCount(1);
+  await rosterDialog.getByRole("button", { name: "編輯 王小明 的相本稱呼" }).click();
+  await expect(rosterDialog.getByRole("textbox", { name: "相本稱呼：王小明" })).toHaveValue("");
+  await rosterDialog.getByRole("button", { name: "取消編輯相本稱呼" }).click();
+
+  const singleAutoFillAlbumNameResponse = page.waitForResponse(
+    response => /\/students\/\d+\/album-name\/auto-fill$/.test(new URL(response.url()).pathname) &&
+      response.request().method() === "POST" && response.ok(),
+  );
+  await rosterDialog.getByRole("button", { name: "自動偵測 王小明 的相本稱呼" }).click();
+  const singleAutoFillAlbumNameResult = await singleAutoFillAlbumNameResponse;
+  expect(await singleAutoFillAlbumNameResult.json()).toEqual({ updated: 1, unresolved: 0 });
+  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
+  await expect(
+    rosterDialog.getByRole("button", { name: "自動偵測 王小明 的相本稱呼" }),
+  ).toHaveCount(0);
+
+  // 單筆與整批兩個入口都必須能從空白稱呼恢復，且不能覆蓋既有人工稱呼。
+  await rosterDialog.getByRole("button", { name: "清除 王小明 的相本稱呼" }).click();
+  await expect(rosterDialog.getByText("相本稱呼：沿用完整姓名", { exact: true })).toHaveCount(1);
+  const autoFillAlbumNamesButton = rosterDialog.getByRole("button", { name: "自動填入相本稱呼" });
+  const autoFillAlbumNamesResponse = page.waitForResponse(
+    response => response.url().includes("/students/album-names/auto-fill") &&
+      response.request().method() === "POST" && response.ok(),
+  );
+  await autoFillAlbumNamesButton.click();
+  const autoFillAlbumNamesResult = await autoFillAlbumNamesResponse;
+  expect(await autoFillAlbumNamesResult.json()).toEqual({ updated: 1, unresolved: 0 });
+  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
+  await expect(autoFillAlbumNamesButton).toBeDisabled();
+
   await rosterDialog.getByRole("button", { name: "關閉" }).click();
   await expect(rosterDialog).toHaveCount(0);
 
@@ -90,14 +164,15 @@ test("admin can create a project and batch students from the browser", async ({ 
   const projectTextArea = page.locator('[data-guide="class-text-panel"] textarea').first();
   await expect(projectTextArea).toHaveValue("Default label");
   await projectTextArea.fill("班級：");
-  await page.locator('[data-guide="class-text-panel"]').getByRole("button", { name: "插入 {name}" }).click();
-  await expect(projectTextArea).toHaveValue("班級：{name}");
+  await page.locator('[data-guide="class-text-panel"]').getByRole("button", { name: "相本稱呼 {name}" }).click();
+  await page.locator('[data-guide="class-text-panel"]').getByRole("button", { name: "完整姓名 {full_name}" }).click();
+  await expect(projectTextArea).toHaveValue("班級：{name}{full_name}");
   await projectTextArea.fill("");
   await expect(projectTextArea).toHaveValue("");
   await waitForResponseAfter(
     page,
     response => response.url().includes("/label_texts") && response.request().method() === "PUT" && response.ok(),
-    () => projectTextArea.fill("共用 {name}"),
+    () => projectTextArea.fill("{name}/{full_name}/{name}"),
   );
 
   const projectsResponse = await page.request.get("/api/projects/");
@@ -106,9 +181,13 @@ test("admin can create a project and batch students from the browser", async ({ 
   expect(project.student_count).toBe(2);
   const projectDetail = await fetchProjectDetail(page, project.id);
   const alice = projectDetail.students.find(item => item.name === "Alice");
-  const bob = projectDetail.students.find(item => item.name === "Bob");
+  const wangXiaoming = projectDetail.students.find(item => item.name === "王小明");
   expect(alice).toBeTruthy();
-  expect(bob).toBeTruthy();
+  expect(wangXiaoming).toBeTruthy();
+  expect(alice.album_name).toBe("Ally");
+  expect(alice.effective_album_name).toBe("Ally");
+  expect(wangXiaoming.album_name).toBe("小明");
+  expect(wangXiaoming.effective_album_name).toBe("小明");
 
   await page.getByRole("link", { name: "班級總覽", exact: true }).click();
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
@@ -126,9 +205,11 @@ test("admin can create a project and batch students from the browser", async ({ 
   await closeProductGuide(page);
 
   const studentTextArea = page.locator('[data-guide="student-text-fields"] textarea').first();
+  await expect(page.locator('[data-guide="student-text-fields"]')).toContainText("預設：Ally/Alice/Ally");
   await studentTextArea.fill("學生：");
-  await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "插入 {name}" }).click();
-  await expect(studentTextArea).toHaveValue("學生：{name}");
+  await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "相本稱呼 {name}" }).click();
+  await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "完整姓名 {full_name}" }).click();
+  await expect(studentTextArea).toHaveValue("學生：{name}{full_name}");
   await studentTextArea.fill("");
   await expect(studentTextArea).toHaveValue("");
   await waitForResponseAfter(
@@ -139,9 +220,9 @@ test("admin can create a project and batch students from the browser", async ({ 
 
   await expect(page.getByLabel("切換學生")).toHaveValue(String(alice.id));
   await page.getByRole("button", { name: "下一位" }).click();
-  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${bob.id}/edit`));
-  await expect(page.getByRole("heading", { name: "Bob", level: 1 })).toBeVisible();
-  await expect(page.getByLabel("切換學生")).toHaveValue(String(bob.id));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${wangXiaoming.id}/edit`));
+  await expect(page.getByRole("heading", { name: "王小明", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("切換學生")).toHaveValue(String(wangXiaoming.id));
   await page.getByLabel("切換學生").selectOption(String(alice.id));
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/students/${alice.id}/edit`));
   await expect(page.getByRole("heading", { name: "Alice", level: 1 })).toBeVisible();
@@ -164,8 +245,12 @@ test("project shared photo upload applies one slot to every student", async ({ p
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Group Alice", "Group Bob"]);
+  const project = await createProject(
+    page,
+    projectName,
+    templateId,
+    ["Group Alice", "Group Bob"],
+  );
 
   // 舊 /batch 路由轉址到相本編輯器的全班 scope
   await page.goto(`/projects/${project.id}/batch`);
@@ -224,8 +309,12 @@ test("class completion locks content while scope switching stays usable", async 
 
   await loginViaApi(page);
   const { templateId } = await createTemplateWithLayout(page, templateName, layout);
-  const project = await createProject(page, projectName, templateId);
-  await addStudents(page, project.id, ["Lock Alice", "Lock Bob"]);
+  const project = await createProject(
+    page,
+    projectName,
+    templateId,
+    ["Lock Alice", "Lock Bob"],
+  );
   const detail = await fetchProjectDetail(page, project.id);
   const slotId = layout.photo_slots[0].id;
   for (const student of detail.students) {

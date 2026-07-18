@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { PHOTO_SCALE_MAX } from "../../src/constants/photoTransform.js";
 import {
+  CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
+  CANVAS_REAL_HEIGHT,
   CANVAS_REAL_WIDTH,
+  CANVAS_SCENE_PIXEL_RATIO,
   applyElementsToLayout,
   buildRenderLayoutModel,
   getAllElementsSorted,
@@ -15,11 +19,20 @@ import { TEXT_LABEL_ROLES } from "../../src/utils/textLabelRoles.js";
 import { test } from "./harness.mjs";
 
 
+test("photo zoom maximum mirrors the shared design token", () => {
+  assert.equal(PHOTO_SCALE_MAX, 3);
+});
+
+
 test("render layout coordinate helpers keep the A4 display scale stable", () => {
   assert.equal(CANVAS_DISPLAY_WIDTH, 530);
   assert.equal(CANVAS_REAL_WIDTH, 794);
   assert.equal(toDisplayCoord(794), 530);
   assert.equal(toRealCoord(530), 794);
+  assert.ok(Math.abs(CANVAS_SCENE_PIXEL_RATIO - CANVAS_REAL_WIDTH / CANVAS_DISPLAY_WIDTH)
+    <= Number.EPSILON);
+  assert.equal(Math.trunc(CANVAS_DISPLAY_WIDTH * CANVAS_SCENE_PIXEL_RATIO), CANVAS_REAL_WIDTH);
+  assert.equal(Math.trunc(CANVAS_DISPLAY_HEIGHT * CANVAS_SCENE_PIXEL_RATIO), CANVAS_REAL_HEIGHT);
 });
 
 
@@ -67,6 +80,26 @@ test("render layout updates and display models stay stable", () => {
   assert.equal(model.elements[1].textRole, TEXT_LABEL_ROLES.FILLABLE);
   assert.equal(model.elements[1].isFillable, true);
   assert.equal(model.elements[2].text, "Footer");
+});
+
+
+test("template stage models resolve name tokens in labels and footer", () => {
+  const model = buildRenderLayoutModel({
+    photo_slots: [],
+    text_labels: [{
+      id: "token-label",
+      x: 0,
+      y: 0,
+      width: 500,
+      height: 100,
+      text: "標題：{name}／{full_name}",
+    }],
+    stickers: [],
+    footer: { text: "頁尾：{name}／{full_name}" },
+  });
+
+  assert.equal(model.elements[0].text, "標題：（相本稱呼）／（完整姓名）");
+  assert.equal(model.elements[1].text, "頁尾：（相本稱呼）／（完整姓名）");
 });
 
 

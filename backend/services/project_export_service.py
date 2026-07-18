@@ -1,11 +1,14 @@
 import io
 import zipfile
+from collections import Counter
+from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
 from database import Project, Student
 from services.output_keys import (
     build_combined_stem,
+    student_output_prefix_from_pdf_key,
     student_pdf_key_for_mode,
 )
 from services.storage_factory import get_storage
@@ -33,11 +36,12 @@ def _student_pdf_zip_entry(
     project: Project,
     student: Student,
     output_mode: str,
+    download_stem: str | None = None,
 ) -> tuple[str, str] | None:
     if not student.output_filename:
         return None
     pdf_key = student_pdf_key_for_mode(student.output_filename, output_mode)
-    combined_stem = build_combined_stem(project.name, student.name)
+    combined_stem = download_stem or build_combined_stem(project.name, student.name)
     suffix = "_screen" if output_mode == "screen" else ""
     return (f"{combined_stem}{suffix}.pdf", pdf_key)
 
@@ -46,23 +50,58 @@ def _plan_student_image_keys(
     project: Project,
     student: Student,
     output_mode: str,
+    download_stem: str | None = None,
 ) -> list[tuple[str, list[str]]]:
     if not student.output_filename:
         return []
 
-    rendered_prefix = student.output_filename[:-4]
-    rendered_stem = rendered_prefix.rsplit("/", 1)[-1]
-    download_stem = build_combined_stem(project.name, student.name)
+    canonical_prefix = student_output_prefix_from_pdf_key(student.output_filename)
+    legacy_rendered_prefix = str(PurePosixPath(student.output_filename).with_suffix(""))
+    legacy_rendered_stem = legacy_rendered_prefix.rsplit("/", 1)[-1]
+    archive_stem = download_stem or build_combined_stem(project.name, student.name)
     mode_suffix = "_screen" if output_mode == "screen" else ""
 
     planned = []
     for page_number in range(1, len(project.template.pages) + 1):
-        candidate_keys = [
-            (f"{rendered_prefix}/images/{output_mode}/{rendered_stem}{mode_suffix}_page{page_number}.jpg"),
-            f"{rendered_prefix}/{rendered_stem}_page{page_number}.jpg",
-        ]
-        planned.append((f"{download_stem}{mode_suffix}_page{page_number}.jpg", candidate_keys))
+        if canonical_prefix is not None:
+            candidate_keys = [
+                f"{canonical_prefix}/images/{output_mode}/page{page_number}.jpg",
+            ]
+        else:
+            candidate_keys = [
+                (
+                    f"{legacy_rendered_prefix}/images/{output_mode}/"
+                    f"{legacy_rendered_stem}{mode_suffix}_page{page_number}.jpg"
+                ),
+                (
+                    f"{legacy_rendered_prefix}/"
+                    f"{legacy_rendered_stem}_page{page_number}.jpg"
+                ),
+            ]
+        planned.append((f"{archive_stem}{mode_suffix}_page{page_number}.jpg", candidate_keys))
     return planned
+
+
+def _unique_student_download_stems(project: Project) -> dict[int, str]:
+    """同名或安全化後同名時才附 student ID，避免全班 ZIP 內路徑互覆。"""
+    stems = {
+        student.id: build_combined_stem(project.name, student.name)
+        for student in project.students
+    }
+    stem_counts = Counter(stems.values())
+    unique_stems: dict[int, str] = {}
+    used_stems: set[str] = set()
+    for student_id, stem in stems.items():
+        candidate = stem if stem_counts[stem] == 1 else f"{stem}-student{student_id}"
+        if candidate in used_stems:
+            candidate = f"{stem}-student{student_id}"
+        sequence = 2
+        while candidate in used_stems:
+            candidate = f"{stem}-student{student_id}-{sequence}"
+            sequence += 1
+        unique_stems[student_id] = candidate
+        used_stems.add(candidate)
+    return unique_stems
 
 
 def _read_first_existing(storage, candidate_keys: list[str]) -> bytes | None:
@@ -111,8 +150,18 @@ def build_zip_of_student_images(
 
 def open_all_student_pdfs_zip_stream(project: Project, output_mode: str):
     storage = get_storage()
+    download_stems = _unique_student_download_stems(project)
     pdf_entries = [
-        entry for student in project.students if (entry := _student_pdf_zip_entry(project, student, output_mode))
+        entry
+        for student in project.students
+        if (
+            entry := _student_pdf_zip_entry(
+                project,
+                student,
+                output_mode,
+                download_stems[student.id],
+            )
+        )
     ]
 
     def write_entries(zip_archive):
@@ -129,13 +178,15 @@ def open_all_student_pdfs_zip_stream(project: Project, output_mode: str):
 
 def open_all_student_images_zip_stream(project: Project, output_mode: str):
     storage = get_storage()
+    download_stems = _unique_student_download_stems(project)
     planned_entries = [
-        (f"{build_combined_stem(project.name, student.name)}/{archive_name}", candidate_keys)
+        (f"{download_stems[student.id]}/{archive_name}", candidate_keys)
         for student in project.students
         for archive_name, candidate_keys in _plan_student_image_keys(
             project,
             student,
             output_mode,
+            download_stems[student.id],
         )
     ]
 

@@ -6,8 +6,14 @@ import { useCallback, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import {
   USER_ROLES,
+  canUserCommentProject,
+  canUserDownloadProject,
   canUserEditProject,
+  canUserReadProject,
+  canUserReopenProject,
+  canUserViewSupervisorReports,
   getRolePermissions,
+  isOrganizationPermissionsPending,
 } from "../utils/userRoles";
 
 export function usePermissions() {
@@ -15,14 +21,50 @@ export function usePermissions() {
   const role = currentUser?.role ?? USER_ROLES.NONE;
   const currentUserId = currentUser?.id;
   const rolePermissions = getRolePermissions(role);
+  const canViewReports = canUserViewSupervisorReports(currentUser);
+  const isOrganizationPermissionsLoading = isOrganizationPermissionsPending(currentUser);
 
   const canEditProject = useCallback(
-    (ownerUserId) => canUserEditProject(role, currentUserId, ownerUserId),
+    (project) => canUserEditProject(role, currentUserId, project),
     [role, currentUserId],
+  );
+  const canDownloadProject = useCallback(
+    (project) => canUserDownloadProject(role, project),
+    [role],
+  );
+  const canReadProject = useCallback(
+    (project) => canUserReadProject(role, project),
+    [role],
+  );
+  const canReopenProject = useCallback(
+    (project) => canUserReopenProject(role, project),
+    [role],
+  );
+  const canCommentProject = useCallback(
+    (project) => canUserCommentProject(role, project),
+    [role],
   );
 
   return useMemo(
-    () => ({ ...rolePermissions, canEditProject }),
-    [rolePermissions, canEditProject],
+    () => ({
+      ...rolePermissions,
+      canViewReports,
+      isOrganizationPermissionsLoading,
+      canCommentProject,
+      canDownloadProject,
+      canEditProject,
+      canReadProject,
+      canReopenProject,
+    }),
+    [
+      rolePermissions,
+      canViewReports,
+      isOrganizationPermissionsLoading,
+      canCommentProject,
+      canDownloadProject,
+      canEditProject,
+      canReadProject,
+      canReopenProject,
+    ],
   );
 }

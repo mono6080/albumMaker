@@ -1,7 +1,11 @@
 """專案照片讀寫、批次展開與 mapping use cases。"""
 
 import json
+import threading
+from _thread import LockType
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import HTTPException, UploadFile
@@ -24,10 +28,12 @@ from services.project_access_service import (
     assert_project_readable,
 )
 from services.project_template_revision import lock_project_template_revision
+from services.request_limiter import photo_upload_limiter
 from services.storage_factory import get_storage
 from services.student_pages import (
     apply_photo_mapping,
     apply_photo_to_page,
+    coerce_page_index_for_write,
     mutate_student_pages,
     page_has_photo,
     parse_pages_data,
@@ -36,6 +42,35 @@ from services.student_pages import (
 
 
 PHOTO_THUMBNAIL_HEADERS = {"Cache-Control": "private, max-age=86400"}
+_thumbnail_build_locks: dict[str, LockType] = {}
+_thumbnail_build_lock_users: dict[str, int] = {}
+_thumbnail_build_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _lock_thumbnail_build(thumbnail_key: str):
+    """同一縮圖 key 只允許一個 cache-miss builder，完成後移除 lock。"""
+    with _thumbnail_build_locks_guard:
+        build_lock = _thumbnail_build_locks.setdefault(
+            thumbnail_key,
+            threading.Lock(),
+        )
+        _thumbnail_build_lock_users[thumbnail_key] = (
+            _thumbnail_build_lock_users.get(thumbnail_key, 0) + 1
+        )
+    build_lock.acquire()
+    try:
+        yield
+    finally:
+        build_lock.release()
+        with _thumbnail_build_locks_guard:
+            remaining_users = _thumbnail_build_lock_users[thumbnail_key] - 1
+            if remaining_users == 0:
+                _thumbnail_build_lock_users.pop(thumbnail_key, None)
+                if _thumbnail_build_locks.get(thumbnail_key) is build_lock:
+                    _thumbnail_build_locks.pop(thumbnail_key, None)
+            else:
+                _thumbnail_build_lock_users[thumbnail_key] = remaining_users
 
 
 @dataclass(frozen=True)
@@ -50,6 +85,48 @@ class BatchPhotoUploadOutcome:
     succeeded: list[dict]
     failed: list[dict]
     skipped: list[dict]
+
+
+@dataclass(frozen=True)
+class StudentPhotoUploadIdentity:
+    student_id: int
+    project_id: int
+    created_at: datetime
+
+
+def _capture_student_photo_upload_identity(
+    student: Student,
+) -> StudentPhotoUploadIdentity:
+    return StudentPhotoUploadIdentity(
+        student_id=student.id,
+        project_id=student.project_id,
+        created_at=student.created_at,
+    )
+
+
+def _get_current_student_for_photo_upload(
+    db: Session,
+    identity: StudentPhotoUploadIdentity,
+) -> Student:
+    student = (
+        db.query(Student)
+        .filter(
+            Student.id == identity.student_id,
+            Student.project_id == identity.project_id,
+            Student.created_at == identity.created_at,
+        )
+        .one_or_none()
+    )
+    if student is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "student_photo_target_changed",
+                "message": "學生名單已變更，請重新整理後再上傳照片。",
+                "student_id": identity.student_id,
+            },
+        )
+    return student
 
 
 def _parse_layout(raw_layout: str) -> dict:
@@ -122,12 +199,12 @@ def _validate_photo_mapping(
     }
     validated_mapping = {}
     for page_index_text, slot_updates in mapping.items():
-        try:
-            page_index = int(page_index_text)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="照片頁面索引格式錯誤")
-        if page_index < 0:
-            raise HTTPException(status_code=400, detail="照片頁面索引不可為負數")
+        page_index = coerce_page_index_for_write(
+            page_index_text,
+            field="照片頁面索引",
+        )
+        if str(page_index) in validated_mapping:
+            raise HTTPException(status_code=422, detail="照片頁面索引重複")
         validated_slots = {}
         for slot_id_text, slot_value in slot_updates.items():
             try:
@@ -161,6 +238,8 @@ async def upload_student_photo(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
+    student_identity = _capture_student_photo_upload_identity(student)
+    del student
     processed_upload = await read_and_process_photo_upload(file)
     storage = get_storage()
     now = utc_now()
@@ -168,12 +247,16 @@ async def upload_student_photo(
     def write_photo() -> str:
         with lock_project_template_revision(db, project, expected_template_revision):
             assert_project_content_writable(project, current_user)
+            current_student = _get_current_student_for_photo_upload(
+                db,
+                student_identity,
+            )
             _assert_project_photo_slot_exists(project, page_index, slot_id)
 
             def mutate(pages_data) -> str:
                 key = apply_photo_to_page(
                     pages_data,
-                    student,
+                    current_student,
                     project_id,
                     page_index,
                     slot_id,
@@ -184,7 +267,13 @@ async def upload_student_photo(
                 project.updated_at = now
                 return key
 
-            return mutate_student_pages(db, student, mutate)
+            return mutate_student_pages(
+                db,
+                current_student,
+                mutate,
+                page_indices=[page_index],
+                template_page_count=len(project.template.pages),
+            )
 
     return await run_in_threadpool(write_photo)
 
@@ -227,6 +316,8 @@ async def upload_shared_project_photo(
                         now,
                         source_key=first_key,
                     ),
+                    page_indices=[page_index],
+                    template_page_count=len(project.template.pages),
                 )
                 if first_key is None:
                     first_key = key
@@ -267,14 +358,27 @@ async def batch_upload_project_photos(
     assert_project_content_writable(project, current_user)
     mapping_data = _parse_batch_mapping(mapping)
     files_by_name = {file.filename: file for file in files}
-    students_by_id = {str(student.id): student for student in project.students}
+    student_identities_by_id = {
+        str(student_id): StudentPhotoUploadIdentity(
+            student_id=student_id,
+            project_id=identity_project_id,
+            created_at=student_created_at,
+        )
+        for student_id, identity_project_id, student_created_at in (
+            db.query(Student.id, Student.project_id, Student.created_at)
+            .filter(Student.project_id == project_id)
+            .all()
+        )
+    }
     storage = get_storage()
     now = utc_now()
     failed: list[dict] = []
-    prepared_assignments: list[tuple[Student, str, ProcessedImageUpload]] = []
+    prepared_assignments: list[
+        tuple[StudentPhotoUploadIdentity, str, ProcessedImageUpload]
+    ] = []
 
     for student_id_text, filename in mapping_data.items():
-        if student_id_text not in students_by_id:
+        if student_id_text not in student_identities_by_id:
             failed.append(
                 {
                     "student_id": int(student_id_text) if student_id_text.isdigit() else -1,
@@ -283,12 +387,12 @@ async def batch_upload_project_photos(
                 }
             )
             continue
-        student = students_by_id[student_id_text]
+        student_identity = student_identities_by_id[student_id_text]
         upload_file = files_by_name.get(filename)
         if upload_file is None:
             failed.append(
                 {
-                    "student_id": student.id,
+                    "student_id": student_identity.student_id,
                     "filename": filename or "",
                     "reason": "file_not_uploaded",
                 }
@@ -299,7 +403,7 @@ async def batch_upload_project_photos(
         except HTTPException as exc:
             failed.append(
                 {
-                    "student_id": student.id,
+                    "student_id": student_identity.student_id,
                     "filename": filename,
                     "reason": f"upload_rejected:{exc.detail}",
                 }
@@ -308,21 +412,27 @@ async def batch_upload_project_photos(
         except Exception:
             failed.append(
                 {
-                    "student_id": student.id,
+                    "student_id": student_identity.student_id,
                     "filename": filename,
                     "reason": "image_decode_failed",
                 }
             )
             continue
-        prepared_assignments.append((student, filename, processed_upload))
+        prepared_assignments.append((student_identity, filename, processed_upload))
 
     def write_batch() -> tuple[list[dict], list[dict]]:
         succeeded: list[dict] = []
         skipped: list[dict] = []
         with lock_project_template_revision(db, project, expected_template_revision):
             assert_project_content_writable(project, current_user)
+            current_students_by_id = {
+                identity.student_id: _get_current_student_for_photo_upload(db, identity)
+                for identity, _, _ in prepared_assignments
+            }
             _assert_project_photo_slot_exists(project, page_index, slot_id)
-            for student, filename, processed_upload in prepared_assignments:
+            for student_identity, filename, processed_upload in prepared_assignments:
+                student = current_students_by_id[student_identity.student_id]
+
                 def mutate(pages_data) -> str | None:
                     if not overwrite_existing and page_has_photo(
                         pages_data,
@@ -344,7 +454,13 @@ async def batch_upload_project_photos(
                     return key
 
                 try:
-                    key = mutate_student_pages(db, student, mutate)
+                    key = mutate_student_pages(
+                        db,
+                        student,
+                        mutate,
+                        page_indices=[page_index],
+                        template_page_count=len(project.template.pages),
+                    )
                 except Exception:
                     failed.append(
                         {
@@ -399,7 +515,13 @@ def update_student_photo_mapping(
             student.updated_at = now
             project.updated_at = now
 
-        mutate_student_pages(db, student, mutate)
+        mutate_student_pages(
+            db,
+            student,
+            mutate,
+            page_indices=pages,
+            template_page_count=len(project.template.pages),
+        )
 
 
 def serve_student_photo(
@@ -444,22 +566,37 @@ def serve_student_photo_thumbnail(
         **PHOTO_THUMBNAIL_HEADERS,
         "X-Photo-Thumbnail-Key": quote(thumbnail_key, safe="/"),
     }
-    try:
+
+    def cached_response() -> Response:
         return Response(
             content=storage.get_bytes(thumbnail_key),
             media_type="image/jpeg",
             headers={**headers, "X-Photo-Thumbnail": "HIT"},
         )
-    except Exception:
+
+    try:
+        return cached_response()
+    except FileNotFoundError:
         pass
 
-    thumbnail_bytes = build_photo_thumbnail_jpeg(storage, photo_key, size)
-    try:
-        storage.put(thumbnail_key, thumbnail_bytes)
-    except Exception:
-        pass
-    return Response(
-        content=thumbnail_bytes,
-        media_type="image/jpeg",
-        headers={**headers, "X-Photo-Thumbnail": "MISS"},
-    )
+    with _lock_thumbnail_build(thumbnail_key):
+        try:
+            return cached_response()
+        except FileNotFoundError:
+            pass
+
+        with photo_upload_limiter.acquire("照片縮圖處理中，請稍後再試"):
+            thumbnail_bytes = build_photo_thumbnail_jpeg(
+                storage,
+                photo_key,
+                size,
+            )
+            try:
+                storage.put(thumbnail_key, thumbnail_bytes)
+            except Exception:
+                pass
+        return Response(
+            content=thumbnail_bytes,
+            media_type="image/jpeg",
+            headers={**headers, "X-Photo-Thumbnail": "MISS"},
+        )

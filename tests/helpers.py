@@ -133,21 +133,14 @@ def login(client: TestClient, username: str = "admin", password: str = ADMIN_PAS
 def create_user(
     client: TestClient,
     role: str,
-    supervisor_id: int | None = None,
-    supervisor_ids: list[int] | None = None,
 ) -> tuple[dict, str]:
     username = unique_name(role)
-    payload: dict[str, object] = {
+    payload = {
         "username": username,
         "display_name": f"{role} user",
         "password": USER_PASSWORD,
         "role": role,
     }
-    if supervisor_ids is not None:
-        payload["supervisor_ids"] = supervisor_ids
-    if supervisor_id is not None:
-        payload["supervisor_id"] = supervisor_id
-
     response = client.post("/api/users/", json=payload)
     assert_status(response, 201)
     return response.json(), USER_PASSWORD
@@ -295,10 +288,157 @@ def template_page_snapshot_payload(
     }
 
 
-def create_project(client: TestClient, template_id: int, name: str | None = None) -> int:
+def _create_classroom_with_lead(
+    client: TestClient,
+    template_id: int,
+    lead_teacher_id: int | None = None,
+    student_names: list[str] | None = None,
+) -> tuple[int, int, list[int]]:
+    template_response = client.get(f"/api/templates/{template_id}")
+    assert_status(template_response, 200)
+    template = template_response.json()
+    assert template["period_status"] == "active"
+    department = template["department"]
+    assert department in {"infant", "academy"}
+
+    if lead_teacher_id is None:
+        lead_teacher, _ = create_user(client, "teacher")
+        lead_teacher_id = lead_teacher["id"]
+    else:
+        db = SessionLocal()
+        try:
+            lead_teacher = db.get(User, lead_teacher_id)
+            assert lead_teacher is not None
+            assert lead_teacher.role == "teacher"
+        finally:
+            db.close()
+
+    campus_response = client.post(
+        "/api/organization/campuses",
+        json={"name": unique_name("fixture-campus"), "is_active": True},
+    )
+    assert_status(campus_response, 201)
+    classroom_response = client.post(
+        "/api/organization/classrooms",
+        json={
+            "campus_id": campus_response.json()["id"],
+            "department": department,
+            "name": unique_name("fixture-classroom"),
+            "is_active": True,
+        },
+    )
+    assert_status(classroom_response, 201)
+    classroom_id = classroom_response.json()["id"]
+    teachers_response = client.put(
+        f"/api/organization/classrooms/{classroom_id}/teachers",
+        json={"teachers": [{"teacher_id": lead_teacher_id, "duty": "lead"}]},
+    )
+    assert_status(teachers_response, 200)
+    member_ids: list[int] = []
+    if student_names:
+        members_response = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={"members": [{"name": name} for name in student_names]},
+        )
+        assert_status(members_response, 201)
+        member_ids = [member["id"] for member in members_response.json()["created"]]
+        assert len(member_ids) == len(student_names)
+    return classroom_id, lead_teacher_id, member_ids
+
+
+def _end_fixture_roster_members(
+    client: TestClient,
+    classroom_id: int,
+    member_ids: list[int],
+) -> None:
+    """相本快照建立後結束測試名單，讓跨測試固定姓名可再次入班。"""
+    for member_id in member_ids:
+        response = client.patch(
+            f"/api/organization/classrooms/{classroom_id}/members/{member_id}",
+            json={"status": "ended", "end_reason": "departed"},
+        )
+        assert_status(response, 200)
+
+
+def _find_classroom_work_slot_id(
+    client: TestClient,
+    classroom_id: int,
+    template_id: int,
+) -> int:
+    """找出指定班級與版型尚未啟動的正式工作槽。"""
+    overview_response = client.get("/api/organization/overview")
+    assert_status(overview_response, 200)
+    return next(
+        work_slot["id"]
+        for work_slot in overview_response.json()["work_slots"]
+        if work_slot["classroom_id"] == classroom_id
+        and template_id in work_slot["template_ids"]
+        and work_slot["can_create_project"]
+    )
+
+
+def create_project(
+    client: TestClient,
+    template_id: int,
+    name: str | None = None,
+    *,
+    student_names: list[str] | None = None,
+) -> int:
+    effective_student_names = (
+        student_names
+        if student_names is not None
+        else [unique_name("fixture_student")]
+    )
+    classroom_id, lead_teacher_id, member_ids = _create_classroom_with_lead(
+        client,
+        template_id,
+        student_names=effective_student_names,
+    )
+    work_slot_id = _find_classroom_work_slot_id(client, classroom_id, template_id)
     response = client.post(
-        "/api/projects/",
-        data={"name": name or unique_name("project"), "template_id": str(template_id)},
+        f"/api/organization/classrooms/{classroom_id}/projects",
+        json={
+            "name": name or unique_name("project"),
+            "template_id": template_id,
+            "work_slot_id": work_slot_id,
+            "owner_id": lead_teacher_id,
+        },
     )
     assert_status(response, 201)
+    _end_fixture_roster_members(client, classroom_id, member_ids)
+    return response.json()["id"]
+
+
+def create_project_for_owner(
+    client: TestClient,
+    template_id: int,
+    owner_id: int,
+    name: str | None = None,
+    *,
+    student_names: list[str] | None = None,
+) -> int:
+    """建立由指定目前老師帶班的班級相本。"""
+    effective_student_names = (
+        student_names
+        if student_names is not None
+        else [unique_name("fixture_student")]
+    )
+    classroom_id, _, member_ids = _create_classroom_with_lead(
+        client,
+        template_id,
+        owner_id,
+        effective_student_names,
+    )
+    work_slot_id = _find_classroom_work_slot_id(client, classroom_id, template_id)
+    response = client.post(
+        f"/api/organization/classrooms/{classroom_id}/projects",
+        json={
+            "name": name or unique_name("project"),
+            "template_id": template_id,
+            "work_slot_id": work_slot_id,
+            "owner_id": owner_id,
+        },
+    )
+    assert_status(response, 201)
+    _end_fixture_roster_members(client, classroom_id, member_ids)
     return response.json()["id"]

@@ -1,82 +1,186 @@
-# 學期彙整匯出服務
-# 負責期別／專案載入、分組預覽、ZIP 規劃、manifest 與串流。
+"""正式學期的校別／班級彙整預覽、ZIP 規劃與串流。"""
 
 import json
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
-from sqlalchemy.orm import Session, joinedload
+from fastapi import HTTPException
+from sqlalchemy.orm import Session, joinedload, selectinload
 
-from database import Project, RosterChild, Student, TemplatePeriod
+from database import (
+    AcademicTerm,
+    AcademicTermClassroom,
+    AcademicTermClassroomStudent,
+    AcademicTermPeriod,
+    ClassPeriodWorkSlot,
+    Project,
+    Student,
+)
+from services.organization_scope_service import (
+    OrganizationReadScope,
+    apply_project_read_scope,
+    apply_term_classroom_report_scope,
+    load_reporting_term_or_404,
+)
 from services.output_keys import (
+    build_safe_zip_entry_path,
     get_project_output_prefix,
     make_safe_filename,
     student_pdf_key_for_mode,
 )
-from services.roster_identity_service import normalize_child_name
 from services.storage_factory import get_storage
 from services.zip_stream import open_zip_stream
 
 
-# ── 學期彙整匯出 ───────────────────────────────────────────────────────────────
+MISSING_ROSTER_CHILD = "missing_roster_child"
+INVALID_ROSTER_CHILD = "invalid_roster_child"
+DUPLICATE_PROJECT_ROSTER_CHILD = "duplicate_project_roster_child"
+MISSING_TERM_STUDENT_SNAPSHOT = "missing_term_student_snapshot"
+DEPARTURE_REASONS = {"departed", "term_departed"}
 
-def load_export_periods(db: Session, period_ids: list[int]) -> list[TemplatePeriod]:
-    """讀取匯出範圍內的期別，依建立時間排序（即學期內的期別先後）。"""
-    return (
-        db.query(TemplatePeriod)
-        .filter(TemplatePeriod.id.in_(period_ids))
-        .order_by(TemplatePeriod.created_at)
-        .all()
+
+def classify_project_student_identity_anomalies(
+    project: Project,
+) -> dict[int, tuple[str, ...]]:
+    """列出同一相本內不可用於學期匯出的學生身分異常。"""
+    child_id_counts = Counter(
+        student.roster_child_id
+        for student in project.students
+        if student.roster_child_id is not None
     )
+    anomalies_by_student_id: dict[int, tuple[str, ...]] = {}
+    for student in project.students:
+        anomaly_codes = []
+        if student.roster_child_id is None:
+            anomaly_codes.append(MISSING_ROSTER_CHILD)
+        elif student.roster_child is None:
+            anomaly_codes.append(INVALID_ROSTER_CHILD)
+        if (
+            student.roster_child_id is not None
+            and child_id_counts[student.roster_child_id] > 1
+        ):
+            anomaly_codes.append(DUPLICATE_PROJECT_ROSTER_CHILD)
+        if anomaly_codes:
+            anomalies_by_student_id[student.id] = tuple(anomaly_codes)
+    return anomalies_by_student_id
+
+
+def load_export_periods(
+    db: Session,
+    academic_term_id: int,
+    period_ids: list[int] | None = None,
+    *,
+    organization_scope: OrganizationReadScope | None = None,
+) -> list[AcademicTermPeriod]:
+    """讀取學期期別；period_ids 使用既有 TemplatePeriod id。"""
+    load_reporting_term_or_404(db, academic_term_id, organization_scope)
+    query = db.query(AcademicTermPeriod).filter(
+        AcademicTermPeriod.academic_term_id == academic_term_id
+    )
+    if organization_scope is not None and not organization_scope.is_admin:
+        scoped_department_rows = apply_term_classroom_report_scope(
+            db.query(AcademicTermClassroom.department).filter(
+                AcademicTermClassroom.academic_term_id == academic_term_id,
+            ),
+            organization_scope,
+        ).distinct().all()
+        visible_departments = {
+            department for department, in scoped_department_rows
+        }
+        query = query.filter(
+            AcademicTermPeriod.department.in_(visible_departments)
+        )
+    if period_ids is not None:
+        requested_ids = set(period_ids)
+        query = query.filter(AcademicTermPeriod.template_period_id.in_(requested_ids))
+    periods = query.order_by(AcademicTermPeriod.position).all()
+    if period_ids is not None:
+        found_ids = {period.template_period_id for period in periods}
+        missing_ids = set(period_ids) - found_ids
+        if missing_ids:
+            if organization_scope is not None and not organization_scope.is_admin:
+                raise HTTPException(status_code=404, detail="找不到期別")
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "period_not_in_academic_term",
+                    "period_ids": sorted(missing_ids),
+                },
+            )
+    return periods
 
 
 def load_export_projects(
-    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
+    db: Session,
+    academic_term_id: int,
+    period_ids: list[int] | None = None,
+    organization_scope: OrganizationReadScope | None = None,
 ) -> list[Project]:
-    """讀取匯出範圍內的專案（排除封存），含學生、名冊連結與帶班老師。
-
-    owner_user_ids 給定時只回傳這些使用者擁有的專案（主管檢視自己管轄老師用）。
-    """
+    """讀取學期內已歸班且未封存的 Project，並套用 snapshot scope。"""
     query = (
         db.query(Project)
+        .join(
+            ClassPeriodWorkSlot,
+            ClassPeriodWorkSlot.id == Project.class_period_work_slot_id,
+        )
+        .join(
+            AcademicTermClassroom,
+            AcademicTermClassroom.id == ClassPeriodWorkSlot.term_classroom_id,
+        )
+        .join(
+            AcademicTermPeriod,
+            AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
+        )
         .options(
             joinedload(Project.students).joinedload(Student.roster_child),
             joinedload(Project.owner),
+            joinedload(Project.class_period_work_slot).joinedload(
+                ClassPeriodWorkSlot.term_classroom
+            ),
+            joinedload(Project.class_period_work_slot).joinedload(
+                ClassPeriodWorkSlot.term_period
+            ),
         )
-        .filter(Project.template_period_id.in_(period_ids))
-        .filter(Project.deleted_at.is_(None))
+        .filter(
+            AcademicTermClassroom.academic_term_id == academic_term_id,
+            Project.deleted_at.is_(None),
+            Project.classroom_id.isnot(None),
+        )
     )
-    if owner_user_ids is not None:
-        query = query.filter(Project.owner_id.in_(owner_user_ids))
-    return query.all()
+    if period_ids is not None:
+        query = query.filter(AcademicTermPeriod.template_period_id.in_(period_ids))
+    if organization_scope is not None:
+        query = apply_project_read_scope(query, organization_scope)
+    return query.order_by(
+        AcademicTermPeriod.position,
+        Project.id,
+    ).all()
 
 
 def load_output_keys_by_project(storage, projects: list[Project]) -> dict[int, set[str]]:
-    """並行列舉各專案的輸出目錄 key 集合（R2 上逐專案序列列舉仍有數秒延遲）。
-
-    boto3 client 是 thread-safe，LocalStorageAdapter 只讀檔案系統，皆可並行。
-    """
-    def list_project_output_keys(project_id) -> tuple:
+    """並行列舉各 Project 輸出 key，避免 R2 逐檔 exists。"""
+    def list_project_output_keys(project_id: int) -> tuple[int, set[str]]:
         return project_id, set(storage.list_keys(get_project_output_prefix(project_id)))
 
     if not projects:
         return {}
-    project_ids = [project.id for project in projects]
+    project_ids = sorted({project.id for project in projects})
     with ThreadPoolExecutor(max_workers=8) as executor:
         return dict(executor.map(list_project_output_keys, project_ids))
 
 
 def student_pdf_key(student: Student, output_mode: str) -> str | None:
-    """回傳學生指定畫質的 PDF storage key；尚未渲染回 None。"""
     if not student.output_filename:
         return None
     return student_pdf_key_for_mode(student.output_filename, output_mode)
 
 
 def _student_skipped_pages(student: Student) -> list[int]:
-    """回傳老師手動略過（刪除）的頁碼清單（1 起算）；資料異常時視為無略過。"""
     try:
         pages_data = json.loads(student.pages_data_json or "[]")
     except ValueError:
+        return []
+    if not isinstance(pages_data, list):
         return []
     return [
         page_index + 1
@@ -85,170 +189,432 @@ def _student_skipped_pages(student: Student) -> list[int]:
     ]
 
 
-def build_semester_export_preview(
-    db: Session, period_ids: list[int], owner_user_ids: list[int] | None = None
-) -> dict:
-    """組出學期匯出預覽：依名冊孩子分組的各期狀態 + 待確認學生清單。
+def _serialize_period(term_period: AcademicTermPeriod) -> dict:
+    return {
+        "id": term_period.template_period_id,
+        "term_period_id": term_period.id,
+        "template_period_id": term_period.template_period_id,
+        "name": term_period.period_name_snapshot,
+        "department": term_period.department,
+        "position": term_period.position,
+    }
 
-    owner_user_ids 給定時只納入這些使用者的專案（主管唯讀檢視）。
-    """
-    periods = load_export_periods(db, period_ids)
-    projects = load_export_projects(db, period_ids, owner_user_ids)
-    storage = get_storage()
+
+def _serialize_term(term: AcademicTerm) -> dict:
+    return {
+        "id": term.id,
+        "label": term.label,
+        "status": term.status,
+        "is_current": term.status in {"imported", "active"},
+        "starts_on": term.starts_on.isoformat() if term.starts_on else None,
+        "ends_on": term.ends_on.isoformat() if term.ends_on else None,
+    }
+
+
+def _load_scoped_term_classrooms(
+    db: Session,
+    academic_term_id: int,
+    organization_scope: OrganizationReadScope | None,
+    departments: set[str],
+) -> list[AcademicTermClassroom]:
+    query = db.query(AcademicTermClassroom).options(
+        selectinload(AcademicTermClassroom.students).selectinload(
+            AcademicTermClassroomStudent.source_membership
+        )
+    ).filter(
+        AcademicTermClassroom.academic_term_id == academic_term_id,
+        AcademicTermClassroom.department.in_(departments),
+    )
+    if organization_scope is not None:
+        query = apply_term_classroom_report_scope(query, organization_scope)
+    return query.order_by(
+        AcademicTermClassroom.campus_name_snapshot,
+        AcademicTermClassroom.classroom_name_snapshot,
+        AcademicTermClassroom.id,
+    ).all()
+
+
+def _serialize_entry(
+    project: Project,
+    student: Student,
+    existing_output_keys: set[str],
+) -> dict:
+    slot = project.class_period_work_slot
+    term_period = slot.term_period
+    term_classroom = slot.term_classroom
+    print_pdf_key = student_pdf_key(student, "print")
+    return {
+        "term_period_id": term_period.id,
+        "period_id": term_period.template_period_id,
+        "template_period_id": term_period.template_period_id,
+        "period_position": term_period.position,
+        "project_id": project.id,
+        "project_name": project.name,
+        "owner_id": project.owner_id,
+        "owner_name": project.owner.display_name if project.owner else None,
+        "student_id": student.id,
+        "student_name": student.name,
+        "campus_id": project.campus_id_snapshot,
+        "campus_name": project.campus_name_snapshot,
+        "classroom_id": project.classroom_id,
+        "term_classroom_id": term_classroom.id,
+        "classroom_name": project.classroom_name_snapshot,
+        "department": project.department,
+        "has_pdf": bool(print_pdf_key and print_pdf_key in existing_output_keys),
+        "skipped_pages": _student_skipped_pages(student),
+    }
+
+
+def _cell_status(
+    entries: list[dict],
+    period_position: int,
+    all_entries: list[dict],
+    *,
+    is_departed: bool,
+) -> str:
+    if len(entries) > 1:
+        return "duplicate"
+    if len(entries) == 1:
+        return "ready" if entries[0]["has_pdf"] else "not_rendered"
+    if not all_entries:
+        return "no_album"
+    first_position = min(entry["period_position"] for entry in all_entries)
+    last_position = max(entry["period_position"] for entry in all_entries)
+    if period_position < first_position:
+        return "not_enrolled"
+    if period_position > last_position and is_departed:
+        return "departed"
+    return "no_album"
+
+
+def _group_summary(children: list[dict]) -> dict:
+    status_counts = Counter(
+        cell["status"]
+        for child in children
+        for cell in child["cells"]
+    )
+    return {
+        "child_count": len(children),
+        "ready_count": status_counts["ready"],
+        "not_rendered_count": status_counts["not_rendered"],
+        "no_album_count": status_counts["no_album"],
+        "duplicate_count": status_counts["duplicate"],
+        "departed_count": status_counts["departed"],
+        "not_enrolled_count": status_counts["not_enrolled"],
+    }
+
+
+def build_semester_export_preview(
+    db: Session,
+    academic_term_id: int,
+    period_ids: list[int],
+    organization_scope: OrganizationReadScope | None = None,
+) -> dict:
+    """由後端判定孩子各期狀態，並依 term classroom snapshot 分組。"""
+    term = load_reporting_term_or_404(
+        db,
+        academic_term_id,
+        organization_scope,
+    )
+    all_periods = load_export_periods(
+        db,
+        academic_term_id,
+        organization_scope=organization_scope,
+    )
+    selected_periods = load_export_periods(
+        db,
+        academic_term_id,
+        period_ids,
+        organization_scope=organization_scope,
+    )
+    selected_term_period_ids = {period.id for period in selected_periods}
+    selected_departments = {period.department for period in selected_periods}
+    relevant_period_ids = [
+        period.template_period_id
+        for period in all_periods
+        if period.department in selected_departments
+    ]
+    term_classrooms = _load_scoped_term_classrooms(
+        db,
+        academic_term_id,
+        organization_scope,
+        selected_departments,
+    )
+    term_classroom_by_id = {row.id: row for row in term_classrooms}
+    projects = load_export_projects(
+        db,
+        academic_term_id,
+        relevant_period_ids,
+        organization_scope=organization_scope,
+    )
+    output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
 
     children_by_id: dict[int, dict] = {}
-    unlinked_students = []
-    # 批次存在性檢查：並行列舉輸出目錄；逐檔 exists 在 R2 上會慢到 timeout
-    output_keys_by_project = load_output_keys_by_project(storage, projects)
-    for project in projects:
-        existing_output_keys = output_keys_by_project[project.id]
-        for student in project.students:
-            pdf_key = student_pdf_key(student, "print")
-            entry = {
-                "period_id": project.template_period_id,
-                "project_id": project.id,
-                "project_name": project.name,
-                "owner_id": project.owner_id,
-                "owner_name": project.owner.display_name if project.owner else None,
-                "student_id": student.id,
-                "student_name": student.name,
-                "has_pdf": bool(pdf_key and pdf_key in existing_output_keys),
-                # 老師手動刪除（略過）的頁碼，供介面與匯出說明標註
-                "skipped_pages": _student_skipped_pages(student),
-            }
-            if student.roster_child_id is None:
-                unlinked_students.append(entry)
-                continue
-            group = children_by_id.setdefault(student.roster_child_id, {
-                "roster_child_id": student.roster_child_id,
-                "name": student.roster_child.name,
+    for term_classroom in term_classrooms:
+        for student_snapshot in term_classroom.students:
+            children_by_id[student_snapshot.roster_child_id_snapshot] = {
+                "roster_child_id": student_snapshot.roster_child_id_snapshot,
+                "name": student_snapshot.student_name_snapshot,
+                "term_classroom_id": term_classroom.id,
+                "source_membership": student_snapshot.source_membership,
                 "entries": [],
-            })
-            group["entries"].append(entry)
+            }
 
-    # 每個孩子的「班級」＝所選範圍內最新期別的專案（孩子最近待的班）
-    period_order = {period.id: index for index, period in enumerate(periods)}
-    for group in children_by_id.values():
-        latest_entry = max(
-            group["entries"], key=lambda entry: period_order.get(entry["period_id"], -1)
+    unlinked = []
+    for project in projects:
+        existing_output_keys = output_keys_by_project.get(project.id, set())
+        identity_anomalies = classify_project_student_identity_anomalies(project)
+        for student in project.students:
+            entry = _serialize_entry(project, student, existing_output_keys)
+            anomaly_codes = identity_anomalies.get(student.id)
+            if anomaly_codes is not None:
+                if entry["term_period_id"] in selected_term_period_ids:
+                    entry["identity_anomalies"] = list(anomaly_codes)
+                    unlinked.append(entry)
+                continue
+            child = children_by_id.get(student.roster_child_id)
+            if child is None:
+                if entry["term_period_id"] in selected_term_period_ids:
+                    entry["identity_anomalies"] = [
+                        MISSING_TERM_STUDENT_SNAPSHOT
+                    ]
+                    unlinked.append(entry)
+                continue
+            child["entries"].append(entry)
+    classroom_groups_by_id = {
+        term_classroom.id: {
+            "term_classroom_id": term_classroom.id,
+            "campus_id": term_classroom.campus_id_snapshot,
+            "campus_name": term_classroom.campus_name_snapshot,
+            "classroom_id": term_classroom.classroom_id,
+            "classroom_name": term_classroom.classroom_name_snapshot,
+            "department": term_classroom.department,
+            "children": [],
+        }
+        for term_classroom in term_classrooms
+    }
+    period_position_by_id = {
+        period.id: period.position for period in all_periods
+    }
+    for child in children_by_id.values():
+        all_entries = child.pop("entries")
+        entries_by_term_period: dict[int, list[dict]] = {}
+        for entry in all_entries:
+            entries_by_term_period.setdefault(entry["term_period_id"], []).append(entry)
+        source_membership = child["source_membership"]
+        is_departed = bool(
+            source_membership is not None
+            and source_membership.ended_at is not None
+            and source_membership.end_reason in DEPARTURE_REASONS
         )
-        group["latest_project_id"] = latest_entry["project_id"]
-        group["latest_project_name"] = latest_entry["project_name"]
-        group["latest_project_owner_name"] = latest_entry["owner_name"]
+        cells = []
+        for period in selected_periods:
+            cell_entries = sorted(
+                entries_by_term_period.get(period.id, []),
+                key=lambda entry: (entry["project_id"], entry["student_id"]),
+            )
+            cells.append({
+                "term_period_id": period.id,
+                "period_id": period.template_period_id,
+                "template_period_id": period.template_period_id,
+                "status": _cell_status(
+                    cell_entries,
+                    period_position_by_id[period.id],
+                    all_entries,
+                    is_departed=is_departed,
+                ),
+                "entries": cell_entries,
+            })
 
-    children = sorted(
-        children_by_id.values(),
-        key=lambda group: (group["latest_project_name"], group["name"]),
-    )
-    # 待確認學生的可選名冊項：同正規化姓名的既有名冊項
-    for entry in unlinked_students:
-        normalized_name = normalize_child_name(entry["student_name"])
-        candidates = db.query(RosterChild).filter(RosterChild.name == normalized_name).all()
-        entry["candidates"] = [
-            {"roster_child_id": candidate.id, "name": candidate.name}
-            for candidate in candidates
-        ]
+        latest_term_classroom_id = child["term_classroom_id"]
+        if latest_term_classroom_id not in classroom_groups_by_id:
+            continue
+        term_classroom = term_classroom_by_id[latest_term_classroom_id]
+        child_payload = {
+            "roster_child_id": child["roster_child_id"],
+            "name": child["name"],
+            "latest_classroom": {
+                "term_classroom_id": term_classroom.id,
+                "campus_id": term_classroom.campus_id_snapshot,
+                "campus_name": term_classroom.campus_name_snapshot,
+                "classroom_id": term_classroom.classroom_id,
+                "classroom_name": term_classroom.classroom_name_snapshot,
+                "department": term_classroom.department,
+            },
+            "cells": cells,
+        }
+        classroom_groups_by_id[latest_term_classroom_id]["children"].append(
+            child_payload
+        )
 
+    classroom_groups = []
+    for group in classroom_groups_by_id.values():
+        group["children"].sort(key=lambda child: child["name"])
+        group["summary"] = _group_summary(group["children"])
+        classroom_groups.append(group)
+    top_summary = _group_summary([
+        child
+        for group in classroom_groups
+        for child in group["children"]
+    ])
+    top_summary["classroom_count"] = len(classroom_groups)
+    top_summary["identity_anomaly_count"] = len(unlinked)
     return {
-        "periods": [
-            {"id": period.id, "name": period.name, "department": period.department}
-            for period in periods
-        ],
-        "children": children,
-        "unlinked": unlinked_students,
+        "term": _serialize_term(term),
+        "periods": [_serialize_period(period) for period in selected_periods],
+        "summary": top_summary,
+        "classroom_groups": classroom_groups,
+        "unlinked": sorted(
+            unlinked,
+            key=lambda entry: (
+                entry["campus_name"] or "",
+                entry["classroom_name"] or "",
+                entry["student_name"],
+            ),
+        ),
+    }
+
+
+def _selected_preview_children(preview: dict, roster_child_ids: list[int] | None):
+    selected_ids = set(roster_child_ids) if roster_child_ids is not None else None
+    for classroom_group in preview["classroom_groups"]:
+        for child in classroom_group["children"]:
+            if selected_ids is None or child["roster_child_id"] in selected_ids:
+                yield child
+
+
+def _filter_preview_for_manifest(
+    preview: dict,
+    roster_child_ids: list[int] | None,
+) -> dict:
+    """讓勾選匯出的說明檔只描述同一批孩子。"""
+    if roster_child_ids is None:
+        return preview
+    selected_ids = set(roster_child_ids)
+    classroom_groups = []
+    for classroom_group in preview["classroom_groups"]:
+        children = [
+            child
+            for child in classroom_group["children"]
+            if child["roster_child_id"] in selected_ids
+        ]
+        if children:
+            classroom_groups.append({
+                **classroom_group,
+                "children": children,
+            })
+    return {
+        **preview,
+        "classroom_groups": classroom_groups,
+        "unlinked": [],
     }
 
 
 def _plan_semester_export_zip(
     db: Session,
+    academic_term_id: int,
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ) -> tuple[list[tuple[str, str]], str]:
-    """規劃 ZIP 內容：回傳（[(壓縮檔內路徑, storage key)], 匯出說明文字）。
+    preview = build_semester_export_preview(db, academic_term_id, period_ids)
+    manifest_preview = _filter_preview_for_manifest(preview, roster_child_ids)
+    projects = load_export_projects(db, academic_term_id, period_ids)
+    students_by_id = {
+        student.id: student
+        for project in projects
+        for student in project.students
+    }
+    output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
+    period_names = {
+        period["template_period_id"]: period["name"]
+        for period in preview["periods"]
+    }
 
-    所有 DB 查詢與 storage 列舉都在此完成，串流階段只逐檔讀 bytes —
-    避免 StreamingResponse 送出期間相依的 DB session 已被回收。
-    roster_child_ids 給定時只匯出勾選的孩子（None 代表全部）。
-    """
-    preview = build_semester_export_preview(db, period_ids)
-    if roster_child_ids is not None:
-        selected_ids = set(roster_child_ids)
-        preview["children"] = [
-            group for group in preview["children"]
-            if group["roster_child_id"] in selected_ids
-        ]
-    period_order = {period["id"]: index for index, period in enumerate(preview["periods"])}
-    period_names = {period["id"]: period["name"] for period in preview["periods"]}
-    storage = get_storage()
-
-    students_by_id = {}
-    zip_projects = load_export_projects(db, period_ids)
-    # 批次存在性檢查（screen/print key 都在同一目錄下）
-    output_keys_by_project = load_output_keys_by_project(storage, zip_projects)
-    for project in zip_projects:
-        for student in project.students:
-            students_by_id[student.id] = student
-
-    zip_entries: list[tuple[str, str]] = []
+    zip_entries = []
     missing_notes = []
-    used_folder_names: set[str] = set()
-    for group in preview["children"]:
-        child_name = make_safe_filename(group["name"])
-        # 資料夾＝孩子姓名；同名不同人以（最新班級）區分，仍撞名才加流水號
-        folder_name = child_name
-        if folder_name in used_folder_names:
-            folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）"
-        suffix_number = 2
-        while folder_name in used_folder_names:
-            folder_name = f"{child_name}（{make_safe_filename(group['latest_project_name'])}）{suffix_number}"
-            suffix_number += 1
-        used_folder_names.add(folder_name)
-
-        used_file_names: set[str] = set()
-        sorted_entries = sorted(
-            group["entries"], key=lambda entry: period_order.get(entry["period_id"], 99)
-        )
-        for entry in sorted_entries:
-            student = students_by_id.get(entry["student_id"])
-            pdf_key = student_pdf_key(student, output_mode) if student else None
-            if not pdf_key or pdf_key not in output_keys_by_project.get(entry["project_id"], set()):
+    used_paths: set[str] = set()
+    for child in _selected_preview_children(preview, roster_child_ids):
+        for cell in child["cells"]:
+            if cell["status"] == "duplicate":
+                project_ids = sorted({entry["project_id"] for entry in cell["entries"]})
                 missing_notes.append(
-                    f"{group['name']}：{period_names.get(entry['period_id'], '?')}"
-                    f"（{entry['project_name']}）尚未產生 PDF，未納入"
+                    f"{child['name']}：{period_names[cell['template_period_id']]}"
+                    f" 同一期有重複相本（Project {project_ids}），未納入"
                 )
                 continue
-            # 檔名＝期別_孩子；同期有多個專案（轉班等）才附專案名區分
-            period_label = make_safe_filename(period_names.get(entry["period_id"], "期別"))
-            file_name = f"{period_label}_{child_name}.pdf"
-            if file_name in used_file_names:
-                file_name = f"{period_label}_{child_name}_{make_safe_filename(entry['project_name'])}.pdf"
-            if file_name in used_file_names:
-                file_name = f"{file_name[:-4]}_{entry['student_id']}.pdf"
-            used_file_names.add(file_name)
-            zip_entries.append((f"{folder_name}/{file_name}", pdf_key))
+            if cell["status"] == "no_album":
+                missing_notes.append(
+                    f"{child['name']}：{period_names[cell['template_period_id']]}"
+                    " 無相本資料"
+                )
+                continue
+            if not cell["entries"]:
+                continue
+            entry = cell["entries"][0]
+            student = students_by_id.get(entry["student_id"])
+            pdf_key = student_pdf_key(student, output_mode) if student else None
+            if (
+                not pdf_key
+                or pdf_key not in output_keys_by_project.get(entry["project_id"], set())
+            ):
+                missing_notes.append(
+                    f"{child['name']}：{period_names[cell['template_period_id']]}"
+                    f"（{entry['campus_name']}／{entry['classroom_name']}）"
+                    "尚未產生 PDF，未納入"
+                )
+                continue
+            child_name = make_safe_filename(child["name"])
+            file_name = (
+                f"{make_safe_filename(period_names[cell['template_period_id']])}_"
+                f"{child_name}.pdf"
+            )
+            latest_classroom = child["latest_classroom"]
+            archive_path = build_safe_zip_entry_path(
+                latest_classroom["campus_name"],
+                latest_classroom["classroom_name"],
+                child_name,
+                file_name,
+            )
+            if archive_path in used_paths:
+                archive_path = build_safe_zip_entry_path(
+                    latest_classroom["campus_name"],
+                    latest_classroom["classroom_name"],
+                    f"{child_name}（{child['roster_child_id']}）",
+                    file_name,
+                )
+            if archive_path in used_paths:
+                archive_path = build_safe_zip_entry_path(
+                    latest_classroom["campus_name"],
+                    latest_classroom["classroom_name"],
+                    f"{child_name}（{child['roster_child_id']}）",
+                    f"{file_name[:-4]}_{entry['student_id']}.pdf",
+                )
+            used_paths.add(archive_path)
+            zip_entries.append((archive_path, pdf_key))
 
-    for entry in preview["unlinked"]:
+    for entry in manifest_preview["unlinked"]:
         missing_notes.append(
-            f"待確認：{entry['student_name']}（{entry['project_name']}）"
-            f"未完成名冊配對，未納入"
+            f"身分異常：{entry['student_name']}"
+            f"（{entry['campus_name']}／{entry['classroom_name']}／"
+            f"{entry['project_name']}），未納入"
         )
-    return zip_entries, _build_export_manifest(preview, missing_notes)
+    return zip_entries, _build_export_manifest(manifest_preview, missing_notes)
 
 
 def open_semester_export_zip_stream(
     db: Session,
+    academic_term_id: int,
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ):
-    """學期匯出 ZIP 串流：先佔 zip 併發槽（滿載回 503），回傳逐段 chunk 產生器。
-
-    邊壓邊送取代整包 BytesIO：峰值記憶體從整包 ZIP 降為單一 PDF，
-    下載也會立即開始而不是等整包組完。產生器結束（含中斷）時釋放併發槽。
-    """
     zip_entries, manifest_text = _plan_semester_export_zip(
-        db, period_ids, output_mode, roster_child_ids
+        db,
+        academic_term_id,
+        period_ids,
+        output_mode,
+        roster_child_ids,
     )
     storage = get_storage()
 
@@ -262,39 +628,38 @@ def open_semester_export_zip_stream(
 
 
 def _build_export_manifest(preview: dict, missing_notes: list[str]) -> str:
-    """組出匯出說明：分類規則、班級對照（依最新期別）、缺頁備註與缺漏清單。"""
     lines = [
         "【分類方式】",
-        "每個孩子一個資料夾，檔名為「期別_孩子姓名」。",
-        "孩子的班級以「所選範圍內最新期別的專案」為準，對照如下。",
+        "檔案依「校別／班級／孩子／期別_孩子.pdf」分類。",
+        "校別與班級使用相本建立當下的正式快照，不使用相本名稱代替班級。",
         "",
         "【班級對照】",
     ]
-    sorted_children = sorted(
-        preview["children"], key=lambda group: (group["latest_project_name"], group["name"])
-    )
-    for group in sorted_children:
-        owner_label = (
-            f"（老師：{group['latest_project_owner_name']}）"
-            if group.get("latest_project_owner_name") else ""
+    for classroom_group in preview["classroom_groups"]:
+        lines.append(
+            f"- {classroom_group['campus_name']}／"
+            f"{classroom_group['classroom_name']}："
+            f"{len(classroom_group['children'])} 位孩子"
         )
-        lines.append(f"- {group['name']}：{group['latest_project_name']}{owner_label}")
 
-    # 缺頁備註：老師手動刪除的頁面，提醒統整成冊時這些不是漏印
-    period_names = {period["id"]: period["name"] for period in preview["periods"]}
+    period_names = {
+        period["template_period_id"]: period["name"]
+        for period in preview["periods"]
+    }
     skipped_notes = [
-        f"- {group['name']}：{period_names.get(entry['period_id'], '?')}"
-        f"（{entry['project_name']}）老師刪除了第 "
+        f"- {child['name']}：{period_names[cell['template_period_id']]}"
+        f"（{entry['campus_name']}／{entry['classroom_name']}／"
+        f"{entry['project_name']}）老師刪除了第 "
         f"{'、'.join(str(page) for page in entry['skipped_pages'])} 頁"
-        for group in sorted_children
-        for entry in group["entries"]
-        if entry.get("skipped_pages")
+        for classroom_group in preview["classroom_groups"]
+        for child in classroom_group["children"]
+        for cell in child["cells"]
+        for entry in cell["entries"]
+        if entry["skipped_pages"]
     ]
     if skipped_notes:
-        lines += ["", "【缺頁備註（老師手動刪除的頁面，非漏印）】"]
-        lines += skipped_notes
-
+        lines += ["", "【缺頁備註（老師手動刪除，非漏印）】", *skipped_notes]
     if missing_notes:
-        lines += ["", "【缺漏，未納入這包】"]
+        lines += ["", "【缺漏或異常，未納入這包】"]
         lines += [f"- {note}" for note in missing_notes]
     return "\n".join(lines)

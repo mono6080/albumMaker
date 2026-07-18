@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === "1";
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
 
 const config = {
   testDir: "./tests/e2e",
@@ -13,7 +14,7 @@ const config = {
   workers: 1,
   reporter: [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL,
     trace: "retain-on-failure",
   },
   projects: [

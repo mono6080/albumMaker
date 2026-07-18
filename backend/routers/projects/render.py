@@ -5,7 +5,7 @@ import io
 import logging
 import time
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
@@ -32,10 +32,14 @@ from services.student_render_service import (
 from services.preview_cache import (
     get_or_render_preview,
     preview_scale_key,
-    render_preview_jpeg_bytes,
+    render_preview_png_bytes,
 )
 from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.render_service import PREVIEW_RENDER_SCALE
+from services.text_variables import (
+    ALBUM_NAME_PREVIEW_PLACEHOLDER,
+    FULL_NAME_PREVIEW_PLACEHOLDER,
+)
 
 from ._helpers import (
     _parse_json_field,
@@ -47,10 +51,9 @@ from .schemas import RenderAllResult, RenderStudentResult
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-# 前端預覽 URL 一律帶版本化的 ?t=（updated_at／編輯時間戳），內容變更即換 URL，
-# 因此回應可以讓瀏覽器快取：來回切頁不再重新下載整面縮圖牆
+# 每次使用前先向後端驗證 ETag；內容 bytes 仍由 storage cache 命中，避免重繪。
 PREVIEW_CACHE_HEADERS = {
-    "Cache-Control": "private, max-age=604800",
+    "Cache-Control": "private, no-cache, must-revalidate",
 }
 
 
@@ -62,17 +65,32 @@ def effective_download_mode(
     return mode if current_user.role == "admin" else "screen"
 
 
-def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes) -> Response:
+def _stored_preview_response(
+    request: Request,
+    cache_prefix: str,
+    payload: dict,
+    render_bytes,
+) -> Response:
     """組出預覽回應：快取讀寫與渲染細節在 services/preview_cache.py。"""
     image_bytes, cache_key, hit = get_or_render_preview(cache_prefix, payload, render_bytes)
+    etag = f'"{cache_key}"'
+    response_headers = {
+        **PREVIEW_CACHE_HEADERS,
+        "ETag": etag,
+        "X-Preview-Cache-Key": cache_key,
+        "X-Preview-Cache": "HIT" if hit else "MISS",
+    }
+    request_etags = {
+        candidate.strip()
+        for candidate in request.headers.get("if-none-match", "").split(",")
+        if candidate.strip()
+    }
+    if "*" in request_etags or etag in request_etags:
+        return Response(status_code=304, headers=response_headers)
     return Response(
         content=image_bytes,
-        media_type="image/jpeg",
-        headers={
-            **PREVIEW_CACHE_HEADERS,
-            "X-Preview-Cache-Key": cache_key,
-            "X-Preview-Cache": "HIT" if hit else "MISS",
-        },
+        media_type="image/png",
+        headers=response_headers,
     )
 
 
@@ -80,12 +98,13 @@ def _stored_preview_response(cache_prefix: str, payload: dict, render_bytes) -> 
 def preview_project_page(
     project_id: int,
     page_index: int,
+    request: Request,
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     t: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
+    """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 PNG。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
 
@@ -102,17 +121,27 @@ def preview_project_page(
         f"page{page_index}/scale{preview_scale_key(scale)}"
     )
     return _stored_preview_response(
+        request,
         cache_prefix,
         # 純內容定址：layout 與 page_data 全文已在 hash 內，任何實質變更都會換 key；
         # 不混入 updated_at，避免無關的編輯（例如某位學生的照片）作廢這份快取
         {
             "kind": "project",
+            "full_name": FULL_NAME_PREVIEW_PLACEHOLDER,
+            "album_name": ALBUM_NAME_PREVIEW_PLACEHOLDER,
             "page_index": page_index,
             "scale": scale,
             "layout": page_layout,
             "page_data": page_data,
         },
-        lambda: render_preview_jpeg_bytes(page_layout, "（姓名）", page_data, page_index, scale),
+        lambda: render_preview_png_bytes(
+            page_layout,
+            FULL_NAME_PREVIEW_PLACEHOLDER,
+            page_data,
+            page_index,
+            scale,
+            album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
+        ),
     )
 
 
@@ -121,12 +150,13 @@ def preview_student_page(
     project_id: int,
     student_id: int,
     page_index: int,
+    request: Request,
     scale: float = Query(PREVIEW_RENDER_SCALE, ge=0.4, le=1.0),
     t: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """渲染學生個人頁面預覽，回傳 JPEG。"""
+    """渲染學生個人頁面預覽，回傳 PNG。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
@@ -153,18 +183,27 @@ def preview_student_page(
         f"page{page_index}/scale{preview_scale_key(scale)}"
     )
     return _stored_preview_response(
+        request,
         cache_prefix,
         # 純內容定址（不混 updated_at）：改一位學生的字不再作廢全班 60 份快取。
         # 同名重傳造成「key 相同、bytes 不同」由照片紀錄的 v 欄位負責換 hash
         {
             "kind": "student",
-            "student_name": student.name,
+            "full_name": student.name,
+            "album_name": student.effective_album_name,
             "page_index": page_index,
             "scale": scale,
             "layout": page_layout,
             "page_data": current_page_data,
         },
-        lambda: render_preview_jpeg_bytes(page_layout, student.name, current_page_data, page_index, scale),
+        lambda: render_preview_png_bytes(
+            page_layout,
+            student.name,
+            current_page_data,
+            page_index,
+            scale,
+            album_name=student.album_name,
+        ),
     )
 
 
@@ -182,7 +221,13 @@ def render_student(
     logger.info("開始渲染 project_id=%s student_id=%s student=%s", project_id, student_id, student.name)
     t0 = time.monotonic()
     with album_render_limiter.acquire("相本 PDF 正在產生中，請稍後再試"):
-        result = render_and_save_student_album(project, student, project_id, db)
+        result = render_and_save_student_album(
+            project,
+            student,
+            project_id,
+            db,
+            actor_id=current_user.id,
+        )
     logger.info("渲染完成 project_id=%s student_id=%s 耗時=%.2fs pages=%s",
                 project_id, student_id, time.monotonic() - t0, result.get("pages"))
     return result
@@ -209,7 +254,13 @@ def render_all_students(
         try:
             # 逐位取槽（而非整班佔住），其他老師的單本渲染可交錯進行
             with album_render_limiter.acquire_blocking():
-                result = render_and_save_student_album(project, student, project_id, db)
+                result = render_and_save_student_album(
+                    project,
+                    student,
+                    project_id,
+                    db,
+                    actor_id=current_user.id,
+                )
             render_results.append({"student": student.name, "pdf": result["pdf"]})
             if result.get("skipped"):
                 skipped_count += 1
@@ -217,6 +268,11 @@ def render_all_students(
                 logger.info("  ✓ %s 耗時=%.2fs", student.name, time.monotonic() - t0)
         except Exception as render_error:
             db.rollback()
+            if (
+                isinstance(render_error, HTTPException)
+                and render_error.status_code in {401, 403, 404}
+            ):
+                raise
             render_errors.append({"student": student.name, "error": "產生失敗"})
             logger.error("  ✗ %s 失敗: %s", student.name, render_error)
 

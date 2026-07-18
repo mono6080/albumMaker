@@ -1,51 +1,70 @@
-// 名冊與學期彙整匯出 API 模組（admin 專用）
-// 封裝孩子名冊配對（連結/合併）與學期匯出（預覽、ZIP 下載）呼叫
+// 正式學期彙整匯出與班級期別進度 API
+// 學生、班級與期別狀態皆由後端正式學期契約提供，前端不自行推測。
 
 import { apiClient } from "./authApi";
 
-// FastAPI 的 list query 參數格式為重複 key（period_ids=1&period_ids=2）
-const buildPeriodIdsQuery = (periodIds) =>
-  periodIds.map(periodId => `period_ids=${encodeURIComponent(periodId)}`).join("&");
+function appendReportScopeQuery(searchParams, filters) {
+  searchParams.set("academic_term_id", String(filters.academicTermId));
+  if (filters.department) searchParams.set("department", filters.department);
+  if (filters.campusId) searchParams.set("campus_id", String(filters.campusId));
+  if (filters.classroomId) searchParams.set("classroom_id", String(filters.classroomId));
+  for (const periodId of filters.periodIds ?? []) {
+    searchParams.append("period_ids", String(periodId));
+  }
+}
 
-/** 取得學期匯出預覽（依名冊孩子分組 + 待確認學生清單） */
-export const fetchSemesterExportPreview = (periodIds) =>
-  apiClient.get(`/roster/semester-export?${buildPeriodIdsQuery(periodIds)}`);
+function buildReportQuery(filters) {
+  const searchParams = new URLSearchParams();
+  appendReportScopeQuery(searchParams, filters);
+  return searchParams.toString();
+}
 
-/** 把學生連到既有名冊項 */
-export const linkStudentToRosterChild = (studentId, rosterChildId) =>
-  apiClient.put(`/roster/students/${studentId}/link`, { roster_child_id: rosterChildId });
+/** 取得可用正式學期與其 ordered periods。 */
+export const fetchAcademicTerms = ({ signal } = {}) =>
+  apiClient.get("/roster/academic-terms", { signal });
 
-/** 為學生建立全新名冊項（同名不同人的拆分） */
-export const linkStudentToNewRosterChild = (studentId) =>
-  apiClient.put(`/roster/students/${studentId}/link`, { create_new: true });
+/** 取得正式學期匯出預覽；孩子每一期狀態完全採後端 cells。 */
+export const fetchSemesterExportPreview = (filters, { signal } = {}) =>
+  apiClient.get(`/roster/semester-export?${buildReportQuery(filters)}`, { signal });
 
-/** 把一個名冊項的所有學生併入另一個名冊項（改名/誤拆修正） */
-export const mergeRosterChildren = (sourceChildId, targetChildId) =>
-  apiClient.post(`/roster/children/${sourceChildId}/merge/${targetChildId}`);
+/** 啟動補渲染背景 job；rosterChildIds 不給代表目前預覽範圍全部。 */
+export const renderMissingSemesterAlbums = ({
+  academicTermId,
+  periodIds,
+  rosterChildIds = null,
+}) => apiClient.post("/roster/semester-export/render-missing", {
+  academic_term_id: academicTermId,
+  period_ids: periodIds,
+  roster_child_ids: rosterChildIds,
+});
 
-/** 啟動補渲染背景 job（立即回傳 job_id）；rosterChildIds 不給代表全部 */
-export const renderMissingSemesterAlbums = (periodIds, rosterChildIds = null) =>
-  apiClient.post("/roster/semester-export/render-missing", {
-    period_ids: periodIds,
-    roster_child_ids: rosterChildIds,
-  });
+/** 查詢補渲染 job 進度。 */
+export const fetchRenderMissingProgress = (jobId, { signal } = {}) =>
+  apiClient.get(`/roster/semester-export/render-missing/${jobId}`, { signal });
 
-/** 查詢補渲染 job 進度（status / done / total / rendered / errors） */
-export const fetchRenderMissingProgress = (jobId) =>
-  apiClient.get(`/roster/semester-export/render-missing/${jobId}`);
+/** 班級 × 期別老師進度；不接受舊版 owner 分組 payload。 */
+export const fetchTeacherProgress = (academicTermId, { signal } = {}) =>
+  apiClient.get(`/roster/teacher-progress?academic_term_id=${encodeURIComponent(academicTermId)}`, { signal });
 
-/** 老師進度總覽（含尚未建專案的老師與照片/文字完成度；supervisor 限管轄老師） */
-export const fetchTeacherProgress = (periodIds) =>
-  apiClient.get(`/roster/teacher-progress?${buildPeriodIdsQuery(periodIds)}`);
+/** 老師進度 Excel；校／部門／班級需與畫面篩選一致。 */
+export const buildTeacherOverviewExcelUrl = (filters) => {
+  const searchParams = new URLSearchParams();
+  appendReportScopeQuery(searchParams, filters);
+  searchParams.delete("period_ids");
+  return `/api/roster/teacher-overview/export?${searchParams.toString()}`;
+};
 
-/** 老師進度 Excel 下載 URL（摘要 + 明細；supervisor 只含管轄老師） */
-export const buildTeacherOverviewExcelUrl = (periodIds) =>
-  `/api/roster/teacher-overview/export?${buildPeriodIdsQuery(periodIds)}`;
-
-/** 學期匯出 ZIP 下載 URL（班級/孩子/序號_期別-專案.pdf）；rosterChildIds 不給代表全部 */
-export const buildSemesterExportDownloadUrl = (periodIds, outputMode = "print", rosterChildIds = null) => {
-  const childIdsQuery = rosterChildIds
-    ? rosterChildIds.map(childId => `&roster_child_ids=${encodeURIComponent(childId)}`).join("")
-    : "";
-  return `/api/roster/semester-export/download?${buildPeriodIdsQuery(periodIds)}&mode=${outputMode}${childIdsQuery}`;
+/** 學期 ZIP；孩子依校別／班級 snapshot 分類。 */
+export const buildSemesterExportDownloadUrl = (
+  filters,
+  outputMode = "print",
+  rosterChildIds = null,
+) => {
+  const searchParams = new URLSearchParams();
+  appendReportScopeQuery(searchParams, filters);
+  searchParams.set("mode", outputMode);
+  for (const rosterChildId of rosterChildIds ?? []) {
+    searchParams.append("roster_child_ids", String(rosterChildId));
+  }
+  return `/api/roster/semester-export/download?${searchParams.toString()}`;
 };

@@ -26,8 +26,8 @@ const buttonVariantClass = {
 };
 
 const buttonSizeClass = {
-  xs: "min-h-8 px-2 py-1 text-xs",
-  sm: "min-h-9 px-3 py-1.5 text-sm",
+  xs: "min-h-8 px-2 py-1 text-xs max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11",
+  sm: "min-h-9 px-3 py-1.5 text-sm max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11",
   md: "min-h-10 px-4 py-2 text-sm",
   lg: "min-h-11 px-5 py-2.5 text-sm",
   touch: "min-h-12 px-3 py-2.5 text-sm sm:px-4",
@@ -84,8 +84,8 @@ const iconButtonVariantClass = {
 };
 
 const iconButtonSizeClass = {
-  xs: "h-8 w-8",
-  sm: "h-9 w-9",
+  xs: "h-8 w-8 max-sm:h-11 max-sm:w-11 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11",
+  sm: "h-9 w-9 max-sm:h-11 max-sm:w-11 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11",
   md: "h-10 w-10",
   touch: "h-11 w-11",
 };
@@ -258,14 +258,14 @@ export function PageHeader({
 }
 
 export const fieldControlClass =
-  "w-full min-w-0 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400";
+  "min-h-10 w-full min-w-0 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11";
 
 export function FormField({ label, hint, className = "", children }) {
   return (
     <label className={cn("block min-w-0", className)}>
       {label && <span className="mb-1 block text-xs font-medium text-gray-500">{label}</span>}
       {children}
-      {hint && <span className="mt-1 block text-xs text-gray-400">{hint}</span>}
+      {hint && <span className="mt-1 block text-xs text-gray-500">{hint}</span>}
     </label>
   );
 }
@@ -278,11 +278,16 @@ export function SegmentedControl({
   size = "md",
   disabled = false,
   style,
+  ariaLabel,
 }) {
-  const itemSizeClass = size === "sm" ? "min-h-8 px-2.5 py-1.5 text-xs" : "min-h-10 px-3 py-2 text-sm";
+  const itemSizeClass = size === "sm"
+    ? "min-h-8 px-2.5 py-1.5 text-xs max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11"
+    : "min-h-10 px-3 py-2 text-sm max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11";
 
   return (
     <div
+      role="group"
+      aria-label={ariaLabel}
       className={cn("grid min-w-0 gap-1 rounded-lg bg-gray-100 p-1", className)}
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`, ...style }}
     >
@@ -298,7 +303,7 @@ export function SegmentedControl({
             aria-pressed={isSelected}
             data-guide={option.guideId}
             className={cn(
-              "inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+              "inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50",
               itemSizeClass,
               isSelected ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700",
             )}

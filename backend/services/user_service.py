@@ -1,15 +1,28 @@
 # 使用者管理業務邏輯（users router 的下層）
-# Excel 批次匯入、使用者建立/更新規則、主管關係維護
+# Excel 批次匯入、使用者建立／更新與帳號生命週期規則
 
 import logging
-import re
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import hash_password
-from crud.user_crud import SUPERVISABLE_ROLES, get_user_or_404
-from database import Project, ProjectComment, User, teacher_supervisors
+from crud.user_crud import get_user_or_404
+from database import (
+    ClassroomTeacherAssignment,
+    OrganizationSupervisorAssignment,
+    Project,
+    ProjectComment,
+    User,
+    utc_now,
+)
+from services.organization_lock import organization_acl_lock
+from services.project_assignment_service import (
+    PROJECT_OWNER_ROLES,
+    record_project_owner_transfer,
+)
+from services.template_sync_locks import lock_project_content_writes
 
 
 logger = logging.getLogger(__name__)
@@ -40,15 +53,6 @@ IMPORT_HEADER_ALIASES = {
     "display_name": {"display_name", "display name", "name", "顯示名稱", "显示名称", "姓名", "名稱", "名称"},
     "password": {"password", "密碼", "密码", "初始密碼", "初始密码"},
     "role": {"role", "角色"},
-    "supervisor": {
-        "supervisor",
-        "supervisor_username",
-        "supervisor_usernames",
-        "supervisors",
-        "主管",
-        "主管帳號",
-        "主管账号",
-    },
 }
 
 
@@ -59,18 +63,14 @@ def create_user(
     display_name: str,
     password: str,
     role: str,
-    supervisor_id: int | None,
-    supervisor_ids: list[int] | None,
 ) -> User:
     """建立使用者並以單一 transaction 提交。"""
-    normalized_ids = normalize_supervisor_ids(supervisor_ids, supervisor_id)
     new_user = create_user_record(
         db,
         username=username,
         display_name=display_name,
         password=password,
         role=role,
-        supervisor_ids=normalized_ids,
     )
     db.commit()
     db.refresh(new_user)
@@ -87,67 +87,172 @@ def update_current_user_settings(db: Session, current_user: User, ui_font_scale:
 
 def update_user(
     db: Session,
+    current_admin: User,
     user_id: int,
     *,
     username: str | None,
     display_name: str | None,
     role: str | None,
-    supervisor_id: int | None,
-    supervisor_ids: list[int] | None,
     new_password: str | None,
-    clear_supervisor: bool,
 ) -> User:
-    """更新使用者及主管關係並提交。"""
-    target_user = get_user_or_404(user_id, db)
-    update_user_record(
-        db,
-        target_user,
-        username=username,
-        display_name=display_name,
-        role=role,
-        supervisor_id=supervisor_id,
-        supervisor_ids=supervisor_ids,
-        new_password=new_password,
-        clear_supervisor=clear_supervisor,
-    )
-    db.commit()
-    db.refresh(target_user)
-    return target_user
+    """在組織鎖內更新帳號；角色變更另取得全部專案鎖。"""
+    admin_id = current_admin.id
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        target_user = get_user_or_404(user_id, db)
+        next_role = _normalize_role(role) if role is not None else target_user.role
+        role_is_changing = next_role != target_user.role
+        requires_project_locks = role_is_changing or (
+            role is not None and next_role == "none"
+        )
+        project_ids = [
+            row[0] for row in db.query(Project.id).all()
+        ] if requires_project_locks else []
+        with lock_project_content_writes(project_ids):
+            _begin_immediate_write(db)
+            try:
+                target_user = get_user_or_404(user_id, db)
+                current_admin = get_user_or_404(admin_id, db)
+                update_user_record(
+                    db,
+                    target_user,
+                    current_admin=current_admin,
+                    username=username,
+                    display_name=display_name,
+                    role=role,
+                    new_password=new_password,
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            db.refresh(target_user)
+            return target_user
 
 
 def delete_user(db: Session, current_admin: User, user_id: int) -> None:
     """刪除使用者，並在同一 transaction 移交專案與留言。"""
     if user_id == current_admin.id:
         raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
-    target_user = get_user_or_404(user_id, db)
-    transferred = db.query(Project).filter(Project.owner_id == user_id).count()
-    if transferred:
+    current_admin_id = current_admin.id
+    with organization_acl_lock:
+        all_project_ids = [row[0] for row in db.query(Project.id).all()]
+        with lock_project_content_writes(all_project_ids):
+            _begin_immediate_write(db)
+            try:
+                target_user = get_user_or_404(user_id, db)
+                current_admin = get_user_or_404(current_admin_id, db)
+                changed_at = utc_now()
+                _end_organization_supervisor_assignments(
+                    db, target_user.id, current_admin, "user_deleted", changed_at
+                )
+                _end_classroom_teacher_assignments(
+                    db, target_user.id, current_admin, "user_deleted", changed_at
+                )
+                _transfer_owned_projects(
+                    db,
+                    target_user,
+                    current_admin,
+                    "刪除使用者時自動轉交",
+                )
+                _transfer_user_comments(db, target_user, current_admin)
+                db.delete(target_user)
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+
+
+def _begin_immediate_write(db: Session) -> None:
+    """在外層鎖都取得後，以最新 session 狀態開始 SQLite immediate write。"""
+    db.rollback()
+    db.expire_all()
+    db.execute(text("BEGIN IMMEDIATE"))
+
+
+def _end_organization_supervisor_assignments(
+    db: Session,
+    user_id: int,
+    changed_by: User,
+    reason: str,
+    ended_at,
+) -> None:
+    assignments = db.query(OrganizationSupervisorAssignment).filter(
+        OrganizationSupervisorAssignment.supervisor_id == user_id,
+        OrganizationSupervisorAssignment.ended_at.is_(None),
+    ).all()
+    for assignment in assignments:
+        assignment.ended_at = ended_at
+        assignment.end_reason = reason
+        assignment.ended_by_id = changed_by.id
+        assignment.ended_by_name_snapshot = changed_by.display_name
+
+
+def _end_classroom_teacher_assignments(
+    db: Session,
+    user_id: int,
+    changed_by: User,
+    reason: str,
+    ended_at,
+) -> None:
+    assignments = db.query(ClassroomTeacherAssignment).filter(
+        ClassroomTeacherAssignment.teacher_id == user_id,
+        ClassroomTeacherAssignment.ended_at.is_(None),
+    ).all()
+    for assignment in assignments:
+        assignment.ended_at = ended_at
+        assignment.end_reason = reason
+        assignment.ended_by_id = changed_by.id
+        assignment.ended_by_name_snapshot = changed_by.display_name
+
+
+def _transfer_owned_projects(
+    db: Session,
+    target_user: User,
+    current_admin: User,
+    reason: str,
+) -> None:
+    owned_projects = db.query(Project).filter(Project.owner_id == target_user.id).all()
+    if owned_projects:
         logger.warning(
-            "使用者刪除：%s（id=%s）的 %s 個專案移交給 admin %s（id=%s）",
+            "帳號生命週期：%s（id=%s）的 %s 個專案移交給 admin %s（id=%s）",
             target_user.username,
-            user_id,
-            transferred,
+            target_user.id,
+            len(owned_projects),
             current_admin.username,
             current_admin.id,
         )
-    db.query(Project).filter(Project.owner_id == user_id).update({"owner_id": current_admin.id})
-    transferred_comments = db.query(ProjectComment).filter(ProjectComment.author_id == user_id).count()
+    for project in owned_projects:
+        record_project_owner_transfer(
+            db,
+            project,
+            current_admin,
+            current_admin,
+            reason,
+        )
+
+
+def _transfer_user_comments(
+    db: Session,
+    target_user: User,
+    current_admin: User,
+) -> None:
+    transferred_comments = db.query(ProjectComment).filter(
+        ProjectComment.author_id == target_user.id
+    ).count()
     if transferred_comments:
         logger.warning(
             "使用者刪除：%s（id=%s）的 %s 則留言作者移交給 admin %s（id=%s）",
             target_user.username,
-            user_id,
+            target_user.id,
             transferred_comments,
             current_admin.username,
             current_admin.id,
         )
-        db.query(ProjectComment).filter(ProjectComment.author_id == user_id).update(
-            {"author_id": current_admin.id}
-        )
-    db.execute(teacher_supervisors.delete().where(teacher_supervisors.c.teacher_id == user_id))
-    remove_supervisor_assignments(user_id, db)
-    db.delete(target_user)
-    db.commit()
+        db.query(ProjectComment).filter(
+            ProjectComment.author_id == target_user.id
+        ).update({"author_id": current_admin.id})
 
 
 def import_users_from_workbook(db: Session, workbook) -> tuple[list, list, list]:
@@ -191,10 +296,6 @@ def import_users_from_workbook(db: Session, workbook) -> tuple[list, list, list]
                 continue
 
             role = _normalize_role(_cell_to_text(_row_value(row, column_map["role"])))
-            supervisor_tokens = _split_supervisor_tokens(
-                _cell_to_text(_row_value(row, column_map.get("supervisor")))
-            )
-            supervisor_ids = _resolve_supervisor_tokens(supervisor_tokens, db) if role in SUPERVISABLE_ROLES else []
 
             new_user = create_user_record(
                 db,
@@ -202,7 +303,6 @@ def import_users_from_workbook(db: Session, workbook) -> tuple[list, list, list]
                 display_name=_cell_to_text(_row_value(row, column_map["display_name"])),
                 password=_cell_to_text(_row_value(row, column_map["password"])),
                 role=role,
-                supervisor_ids=supervisor_ids,
             )
             db.flush()
             seen_usernames.add(username)
@@ -223,9 +323,8 @@ def create_user_record(
     display_name: str,
     password: str,
     role: str,
-    supervisor_ids: list[int],
 ) -> User:
-    """驗證欄位與主管關係後建立 User（不 commit，由呼叫端決定）。"""
+    """驗證欄位後建立 User（不 commit，由呼叫端決定）。"""
     username = username.strip()
     display_name = display_name.strip()
     password = password.strip()
@@ -240,11 +339,6 @@ def create_user_record(
     if len(password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"密碼至少需要 {MIN_PASSWORD_LENGTH} 個字元")
 
-    if role == "teacher" and not supervisor_ids:
-        raise HTTPException(status_code=400, detail="帶班老師必須指定主管")
-
-    supervisors = _validate_supervisors(supervisor_ids, db) if role in SUPERVISABLE_ROLES else []
-
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=400, detail="帳號已存在")
 
@@ -253,10 +347,7 @@ def create_user_record(
         display_name=display_name,
         hashed_password=hash_password(password),
         role=role,
-        supervisor_id=supervisor_ids[0] if role in SUPERVISABLE_ROLES and supervisor_ids else None,
     )
-    if role in SUPERVISABLE_ROLES:
-        new_user.supervisors = supervisors
     db.add(new_user)
     return new_user
 
@@ -265,15 +356,49 @@ def update_user_record(
     db: Session,
     target_user: User,
     *,
+    current_admin: User,
     username: str | None,
     display_name: str | None,
     role: str | None,
-    supervisor_id: int | None,
-    supervisor_ids: list[int] | None,
     new_password: str | None,
-    clear_supervisor: bool,
 ) -> None:
-    """套用使用者更新：角色轉換、主管關係重算、密碼重設（不 commit）。"""
+    """套用使用者更新：角色轉換與密碼重設（不 commit）。"""
+    old_role = target_user.role
+    next_role = _normalize_role(role) if role is not None else old_role
+    if next_role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"無效角色：{role}")
+    role_is_changing = next_role != old_role
+    is_emergency_disable = role is not None and next_role == "none"
+
+    if is_emergency_disable and target_user.id == current_admin.id:
+        raise HTTPException(status_code=400, detail="不能停用自己的管理員帳號")
+
+    if role_is_changing and next_role not in {"teacher", "supervisor", "none"}:
+        active_scope = db.query(OrganizationSupervisorAssignment.id).filter(
+            OrganizationSupervisorAssignment.supervisor_id == target_user.id,
+            OrganizationSupervisorAssignment.ended_at.is_(None),
+        ).first()
+        if active_scope is not None:
+            raise HTTPException(status_code=409, detail="請先解除目前園所主管範圍")
+
+    if role_is_changing and next_role not in {"teacher", "supervisor", "none"}:
+        active_classroom_count = db.query(ClassroomTeacherAssignment).filter(
+            ClassroomTeacherAssignment.teacher_id == target_user.id,
+            ClassroomTeacherAssignment.ended_at.is_(None),
+        ).count()
+        if active_classroom_count:
+            raise HTTPException(
+                status_code=409,
+                detail="請先解除目前班級編制",
+            )
+
+    if role_is_changing and next_role not in PROJECT_OWNER_ROLES | {"none"}:
+        owned_project = db.query(Project.id).filter(
+            Project.owner_id == target_user.id
+        ).first()
+        if owned_project:
+            raise HTTPException(status_code=409, detail="請先轉交此帳號負責的相本")
+
     if username is not None:
         new_username = username.strip()
         if not new_username:
@@ -284,43 +409,36 @@ def update_user_record(
         target_user.username = new_username
 
     if display_name is not None:
-        target_user.display_name = display_name.strip()
+        normalized_display_name = display_name.strip()
+        if not normalized_display_name:
+            raise HTTPException(status_code=400, detail="顯示名稱不能為空")
+        target_user.display_name = normalized_display_name
 
-    old_role = target_user.role
+    if is_emergency_disable:
+        changed_at = utc_now()
+        _end_organization_supervisor_assignments(
+            db, target_user.id, current_admin, "role_none", changed_at
+        )
+        _end_classroom_teacher_assignments(
+            db, target_user.id, current_admin, "role_none", changed_at
+        )
+        _transfer_owned_projects(
+            db,
+            target_user,
+            current_admin,
+            "帳號停權時自動轉交",
+        )
 
-    if role is not None:
-        next_role = _normalize_role(role)
-        if next_role not in VALID_ROLES:
-            raise HTTPException(status_code=400, detail=f"無效角色：{role}")
-        target_user.role = next_role
+    target_user.role = next_role
 
-    normalized_supervisor_ids = None
-    if supervisor_ids is not None or supervisor_id is not None:
-        normalized_supervisor_ids = normalize_supervisor_ids(supervisor_ids, supervisor_id)
-
-    if normalized_supervisor_ids is not None:
-        if target_user.role not in SUPERVISABLE_ROLES and normalized_supervisor_ids:
-            raise HTTPException(status_code=400, detail="只有帶班老師或主管可以指定主管")
-        supervisors = _validate_supervisors(normalized_supervisor_ids, db, target_user_id=target_user.id)
-        target_user.supervisors = supervisors
-        target_user.supervisor_id = normalized_supervisor_ids[0] if normalized_supervisor_ids else None
-
-    if clear_supervisor:
-        target_user.supervisors = []
-        target_user.supervisor_id = None
-
-    if target_user.role not in SUPERVISABLE_ROLES:
-        target_user.supervisors = []
-        target_user.supervisor_id = None
-
-    if old_role == "supervisor" and target_user.role != "supervisor":
-        remove_supervisor_assignments(target_user.id, db)
-
+    password_is_changing = new_password is not None
     if new_password is not None:
         stripped_password = new_password.strip()
         if len(stripped_password) < MIN_PASSWORD_LENGTH:
             raise HTTPException(status_code=400, detail=f"新密碼至少需要 {MIN_PASSWORD_LENGTH} 個字元")
         target_user.hashed_password = hash_password(stripped_password)
+
+    if role_is_changing or password_is_changing:
         target_user.auth_version = int(target_user.auth_version or 0) + 1
 
 
@@ -362,73 +480,3 @@ def _row_value(row: tuple, column_index: int | None):
 def _normalize_role(role: str) -> str:
     key = _cell_to_text(role).lower()
     return ROLE_ALIASES.get(key, key)
-
-
-def _split_supervisor_tokens(value: str) -> list[str]:
-    return [
-        token.strip()
-        for token in re.split(r"[,，、;；\n]+", value or "")
-        if token.strip()
-    ]
-
-
-def _resolve_supervisor_tokens(tokens: list[str], db: Session) -> list[int]:
-    if not tokens:
-        return []
-
-    supervisor_ids = []
-    for token in tokens:
-        supervisor = db.query(User).filter(User.username == token).first()
-        if supervisor is None:
-            matches = db.query(User).filter(User.display_name == token).all()
-            if len(matches) > 1:
-                raise HTTPException(status_code=400, detail=f"主管名稱不唯一：{token}，請改填帳號")
-            supervisor = matches[0] if matches else None
-        if supervisor is None:
-            raise HTTPException(status_code=400, detail=f"找不到主管：{token}")
-        if supervisor.role != "supervisor":
-            raise HTTPException(status_code=400, detail=f"{token} 不是主管角色")
-        if supervisor.id not in supervisor_ids:
-            supervisor_ids.append(supervisor.id)
-    return supervisor_ids
-
-
-def normalize_supervisor_ids(supervisor_ids: list[int] | None, supervisor_id: int | None) -> list[int]:
-    """合併去重 supervisor_ids 與 legacy supervisor_id，保留原始順序。"""
-    normalized = []
-    for raw_id in supervisor_ids or []:
-        if raw_id not in normalized:
-            normalized.append(raw_id)
-    if supervisor_id is not None and supervisor_id not in normalized:
-        normalized.append(supervisor_id)
-    return normalized
-
-
-def _validate_supervisors(supervisor_ids: list[int], db: Session, target_user_id: int | None = None) -> list[User]:
-    supervisors = []
-    for supervisor_id in supervisor_ids:
-        if target_user_id is not None and supervisor_id == target_user_id:
-            raise HTTPException(status_code=400, detail="不能指定自己為主管")
-        supervisor = get_user_or_404(supervisor_id, db)
-        if supervisor.role != "supervisor":
-            raise HTTPException(status_code=400, detail="指定的主管必須是 supervisor 角色")
-        supervisors.append(supervisor)
-    return supervisors
-
-
-def remove_supervisor_assignments(supervisor_id: int, db: Session) -> None:
-    """移除某主管對老師的管理關係，並把 legacy supervisor_id 改指向剩餘主管。"""
-    affected_teachers = db.query(User).filter(User.supervisor_id == supervisor_id).all()
-    db.execute(
-        teacher_supervisors.delete().where(
-            teacher_supervisors.c.supervisor_id == supervisor_id
-        )
-    )
-    for teacher in affected_teachers:
-        next_supervisor = (
-            db.query(teacher_supervisors.c.supervisor_id)
-            .filter(teacher_supervisors.c.teacher_id == teacher.id)
-            .order_by(teacher_supervisors.c.supervisor_id)
-            .first()
-        )
-        teacher.supervisor_id = next_supervisor[0] if next_supervisor else None

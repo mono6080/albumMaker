@@ -160,7 +160,7 @@ export default function ClassEdit() {
   const { canEditProject } = usePermissions();
   useEffect(() => {
     if (!project) return;
-    if (!canEditProject(project.owner_id)) {
+    if (!canEditProject(project)) {
       toast.error("你沒有此專案的編輯權限，已切到班級總覽");
       navigate(`/projects/${projectId}/review`, { replace: true });
     }
@@ -299,7 +299,7 @@ export default function ClassEdit() {
       {
         element: '[data-guide="class-text-panel"]',
         title: "全班文字",
-        description: "這裡填全班共用文案，{name} 會自動代入各學生姓名；清空會輸出空白，按恢復預設可回到模板文字。",
+        description: "這裡填全班共用文案；{name} 代入相本稱呼，{full_name} 代入完整姓名。清空會輸出空白，按恢復預設可回到模板文字。",
         side: "left",
         align: "start",
         onBeforeStep: () => { setIsSlotPhotoModalOpen(false); setMobileTab("text"); },

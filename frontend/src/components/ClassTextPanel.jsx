@@ -29,7 +29,7 @@ export default function ClassTextPanel({
               第 {activePage + 1} 頁文字
             </h3>
             <span className="text-xs text-gray-400 ml-1 hidden sm:inline">
-              ({"{name}"} 自動代入姓名，清空會輸出空白)
+              ({"{name}"}=相本稱呼、{"{full_name}"}=完整姓名，清空會輸出空白)
             </span>
             <AutoSaveStatus status={saveStatus} className="ml-auto" />
           </div>

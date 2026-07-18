@@ -3,11 +3,12 @@
 
 from fastapi import APIRouter
 
-from . import comments, crud, photos, render, texts
+from . import assignments, comments, crud, photos, render, texts
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 router.include_router(crud.router)
+router.include_router(assignments.router)
 router.include_router(photos.router)
 router.include_router(texts.router)
 router.include_router(render.router)
