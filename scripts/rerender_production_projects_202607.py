@@ -388,8 +388,6 @@ def _project_summary(
         errors.append("名稱不符")
     if payload.get("deleted_at") is not None or payload.get("archive_expires_at") is not None:
         errors.append("不是 active Project")
-    if payload.get("completed_at") is None:
-        errors.append("尚未標記完成")
     permissions = payload.get("permissions")
     if not isinstance(permissions, dict) or permissions.get("can_edit") is not True:
         errors.append("登入帳號沒有 render 所需編輯權")
@@ -437,6 +435,8 @@ def _project_summary(
         "ready_student_ids_before": ready_student_ids,
         "missing_student_ids_before": missing_student_ids,
         "student_ids": student_ids,
+        "observed_completed_at": payload.get("completed_at"),
+        "observed_completed_at_after": None,
         # 非空 output_filename 只代表 DB 宣告有輸出，不證明 storage/hash 完整。
         "status": (
             "database_outputs_complete"
@@ -635,6 +635,16 @@ def run_workflow(
                             f"Project {project_id} render 後只有 "
                             f"{after['ready_before']}/"
                             f"{target.expected_student_count} 份 output"
+                        )
+                    project_entry["observed_completed_at_after"] = after[
+                        "observed_completed_at"
+                    ]
+                    if (
+                        after["observed_completed_at"]
+                        != project_entry["observed_completed_at"]
+                    ):
+                        raise RerenderApplyError(
+                            f"Project {project_id} render 前後完成狀態漂移"
                         )
                     _assert_reference_binding(target_contract)
                     project_entry["ready_after"] = after["ready_before"]

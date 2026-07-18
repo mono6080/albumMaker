@@ -228,7 +228,7 @@ docker compose ps app
 docker compose exec -T app python /app/healthcheck.py
 ```
 
-密碼只從隱藏輸入進 host 環境並以 `-e` 傳變數名稱；腳本依私有 reference 從 app Unix socket 補渲染，全程不可移除 flag。
+密碼只從隱藏輸入進 host 環境並以 `-e` 傳變數名稱；reference 只綁名稱與學生數，兩本完成狀態以 maintenance fresh backup 為準，`NULL` 也可補渲染，不得為通過 preflight 手動標記完成；全程不可移除 flag。
 
 ```bash
 set +x
@@ -272,7 +272,7 @@ curl --fail --silent --show-error --max-time 30 "${PUBLIC_ORIGIN}/api/health" ||
 
 - organization/P203 中斷時，保持 maintenance，以同一 manifest 與相同 acknowledgement
   重跑；腳本只接受完整未套用、完整已套用或精確可 reconcile 狀態。
-- rerender partial failure 不改 DB migration；保留失敗 manifest，以新 run ID 重跑。
+- rerender preflight 或 partial failure 不改 DB migration；保留失敗 manifest，以新 run ID 重跑。
   已成功的單生輸出會由 storage/hash 規則安全跳過或重建。
 - 只有尚未恢復正式寫入時，才可整體還原切換前 DB：
 

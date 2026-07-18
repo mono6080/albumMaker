@@ -70,14 +70,20 @@ def _load_reviewed_reference(database_path):
         return load_target_contract(database_path)
 
 
-def _project_payload(project_id, ready_count=0, *, name=None):
+def _project_payload(
+    project_id,
+    ready_count=0,
+    *,
+    name=None,
+    completed_at="2026-07-17T12:00:00",
+):
     target = SYNTHETIC_TARGETS[project_id]
     return {
         "id": project_id,
         "name": name or target["name"],
         "deleted_at": None,
         "archive_expires_at": None,
-        "completed_at": "2026-07-17T12:00:00",
+        "completed_at": completed_at,
         "permissions": {"can_edit": True},
         "students": [
             {
@@ -209,6 +215,92 @@ def test_dry_run_logs_in_and_gets_without_render_posts(tmp_path):
         },
     ]
     assert len(manifest["target_contract_sha256"]) == 64
+
+
+def test_working_projects_are_valid_rerender_targets(tmp_path):
+    api_client = FakeApiClient(
+        {
+            50: _project_payload(50, completed_at=None),
+            174: _project_payload(174, completed_at=None),
+        }
+    )
+
+    result, _manifest_path = _run(
+        tmp_path,
+        api_client,
+        apply_requested=False,
+    )
+
+    assert result["overall_status"] == "dry_run"
+    assert [project["missing_before"] for project in result["projects"]] == [
+        3,
+        2,
+    ]
+    assert all(
+        "/students/" not in path for _method, path in api_client.calls
+    )
+
+
+def test_apply_preserves_working_project_state(tmp_path):
+    api_client = FakeApiClient(
+        {
+            50: _project_payload(50, completed_at=None),
+            174: _project_payload(174, completed_at=None),
+        }
+    )
+
+    result, _manifest_path = _run(
+        tmp_path,
+        api_client,
+        apply_requested=True,
+    )
+
+    assert result["overall_status"] == "complete"
+    assert all(
+        project["completed_at"] is None
+        for project in api_client.projects.values()
+    )
+    assert all(
+        project["observed_completed_at"] is None
+        and project["observed_completed_at_after"] is None
+        for project in result["projects"]
+    )
+    assert all(
+        not path.endswith("/complete") for _method, path in api_client.calls
+    )
+
+
+def test_apply_rejects_workflow_state_drift(tmp_path):
+    class CompletionDriftApiClient(FakeApiClient):
+        def get(self, path):
+            if path == "/api/projects/50" and any(
+                "/students/" in called_path
+                for _method, called_path in self.calls
+            ):
+                self.projects[50]["completed_at"] = (
+                    "2026-07-19T01:00:00"
+                )
+            return super().get(path)
+
+    api_client = CompletionDriftApiClient(
+        {
+            50: _project_payload(50, completed_at=None),
+            174: _project_payload(174, completed_at=None),
+        }
+    )
+
+    with pytest.raises(RerenderApplyError, match="完成狀態漂移"):
+        _run(tmp_path, api_client, apply_requested=True)
+
+    manifest = json.loads(
+        (tmp_path / "rerender.manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["overall_status"] == "partial_failure"
+    assert manifest["projects"][0]["status"] == "failed"
+    assert manifest["projects"][0]["observed_completed_at"] is None
+    assert manifest["projects"][0]["observed_completed_at_after"] == (
+        "2026-07-19T01:00:00"
+    )
 
 
 def test_apply_handles_partial_outputs_and_verifies_reference_counts(tmp_path):
