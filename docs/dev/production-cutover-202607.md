@@ -18,6 +18,8 @@
   舊本機 DB 覆蓋。
 - 任一命令非零、audit 非 37/37，或人工核對不符，都保持 maintenance 並停止；
   不可手寫 SQL 補半套資料。
+- R2 不用 versioning、replication 或 active bucket lock；候選啟動前與補渲染後必須完成
+  [R2 快照 runbook](production-r2-snapshot-202607.md) 的 bytes snapshot 與 drift audit。
 
 ## 1. 候選映像與私人目錄
 
@@ -26,9 +28,10 @@
 ```bash
 set -Eeuo pipefail
 umask 077
+DOCKER_BIN="$(command -v docker)"
+docker() { sudo "${DOCKER_BIN}" "$@"; }
 test -f docker-compose.yml
 test -z "$(git status --porcelain)"
-
 CUTOVER_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 PRIVATE_DIR="/var/lib/album-maker-private/production-cutover-202607"
 MIGRATION_DIR="${PRIVATE_DIR}/${CUTOVER_ID}"
@@ -39,7 +42,6 @@ MAINTENANCE_FLAG="${NGINX_COMPOSE_DIR}/nginx/maintenance/album_maker.flag"
 NGINX_SITE="${NGINX_COMPOSE_DIR}/nginx/sites-available/album_maker.conf"
 nginx_compose() { sudo docker compose -f "${NGINX_COMPOSE_DIR}/docker-compose.yml" --project-directory "${NGINX_COMPOSE_DIR}" "$@"; }
 REFERENCE_SHA256="b753b3aec0b0f03e151d9a5ce88f6eb54770b5f58e278cdd4ebd5e06c42eaf15"
-
 sudo install -d -m 0700 -o "$(id -un)" -g "$(id -gn)" \
   "${PRIVATE_DIR}" "${MIGRATION_DIR}"
 test -f "${REFERENCE_DB}" && chmod 0400 "${REFERENCE_DB}"
@@ -47,9 +49,8 @@ test ! -e "${REFERENCE_DB}-wal" && test ! -e "${REFERENCE_DB}-shm"
 printf '%s  %s\n' "${REFERENCE_SHA256}" "${REFERENCE_DB}" | sha256sum --check --strict
 ```
 
-記住舊 image 後 pull/build；build 期間舊 app 仍在線：
-
-外部 nginx 不在 app Compose；pull 後先部署、驗證、reload，公開 health/TLS preflight 失敗不得建立 maintenance flag。
+記住舊 image 後 pull/build；build 期間舊 app 仍在線。外部 nginx 不在 app Compose；
+先部署、驗證、reload，公開 health/TLS preflight 失敗不得建立 maintenance flag。
 
 ```bash
 OLD_CONTAINER_ID="$(docker compose ps --status running -q app)" && test -n "${OLD_CONTAINER_ID}"
@@ -73,7 +74,6 @@ printf '%s\n' "${APP_IMAGE_REF}" > "${MIGRATION_DIR}/app-image-ref.txt"
 printf '%s\n' "${PRE_CUTOVER_IMAGE}" > "${MIGRATION_DIR}/pre-cutover-image.txt"
 docker image inspect "${APP_IMAGE_REF}" \
   --format '{{.Id}}' > "${MIGRATION_DIR}/candidate-image-id.txt"
-
 docker compose run --rm --no-deps -T app sh -ec '
   for path in \
     /app/migrations.py \
@@ -82,6 +82,7 @@ docker compose run --rm --no-deps -T app sh -ec '
     /app/scripts/migrate_production_organization_202607.py \
     /app/scripts/repair_project_203.py \
     /app/scripts/audit_production_migration_202607.py \
+    /app/scripts/snapshot_production_r2_outputs_202607.py \
     /app/scripts/rerender_production_projects_202607.py
   do test -f "$path"; done
 '
@@ -111,10 +112,8 @@ case "${BACKUP_PATH}" in
   *) printf '無法辨識備份路徑：%s\n' "${BACKUP_PATH}" >&2; exit 1 ;;
 esac
 printf '%s\n' "${BACKUP_PATH}" > "${MIGRATION_DIR}/cutover-backup-path.txt"
-
 docker compose run --rm --no-deps -T app \
   python /app/scripts/backup_data.py verify "${BACKUP_PATH}"
-
 docker compose run --rm --no-deps -T app python -c \
   'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["files"]["database"]["sha256"])' \
   "${BACKUP_PATH}/manifest.json"
@@ -123,9 +122,8 @@ read -r -p "貼上剛才已 verify 備份 manifest 的 DB SHA-256: " SOURCE_DB_S
 printf '%s\n' "${SOURCE_DB_SHA256}" > "${MIGRATION_DIR}/source-db-sha256.txt"
 ```
 
-本次備份不帶 `--keep-days`，避免 rollback 時順便清舊備份。R2 模式只備份 SQLite；
-bucket 必須另有版本控管或複寫。source SHA 只能取自剛通過 verify 的備份 manifest，
-不可對之後仍可能被替換的 source DB 現算後直接信任。
+本次備份不帶 `--keep-days`，避免 rollback 時順便清舊備份。它不包含 R2；source SHA
+只能取自剛通過 verify 的 manifest，不可對仍可能被替換的 source DB 現算後直接信任。
 
 ## 3. Startup schema 與園所 replay
 
@@ -136,7 +134,6 @@ docker compose run --rm --no-deps -T \
   -e DATABASE_URL=sqlite:////app/db/album_maker.db \
   app \
   python /app/scripts/run_startup_migrations.py
-
 ORG_RUN_ID="organization-${CUTOVER_ID}"
 ORG_MANIFEST="/migration/production-organization.manifest-${ORG_RUN_ID}.json"
 docker compose run --rm --no-deps -T \
@@ -217,6 +214,9 @@ docker compose run --rm --no-deps -T \
 只有 exit 0、`ok: true`、37/37 才可繼續。audit 會核對最新 P198 內容、115/199
 封存狀態、完整園所 plan、角色、孤兒、ledger 與 P203 replacement。
 
+接著完整執行 [候選啟動前 R2 快照](production-r2-snapshot-202607.md#候選啟動前建立快照)；
+快照未完成或 SHA 未人工核對，不可啟動 candidate。
+
 ## 6. 候選 app、補渲染與解除 maintenance
 
 先啟動 candidate，但仍不恢復公開流量：
@@ -236,7 +236,6 @@ read -r -s -p "Production admin password: " ALBUM_MAKER_ADMIN_PASSWORD
 printf '\n'
 export ALBUM_MAKER_ADMIN_PASSWORD
 trap 'unset ALBUM_MAKER_ADMIN_PASSWORD' EXIT
-
 docker compose run --rm --no-deps -T \
   -e ALBUM_MAKER_ADMIN_PASSWORD \
   -v "${MIGRATION_DIR}:/migration:rw" \
@@ -246,7 +245,6 @@ docker compose run --rm --no-deps -T \
     --password-env ALBUM_MAKER_ADMIN_PASSWORD \
     --manifest /migration/production-rerender.json \
     --run-id "rerender-dry-${CUTOVER_ID}" --timeout-seconds 3600
-
 docker compose run --rm --no-deps -T \
   -e ALBUM_MAKER_ADMIN_PASSWORD \
   -v "${MIGRATION_DIR}:/migration:rw" \
@@ -257,14 +255,13 @@ docker compose run --rm --no-deps -T \
     --manifest /migration/production-rerender.json \
     --run-id "rerender-apply-${CUTOVER_ID}" --timeout-seconds 3600 \
     --apply --acknowledge-project-ids 50,174
-
 unset ALBUM_MAKER_ADMIN_PASSWORD
 trap - EXIT
 sudo chmod -R go-rwx "${MIGRATION_DIR}"
 ```
 
-確認 apply manifest `complete`，且兩本 responses/final 數量都等於 reference 後，才移除
-maintenance flag 並驗公開路徑：
+確認 apply manifest `complete` 且兩本 responses/final 數量都等於 reference，再執行
+[補渲染後 R2 audit](production-r2-snapshot-202607.md#補渲染後-audit)；通過後才移除 flag：
 
 ```bash
 docker compose exec -T app python /app/healthcheck.py && sudo unlink "${MAINTENANCE_FLAG}"
@@ -279,8 +276,10 @@ curl --fail --silent --show-error --max-time 30 "${PUBLIC_ORIGIN}/api/health" ||
   已成功的單生輸出會由 storage/hash 規則安全跳過或重建。
 - 只有尚未恢復正式寫入時，才可整體還原切換前 DB：
 
+若 R2 snapshot 已建立，先依 [R2 rollback restore](production-r2-snapshot-202607.md#rollback-restore)
+還原物件；snapshot 前的 DB-only rollback 不碰 R2。接著還原 DB/image：
+
 ```bash
-docker compose stop --timeout 120 app
 BACKUP_PATH="$(cat "${MIGRATION_DIR}/cutover-backup-path.txt")"
 case "${BACKUP_PATH}" in /app/backups/album-maker-backup-*) ;; *) exit 1 ;; esac
 docker compose run --rm --no-deps -T app \
@@ -293,7 +292,8 @@ PRE_CUTOVER_IMAGE="$(cat "${MIGRATION_DIR}/pre-cutover-image.txt")"
 docker image tag "${PRE_CUTOVER_IMAGE}" "${APP_IMAGE_REF}"
 docker compose up -d --no-deps --force-recreate --no-build \
   --wait --wait-timeout 120 app
+docker compose exec -T app python /app/healthcheck.py && sudo unlink "${MAINTENANCE_FLAG}"
+curl --fail --silent --show-error --max-time 30 "${PUBLIC_ORIGIN}/api/health" || { sudo install -m 0644 /dev/null "${MAINTENANCE_FLAG}"; exit 1; }
 ```
-
-正式流量恢復後若已有新寫入，禁止直接還原切換前 DB，否則會刪掉新資料；必須重新
-進 maintenance 並先做影響分析。R2 物件不在 SQLite 備份內，另依 bucket 版本控管處理。
+正式流量恢復後若已有新寫入，禁止直接還原切換前 DB/R2，否則會刪掉新資料；必須
+重新進 maintenance 並先做影響分析。

@@ -90,8 +90,8 @@ app 已停止時不能使用 `exec`；切換或還原期間改用同一 Compose 
 [2026-07 runbook](production-cutover-202607.md)，避免另建空 named volume。
 
 `backups` 是獨立 named volume；仍應用主機排程把它同步到異機／物件儲存。R2 模式只
-備份 SQLite，manifest 會明確標示未包含 R2 物件；R2 bucket 必須另外啟用版本控管或
-跨 bucket 複寫，不能把本機 cache 當備份。
+備份 SQLite，manifest 會明確標示未包含 R2 物件；媒體備份契約見
+[storage.md 的 R2 備份與大量改寫](storage.md#r2-備份與大量改寫)。
 
 還原前先停止 app，並先執行 `verify`。還原是取代性操作，沒有
 `--confirm-replace` 會拒絕執行：

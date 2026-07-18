@@ -91,6 +91,20 @@ python scripts\migrate_uploads_to_r2.py --dry-run  # 只列出將上傳的 key
 - 以 `head_object` 比對物件大小，相同即跳過 → 可重複執行；
   第二次執行顯示 `uploaded=0, failed=0` 代表已同步
 
+### R2 備份與大量改寫
+
+`backup_data.py` 在 R2 模式只備份 SQLite；memory/local cache 與同 bucket 的一般前綴都
+不是獨立備份。大量刪除或覆寫前，必須停掉所有 writer，把受影響範圍的原始 bytes 串流到
+repo 外的私人持久目錄，逐物件保存 SHA-256／metadata 並重驗；另保存全 bucket inventory
+摘要，完成後只允許已審範圍變動。這個契約由
+`tests/test_production_r2_snapshot_script.py` 釘住；2026-07 的完整命令見
+[正式 R2 快照 runbook](production-r2-snapshot-202607.md)。
+
+Cloudflare R2 的 active bucket lock 會禁止刪除／覆寫，不是版本快照；不得為了 rollback
+鎖住正式工作前綴，否則相本重算與失敗重試都會被阻擋。若使用 lock，只能套在不再寫入的
+獨立備份位置。`R2StorageAdapter.delete_prefix()` 也必須把 `DeleteObjects` 回應中的任何
+逐物件 error 視為整批失敗，不得在遠端仍有殘留時回報成功。
+
 ### R2 integration test
 
 一般測試不連 R2。要對真實 staging bucket 做 put/get/delete smoke test：

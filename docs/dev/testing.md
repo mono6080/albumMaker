@@ -57,6 +57,8 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     effective traversal、v1/v2 link 相容、CSV formula safety、review gate、唯一備份與多模板 partial manifest
   - `test_data_script_manifest_inspection.py`：manifest fsync/atomic replace 與 crash-gap
     revision/layout-hash reconciliation
+  - `test_production_r2_snapshot_script.py`：正式 R2 scope 推導、私有 bytes/blob SHA-256、
+    全 bucket 範圍外 drift gate、空 prefix 與 partial restore 的可重入契約
   - `test_photo_upload_identity.py`：單張／批次照片在鎖外解碼期間遇外部 migration 替換
     學生快照或 SQLite ID 重用時，鎖內身份 CAS 回 409，且替代學生與同批其他學生皆零寫入
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與

@@ -129,7 +129,7 @@ def create_backup(
             "upload_file_count": upload_count,
             "files": files,
             "note": (
-                "R2 物件未包含；請另行啟用 bucket versioning／複寫。"
+                "R2 物件未包含；請另行建立並驗證可還原的 R2 bytes snapshot。"
                 if normalized_backend != "local"
                 else "SQLite 與本機媒體均已包含。"
             ),

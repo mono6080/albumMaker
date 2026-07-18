@@ -34,6 +34,7 @@ COPY scripts/backup_data.py \
      scripts/migrate_production_organization_202607.py \
      scripts/repair_project_203.py \
      scripts/audit_production_migration_202607.py \
+     scripts/snapshot_production_r2_outputs_202607.py \
      scripts/rerender_production_projects_202607.py \
      /app/scripts/
 
