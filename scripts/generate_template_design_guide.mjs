@@ -31,6 +31,14 @@ function docsRelative(filePath) {
   return relativeWebPath(docsDir, filePath);
 }
 
+async function getTemplateRevision(context, templateId) {
+  const response = await requireOk(
+    await context.request.get(`${apiUrl}/templates/${templateId}`),
+    "load template revision",
+  );
+  return (await response.json()).revision;
+}
+
 async function createBackgroundImage(browser) {
   const page = await browser.newPage({ viewport: { width: 794, height: 1123 } });
   await page.setContent(`
@@ -83,8 +91,10 @@ async function createDemoTemplate(context, backgroundPath) {
       `create page ${pageNumber}`,
     );
     const pageInfo = await pageResponse.json();
+    const expectedRevision = await getTemplateRevision(context, template.id);
     const uploadResponse = await requireOk(
       await context.request.post(`${apiUrl}/templates/${template.id}/pages/${pageInfo.id}/background`, {
+        params: { expected_revision: expectedRevision },
         multipart: {
           file: {
             name: `guide-background-${pageNumber}.png`,
@@ -263,8 +273,8 @@ const GUIDE_MARKERS = {
   textContent: [
     { n: 1, selector: '[data-guide="tool-add-text"]', text: "純文字工具。新增標題、日期、頁尾等可替換文字。" },
     { n: 2, relativeTo: '[data-guide="canvas-frame"]', rect: CANVAS_TARGETS.textLabel1, text: "文字框位置。新增後切回選取工具，再點文字框調整內容。" },
-    { n: 3, selector: '[data-guide="text-content"]', text: "文字內容輸入框。固定文案和 {name} 都在這裡編輯。" },
-    { n: 4, selector: '[data-guide="text-content-insert-name"]', padding: 3, text: "插入 {name}。點一下就會在游標位置插入姓名變數。" },
+    { n: 3, selector: '[data-guide="text-content"]', text: "文字內容輸入框。固定文案、{name} 相本稱呼與 {full_name} 完整姓名都在這裡編輯。" },
+    { n: 4, selector: '[data-guide="text-content-insert-name"]', padding: 3, text: "插入 {name}。點一下會在游標位置插入相本稱呼變數。" },
   ],
   text: [
     { n: 1, relativeTo: '[data-guide="canvas-frame"]', rect: CANVAS_TARGETS.textLabel1, text: "被選取的文字框。可拖曳位置，也可調整寬高。" },
@@ -374,7 +384,7 @@ async function buildPdf(screenshots) {
       <li>在左側「素材」點「上傳背景」，選擇該頁背景圖。</li>
       <li>在裁切視窗調整背景位置與縮放，讓主要圖案完整落在 A4 範圍。</li>
       <li>在左側「頁面」切換第 1 頁、第 2 頁；需要更多頁時點「新增頁」。</li>
-      <li>背景不要直接寫死學生姓名；會變動的姓名用文字元素 <span class="kbd">{name}</span>。</li>
+      <li>背景不要直接寫死學生姓名；相本稱呼用 <span class="kbd">{name}</span>，完整姓名用 <span class="kbd">{full_name}</span>。</li>
     </ol>
     ${stepFigure(screenshots.pages, "步驟 3：頁面、背景與新增頁的位置。")}
   </section>
@@ -407,13 +417,13 @@ async function buildPdf(screenshots) {
 
   <section class="page-break">
     <h2>6. 新增文字與姓名變數</h2>
-    <p class="step-intro">純文字適合標題、日期、頁尾、短句與說明文字。需要自動帶入學生姓名時，請使用 <span class="kbd">{name}</span>。</p>
+    <p class="step-intro">純文字適合標題、日期、頁尾、短句與說明文字。<span class="kbd">{name}</span> 會帶入相本稱呼，<span class="kbd">{full_name}</span> 會帶入名冊完整姓名。</p>
     <ol class="actions">
       <li>左側工具選「純文字」。</li>
       <li>在畫布上點擊新增文字框。</li>
       <li>切回「選取」後點文字框，右側會出現文字屬性。</li>
-      <li>文字內容可輸入固定文案，也可使用 <span class="kbd">{name}</span> 代入學生姓名。</li>
-      <li>點「插入 {name}」可在目前游標位置一鍵插入姓名變數；選取文字時會直接取代選取範圍。</li>
+      <li>文字內容可輸入固定文案，也可使用 <span class="kbd">{name}</span> 或 <span class="kbd">{full_name}</span>。</li>
+      <li>點對應的插入按鈕可在目前游標位置插入變數；選取文字時會直接取代選取範圍。</li>
       <li>標題文字建議先確認是否會超出文字框，再調整字級與行距。</li>
     </ol>
     ${stepFigure(screenshots.textContent, "步驟 6：文字內容與姓名變數插入。")}
@@ -454,7 +464,7 @@ async function buildPdf(screenshots) {
         <li>□ 照片總計符合企劃需求。</li>
         <li>□ 每個照片格尺寸、位置、旋轉角度合理。</li>
         <li>□ 純文字沒有超出框線。</li>
-        <li>□ 需要帶學生姓名的地方都有使用 {name}。</li>
+        <li>□ 相本稱呼使用 {name}；確實需要完整姓名時使用 {full_name}。</li>
       </ul>
       <ul class="checklist">
         <li>□ 文字顏色與背景對比足夠。</li>
