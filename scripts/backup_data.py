@@ -8,7 +8,9 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import sys
+import tempfile
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +48,11 @@ def sqlite_backup(source_path: Path, destination_path: Path) -> None:
         raise FileNotFoundError(f"找不到 SQLite 資料庫：{source_path}")
     with sqlite3.connect(source_path) as source, sqlite3.connect(destination_path) as destination:
         source.backup(destination)
+        # 備份 artifact 必須是 manifest 可完整涵蓋的單一檔案；不要把來源的
+        # WAL journal mode 與未列入 manifest 的 sidecar 帶進備份目錄。
+        journal_mode = destination.execute("PRAGMA journal_mode=DELETE").fetchone()
+        if not journal_mode or str(journal_mode[0]).lower() != "delete":
+            raise RuntimeError(f"SQLite 備份無法切回單檔 journal mode：{journal_mode}")
         result = destination.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
             raise RuntimeError(f"SQLite 備份完整性檢查失敗：{result}")
@@ -131,11 +138,11 @@ def create_backup(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        verify_backup(final_dir)
     except Exception:
         shutil.rmtree(final_dir, ignore_errors=True)
         raise
 
-    verify_backup(final_dir)
     if keep_days is not None:
         prune_backups(output_dir, keep_days, now=created_at)
     return final_dir
@@ -153,10 +160,43 @@ def verify_backup(backup_dir: Path) -> dict:
         path = backup_dir / artifact["filename"]
         if not path.is_file() or path.stat().st_size != artifact["bytes"] or sha256(path) != artifact["sha256"]:
             raise ValueError(f"備份校驗失敗：{path.name}")
-    with sqlite3.connect(backup_dir / manifest["files"]["database"]["filename"]) as connection:
+    database_artifact = (
+        backup_dir / manifest["files"]["database"]["filename"]
+    ).resolve()
+    sidecar_paths = [
+        database_artifact.with_name(database_artifact.name + suffix)
+        for suffix in ("-wal", "-shm", "-journal")
+    ]
+    existing_sidecars = [path.name for path in sidecar_paths if path.exists()]
+    if existing_sidecars:
+        raise ValueError(
+            "備份資料庫不可帶未列入 manifest 的 SQLite sidecar："
+            f"{existing_sidecars}"
+        )
+    connection = sqlite3.connect(
+        f"{database_artifact.as_uri()}?mode=ro&immutable=1",
+        uri=True,
+    )
+    try:
+        connection.execute("PRAGMA query_only=ON")
         result = connection.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
             raise ValueError(f"SQLite 備份完整性檢查失敗：{result}")
+        foreign_key_violations = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+        if foreign_key_violations:
+            raise ValueError(
+                f"SQLite 備份外鍵檢查失敗：{foreign_key_violations}"
+            )
+    finally:
+        connection.close()
+    existing_sidecars = [path.name for path in sidecar_paths if path.exists()]
+    if existing_sidecars:
+        raise ValueError(
+            "備份資料庫驗證期間出現未列入 manifest 的 SQLite sidecar："
+            f"{existing_sidecars}"
+        )
     return manifest
 
 
@@ -167,6 +207,136 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
             if relative.is_absolute() or ".." in relative.parts:
                 raise ValueError(f"媒體備份含不安全路徑：{member.filename}")
         archive.extractall(destination)
+
+
+def _verify_restored_database(database_path: Path) -> None:
+    database_uri = f"{database_path.as_uri()}?mode=ro&immutable=1"
+    connection = sqlite3.connect(database_uri, uri=True)
+    try:
+        integrity_result = connection.execute("PRAGMA integrity_check").fetchone()
+        if not integrity_result or integrity_result[0] != "ok":
+            raise RuntimeError(f"SQLite 還原完整性檢查失敗：{integrity_result}")
+        foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_violations:
+            raise RuntimeError(f"SQLite 還原外鍵檢查失敗：{foreign_key_violations}")
+    finally:
+        # sqlite3 的 context manager 不會 close；Windows replace 前必須明確釋放檔案。
+        connection.close()
+
+
+def _remove_sqlite_sidecars(database_path: Path) -> None:
+    for suffix in ("-wal", "-shm", "-journal"):
+        database_path.with_name(database_path.name + suffix).unlink(missing_ok=True)
+
+
+def _checkpoint_existing_database(database_path: Path) -> None:
+    if not database_path.is_file():
+        return
+
+    database_uri = f"{database_path.as_uri()}?mode=rw"
+    connection = sqlite3.connect(
+        database_uri,
+        uri=True,
+        timeout=0,
+        isolation_level=None,
+    )
+    journal_mode = ""
+    try:
+        integrity_result = connection.execute("PRAGMA integrity_check").fetchone()
+        if not integrity_result or integrity_result[0] != "ok":
+            raise RuntimeError(
+                f"SQLite 既有目的資料庫完整性檢查失敗：{integrity_result}"
+            )
+        foreign_key_violations = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+        if foreign_key_violations:
+            raise RuntimeError(
+                "SQLite 既有目的資料庫外鍵檢查失敗："
+                f"{foreign_key_violations}"
+            )
+
+        journal_mode_result = connection.execute("PRAGMA journal_mode").fetchone()
+        journal_mode = (
+            str(journal_mode_result[0]).lower() if journal_mode_result else ""
+        )
+        if not journal_mode:
+            raise RuntimeError("無法讀取 SQLite 既有目的資料庫 journal mode")
+        if journal_mode == "wal":
+            checkpoint_result = connection.execute(
+                "PRAGMA wal_checkpoint(TRUNCATE)"
+            ).fetchone()
+            normalized_result = (
+                tuple(int(value) for value in checkpoint_result)
+                if checkpoint_result is not None
+                else None
+            )
+            if normalized_result != (0, 0, 0):
+                raise RuntimeError(
+                    "SQLite 既有目的資料庫 WAL checkpoint 未完成；"
+                    f"可能仍有 busy connection：{normalized_result}"
+                )
+    except sqlite3.DatabaseError as error:
+        raise RuntimeError(
+            f"SQLite 既有目的資料庫 checkpoint 失敗：{error}"
+        ) from error
+    finally:
+        connection.close()
+
+    wal_path = database_path.with_name(database_path.name + "-wal")
+    if journal_mode == "wal" and wal_path.exists() and wal_path.stat().st_size != 0:
+        raise RuntimeError(
+            f"SQLite 既有目的資料庫 checkpoint 後仍有 WAL：{wal_path}"
+        )
+
+
+def _fsync_parent_directory(directory_path: Path) -> None:
+    if os.name == "nt":
+        return
+    directory_fd = os.open(directory_path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _restore_database_atomic(source_database: Path, destination_database: Path) -> None:
+    destination_mode = (
+        stat.S_IMODE(destination_database.stat().st_mode)
+        if destination_database.exists()
+        else None
+    )
+    temporary_fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination_database.name}.restore-",
+        suffix=".tmp",
+        dir=destination_database.parent,
+    )
+    temporary_database = Path(temporary_name)
+    try:
+        with source_database.open("rb") as source:
+            with os.fdopen(temporary_fd, "wb") as temporary_output:
+                temporary_fd = -1
+                shutil.copyfileobj(source, temporary_output)
+                temporary_output.flush()
+                if destination_mode is not None:
+                    temporary_database.chmod(destination_mode)
+                os.fsync(temporary_output.fileno())
+
+        # 所有內容驗證都在碰觸目的 DB 前完成。
+        _verify_restored_database(temporary_database)
+
+        # 舊 DB 若帶 WAL，先將 committed frames 寫回主檔。sidecar 必須在
+        # replace 前移除並 fsync 目錄，避免新 DB 被舊 WAL replay。
+        _checkpoint_existing_database(destination_database)
+        _remove_sqlite_sidecars(destination_database)
+        _fsync_parent_directory(destination_database.parent)
+        os.replace(temporary_database, destination_database)
+        _fsync_parent_directory(destination_database.parent)
+        _verify_restored_database(destination_database)
+    finally:
+        if temporary_fd != -1:
+            os.close(temporary_fd)
+        temporary_database.unlink(missing_ok=True)
 
 
 def restore_backup(
@@ -183,7 +353,7 @@ def restore_backup(
     destination_database = destination_database.resolve()
     destination_database.parent.mkdir(parents=True, exist_ok=True)
     database_source = backup_dir / manifest["files"]["database"]["filename"]
-    shutil.copy2(database_source, destination_database)
+    _restore_database_atomic(database_source, destination_database)
 
     uploads_artifact = manifest["files"].get("uploads")
     if uploads_artifact and destination_uploads is not None:

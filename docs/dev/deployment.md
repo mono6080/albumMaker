@@ -20,12 +20,19 @@
 
 - **Multi-stage Dockerfile**：Stage 1 Node 20 編前端 → Stage 2 Python 3.12
   serve 後端與 `frontend/dist`
+- candidate image 同時內建備份、startup schema、一次性 migration/audit 與補渲染
+  腳本；本次正式資料流程與 maintenance 順序見
+  [2026-07 正式切換 runbook](production-cutover-202607.md)
 - Stage 1 用 `npm ci --legacy-peer-deps`（vite-plugin-pwa 與 vite 8 有
   peer dep 衝突）
-- 容器內安裝 fonts-noto-cjk / fonts-wqy-*，替代 Windows 的
-  `C:/Windows/Fonts/`（缺字型的後果見 [rendering.md 字型](rendering.md#字型)）
+- 前端 build 會把共用 Noto TC 字型複製到 `/frontend/dist/fonts/`，後端也從同一路徑
+  讀取；瀏覽器優先取 WOFF2，`/fonts` 以 ETag 重驗證、未變更回 304，
+  fonts-noto-cjk / fonts-wqy-* 只保留作資產遺失時的 fallback
+  （字型契約見 [rendering.md 字型](rendering.md#字型)）
 - 容器**不對外暴露 port**，透過 Unix socket 接 nginx
   （設定範本 `deploy/album_maker.conf`）
+- nginx 設定目錄出現 `maintenance/album_maker.flag` 時，HTTPS 站點立即回 503；移除
+  檔案即恢復流量，不需 reload。切換中的管理操作只可從 app 容器走 Unix socket。
 - uploads 與 DB 掛 named volumes
 
 ```bash
@@ -61,6 +68,7 @@ docker compose up -d --build
 | `ZIP_BUILD_CONCURRENCY` | `1` | ZIP 打包併發槽 |
 | `PHOTO_UPLOAD_CONCURRENCY` | `2` | 照片上傳處理併發槽 |
 | `HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS` | `10.0` | 重任務排隊逾時秒數，超時回 503（背景 job 走 `acquire_blocking` 不受此限） |
+| `ARCHIVE_PURGE_INTERVAL_SECONDS` | `300` | 服務存活期間掃描並清除已超過復原期限之封存相本的間隔秒數；啟動時也會立即掃描一次 |
 
 `.env` 已被 `.gitignore` 排除；金鑰不得 commit。
 
@@ -71,10 +79,15 @@ backup API 取得一致快照，本機 storage 會一併封裝，產物以 SHA-2
 
 ```bash
 docker compose exec app python /app/scripts/backup_data.py create \
-  --output-dir /app/backups --keep-days 30
+  --database-url sqlite:////app/db/album_maker.db \
+  --uploads-dir /app/uploads --output-dir /app/backups --keep-days 30
 docker compose exec app python /app/scripts/backup_data.py verify \
   /app/backups/album-maker-backup-YYYYMMDDTHHMMSSZ
 ```
+
+app 已停止時不能使用 `exec`；切換或還原期間改用同一 Compose project 的
+`docker compose run --rm --no-deps -T app ...`。一次性正式切換的完整命令只放在
+[2026-07 runbook](production-cutover-202607.md)，避免另建空 named volume。
 
 `backups` 是獨立 named volume；仍應用主機排程把它同步到異機／物件儲存。R2 模式只
 備份 SQLite，manifest 會明確標示未包含 R2 物件；R2 bucket 必須另外啟用版本控管或

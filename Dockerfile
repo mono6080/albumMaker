@@ -27,7 +27,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 後端程式碼
 COPY backend/ .
-COPY scripts/backup_data.py /app/scripts/backup_data.py
+# 正式備份、一次性資料遷移與上線後驗證必須由同一個 candidate image 執行。
+COPY scripts/backup_data.py \
+     scripts/data_script_utils.py \
+     scripts/run_startup_migrations.py \
+     scripts/migrate_production_organization_202607.py \
+     scripts/repair_project_203.py \
+     scripts/audit_production_migration_202607.py \
+     scripts/rerender_production_projects_202607.py \
+     /app/scripts/
 
 # 前端編譯結果（放在 main.py 預期的相對位置）
 COPY --from=frontend-builder /build/dist/ /frontend/dist/

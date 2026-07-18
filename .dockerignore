@@ -6,6 +6,9 @@ backend/uploads/
 backend/.env
 frontend/node_modules
 frontend/dist
+.tmp/
+output/
+backups/
 .git
 *.bat
 *.md
