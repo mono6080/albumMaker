@@ -156,7 +156,12 @@ class R2StorageAdapter(StorageAdapter):
             for start in range(0, len(objects), 1000):
                 batch = objects[start : start + 1000]
                 if batch:
-                    self._s3.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
+                    response = self._s3.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
+                    errors = response.get("Errors", [])
+                    if errors:
+                        raise RuntimeError(
+                            f"R2 delete_prefix failed for {len(errors)} object(s)"
+                        )
 
     def move(self, src_key: str, dst_key: str) -> None:
         source = self._key(src_key)

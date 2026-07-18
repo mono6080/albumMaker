@@ -133,6 +133,48 @@ class FakeS3Client:
         del Bucket
         for item in Delete["Objects"]:
             self.objects.pop(item["Key"], None)
+        return {"Deleted": list(Delete["Objects"])}
+
+
+class PaginatedFakeS3Client(FakeS3Client):
+    def __init__(self, pages):
+        super().__init__()
+        self.pages = pages
+        self.deleted_batches = []
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        pages = self.pages
+
+        class StaticPaginator:
+            def paginate(self, Bucket, Prefix):
+                del Bucket, Prefix
+                yield from pages
+
+        return StaticPaginator()
+
+    def delete_objects(self, Bucket, Delete):
+        self.deleted_batches.append([item["Key"] for item in Delete["Objects"]])
+        return super().delete_objects(Bucket, Delete)
+
+
+class DeleteErrorFakeS3Client(FakeS3Client):
+    def __init__(self, failed_keys):
+        super().__init__()
+        self.failed_keys = set(failed_keys)
+
+    def delete_objects(self, Bucket, Delete):
+        del Bucket
+        deleted = []
+        errors = []
+        for item in Delete["Objects"]:
+            key = item["Key"]
+            if key in self.failed_keys:
+                errors.append({"Key": key, "Code": "AccessDenied"})
+                continue
+            self.objects.pop(key, None)
+            deleted.append(item)
+        return {"Deleted": deleted, "Errors": errors}
 
 
 def test_local_storage_put_get_delete(tmp_path):
@@ -313,6 +355,76 @@ def test_r2_delete_prefix_stays_within_namespace_boundary():
     assert client.objects["projects/proj1/output/demo_screen.pdf"] == b"screen"
     assert "projects/proj1/output/demo/images/print/demo_page1.jpg" not in client.objects
     assert client.objects["projects/proj1/output/demo-other.pdf"] == b"other"
+
+
+def test_r2_delete_prefix_raises_without_leaking_key_on_partial_delete_error(tmp_path):
+    failed_key = "private/children/secret-name.jpg"
+    deleted_key = "private/children/other-name.jpg"
+    client = DeleteErrorFakeS3Client({failed_key})
+    adapter = R2StorageAdapter(
+        bucket="bucket",
+        s3_client=client,
+        local_cache_dir=str(tmp_path / "cache"),
+    )
+    adapter.put(failed_key, b"failed")
+    adapter.put(deleted_key, b"deleted")
+
+    with pytest.raises(RuntimeError) as error_info:
+        adapter.delete_prefix("private/children")
+
+    assert str(error_info.value) == "R2 delete_prefix failed for 1 object(s)"
+    assert failed_key not in str(error_info.value)
+    assert deleted_key not in str(error_info.value)
+    assert deleted_key not in client.objects
+    assert client.objects[failed_key] == b"failed"
+    assert adapter.get_cached_bytes(failed_key) is None
+    assert adapter.get_cached_bytes(deleted_key) is None
+    assert adapter.get_bytes(failed_key) == b"failed"
+    assert client.get_object_calls == [failed_key]
+
+
+def test_r2_delete_prefix_raises_without_leaking_keys_when_all_deletes_fail(tmp_path):
+    failed_keys = {
+        "private/children/first-secret.jpg",
+        "private/children/second-secret.jpg",
+    }
+    client = DeleteErrorFakeS3Client(failed_keys)
+    adapter = R2StorageAdapter(
+        bucket="bucket",
+        s3_client=client,
+        local_cache_dir=str(tmp_path / "cache"),
+    )
+    for key in failed_keys:
+        adapter.put(key, key.encode())
+
+    with pytest.raises(RuntimeError) as error_info:
+        adapter.delete_prefix("private/children")
+
+    assert str(error_info.value) == "R2 delete_prefix failed for 2 object(s)"
+    assert all(key not in str(error_info.value) for key in failed_keys)
+    assert set(client.objects) == failed_keys
+    assert all(adapter.get_cached_bytes(key) is None for key in failed_keys)
+    assert {adapter.get_bytes(key) for key in failed_keys} == {
+        key.encode() for key in failed_keys
+    }
+
+
+def test_r2_delete_prefix_deletes_all_successful_paginator_pages():
+    first_key = "private/children/first.jpg"
+    second_key = "private/children/second.jpg"
+    client = PaginatedFakeS3Client(
+        [
+            {"Contents": [{"Key": first_key}]},
+            {"Contents": [{"Key": second_key}]},
+        ]
+    )
+    client.objects = {first_key: b"first", second_key: b"second"}
+    adapter = R2StorageAdapter(bucket="bucket", s3_client=client)
+
+    adapter.delete_prefix("private/children")
+
+    assert client.objects == {}
+    assert client.deleted_batches == [[first_key], [second_key]]
 
 
 def test_legacy_student_output_cleanup_protects_sibling_collision():
