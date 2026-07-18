@@ -14,37 +14,37 @@ export const FONT_OPTIONS = [
   {
     value: "msjh",
     label: "微軟正黑體",
-    css: '"Microsoft JhengHei", sans-serif',
+    css: '"Album Noto Sans TC", sans-serif',
     bold: false,
   },
   {
     value: "msjhbd",
     label: "微軟正黑體 Bold",
-    css: '"Microsoft JhengHei", sans-serif',
+    css: '"Album Noto Sans TC", sans-serif',
     bold: true,
   },
   {
     value: "kaiu",
     label: "標楷體",
-    css: '"DFKai-SB", "標楷體", serif',
+    css: '"Album Noto Serif TC", serif',
     bold: false,
   },
   {
     value: "mingliu",
     label: "細明體",
-    css: '"MingLiU", serif',
+    css: '"Album Noto Serif TC", serif',
     bold: false,
   },
   {
     value: "simsun",
     label: "新細明體",
-    css: '"SimSun", serif',
+    css: '"Album Noto Serif TC", serif',
     bold: false,
   },
   {
     value: "msyh",
     label: "微軟雅黑",
-    css: '"Microsoft YaHei", sans-serif',
+    css: '"Album Noto Sans TC", sans-serif',
     bold: false,
   },
 ];

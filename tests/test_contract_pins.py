@@ -13,12 +13,27 @@ from services.photo_frame_geometry import (
     DEFAULT_PHOTO_BORDER_WIDTH,
     get_photo_frame_insets,
 )
+from services.photo_transform_policy import PHOTO_SCALE_MAX
+from services.label_texts import MAX_LABEL_TEXT_LENGTH
+from services.text_layout import TEXT_LAYOUT_MEASUREMENT_SCALE
+from services.text_variables import (
+    ALBUM_NAME_PREVIEW_PLACEHOLDER,
+    FULL_NAME_PREVIEW_PLACEHOLDER,
+    resolve_student_text_variables,
+)
 
 REPO_ROOT = Path(__file__).parent.parent
 BACKEND_TOKENS_PATH = REPO_ROOT / "backend" / "services" / "design_tokens.json"
 FRONTEND_TOKENS_PATH = REPO_ROOT / "frontend" / "src" / "constants" / "designTokens.js"
 FRONTEND_GEOMETRY_PATH = REPO_ROOT / "frontend" / "src" / "utils" / "photoFrameGeometry.js"
 FRONTEND_LAYOUT_MODEL_PATH = REPO_ROOT / "frontend" / "src" / "utils" / "renderLayoutModel.js"
+FRONTEND_PROPERTY_PANEL_PATH = REPO_ROOT / "frontend" / "src" / "components" / "PropertyPanel.jsx"
+FRONTEND_TEXT_FIELD_PATH = REPO_ROOT / "frontend" / "src" / "components" / "TextLabelFieldRow.jsx"
+FRONTEND_PHOTO_EDIT_PATH = REPO_ROOT / "frontend" / "src" / "components" / "PhotoEditModal.jsx"
+FRONTEND_TEXT_VARIABLES_PATH = REPO_ROOT / "frontend" / "src" / "utils" / "textVariables.js"
+TEXT_VARIABLE_FIXTURE_PATH = (
+    REPO_ROOT / "tests" / "fixtures" / "template_text_variable_parity.json"
+)
 
 
 def _load_frontend_tokens() -> dict:
@@ -44,6 +59,9 @@ def test_backend_constants_come_from_tokens():
     tokens = json.loads(BACKEND_TOKENS_PATH.read_text(encoding="utf-8"))
     assert (CANVAS_WIDTH, CANVAS_HEIGHT) == (tokens["canvas"]["width"], tokens["canvas"]["height"])
     assert DEFAULT_PHOTO_BORDER_WIDTH == tokens["photo_frame"]["default_border_width"]
+    assert TEXT_LAYOUT_MEASUREMENT_SCALE == tokens["text_layout"]["measurement_scale"]
+    assert MAX_LABEL_TEXT_LENGTH == tokens["text_content"]["max_label_text_length"]
+    assert PHOTO_SCALE_MAX == tokens["photo_transform"]["max_scale"]
 
 
 def test_frontend_files_consume_tokens_not_literals():
@@ -55,6 +73,43 @@ def test_frontend_files_consume_tokens_not_literals():
     assert "DESIGN_TOKENS.photo_frame.content_min_width" in geometry_source
     assert "DESIGN_TOKENS.canvas.width" in layout_source
     assert "DESIGN_TOKENS.canvas.height" in layout_source
+    text_render_source = (
+        REPO_ROOT / "frontend" / "src" / "utils" / "textRenderModel.js"
+    ).read_text(encoding="utf-8")
+    assert "DESIGN_TOKENS.text_layout.measurement_scale" in text_render_source
+    property_panel_source = FRONTEND_PROPERTY_PANEL_PATH.read_text(encoding="utf-8")
+    text_field_source = FRONTEND_TEXT_FIELD_PATH.read_text(encoding="utf-8")
+    assert "MAX_LABEL_TEXT_LENGTH" in property_panel_source
+    assert "MAX_LABEL_TEXT_LENGTH" in text_field_source
+    photo_edit_source = FRONTEND_PHOTO_EDIT_PATH.read_text(encoding="utf-8")
+    assert "PHOTO_SCALE_MAX" in photo_edit_source
+
+
+def test_template_name_variable_preview_contract_matches_frontend_and_fixture():
+    """模板 Canvas、PIL 預覽與 parity fixture 必須使用相同佔位符。"""
+    frontend_source = FRONTEND_TEXT_VARIABLES_PATH.read_text(encoding="utf-8")
+    assert (
+        f'ALBUM_NAME_PREVIEW_PLACEHOLDER = "{ALBUM_NAME_PREVIEW_PLACEHOLDER}"'
+        in frontend_source
+    )
+    assert (
+        f'FULL_NAME_PREVIEW_PLACEHOLDER = "{FULL_NAME_PREVIEW_PLACEHOLDER}"'
+        in frontend_source
+    )
+
+    fixture = json.loads(TEXT_VARIABLE_FIXTURE_PATH.read_text(encoding="utf-8"))
+    text_label = fixture["text_labels"][0]["text"]
+    footer = fixture["footer"]["text"]
+    assert resolve_student_text_variables(
+        text_label,
+        FULL_NAME_PREVIEW_PLACEHOLDER,
+        ALBUM_NAME_PREVIEW_PLACEHOLDER,
+    ) == fixture["expected_text_label"]
+    assert resolve_student_text_variables(
+        footer,
+        FULL_NAME_PREVIEW_PLACEHOLDER,
+        ALBUM_NAME_PREVIEW_PLACEHOLDER,
+    ) == fixture["expected_footer"]
 
 
 def test_photo_frame_insets_algorithm_pinned():

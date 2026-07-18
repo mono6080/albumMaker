@@ -2,22 +2,46 @@
 
 import math
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter
 
 from services.draw_helpers import (
     get_font, load_key_for_box, paste_rotated,
     apply_rounded_corners, add_drop_shadow,
-    wrap_text,
-    _line_width_with_spacing, draw_line_with_spacing,
+    draw_line_with_spacing,
 )
-from services.label_texts import get_label_entry_align, get_label_entry_text
+from services.label_texts import (
+    get_label_entry_align,
+    get_label_entry_text,
+)
 from services.photo_frame_geometry import get_photo_frame_insets
+from services.photo_transform_policy import PHOTO_SCALE_MAX
+from services.render_image_loader import (
+    STICKER_SOURCE_PIXEL_LIMIT,
+    open_bounded_storage_image,
+)
+from services.text_layout import TEXT_LAYOUT_MEASUREMENT_SCALE, layout_text_label
+from services.text_variables import resolve_student_text_variables
 
 
 def _clamp_int(value, default: int, min_value: int, max_value: int) -> int:
     try:
         number = int(round(float(value)))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
+        number = default
+    return max(min_value, min(number, max_value))
+
+
+def _clamp_float(
+    value,
+    default: float,
+    min_value: float,
+    max_value: float,
+) -> float:
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        number = default
+    if not math.isfinite(number):
         number = default
     return max(min_value, min(number, max_value))
 
@@ -53,19 +77,6 @@ def _composite_rgba_layer(target: Image.Image, layer: Image.Image) -> None:
     target.paste(layer, (0, 0), layer)
 
 
-def _visual_line_vertical_offset(
-    draw: ImageDraw.ImageDraw,
-    lines: list[str],
-    font: ImageFont.FreeTypeFont,
-    line_height_px: int,
-) -> int:
-    """補償 PIL anchor top 與 Konva verticalAlign='middle' 的視覺置中差異。"""
-    ref_text = next((line for line in lines if line), "A")
-    bbox = draw.textbbox((0, 0), ref_text, font=font, anchor="lt")
-    visual_height = bbox[3] - bbox[1]
-    return int(round((line_height_px - visual_height) / 2))
-
-
 def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index: int, slot_index: int = 0) -> None:
     """渲染單一照片格（有照片則合成，否則繪製佔位框）。"""
     slot_id = str(slot["id"])
@@ -78,14 +89,14 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     border_w = int(round(insets["border_width"]))
     content_w = max(1, sw - int(round(insets["left"] + insets["right"])))
     content_h = max(1, sh - int(round(insets["top"] + insets["bottom"])))
-    slot_radius = slot.get("border_radius", 0)
+    slot_radius = _clamp_int(slot.get("border_radius", 0), 0, 0, max(sw, sh))
     rotation = slot.get("rotation", 0)
     _sh_raw = slot.get("shadow_enabled")
     sh_enabled = border if _sh_raw is None else _sh_raw
-    sh_ox = slot.get("shadow_offset_x", 5)
-    sh_oy = slot.get("shadow_offset_y", 8)
-    sh_blur = slot.get("shadow_blur", 14)
-    sh_opacity = slot.get("shadow_opacity", 120)
+    sh_ox = _clamp_int(slot.get("shadow_offset_x", 5), 5, -200, 200)
+    sh_oy = _clamp_int(slot.get("shadow_offset_y", 8), 8, -200, 200)
+    sh_blur = _clamp_int(slot.get("shadow_blur", 14), 14, 0, 200)
+    sh_opacity = _clamp_int(slot.get("shadow_opacity", 120), 120, 0, 255)
 
     if not photo_val:
         # 繪製空白佔位框
@@ -131,11 +142,26 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     # 解析照片資料（支援路徑字串與含位移縮放/亮度對比的 dict）
     if isinstance(photo_val, dict):
         photo_path = photo_val.get("path", "")
-        user_scale = float(photo_val.get("scale", 1.0))
-        offset_x   = float(photo_val.get("offset_x", 0.0))
-        offset_y   = float(photo_val.get("offset_y", 0.0))
-        user_brightness = float(photo_val.get("brightness", 1.0))
-        user_contrast   = float(photo_val.get("contrast", 1.0))
+        user_scale = _clamp_float(
+            photo_val.get("scale", 1.0),
+            1.0,
+            0.1,
+            PHOTO_SCALE_MAX,
+        )
+        offset_x = _clamp_float(photo_val.get("offset_x", 0.0), 0.0, -10.0, 10.0)
+        offset_y = _clamp_float(photo_val.get("offset_y", 0.0), 0.0, -10.0, 10.0)
+        user_brightness = _clamp_float(
+            photo_val.get("brightness", 1.0),
+            1.0,
+            0.1,
+            3.0,
+        )
+        user_contrast = _clamp_float(
+            photo_val.get("contrast", 1.0),
+            1.0,
+            0.1,
+            3.0,
+        )
     else:
         photo_path = photo_val
         user_scale, offset_x, offset_y = 1.0, 0.0, 0.0
@@ -147,49 +173,19 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
     # content_w/content_h（照片實際要填的內容框）已於函式開頭由 insets 推得，
     # 讓載入器能「先粗縮、再轉色」
     try:
-        img = load_key_for_box(photo_path, content_w, content_h, user_scale)
+        img = load_key_for_box(
+            photo_path,
+            content_w,
+            content_h,
+            user_scale,
+            offset_x,
+            offset_y,
+        )
         if img is None:
             return
         img = img.convert("RGBA")
     except Exception:
         return
-
-    def _cover_crop(img, box_w, box_h, u_scale, ox, oy):
-        ir = img.width / img.height
-        br = box_w / box_h
-        if ir > br:
-            base_h = box_h
-            base_w = int(box_h * ir)
-        else:
-            base_w = box_w
-            base_h = int(box_w / ir)
-        nw = max(1, int(base_w * u_scale))
-        nh = max(1, int(base_h * u_scale))
-        img = img.resize((nw, nh), Image.LANCZOS)
-        overflow_x = nw - box_w
-        overflow_y = nh - box_h
-        if overflow_x >= 0:
-            src_x = int(overflow_x * (0.5 + ox * 0.5))
-            src_x = max(0, min(src_x, overflow_x))
-            dst_x = 0
-            copy_w = box_w
-        else:
-            src_x = 0
-            dst_x = int(-overflow_x / 2)
-            copy_w = nw
-        if overflow_y >= 0:
-            src_y = int(overflow_y * (0.5 + oy * 0.5))
-            src_y = max(0, min(src_y, overflow_y))
-            dst_y = 0
-            copy_h = box_h
-        else:
-            src_y = 0
-            dst_y = int(-overflow_y / 2)
-            copy_h = nh
-        crop = img.crop((src_x, src_y, src_x + copy_w, src_y + copy_h))
-        frame = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
-        frame.paste(crop, (dst_x, dst_y), crop)
-        return frame
 
     def _apply_photo_adjustments(photo_img, brightness, contrast):
         """亮度/對比調整。公式與前端 CSS filter 完全一致：
@@ -209,7 +205,7 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         return Image.merge("RGBA", (red.point(lut), green.point(lut), blue.point(lut), alpha))
 
     if border:
-        photo = _cover_crop(img, content_w, content_h, user_scale, offset_x, offset_y)
+        photo = img
         photo = _apply_photo_adjustments(photo, user_brightness, user_contrast)
         inner_r = max(0, slot_radius - border_w)
         if inner_r > 0:
@@ -223,7 +219,6 @@ def render_photo_slot(canvas: Image.Image, slot: dict, photos: dict, page_index:
         else:
             img = frame
     else:
-        img = _cover_crop(img, sw, sh, user_scale, offset_x, offset_y)
         img = _apply_photo_adjustments(img, user_brightness, user_contrast)
         img = apply_rounded_corners(img.convert("RGBA"), slot_radius)
         if sh_enabled:
@@ -241,9 +236,15 @@ def render_sticker(canvas: Image.Image, sticker: dict) -> None:
     try:
         from services.storage import get_storage
         storage = get_storage()
-        stkr_img = storage.open_image(stkr_path_str).convert("RGBA")
-        sw, sh = int(sticker["width"]), int(sticker["height"])
-        stkr_img = stkr_img.resize((sw, sh), Image.LANCZOS)
+        sw = max(1, int(round(float(sticker["width"]))))
+        sh = max(1, int(round(float(sticker["height"]))))
+        stkr_img = open_bounded_storage_image(
+            storage,
+            stkr_path_str,
+            target_size=(sw, sh),
+            fit="exact",
+            source_pixel_limit=STICKER_SOURCE_PIXEL_LIMIT,
+        ).convert("RGBA")
         cx = sticker["x"] + sw / 2
         cy = sticker["y"] + sh / 2
         paste_rotated(canvas, stkr_img, cx, cy, sticker.get("rotation", 0))
@@ -258,81 +259,200 @@ def _text_label_is_fillable(label: dict) -> bool:
     return True
 
 
-def render_text_label(canvas: Image.Image, label: dict, label_texts: dict, student_name: str) -> None:
+def render_text_label(
+    canvas: Image.Image,
+    label: dict,
+    label_texts: dict,
+    student_name: str,
+    *,
+    album_name: str | None = None,
+    clip_overflow: bool = True,
+) -> None:
     """渲染文字方塊（無背景）；固定文字會忽略專案 / 學生覆寫。"""
     label_id = str(label.get("id", ""))
     label_entry = label_texts.get(label_id) if _text_label_is_fillable(label) else None
     raw_text = get_label_entry_text(label_entry)
     if raw_text is None:
         raw_text = label.get("text", "")
-    label_text = raw_text.replace("{name}", student_name)
+    label_text = resolve_student_text_variables(
+        raw_text,
+        student_name,
+        album_name,
+    )
     if not label_text:
         return
-    font_size = label.get("font_size", 24)
+    font_size = float(label.get("font_size", 24))
     font_color = label.get("font_color", "#333333")
     font = get_font(font_size, label.get("font_family"))
-    line_height_px = int(font_size * label.get("line_height", 1.4))
-    letter_spacing = int(label.get("letter_spacing", 0))
-    lw, lh = int(label["width"]), int(label["height"])
+    letter_spacing = float(label.get("letter_spacing", 0))
+    frame_width = float(label["width"])
+    frame_height = float(label["height"])
+    layer_width = max(1, int(round(frame_width)))
+    layer_height = max(1, int(round(frame_height)))
     rotation = label.get("rotation", 0)
     text_align = get_label_entry_align(label_entry, label.get("text_align", "center"))
     shadow = _text_shadow_settings(label)
-    draw = ImageDraw.Draw(canvas, "RGBA")
-    lines = wrap_text(label_text, font, lw, draw, letter_spacing)
-    total_h = len(lines) * line_height_px
 
-    def _draw_line(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, line: str, fill) -> None:
-        """依對齊方式計算起始 x 並逐字繪製（含字間距）。"""
+    source = label.get("_text_layout_source")
+    if not isinstance(source, dict):
+        source = label
+    source_width = float(source.get("width", frame_width))
+    source_height = float(source.get("height", frame_height))
+    source_font_size = float(source.get("font_size", font_size))
+    measurement_scale = TEXT_LAYOUT_MEASUREMENT_SCALE
+    source_font = get_font(
+        source_font_size * measurement_scale,
+        source.get("font_family"),
+    )
+    source_layout = layout_text_label(
+        label_text,
+        font=source_font,
+        box_width=source_width * measurement_scale,
+        box_height=source_height * measurement_scale,
+        font_size=source_font_size * measurement_scale,
+        line_height=float(source.get("line_height", label.get("line_height", 1.4))),
+        letter_spacing=(
+            float(source.get("letter_spacing", label.get("letter_spacing", 0)))
+            * measurement_scale
+        ),
+        text_align=text_align,
+        clip_overflow=clip_overflow,
+    )
+    horizontal_scale = frame_width / source_width
+    vertical_scale = frame_height / source_height
+    line_x_positions = [
+        line_x / measurement_scale * horizontal_scale
+        for line_x in source_layout.line_x_positions
+    ]
+    line_baselines = [
+        baseline / measurement_scale * vertical_scale
+        for baseline in source_layout.line_baselines
+    ]
+
+    def _draw_line(
+        target_draw: ImageDraw.ImageDraw,
+        start_x: float,
+        baseline_y: float,
+        line: str,
+        fill,
+    ) -> None:
         if letter_spacing == 0:
-            if text_align == "left":
-                target_draw.text((tx, ty), line, fill=fill, font=font, anchor="lt")
-            elif text_align == "right":
-                target_draw.text((tx + lw, ty), line, fill=fill, font=font, anchor="rt")
-            else:
-                target_draw.text((tx + lw // 2, ty), line, fill=fill, font=font, anchor="mt")
-        else:
-            line_w = _line_width_with_spacing(target_draw, line, font, letter_spacing)
-            if text_align == "left":
-                start_x = tx
-            elif text_align == "right":
-                start_x = tx + lw - line_w
-            else:
-                start_x = tx + (lw - line_w) // 2
-            draw_line_with_spacing(target_draw, start_x, ty, line, font, fill, letter_spacing)
+            target_draw.text(
+                (start_x, baseline_y),
+                line,
+                fill=fill,
+                font=font,
+                anchor="ls",
+            )
+            return
+        draw_line_with_spacing(
+            target_draw,
+            start_x,
+            baseline_y,
+            line,
+            font,
+            fill,
+            letter_spacing,
+        )
 
-    def _draw_lines(target_draw: ImageDraw.ImageDraw, tx: int, ty: int, fill) -> None:
-        for line_index, line in enumerate(lines):
-            _draw_line(target_draw, tx, ty + line_index * line_height_px, line, fill)
+    def _draw_lines(
+        target_draw: ImageDraw.ImageDraw,
+        origin_x: float,
+        origin_y: float,
+        fill,
+    ) -> None:
+        for line, line_x, baseline in zip(
+            source_layout.visible_lines,
+            line_x_positions,
+            line_baselines,
+            strict=True,
+        ):
+            _draw_line(
+                target_draw,
+                origin_x + line_x,
+                origin_y + baseline,
+                line,
+                fill,
+            )
 
-    def _draw_shadow(target: Image.Image, tx: int, ty: int) -> None:
+    def _draw_shadow(target: Image.Image, origin_x: float, origin_y: float) -> None:
         if not shadow:
             return
         shadow_layer = Image.new("RGBA", target.size, (0, 0, 0, 0))
         shadow_draw = ImageDraw.Draw(shadow_layer, "RGBA")
         _draw_lines(
             shadow_draw,
-            tx + shadow["offset_x"],
-            ty + shadow["offset_y"],
+            origin_x + shadow["offset_x"],
+            origin_y + shadow["offset_y"],
             shadow["color"],
         )
         if shadow["blur"] > 0:
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow["blur"]))
         _composite_rgba_layer(target, shadow_layer)
 
-    visual_v_offset = _visual_line_vertical_offset(draw, lines, font, line_height_px)
-
-    if rotation:
-        diag = int(math.sqrt(lw**2 + lh**2)) + 4
-        pad = (diag - min(lw, lh)) // 2 + 2
-        tmp = Image.new("RGBA", (lw + pad * 2, lh + pad * 2), (0, 0, 0, 0))
-        tmp_y = pad + (lh - total_h) // 2 + visual_v_offset
-        _draw_shadow(tmp, pad, tmp_y)
-        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
-        _draw_lines(tmp_draw, pad, tmp_y, font_color)
-        paste_rotated(canvas, tmp, label["x"] + lw / 2, label["y"] + lh / 2, rotation)
+    if clip_overflow:
+        effect_padding = (
+            shadow["blur"] * 2
+            + max(abs(shadow["offset_x"]), abs(shadow["offset_y"]))
+            if shadow
+            else 0
+        )
+        working_layer = Image.new(
+            "RGBA",
+            (
+                layer_width + effect_padding * 2,
+                layer_height + effect_padding * 2,
+            ),
+            (0, 0, 0, 0),
+        )
+        _draw_shadow(working_layer, effect_padding, effect_padding)
+        working_draw = ImageDraw.Draw(working_layer, "RGBA")
+        _draw_lines(working_draw, effect_padding, effect_padding, font_color)
+        label_layer = working_layer.crop(
+            (
+                effect_padding,
+                effect_padding,
+                effect_padding + layer_width,
+                effect_padding + layer_height,
+            )
+        )
+        if rotation:
+            paste_rotated(
+                canvas,
+                label_layer,
+                label["x"] + frame_width / 2,
+                label["y"] + frame_height / 2,
+                rotation,
+            )
+        else:
+            canvas.paste(
+                label_layer,
+                (int(round(label["x"])), int(round(label["y"]))),
+                label_layer,
+            )
         return
 
-    start_y = label["y"] + (lh - total_h) // 2 + visual_v_offset
-    _draw_shadow(canvas, label["x"], start_y)
+    # 溢框稽核需要取得未裁切 glyph bbox；正式預覽／輸出不走這條路徑。
+    if rotation:
+        diag = int(math.sqrt(layer_width**2 + layer_height**2)) + 4
+        pad = (diag - min(layer_width, layer_height)) // 2 + 2
+        tmp = Image.new(
+            "RGBA",
+            (layer_width + pad * 2, layer_height + pad * 2),
+            (0, 0, 0, 0),
+        )
+        _draw_shadow(tmp, pad, pad)
+        tmp_draw = ImageDraw.Draw(tmp, "RGBA")
+        _draw_lines(tmp_draw, pad, pad, font_color)
+        paste_rotated(
+            canvas,
+            tmp,
+            label["x"] + frame_width / 2,
+            label["y"] + frame_height / 2,
+            rotation,
+        )
+        return
+
+    _draw_shadow(canvas, label["x"], label["y"])
     draw = ImageDraw.Draw(canvas, "RGBA")
-    _draw_lines(draw, label["x"], start_y, font_color)
+    _draw_lines(draw, label["x"], label["y"], font_color)

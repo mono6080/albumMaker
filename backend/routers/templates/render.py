@@ -1,5 +1,5 @@
 # 模板頁面預覽路由
-# 單頁預覽與跨頁（spread）預覽的渲染與 JPEG 回應，
+# 單頁預覽與跨頁（spread）預覽的渲染與 PNG 回應，
 # 路由層僅負責 HTTP 接收與回應，渲染委派給 services/render_service
 
 import io
@@ -13,54 +13,61 @@ from auth import get_current_user
 from crud.template_crud import get_template_or_404, get_template_page_or_404
 from database import User, get_db
 from services.render_service import render_page
+from services.request_limiter import require_preview_render_slot
+from services.text_variables import (
+    ALBUM_NAME_PREVIEW_PLACEHOLDER,
+    FULL_NAME_PREVIEW_PLACEHOLDER,
+)
 
 from ._helpers import _template_page_layout_with_background
 
 router = APIRouter()
 
-TEMPLATE_PREVIEW_JPEG_QUALITY = 72  # 模板編輯預覽（與專案預覽的 80 不同檔不同值，改名避免混淆）
 PREVIEW_RESPONSE_HEADERS = {
     "Cache-Control": "no-store, max-age=0",
     "Pragma": "no-cache",
 }
 
 
-def _jpeg_response(image: Image.Image, quality: int = TEMPLATE_PREVIEW_JPEG_QUALITY) -> StreamingResponse:
+def _png_response(image: Image.Image) -> StreamingResponse:
     image_buffer = io.BytesIO()
-    image.convert("RGB").save(image_buffer, format="JPEG", quality=quality)
+    image.save(image_buffer, format="PNG")
     image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/jpeg", headers=PREVIEW_RESPONSE_HEADERS)
+    return StreamingResponse(image_buffer, media_type="image/png", headers=PREVIEW_RESPONSE_HEADERS)
 
 
 @router.get("/{template_id}/pages/{page_id}/preview")
 def preview_template_page(
     template_id: int,
     page_id: int,
+    _limit: None = Depends(require_preview_render_slot),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """渲染模板頁面預覽圖（以「姓名」佔位符代替學生姓名），回傳 JPEG。"""
+    """以相本稱呼與完整姓名的可辨識佔位符渲染模板預覽。"""
     template_page = get_template_page_or_404(page_id, template_id, db)
 
     page_layout = _template_page_layout_with_background(template_page)
     preview_image = render_page(
         page_layout,
-        "（姓名）",
+        FULL_NAME_PREVIEW_PLACEHOLDER,
         {},
         page_index=template_page.page_number,
+        album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
     )
 
-    return _jpeg_response(preview_image)
+    return _png_response(preview_image)
 
 
 @router.get("/{template_id}/spread-preview/{start_page_index}")
 def preview_template_spread(
     template_id: int,
     start_page_index: int,
+    _limit: None = Depends(require_preview_render_slot),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """將模板中連續兩頁合併為橫向預覽圖，回傳 JPEG。"""
+    """將模板中連續兩頁合併為橫向預覽圖，回傳 PNG。"""
     template = get_template_or_404(template_id, db)
     pages = list(template.pages)
     if start_page_index < 0 or start_page_index >= len(pages):
@@ -78,9 +85,10 @@ def preview_template_spread(
         rendered_pages.append(
             render_page(
                 page_layout,
-                "（姓名）",
+                FULL_NAME_PREVIEW_PLACEHOLDER,
                 {},
                 page_index=template_page.page_number,
+                album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
             ).convert("RGB")
         )
 
@@ -89,4 +97,4 @@ def preview_template_spread(
     spread_image.paste(rendered_pages[0], (0, 0))
     spread_image.paste(rendered_pages[1], (page_width, 0))
 
-    return _jpeg_response(spread_image)
+    return _png_response(spread_image)

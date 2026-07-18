@@ -59,6 +59,10 @@ from services.element_renderers import (
     render_sticker,
     render_text_label,
 )
+from services.layout_geometry_validation import (
+    require_safe_template_page_count,
+    require_valid_layout_geometry,
+)
 from services.layout_group_traversal import iter_layout_render_elements
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
@@ -66,6 +70,7 @@ from services.photo_frame_geometry import (
     build_photo_frame_slot,
     get_photo_slot_dimension_mode,
 )
+from services.text_variables import resolve_student_text_variables
 
 _X_NUMERIC_KEYS = {
     "x",
@@ -105,7 +110,13 @@ def _scale_number(value, scale: float):
     return value
 
 
-def _scale_layout_item(item: Any, scale_x: float, scale_y: float) -> Any:
+def _scale_layout_item(
+    item: Any,
+    scale_x: float,
+    scale_y: float,
+    *,
+    preserve_text_layout_source: bool = False,
+) -> Any:
     if not isinstance(item, dict):
         return deepcopy(item)
     uniform_scale = (scale_x + scale_y) / 2
@@ -119,6 +130,16 @@ def _scale_layout_item(item: Any, scale_x: float, scale_y: float) -> Any:
             scaled[key] = _scale_number(value, uniform_scale)
         else:
             scaled[key] = value
+    if preserve_text_layout_source:
+        source = item.get("_text_layout_source") or item
+        scaled["_text_layout_source"] = {
+            "width": source.get("width", 1),
+            "height": source.get("height", 1),
+            "font_size": source.get("font_size", 24),
+            "font_family": source.get("font_family"),
+            "line_height": source.get("line_height", 1.4),
+            "letter_spacing": source.get("letter_spacing", 0),
+        }
     return scaled
 
 
@@ -142,7 +163,15 @@ def scale_layout(layout: dict, scale_x: float, scale_y: float | None = None, tar
     for collection_key in ("photo_slots", "text_labels", "stickers"):
         collection = layout.get(collection_key, [])
         scaled_layout[collection_key] = (
-            [_scale_layout_item(item, scale_x, scale_y) for item in collection]
+            [
+                _scale_layout_item(
+                    item,
+                    scale_x,
+                    scale_y,
+                    preserve_text_layout_source=collection_key == "text_labels",
+                )
+                for item in collection
+            ]
             if isinstance(collection, list)
             else deepcopy(collection)
         )
@@ -175,20 +204,43 @@ def render_preview_page(
     page_data: dict,
     page_index: int = 0,
     scale: float = PREVIEW_RENDER_SCALE,
+    *,
+    album_name: str | None = None,
 ) -> Image.Image:
-    """Render a lower-resolution page image for interactive browser previews."""
-    return render_page(scale_layout_for_preview(layout, scale), student_name, page_data, page_index=page_index)
+    """先以 canonical 尺寸渲染，再降採樣成互動預覽。"""
+    canonical_image = render_page(
+        layout,
+        student_name,
+        page_data,
+        page_index=page_index,
+        album_name=album_name,
+    )
+    if scale >= 0.999:
+        return canonical_image
+    preview_size = (
+        max(1, int(round(canonical_image.width * scale))),
+        max(1, int(round(canonical_image.height * scale))),
+    )
+    return canonical_image.resize(preview_size, Image.Resampling.LANCZOS)
 
 
-def render_page(layout: dict, student_name: str, page_data: dict, output_size: tuple = (CANVAS_WIDTH, CANVAS_HEIGHT), page_index: int = 0) -> Image.Image:
-    """Render one album page and return a PIL Image."""
+def _render_page_without_geometry_validation(
+    layout: dict,
+    student_name: str,
+    page_data: dict,
+    output_size: tuple = (CANVAS_WIDTH, CANVAS_HEIGHT),
+    page_index: int = 0,
+    *,
+    album_name: str | None = None,
+) -> Image.Image:
+    """渲染已通過來源版面安全驗證的單頁。"""
     w, h = layout.get("canvas_width", output_size[0]), layout.get("canvas_height", output_size[1])
     canvas = Image.new("RGB", (w, h), "white")
 
     # 1. Background
     bg_filename = layout.get("background_filename")
     if bg_filename:
-        bg = load_key(bg_filename)
+        bg = load_key(bg_filename, (w, h))
         if bg:
             bg = bg.convert("RGBA").resize((w, h), Image.LANCZOS)
             canvas.paste(bg, (0, 0), bg)
@@ -233,7 +285,13 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
                 slot_index=visible_photo_indices[id(elem_data)],
             )
         elif elem_type == "text":
-            render_text_label(canvas, elem_data, label_texts, student_name)
+            render_text_label(
+                canvas,
+                elem_data,
+                label_texts,
+                student_name,
+                album_name=album_name,
+            )
         elif elem_type == "sticker":
             render_sticker(canvas, elem_data)
         draw = ImageDraw.Draw(canvas, "RGBA")  # 每個元素繪製後重建 draw
@@ -241,7 +299,12 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
     # 3. Footer
     footer = layout.get("footer")
     if footer and footer.get("text"):
-        ft = footer["text"].replace("{name}", student_name)
+        raw_footer_text = footer["text"]
+        ft = resolve_student_text_variables(
+            raw_footer_text,
+            student_name,
+            album_name,
+        )
         ff = get_font(footer.get("font_size", 22))
         draw.text((footer.get("x", w // 2), footer.get("y", h - 50)),
                   ft, fill=footer.get("font_color", "#3B6B8C"), font=ff, anchor="lm")
@@ -253,12 +316,37 @@ def render_page(layout: dict, student_name: str, page_data: dict, output_size: t
             lg = load_key(f"logos/{logo['filename']}")
             if lg is not None:
                 lg = lg.convert("RGBA")
-                lg = lg.resize((logo.get("width", 80), logo.get("height", 50)), Image.LANCZOS)
-                canvas.paste(lg, (logo.get("x", w - 90), logo.get("y", 20)), lg)
+                logo_width = max(1, int(round(float(logo.get("width", 80)))))
+                logo_height = max(1, int(round(float(logo.get("height", 50)))))
+                logo_x = int(round(float(logo.get("x", w - 90))))
+                logo_y = int(round(float(logo.get("y", 20))))
+                lg = lg.resize((logo_width, logo_height), Image.LANCZOS)
+                canvas.paste(lg, (logo_x, logo_y), lg)
         except Exception:
             pass
 
     return canvas
+
+
+def render_page(
+    layout: dict,
+    student_name: str,
+    page_data: dict,
+    output_size: tuple = (CANVAS_WIDTH, CANVAS_HEIGHT),
+    page_index: int = 0,
+    *,
+    album_name: str | None = None,
+) -> Image.Image:
+    """驗證來源版面後渲染單頁，確保 Pillow 配置前已擋下危險幾何。"""
+    require_valid_layout_geometry(layout)
+    return _render_page_without_geometry_validation(
+        layout,
+        student_name,
+        page_data,
+        output_size=output_size,
+        page_index=page_index,
+        album_name=album_name,
+    )
 
 
 def render_album(
@@ -266,8 +354,11 @@ def render_album(
     student_name: str,
     pages_data: list[dict],
     output_size: tuple[int, int] | None = None,
+    *,
+    album_name: str | None = None,
 ) -> list[Image.Image]:
     """Render all pages of an album. Returns list of PIL Images."""
+    require_safe_template_page_count(len(template_pages))
     images = []
     data_map = {p["page_index"]: p for p in pages_data}
     for i, page_layout in enumerate(template_pages):
@@ -275,8 +366,16 @@ def render_album(
         # 跳過已標記刪除的頁面
         if page_data.get("skip"):
             continue
+        require_valid_layout_geometry(page_layout)
         output_layout = scale_layout_to_size(page_layout, output_size) if output_size else page_layout
-        img = render_page(output_layout, student_name, page_data, output_size=output_size or (CANVAS_WIDTH, CANVAS_HEIGHT), page_index=i)
+        img = _render_page_without_geometry_validation(
+            output_layout,
+            student_name,
+            page_data,
+            output_size=output_size or (CANVAS_WIDTH, CANVAS_HEIGHT),
+            page_index=i,
+            album_name=album_name,
+        )
         images.append(img)
     return images
 

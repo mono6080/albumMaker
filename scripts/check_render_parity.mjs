@@ -15,6 +15,11 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 const layout = JSON.parse(await readFile(fixturePath, "utf8"));
+const tokenFixturePath = resolve(
+  repoRoot,
+  "tests/fixtures/template_text_variable_parity.json",
+);
+const tokenLayout = JSON.parse(await readFile(tokenFixturePath, "utf8"));
 
 function assertClose(actual, expected, tolerance = 0.000001) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} not within ${tolerance} of ${expected}`);
@@ -48,8 +53,18 @@ assert.equal(text.fontColor, "#1F2937");
 assert.equal(text.align, "center");
 assertPointInside({ x: toDisplayCoord(180), y: toDisplayCoord(292) }, text.box);
 
-assert.equal(footer.text, "Footer for {name}");
+assert.equal(footer.text, "Footer for （相本稱呼）");
 assert.equal(footer.fontColor, "#2563EB");
 assertPointInside({ x: toDisplayCoord(70), y: toDisplayCoord(1080) }, footer.box);
 
-console.log("render parity fixture matches frontend stage model");
+const tokenModel = buildRenderLayoutModel(tokenLayout, 0);
+const tokenText = tokenModel.elements.find(element => element.type === "text");
+const tokenFooter = tokenModel.elements.find(element => element.type === "footer");
+assert.equal(tokenText.text, tokenLayout.expected_text_label);
+assert.equal(tokenFooter.text, tokenLayout.expected_footer);
+assert.ok(!tokenText.text.includes("{name}"));
+assert.ok(!tokenText.text.includes("{full_name}"));
+assert.ok(!tokenFooter.text.includes("{name}"));
+assert.ok(!tokenFooter.text.includes("{full_name}"));
+
+console.log("render parity fixtures match frontend stage model and template name tokens");

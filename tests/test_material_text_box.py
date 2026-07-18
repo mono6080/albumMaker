@@ -2,6 +2,7 @@ import hashlib
 import json
 from io import BytesIO
 
+import pytest
 from PIL import Image, ImageDraw
 
 from database import SessionLocal, TemplatePage
@@ -11,6 +12,7 @@ from services.material_text_box import (
     DETECTOR_VERSION,
     analyze_material_text_box,
     decode_rgba_image,
+    project_normalized_box_to_sticker,
     rgba_asset_revision,
 )
 from services.storage import get_storage
@@ -55,6 +57,78 @@ def test_revision_uses_decoded_rgba_pixels_and_detector_returns_bounded_box():
     assert box["width"] > 0 and box["height"] > 0
     assert box["x"] + box["width"] <= 1
     assert box["y"] + box["height"] <= 1
+
+
+def test_normalized_box_projects_through_current_sticker_geometry():
+    sticker = {
+        "id": "sticker",
+        "x": 80,
+        "y": 700,
+        "width": 600,
+        "height": 200,
+        "rotation": 30,
+    }
+
+    assert project_normalized_box_to_sticker(sticker, {
+        "x": 0.1,
+        "y": 0.2,
+        "width": 0.8,
+        "height": 0.6,
+    }) == {
+        "x": 140,
+        "y": 740,
+        "width": 480,
+        "height": 120,
+        "rotation": 30,
+    }
+    assert project_normalized_box_to_sticker({
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "rotation": 90,
+    }, {
+        "x": 0,
+        "y": 0,
+        "width": 0.5,
+        "height": 0.5,
+    }) == {
+        "x": 75,
+        "y": -25,
+        "width": 100,
+        "height": 50,
+        "rotation": 90,
+    }
+
+
+def test_normalized_box_projection_rejects_out_of_bounds_box():
+    with pytest.raises(ValueError, match="超出素材範圍"):
+        project_normalized_box_to_sticker({
+            "x": 0,
+            "y": 0,
+            "width": 200,
+            "height": 100,
+        }, {
+            "x": 0.8,
+            "y": 0,
+            "width": 0.3,
+            "height": 1,
+        })
+
+
+def test_normalized_box_projection_rejects_boolean_values():
+    with pytest.raises(ValueError, match="有限數值"):
+        project_normalized_box_to_sticker({
+            "x": 0,
+            "y": 0,
+            "width": 200,
+            "height": 100,
+        }, {
+            "x": True,
+            "y": 0,
+            "width": 0.5,
+            "height": 1,
+        })
 
 
 def test_detector_reports_only_contract_unavailable_reasons():
@@ -156,14 +230,14 @@ def test_suggestion_echoes_token_and_does_not_mutate_media_or_layout(monkeypatch
             db.close()
 
 
-class _OpenOnlyStorage:
+class _ReadOnlyStorage:
     def __init__(self, data: bytes):
         self.data = data
         self.calls = []
 
-    def open_image(self, key):
-        self.calls.append(("open_image", key))
-        return Image.open(BytesIO(self.data))
+    def get_bytes(self, key):
+        self.calls.append(("get_bytes", key))
+        return self.data
 
     def __getattr__(self, name):
         raise AssertionError(f"analysis attempted forbidden storage operation: {name}")
@@ -171,7 +245,7 @@ class _OpenOnlyStorage:
 
 def test_suggestion_storage_adapter_is_strictly_read_only(monkeypatch):
     data = _material_png()
-    fake_storage = _OpenOnlyStorage(data)
+    fake_storage = _ReadOnlyStorage(data)
 
     with started_client() as client:
         login(client)
@@ -201,7 +275,39 @@ def test_suggestion_storage_adapter_is_strictly_read_only(monkeypatch):
         assert_status(response, 200)
         assert_status(unsafe_id, 422)
         assert unsafe_id.json()["detail"]["code"] == "invalid_sticker_reference"
-        assert fake_storage.calls == [("open_image", path)]
+        assert fake_storage.calls == [("get_bytes", path)]
+
+
+def test_suggestion_converts_only_after_material_is_bounded(monkeypatch):
+    data = _material_png(size=(1200, 800))
+    fake_storage = _ReadOnlyStorage(data)
+    decoded_sizes = []
+    original_decode = template_asset_service.decode_rgba_image
+
+    def tracked_decode(image):
+        decoded_sizes.append(image.size)
+        return original_decode(image)
+
+    with started_client() as client:
+        login(client)
+        template_id, page_id = create_template_with_page(client)
+        path = f"templates/tmpl{template_id}/stickers/material.png"
+        monkeypatch.setattr(template_asset_service, "get_storage", lambda: fake_storage)
+        monkeypatch.setattr(template_asset_service, "decode_rgba_image", tracked_decode)
+
+        response = client.post(
+            f"/api/templates/{template_id}/pages/{page_id}/material-text-box-suggestion",
+            json={
+                "sticker_id": 1,
+                "path": path,
+                "source_revision": None,
+                "request_token": "bounded-analysis",
+            },
+        )
+
+        assert_status(response, 200)
+        assert decoded_sizes == [(512, 341)]
+        assert fake_storage.calls == [("get_bytes", path)]
 
 
 def test_suggestion_rejects_cross_template_traversal_and_missing_media(monkeypatch, tmp_path):

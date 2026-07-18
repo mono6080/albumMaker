@@ -19,9 +19,15 @@ from services.file_service import (
 )
 from services.layout_group_validation import canonical_id
 from services.material_text_box import (
+    MATERIAL_TEXT_ANALYSIS_MAX_SIDE,
     analyze_material_text_box,
     decode_rgba_image,
     rgba_asset_revision,
+)
+from services.render_image_loader import (
+    STICKER_SOURCE_PIXEL_LIMIT,
+    OversizedRenderImageError,
+    open_bounded_storage_image,
 )
 from services.storage_factory import get_storage
 from services.template_project_sync_service import commit_direct_template_render_change
@@ -29,6 +35,9 @@ from services.template_sync_locks import lock_template_write
 
 
 _ASSET_REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_VERSIONED_STICKER_REVISION_PATTERN = re.compile(
+    r"_([0-9a-f]{16})(?:\.[^./]+)?$"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -143,7 +152,11 @@ def _is_canonical_template_sticker_key(template_id: int, path: str) -> bool:
     return get_sticker_key(template_id, PurePosixPath(relative_name).name) == path
 
 
-def _matches_saved_sticker(page_layout: dict, sticker_id, path: str) -> bool:
+def _saved_sticker_for_reference(
+    page_layout: dict,
+    sticker_id,
+    path: str,
+) -> dict | None:
     try:
         requested_id = canonical_id(sticker_id)
     except ValueError:
@@ -162,7 +175,34 @@ def _matches_saved_sticker(page_layout: dict, sticker_id, path: str) -> bool:
             status_code=422,
             detail={"code": "ambiguous_sticker_id", "message": "貼圖 ID 不唯一"},
         )
-    return len(matches) == 1 and matches[0].get("path") == path
+    if len(matches) == 1 and matches[0].get("path") == path:
+        return matches[0]
+    return None
+
+
+def _trusted_sticker_revision(
+    path: str,
+    source_revision: str | None,
+    saved_sticker: dict | None,
+) -> str | None:
+    if source_revision is None:
+        return None
+    saved_revision = (
+        saved_sticker.get("asset_revision")
+        if isinstance(saved_sticker, dict)
+        else None
+    )
+    if saved_revision == source_revision:
+        return source_revision
+    revision_match = _VERSIONED_STICKER_REVISION_PATTERN.search(path)
+    if (
+        revision_match is not None
+        and source_revision.removeprefix("sha256:").startswith(
+            revision_match.group(1)
+        )
+    ):
+        return source_revision
+    return None
 
 
 def suggest_material_text_box(
@@ -185,9 +225,14 @@ def suggest_material_text_box(
             status_code=422,
             detail={"code": "invalid_sticker_reference", "message": "貼圖 ID 格式不正確"},
         ) from exc
+    saved_sticker = _saved_sticker_for_reference(
+        page_layout,
+        sticker_id,
+        path,
+    )
     if not (
         _is_canonical_template_sticker_key(template_id, path)
-        or _matches_saved_sticker(page_layout, sticker_id, path)
+        or saved_sticker is not None
     ):
         raise HTTPException(
             status_code=422,
@@ -200,17 +245,34 @@ def suggest_material_text_box(
         )
 
     try:
-        with get_storage().open_image(path) as sticker_image:
+        with open_bounded_storage_image(
+            get_storage(),
+            path,
+            target_size=(
+                MATERIAL_TEXT_ANALYSIS_MAX_SIDE,
+                MATERIAL_TEXT_ANALYSIS_MAX_SIDE,
+            ),
+            fit="contain",
+            source_pixel_limit=STICKER_SOURCE_PIXEL_LIMIT,
+        ) as sticker_image:
             rgba = decode_rgba_image(sticker_image)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="找不到貼圖") from exc
+    except OversizedRenderImageError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "material_image_too_large", "message": "貼圖像素尺寸過大"},
+        ) from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "material_image_unreadable", "message": "貼圖無法解析"},
         ) from exc
 
-    actual_revision = rgba_asset_revision(rgba)
+    actual_revision = (
+        _trusted_sticker_revision(path, source_revision, saved_sticker)
+        or rgba_asset_revision(rgba)
+    )
     if source_revision is not None and source_revision != actual_revision:
         raise HTTPException(
             status_code=409,

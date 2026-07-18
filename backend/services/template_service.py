@@ -4,11 +4,14 @@
 import json
 import posixpath
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from database import Template, TemplatePage
 from services.file_service import get_background_key, get_sticker_key
+from services.layout_geometry_validation import validate_template_page_count
 from services.storage import get_storage
+from services.template_page_snapshot_service import normalize_template_page_layout
 
 
 def _copy_storage_key(storage, source_key: str, target_key: str) -> bool:
@@ -48,10 +51,27 @@ def _copy_layout_sticker_assets(
 
 
 def copy_template_pages(source_template: Template, target_template: Template, db: Session) -> None:
+    page_count_errors = validate_template_page_count(len(source_template.pages))
+    if page_count_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_template_page_snapshot",
+                "message": page_count_errors[0]["message"],
+            },
+        )
+    # 先全量驗證，避免複製到一半才發現危險版面，留下未綁定的素材 key。
+    source_pages_with_layouts = [
+        (
+            source_page,
+            normalize_template_page_layout(json.loads(source_page.layout_json)),
+        )
+        for source_page in source_template.pages
+    ]
     storage = get_storage()
-    for source_page in source_template.pages:
+    for source_page, source_layout in source_pages_with_layouts:
         layout = _copy_layout_sticker_assets(
-            json.loads(source_page.layout_json),
+            source_layout,
             source_template.id,
             target_template.id,
             storage,

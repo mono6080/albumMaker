@@ -12,6 +12,9 @@
   **不直接操作 `Path`**（跨模組 invariant，見
   [conventions.md](conventions.md#跨模組-invariants)）
 - 介面：put / open_image / serve / delete / delete_prefix / move / exists / list_keys / get_bytes
+- `delete_prefix` / `list_keys` 的 prefix 以 **path segment 邊界**比對：只匹配 exact key
+  或 `prefix/…` descendants，不把 `prefix.pdf`、`prefix_screen` 等 lexical sibling
+  視為同一 namespace；Local 與 R2 語意一致
 - **批次存在性檢查用 `list_keys(prefix)`**：R2 上逐檔 `exists()` 是一次 head_object
   網路往返，數百檔會慢到 timeout（學期匯出預覽曾因此 29 秒）；改為每目錄列舉一次
   再做集合比對
@@ -27,7 +30,9 @@
 
 `LocalStorageAdapter._path()` 對 key `.resolve()` 後確認在 `base_dir` 內，
 含 `../` 的 key 拋 `ValueError`。已知理論邊界（shared-prefix escape）已有
-regression test，見 [known-issues.md](known-issues.md)。
+regression test，見 [known-issues.md](known-issues.md)。Windows containment 比較會把
+一般路徑與 `\\?\`／`\\?\UNC\` 的 extended-length 等價表示正規化，但實際 I/O
+仍使用 `.resolve()` 回傳的路徑，不能為了長路徑相容而略過 canonical containment。
 
 ## Storage key 格式
 
@@ -38,26 +43,31 @@ regression test，見 [known-issues.md](known-issues.md)。
 | 學生照片 | `projects/proj{pid}/photos/student{sid}/p{page_index}_slot{slot_id}_{stem}_{content-hash}.{ext}` |
 | 模板背景 | `templates/tmpl{tid}/backgrounds/page{page_id}_{stem}_{content-hash}.{ext}` |
 | 貼圖 | `templates/tmpl{tid}/stickers/{stem}_{content-hash}.{ext}` |
-| PDF（列印） | `projects/proj{pid}/output/{stem}.pdf` |
-| PDF（螢幕） | `projects/proj{pid}/output/{stem}_screen.pdf` |
-| 學生單頁圖 | `projects/proj{pid}/output/{stem}/images/{print\|screen}/{stem}[_screen]_page{n}.jpg`（讀取時 fallback 舊版 `{stem}/{stem}_page{n}.jpg`） |
-| 渲染指紋 | `projects/proj{pid}/output/{stem}/.render_state`（dirty-skip 用，見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)） |
+| PDF（列印） | `projects/proj{pid}/output/students/student{sid}/pdf/print.pdf` |
+| PDF（螢幕） | `projects/proj{pid}/output/students/student{sid}/pdf/screen.pdf` |
+| 學生單頁圖 | `projects/proj{pid}/output/students/student{sid}/images/{print\|screen}/page{n}.jpg`（讀取時相容舊版姓名 key） |
+| 專案／學生互動預覽快取 | `projects/proj{pid}/previews/{project\|students/student{sid}}/page{page_index}/scale{scale}/{content-hash}.png` |
+| 渲染指紋 | `projects/proj{pid}/output/students/student{sid}/.render_state`（dirty-skip 用，見 [rendering.md](rendering.md#相冊輸出與-dirty-skip)） |
 
 - key 計算集中在 `services/file_service.py`（`get_photo_key` /
   `get_background_key` / `get_sticker_key`）
 - 新上傳圖片的檔名尾端固定保留內容 hash；原始檔名過長時先截 stem 再拼 hash，避免不同 bytes
   撞到同一 key。舊版無 hash key 保持可讀。
-- `{stem}` = `make_safe_filename(專案名) + "-" + make_safe_filename(學生名)`
-  （`output_keys.py`），非法字元 `\/:*?"<>|` 替換為 `_`
+- canonical 相本輸出以 `student{sid}` 隔離；姓名不參與 storage key，因此同名學生、
+  `小明`／`小明_screen` 或安全化後同名都不會互覆。下載檔名仍以
+  `build_combined_stem()` 組合專案名與學生名，非法字元 `\/:*?"<>|` 替換為 `_`；
+  全班 ZIP 若下載 stem 重複才附 `-student{sid}`
 - DB 內的照片 path 是 immutable opaque key；頁面重排／換格只改 binding，不搬檔。換照片時
   使用新內容 key，舊檔只有在不再被任何 active binding 引用時才刪，避免跨頁共享／重排後誤刪。
 - 背景與貼圖也是內容版本 key。新背景 DB commit 前保留舊 key，commit 後舊版交由延遲 GC；
   同名貼圖上傳只建立新版本，直到模板 snapshot 儲存切換 path 才影響既有專案。
 - 專案／學生改名或刪除會先在 project→student locks 內提交 DB binding 與輸出失效，再清除舊
   canonical output／學生照片 namespace；cleanup 失敗會記錄 error 而不把已成功的 DB mutation 回報成
-  失敗。學生照片 namespace 清理完成前不釋放 project lock，避免 SQLite 重用 student id 時誤刪新檔。
-- `students.output_filename` 存的是**列印版 PDF key**；下載 screen 版時以字串
-  操作換副檔名 — 對 `.pdf` 的硬假設，見 [known-issues.md](known-issues.md)
+  失敗。舊版 flat 姓名 key 仍可讀／下載；單生首次遷移、改名或刪除時會精確刪 key，
+  並保留仍被 sibling `output_filename` 引用的碰撞檔。學生照片 namespace 清理完成前不釋放
+  project lock，避免 SQLite 重用 student id 時誤刪新檔。
+- `students.output_filename` 存的是**列印版 PDF key**；`student_pdf_key_for_mode()`
+  對新版改走 sibling `pdf/screen.pdf`，並保留舊版 `{stem}_screen.pdf` 推導相容
 
 ## R2 設定與維運
 

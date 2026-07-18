@@ -36,8 +36,8 @@ from tests.helpers import (
 
 def _layout_with_group() -> dict:
     return {
-        "canvas_width": 160,
-        "canvas_height": 120,
+        "canvas_width": 794,
+        "canvas_height": 1123,
         "photo_slots": [],
         "group_contract": "flat-world-v1",
         "groups": [
@@ -219,8 +219,8 @@ def test_layout_save_strips_empty_legacy_bubbles_and_rejects_nonempty_values():
         login(client)
         template_id, page_id = create_template_with_page(client)
         layout = {
-            "canvas_width": 160,
-            "canvas_height": 120,
+            "canvas_width": 794,
+            "canvas_height": 1123,
             "photo_slots": [],
             "text_labels": [],
             "stickers": [],
@@ -317,7 +317,7 @@ def test_render_reaches_flat_fallback_before_preprocessing_malformed_photo_colle
 
     image = render_page(layout, "Ada", {}, page_index=0)
 
-    assert image.size == (160, 120)
+    assert image.size == (794, 1123)
 
 
 class _CopyRecordingStorage:
@@ -352,7 +352,7 @@ def test_group_traversal_participates_in_render_and_preview_cache_versions():
     source_names = {path.name for path in _RENDER_PIPELINE_FILES}
     assert "layout_group_validation.py" in source_names
     assert "layout_group_traversal.py" in source_names
-    assert PREVIEW_CACHE_VERSION == "project-preview-v7-layer-visibility"
+    assert PREVIEW_CACHE_VERSION == "project-preview-v10-bounded-assets"
 
 
 def test_unknown_contract_is_invalid_even_without_nonempty_groups():
@@ -468,8 +468,8 @@ def test_shared_nested_fixture_has_exact_backend_traversal_order():
 
 def _nested_v2_layout() -> dict:
     return {
-        "canvas_width": 240,
-        "canvas_height": 180,
+        "canvas_width": 794,
+        "canvas_height": 1123,
         "group_contract": "nested-world-v2",
         "photo_slots": [
             {"id": "photo-root", "x": 0, "y": 0, "width": 40, "height": 30, "z_index": 0},
@@ -763,7 +763,7 @@ def test_preview_and_formal_scaling_tolerate_malformed_collections_and_items():
         list(iter_layout_render_elements(scaled_layout))
 
         preview = render_preview_page(layout, "Ada", {}, scale=0.5)
-        assert preview.size == (120, 90)
+        assert preview.size == (397, 562)
 
         formal = render_album(
             [layout],

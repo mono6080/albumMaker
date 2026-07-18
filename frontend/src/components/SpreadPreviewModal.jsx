@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 
-import { buildTemplateSpreadPreviewUrl } from "../api/urls";
+import { appendPreviewCacheVersion, buildTemplateSpreadPreviewUrl } from "../api/urls";
 import useDialogA11y from "../hooks/useDialogA11y";
 
 export default function SpreadPreviewModal({ templateId, pageCount, initialPageIndex, onClose }) {
@@ -15,7 +15,10 @@ export default function SpreadPreviewModal({ templateId, pageCount, initialPageI
 
   const lastSpreadStartIndex = Math.max(0, Math.floor((pageCount - 1) / 2) * 2);
   const spreadEndIndex = Math.min(spreadStartIndex + 1, pageCount - 1);
-  const spreadPreviewUrl = `${buildTemplateSpreadPreviewUrl(templateId, spreadStartIndex)}?t=${spreadPreviewTimestamp}`;
+  const spreadPreviewUrl = appendPreviewCacheVersion(
+    buildTemplateSpreadPreviewUrl(templateId, spreadStartIndex),
+    spreadPreviewTimestamp,
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

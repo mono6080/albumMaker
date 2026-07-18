@@ -1,14 +1,51 @@
 # PIL 繪圖工具函式：字型載入、圖片合成、形狀繪製
 
 import io
+import math
 import os
+import unicodedata
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageCms, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageCms, ImageDraw, ImageFilter, ImageFont, ImageOps
+from services.render_image_loader import (
+    BACKGROUND_SOURCE_PIXEL_LIMIT,
+    MAX_BOUNDED_DECODE_PIXELS,
+    OversizedRenderImageError,
+    open_bounded_storage_image,
+    open_storage_image_source,
+    validate_image_pixel_limit,
+)
 
-# CJK 字型候選清單：Windows 優先，找不到自動 fallback 至 Linux 路徑
+# 前後端共用的 OFL 可變字型。開發環境直接讀 public，Docker 則讀已 build 的 dist。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BUNDLED_FONT_DIRS = (
+    _REPO_ROOT / "frontend" / "public" / "fonts",
+    Path("/frontend/dist/fonts"),
+)
+BUNDLED_SANS_FONT_PATHS = tuple(
+    str(font_dir / "NotoSansTC-VF.ttf")
+    for font_dir in _BUNDLED_FONT_DIRS
+)
+BUNDLED_SERIF_FONT_PATHS = tuple(
+    str(font_dir / "NotoSerifTC-VF.ttf")
+    for font_dir in _BUNDLED_FONT_DIRS
+)
+BUNDLED_FONT_MANIFEST_PATHS = tuple(
+    str(font_dir / "manifest.json")
+    for font_dir in _BUNDLED_FONT_DIRS
+)
+_BUNDLED_VARIABLE_FONT_NAMES = {
+    "NotoSansTC-VF.ttf",
+    "NotoSerifTC-VF.ttf",
+}
+_BOLD_FONT_FAMILIES = {"msjhbd"}
+
+# CJK 字型候選清單：bundled font 優先，系統字型只作遺失時的 fallback
 CJK_FONTS = [
+    *BUNDLED_SANS_FONT_PATHS,
+    *BUNDLED_SERIF_FONT_PATHS,
     # Windows
     "C:/Windows/Fonts/msjh.ttc",
     "C:/Windows/Fonts/msjhbd.ttc",
@@ -27,16 +64,41 @@ CJK_FONTS = [
 # 跨語言鏡像：前端選單 frontend/src/constants/fonts.js 的每個 value 都必須在此有對應，
 # 一致性由 tests/test_font_parity.py 釘住
 FONT_MAP = {
-    # Windows
-    "msjh":    "C:/Windows/Fonts/msjh.ttc",
-    "msjhbd":  "C:/Windows/Fonts/msjhbd.ttc",
-    "mingliu": "C:/Windows/Fonts/mingliu.ttc",
-    "kaiu":    "C:/Windows/Fonts/kaiu.ttf",
-    "simsun":  "C:/Windows/Fonts/simsun.ttc",
-    "msyh":    "C:/Windows/Fonts/msyh.ttc",
-    # Linux
-    "noto":    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "wqy":     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "msjh": (
+        *BUNDLED_SANS_FONT_PATHS,
+        "C:/Windows/Fonts/msjh.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ),
+    "msjhbd": (
+        *BUNDLED_SANS_FONT_PATHS,
+        "C:/Windows/Fonts/msjhbd.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    ),
+    "mingliu": (
+        *BUNDLED_SERIF_FONT_PATHS,
+        "C:/Windows/Fonts/mingliu.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    ),
+    "kaiu": (
+        *BUNDLED_SERIF_FONT_PATHS,
+        "C:/Windows/Fonts/kaiu.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    ),
+    "simsun": (
+        *BUNDLED_SERIF_FONT_PATHS,
+        "C:/Windows/Fonts/simsun.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    ),
+    "msyh": (
+        *BUNDLED_SANS_FONT_PATHS,
+        "C:/Windows/Fonts/msyh.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ),
+    "noto": (
+        *BUNDLED_SANS_FONT_PATHS,
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ),
+    "wqy": ("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",),
 }
 
 _SRGB_PROFILE = ImageCms.createProfile("sRGB")
@@ -68,61 +130,281 @@ def to_srgb(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 
-def load_key(key: str) -> Optional[Image.Image]:
+def load_key(
+    key: str,
+    target_size: tuple[int, int] | None = None,
+) -> Optional[Image.Image]:
     """從 storage 讀取圖片並轉為 sRGB，key 不存在時回傳 None。"""
     from services.storage import get_storage
     storage = get_storage()
     try:
-        return to_srgb(storage.open_image(key))
-    except FileNotFoundError:
+        image = (
+            open_bounded_storage_image(
+                storage,
+                key,
+                target_size=target_size,
+                fit="exact",
+                source_pixel_limit=BACKGROUND_SOURCE_PIXEL_LIMIT,
+            )
+            if target_size is not None
+            else storage.open_image(key)
+        )
+        return to_srgb(image)
+    except (FileNotFoundError, OversizedRenderImageError):
         return None
 
 
-def load_key_for_box(key: str, box_w: int, box_h: int, user_scale: float = 1.0) -> Optional[Image.Image]:
-    """讀取照片並「先粗縮、再轉色」，供照片格渲染使用。
+def _cover_crop_plan(
+    image_width: int,
+    image_height: int,
+    box_width: int,
+    box_height: int,
+    user_scale: float,
+    offset_x: float,
+    offset_y: float,
+) -> dict:
+    """把舊「先放大整張再裁」公式換算成原圖 source box。"""
+    image_ratio = image_width / image_height
+    box_ratio = box_width / box_height
+    if image_ratio > box_ratio:
+        base_height = box_height
+        base_width = int(box_height * image_ratio)
+    else:
+        base_width = box_width
+        base_height = int(box_width / image_ratio)
+    resized_width = max(1, int(base_width * user_scale))
+    resized_height = max(1, int(base_height * user_scale))
 
-    原圖常是 12-24MP（5-10MB），但照片格 cover 後只需要幾百 px：
-    先用整數倍 reduce()（極快）把影像縮到目標的 ≥2 倍（保留 LANCZOS 的
-    細縮空間、視覺上與全解析度縮放無差異），ICC 轉換因此在小圖上進行。
-    單張成本從 ~600ms 降到 <100ms。
-    """
+    overflow_x = resized_width - box_width
+    overflow_y = resized_height - box_height
+    if overflow_x >= 0:
+        resized_source_x = int(overflow_x * (0.5 + offset_x * 0.5))
+        resized_source_x = max(0, min(resized_source_x, overflow_x))
+        destination_x = 0
+        copy_width = box_width
+    else:
+        resized_source_x = 0
+        destination_x = int(-overflow_x / 2)
+        copy_width = resized_width
+    if overflow_y >= 0:
+        resized_source_y = int(overflow_y * (0.5 + offset_y * 0.5))
+        resized_source_y = max(0, min(resized_source_y, overflow_y))
+        destination_y = 0
+        copy_height = box_height
+    else:
+        resized_source_y = 0
+        destination_y = int(-overflow_y / 2)
+        copy_height = resized_height
+
+    scale_x = image_width / resized_width
+    scale_y = image_height / resized_height
+    return {
+        "source_box": (
+            resized_source_x * scale_x,
+            resized_source_y * scale_y,
+            (resized_source_x + copy_width) * scale_x,
+            (resized_source_y + copy_height) * scale_y,
+        ),
+        "copy_size": (copy_width, copy_height),
+        "destination": (destination_x, destination_y),
+    }
+
+
+def _render_cover_crop(
+    image: Image.Image,
+    plan: dict,
+    box_width: int,
+    box_height: int,
+) -> Image.Image:
+    sampled = image.resize(
+        plan["copy_size"],
+        Image.Resampling.LANCZOS,
+        box=plan["source_box"],
+    ).convert("RGBA")
+    frame = Image.new("RGBA", (box_width, box_height), (0, 0, 0, 0))
+    frame.paste(sampled, plan["destination"], sampled)
+    return frame
+
+
+def cover_crop_for_box(
+    image: Image.Image,
+    box_width: int,
+    box_height: int,
+    user_scale: float,
+    offset_x: float,
+    offset_y: float,
+) -> Image.Image:
+    """只配置輸出框大小的 cover/zoom/crop，保留既有 offset 語意。"""
+    plan = _cover_crop_plan(
+        image.width,
+        image.height,
+        box_width,
+        box_height,
+        user_scale,
+        offset_x,
+        offset_y,
+    )
+    return _render_cover_crop(image, plan, box_width, box_height)
+
+
+def _photo_decoder_target(
+    image: Image.Image,
+    box_width: int,
+    box_height: int,
+    user_scale: float,
+) -> tuple[int, int]:
+    """依 cover×zoom 的 2×取樣需求與全圖 pixel cap 選 JPEG draft 尺寸。"""
+    orientation = image.getexif().get(274, 1)
+    swaps_axes = orientation in {5, 6, 7, 8}
+    oriented_width, oriented_height = (
+        (image.height, image.width)
+        if swaps_axes
+        else image.size
+    )
+    image_ratio = oriented_width / oriented_height
+    box_ratio = box_width / box_height
+    if image_ratio > box_ratio:
+        base_height = box_height
+        base_width = int(box_height * image_ratio)
+    else:
+        base_width = box_width
+        base_height = int(box_width / image_ratio)
+    needed_oriented_width = min(
+        oriented_width,
+        max(1, int(base_width * user_scale * 2)),
+    )
+    needed_oriented_height = min(
+        oriented_height,
+        max(1, int(base_height * user_scale * 2)),
+    )
+    desired_decoder = (
+        (needed_oriented_height, needed_oriented_width)
+        if swaps_axes
+        else (needed_oriented_width, needed_oriented_height)
+    )
+
+    safe_factor = next(
+        (
+            factor
+            for factor in (1, 2, 4, 8)
+            if (
+                math.ceil(image.width / factor)
+                * math.ceil(image.height / factor)
+                <= MAX_BOUNDED_DECODE_PIXELS
+            )
+        ),
+        None,
+    )
+    if safe_factor is None:
+        raise OversizedRenderImageError("JPEG draft 後仍會超過安全像素上限")
+    safe_decoder_width = max(1, image.width // safe_factor)
+    safe_decoder_height = max(1, image.height // safe_factor)
+    if safe_factor > 1:
+        # Pillow draft 在臨界等尺寸可能保留上一級，少一像素可穩定選到安全倍率。
+        safe_decoder_width = max(1, safe_decoder_width - 1)
+        safe_decoder_height = max(1, safe_decoder_height - 1)
+    return (
+        min(desired_decoder[0], safe_decoder_width),
+        min(desired_decoder[1], safe_decoder_height),
+    )
+
+
+def load_key_for_box(
+    key: str,
+    box_w: int,
+    box_h: int,
+    user_scale: float = 1.0,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+) -> Optional[Image.Image]:
+    """只解碼、轉色與縮放最後可見的原圖區域，避免 zoom 放大中間 buffer。"""
     from services.storage import get_storage
+    storage = get_storage()
     try:
-        raw = get_storage().open_image(key)
-    except FileNotFoundError:
-        return None
-
-    if raw.width > 0 and raw.height > 0 and box_w > 0 and box_h > 0:
-        # cover-fit 需要的基準尺寸（與 _cover_crop 同公式）
-        image_ratio = raw.width / raw.height
-        box_ratio = box_w / box_h
-        if image_ratio > box_ratio:
-            base_w, base_h = box_h * image_ratio, box_h
-        else:
-            base_w, base_h = box_w, box_w / image_ratio
-        need_w = max(1, int(base_w * max(user_scale, 0.01)))
-        need_h = max(1, int(base_h * max(user_scale, 0.01)))
-        factor = min(raw.width // (need_w * 2), raw.height // (need_h * 2))
-        if factor >= 2:
+        with open_storage_image_source(storage, key) as raw:
+            if raw.width <= 0 or raw.height <= 0 or box_w <= 0 or box_h <= 0:
+                raise OversizedRenderImageError("照片尺寸無效")
+            if (raw.format or "").upper() in {"JPEG", "MPO"}:
+                raw.draft(
+                    None,
+                    _photo_decoder_target(
+                        raw,
+                        box_w,
+                        box_h,
+                        user_scale,
+                    ),
+                )
+            validate_image_pixel_limit(raw, MAX_BOUNDED_DECODE_PIXELS)
+            oriented = ImageOps.exif_transpose(raw)
             try:
-                raw = raw.reduce(factor)
-            except Exception:
-                pass  # 少數模式（如調色盤圖）不支援 reduce，直接走原圖
+                plan = _cover_crop_plan(
+                    oriented.width,
+                    oriented.height,
+                    box_w,
+                    box_h,
+                    user_scale,
+                    offset_x,
+                    offset_y,
+                )
+                source_left, source_top, source_right, source_bottom = plan["source_box"]
+                outer_box = (
+                    max(0, math.floor(source_left)),
+                    max(0, math.floor(source_top)),
+                    min(oriented.width, math.ceil(source_right)),
+                    min(oriented.height, math.ceil(source_bottom)),
+                )
+                visible = oriented.crop(outer_box)
+                relative_box = (
+                    source_left - outer_box[0],
+                    source_top - outer_box[1],
+                    source_right - outer_box[0],
+                    source_bottom - outer_box[1],
+                )
+                copy_width, copy_height = plan["copy_size"]
+                factor = min(
+                    int((relative_box[2] - relative_box[0]) // (copy_width * 2)),
+                    int((relative_box[3] - relative_box[1]) // (copy_height * 2)),
+                )
+                if factor >= 2:
+                    try:
+                        reduced = visible.reduce(factor)
+                        visible.close()
+                        visible = reduced
+                        relative_box = tuple(value / factor for value in relative_box)
+                    except Exception:
+                        pass  # 少數模式不支援 reduce，仍只處理可見 crop
 
-    return to_srgb(raw)
+                converted = to_srgb(visible)
+                visible.close()
+                try:
+                    bounded_plan = {
+                        **plan,
+                        "source_box": relative_box,
+                    }
+                    return _render_cover_crop(converted, bounded_plan, box_w, box_h)
+                finally:
+                    converted.close()
+            finally:
+                oriented.close()
+    except (FileNotFoundError, OversizedRenderImageError):
+        return None
 
 
 @lru_cache(maxsize=128)
-def get_font(size: int, family: str = None) -> ImageFont.FreeTypeFont:
+def get_font(size: int | float, family: str | None = None) -> ImageFont.FreeTypeFont:
     """Return a FreeType font at `size` pts. If `family` is specified, use FONT_MAP lookup."""
     candidates = []
     if family and family in FONT_MAP:
-        candidates.append(FONT_MAP[family])
+        candidates.extend(FONT_MAP[family])
     candidates.extend(CJK_FONTS)
     for path in candidates:
         if os.path.exists(path):
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(path, size)
+                if Path(path).name in _BUNDLED_VARIABLE_FONT_NAMES:
+                    variation = "Bold" if family in _BOLD_FONT_FAMILIES else "Regular"
+                    font.set_variation_by_name(variation)
+                return font
             except Exception:
                 continue
     return ImageFont.load_default()
@@ -172,48 +454,140 @@ def add_drop_shadow(img: Image.Image, offset=(4, 6), blur=10,
     return combined
 
 
-def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw, letter_spacing: int = 0) -> list[str]:
-    """Wrap text to fit within max_width pixels, accounting for optional letter spacing."""
-    lines = []
+def _text_units(text: str) -> list[str]:
+    """依 Konva Text 的字素切分規則合併組合符號、emoji modifier 與 ZWJ。"""
+    units: list[str] = []
+    for character in text:
+        codepoint = ord(character)
+        is_combining = unicodedata.category(character).startswith("M")
+        is_emoji_modifier = 0x1F3FB <= codepoint <= 0x1F3FF
+        is_regional_indicator = 0x1F1E6 <= codepoint <= 0x1F1FF
+        if units and (is_combining or is_emoji_modifier):
+            units[-1] += character
+        elif character == "\u200d" and units:
+            units[-1] += character
+        elif (
+            units
+            and is_regional_indicator
+            and len(units[-1]) == 1
+            and 0x1F1E6 <= ord(units[-1]) <= 0x1F1FF
+        ):
+            units[-1] += character
+        else:
+            units.append(character)
+    return units
+
+
+def _utf16_length(text: str) -> int:
+    """回傳 JavaScript String.length，供 Konva letterSpacing 計寬契約使用。"""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _text_advance_with_spacing(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    letter_spacing: float,
+) -> float:
+    if not text:
+        return 0.0
+    return float(draw.textlength(text, font=font)) + _utf16_length(text) * letter_spacing
+
+
+def wrap_text(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: float,
+    draw: ImageDraw.ImageDraw,
+    letter_spacing: float = 0,
+) -> list[str]:
+    """依 Konva ``wrap='word'`` 規則換行，不縮字、不加省略號。"""
+    lines: list[str] = []
     for paragraph in text.split("\n"):
-        if not paragraph:
-            lines.append("")
+        remaining = paragraph
+        if _text_advance_with_spacing(draw, remaining, font, letter_spacing) <= max_width:
+            lines.append(remaining)
             continue
-        current = ""
-        for char in paragraph:
-            test = current + char
-            bbox = draw.textbbox((0, 0), test, font=font)
-            text_w = bbox[2] - bbox[0] + max(0, len(test) - 1) * letter_spacing
-            if text_w > max_width and current:
-                lines.append(current)
-                current = char
+
+        while remaining:
+            units = _text_units(remaining)
+            low = 0
+            high = len(units)
+            match = ""
+            match_width = 0.0
+            while low < high:
+                middle = (low + high) // 2
+                candidate = "".join(units[: middle + 1])
+                candidate_width = _text_advance_with_spacing(
+                    draw,
+                    candidate,
+                    font,
+                    letter_spacing,
+                )
+                if candidate_width <= max_width:
+                    low = middle + 1
+                    match = candidate
+                    match_width = candidate_width
+                else:
+                    high = middle
+
+            if not match:
+                break
+
+            match_units = _text_units(match)
+            next_character = units[len(match_units)] if len(match_units) < len(units) else ""
+            if next_character in (" ", "-") and match_width <= max_width:
+                wrap_index = len(match_units)
             else:
-                current = test
-        if current:
-            lines.append(current)
+                last_space_index = max(
+                    (index for index, unit in enumerate(match_units) if unit == " "),
+                    default=-1,
+                )
+                last_dash_index = max(
+                    (index for index, unit in enumerate(match_units) if unit == "-"),
+                    default=-1,
+                )
+                wrap_index = max(last_space_index, last_dash_index) + 1
+            if wrap_index > 0:
+                low = wrap_index
+                match = "".join(units[:low])
+
+            lines.append(match.rstrip())
+            remaining = "".join(units[low:]).lstrip()
+            if (
+                remaining
+                and _text_advance_with_spacing(draw, remaining, font, letter_spacing)
+                <= max_width
+            ):
+                lines.append(remaining)
+                break
     return lines
 
 
-def _line_width_with_spacing(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, letter_spacing: int) -> int:
-    """回傳含字間距的行寬。"""
+def _line_width_with_spacing(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    letter_spacing: float,
+) -> float:
+    """回傳與 Konva 對齊／換行相同的 advance width。"""
     if not text:
-        return 0
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return bbox[2] - bbox[0] + max(0, len(text) - 1) * letter_spacing
+        return 0.0
+    return _text_advance_with_spacing(draw, text, font, letter_spacing)
 
 
-def draw_line_with_spacing(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
-                           font: ImageFont.FreeTypeFont, fill: str, letter_spacing: int) -> None:
-    """從 (x, y) 開始逐字繪製，加入字間距。
-    y 為 'lt' anchor 位置（文字框頂端）。
-    內部改用 'la' anchor 確保標點與一般字元對齊同一 ascender line。
-    """
+def draw_line_with_spacing(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    baseline_y: float,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: str,
+    letter_spacing: float,
+) -> None:
+    """從 alphabetic baseline 逐字素繪製，使用 advance width 加入字間距。"""
     if not text:
         return
-    # 將 lt y 換算成 la y：la_bbox[1] 是 la anchor 到 glyph 視覺頂端的距離
-    la_bbox = draw.textbbox((0, 0), text, font=font, anchor="la")
-    la_y = y - la_bbox[1]
-    for char in text:
-        draw.text((x, la_y), char, font=font, fill=fill, anchor="la")
-        char_bbox = draw.textbbox((0, 0), char, font=font, anchor="la")
-        x += char_bbox[2] - char_bbox[0] + letter_spacing
+    for text_unit in _text_units(text):
+        draw.text((x, baseline_y), text_unit, font=font, fill=fill, anchor="ls")
+        x += float(draw.textlength(text_unit, font=font)) + letter_spacing

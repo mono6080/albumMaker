@@ -1,4 +1,97 @@
+import json
+from pathlib import Path
+from typing import Any
+
+from fastapi import HTTPException
+
+
+_DESIGN_TOKENS = json.loads(
+    (Path(__file__).parent / "design_tokens.json").read_text(encoding="utf-8")
+)
+MAX_LABEL_TEXT_LENGTH = _DESIGN_TOKENS["text_content"]["max_label_text_length"]
+MAX_LABEL_ENTRIES_PER_PAGE = 100
+MAX_LABEL_TEXT_TOTAL_PER_PAGE = 4000
+MAX_LABEL_ID_LENGTH = 128
 TEXT_ALIGN_VALUES = {"left", "center", "right"}
+LABEL_ENTRY_FIELDS = {"text", "text_align"}
+
+
+def _invalid_label_texts(path: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": "invalid_label_texts",
+            "errors": [{"path": path, "message": message}],
+        },
+    )
+
+
+def validate_page_label_texts(
+    label_texts: Any,
+    *,
+    path: str = "label_texts",
+) -> dict[str, Any]:
+    """驗證單頁文字覆寫格式，避免任意 JSON 進入渲染器。"""
+    if not isinstance(label_texts, dict):
+        raise _invalid_label_texts(path, "must be an object")
+    if len(label_texts) > MAX_LABEL_ENTRIES_PER_PAGE:
+        raise _invalid_label_texts(
+            path,
+            f"must not contain more than {MAX_LABEL_ENTRIES_PER_PAGE} entries",
+        )
+
+    total_text_length = 0
+    for label_id, entry in label_texts.items():
+        if not isinstance(label_id, str) or not label_id:
+            raise _invalid_label_texts(path, "label id must be a non-empty string")
+        if len(label_id) > MAX_LABEL_ID_LENGTH:
+            raise _invalid_label_texts(
+                path,
+                f"label id must not exceed {MAX_LABEL_ID_LENGTH} characters",
+            )
+        entry_path = f"{path}.{label_id}"
+        if isinstance(entry, str):
+            if len(entry) > MAX_LABEL_TEXT_LENGTH:
+                raise _invalid_label_texts(
+                    entry_path,
+                    f"must not exceed {MAX_LABEL_TEXT_LENGTH} characters",
+                )
+            total_text_length += len(entry)
+            continue
+        if not isinstance(entry, dict):
+            raise _invalid_label_texts(
+                entry_path,
+                "must be a string or an object with text/text_align",
+            )
+        unknown_fields = set(entry) - LABEL_ENTRY_FIELDS
+        if unknown_fields:
+            raise _invalid_label_texts(
+                entry_path,
+                f"unsupported fields: {', '.join(sorted(str(field) for field in unknown_fields))}",
+            )
+        if "text" in entry and entry["text"] is not None and not isinstance(entry["text"], str):
+            raise _invalid_label_texts(f"{entry_path}.text", "must be a string or null")
+        if isinstance(entry.get("text"), str):
+            if len(entry["text"]) > MAX_LABEL_TEXT_LENGTH:
+                raise _invalid_label_texts(
+                    f"{entry_path}.text",
+                    f"must not exceed {MAX_LABEL_TEXT_LENGTH} characters",
+                )
+            total_text_length += len(entry["text"])
+        if "text_align" in entry and entry["text_align"] not in TEXT_ALIGN_VALUES:
+            raise _invalid_label_texts(
+                f"{entry_path}.text_align",
+                "must be left, center, or right",
+            )
+    if total_text_length > MAX_LABEL_TEXT_TOTAL_PER_PAGE:
+        raise _invalid_label_texts(
+            path,
+            (
+                "total text length must not exceed "
+                f"{MAX_LABEL_TEXT_TOTAL_PER_PAGE} characters"
+            ),
+        )
+    return label_texts
 
 
 def normalize_text_align(value) -> str | None:

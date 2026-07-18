@@ -84,3 +84,8 @@ photo_upload_limiter = BusyLimiter("photo_upload", "PHOTO_UPLOAD_CONCURRENCY", 2
 def require_photo_upload_slot():
     with photo_upload_limiter.acquire("照片處理中，請稍後再試"):
         yield
+
+
+def require_preview_render_slot():
+    with preview_render_limiter.acquire("預覽產生中，請稍後再試"):
+        yield

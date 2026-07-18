@@ -5,12 +5,18 @@
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user, require_role
 from database import User, get_db
 from services.file_service import (
     read_and_validate_image,
 )
+from services.render_image_loader import (
+    BACKGROUND_SOURCE_PIXEL_LIMIT,
+    STICKER_SOURCE_PIXEL_LIMIT,
+)
+from services.request_limiter import require_photo_upload_slot
 from services.template_asset_service import (
     serve_background,
     serve_sticker,
@@ -39,11 +45,16 @@ async def upload_background(
     page_id: int,
     file: UploadFile = File(...),
     expected_revision: int = Query(..., ge=1),
+    _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳模板頁面的背景圖，並將檔名記錄至資料庫與佈局 JSON。"""
-    file_bytes = await read_and_validate_image(file, max_mb=20)
+    file_bytes = await read_and_validate_image(
+        file,
+        max_mb=20,
+        max_pixels=BACKGROUND_SOURCE_PIXEL_LIMIT,
+    )
 
     return upload_background_use_case(
         db,
@@ -72,11 +83,21 @@ def get_background(
 async def upload_sticker(
     template_id: int,
     file: UploadFile = File(...),
+    _limit: None = Depends(require_photo_upload_slot),
     _: User = Depends(require_role("admin", "art_team")),
 ):
     """上傳貼圖素材至模板專屬目錄。"""
-    file_bytes = await read_and_validate_image(file, max_mb=10)
-    return store_sticker(template_id, file.filename, file_bytes)
+    file_bytes = await read_and_validate_image(
+        file,
+        max_mb=10,
+        max_pixels=STICKER_SOURCE_PIXEL_LIMIT,
+    )
+    return await run_in_threadpool(
+        store_sticker,
+        template_id,
+        file.filename,
+        file_bytes,
+    )
 
 
 @router.post("/{template_id}/pages/{page_id}/material-text-box-suggestion")
@@ -84,6 +105,7 @@ def suggest_material_text_box(
     template_id: int,
     page_id: int,
     payload: MaterialTextBoxSuggestionRequest,
+    _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):

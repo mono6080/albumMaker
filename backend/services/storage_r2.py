@@ -116,12 +116,7 @@ class R2StorageAdapter(StorageAdapter):
         return f"{self._public_base_url}/{encoded_key}"
 
     def _prefix_matches(self, prefix: str, key: str) -> bool:
-        return (
-            key == prefix
-            or key.startswith(prefix + "/")
-            or key.startswith(prefix + ".")
-            or key.startswith(prefix + "_")
-        )
+        return key == prefix or key.startswith(prefix + "/")
 
     def put(self, key: str, data: bytes) -> None:
         clean_key = self._key(key)

@@ -3,6 +3,7 @@
 
 import TextAlignControl from "./TextAlignControl";
 import TextVariableTextarea from "./TextVariableTextarea";
+import { MAX_LABEL_TEXT_LENGTH } from "../constants/textContent.js";
 
 export default function TextLabelFieldRow({
   labelId,
@@ -18,7 +19,7 @@ export default function TextLabelFieldRow({
   onRestoreDefault,
   onScheduleSave,
   buttonGuideId,
-  maxLength = 200,
+  maxLength = MAX_LABEL_TEXT_LENGTH,
 }) {
   const len = value.length;
   return (

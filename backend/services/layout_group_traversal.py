@@ -212,6 +212,7 @@ def iter_layout_render_elements(
 def layout_for_render_fingerprint(layout: dict) -> dict:
     """移除不影響像素的編輯器 metadata，避免改名／鎖定觸發重渲。"""
     normalized_layout = deepcopy(layout)
+    normalized_layout.pop("material_text_links", None)
     for collection_name in ("photo_slots", "text_labels", "stickers", "groups"):
         collection = normalized_layout.get(collection_name)
         if not isinstance(collection, list):
@@ -221,4 +222,8 @@ def layout_for_render_fingerprint(layout: dict) -> dict:
                 continue
             for key in _EDITOR_ONLY_LAYOUT_KEYS:
                 item.pop(key, None)
+            if collection_name == "groups":
+                item.pop("links", None)
+    if not normalized_layout.get("groups"):
+        normalized_layout.pop("group_contract", None)
     return normalized_layout

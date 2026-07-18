@@ -7,7 +7,7 @@
 |--------|----------|
 | §1 Overview / §2 Stack | [dev/architecture.md](dev/architecture.md)、[README.md](../README.md) |
 | §3 Architecture Layers | [dev/architecture.md](dev/architecture.md) |
-| §4 Data Model / Storage key | [dev/data-model.md](dev/data-model.md)、[dev/storage.md](dev/storage.md) |
+| §4 Data Model / Storage key | [dev/data-model.md](dev/data-model.md)、[dev/layout-data-model.md](dev/layout-data-model.md)、[dev/storage.md](dev/storage.md) |
 | §5 Load-Bearing Decisions | 渲染類 → [dev/rendering.md](dev/rendering.md)；API/auth 類 → [dev/api.md](dev/api.md)；storage 類 → [dev/storage.md](dev/storage.md)；migration 類 → [dev/data-model.md](dev/data-model.md)；SPA/PWA → [dev/architecture.md](dev/architecture.md) |
 | §6 Invariants | [dev/conventions.md](dev/conventions.md#跨模組-invariants) |
 | §7 External Boundaries | [dev/deployment.md](dev/deployment.md)、[dev/rendering.md](dev/rendering.md#字型) |

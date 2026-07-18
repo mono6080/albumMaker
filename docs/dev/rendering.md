@@ -23,6 +23,12 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   下載權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
 - PDF 由 img2pdf 產生（`save_album_pdf()` 唯一進入點），避開 PIL 內建 PDF 的色域問題；
   print 頁面內嵌 **JPEG quality 95**（照片內容用 PNG 體積大 5-8 倍且壓縮極慢）
+- 模板單頁／跨頁與專案／學生互動預覽一律回傳無損 PNG；專案／學生預覽的內容定址
+  快取也使用 `.png`。正式 print／screen PDF 與單頁 JPEG 輸出不受影響
+- 互動預覽先在 794×1123 canonical 像素完整渲染，再以 LANCZOS 縮成顯示尺寸；
+  縮圖不另跑一套字級、行距或裁切公式
+- 專案／學生預覽回傳內容定址 ETag 與 `private, no-cache, must-revalidate`；
+  前端 URL 另帶 build version，部署新版渲染程式後不沿用舊頁面記住的預覽 URL
 - 渲染 endpoint 有 `time.monotonic()` 計時 log，效能問題先看 log
 
 ## 相冊輸出與 dirty-skip
@@ -32,15 +38,34 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 - 只渲染**一次**列印尺寸（2480×3508），螢幕圖由 `derive_screen_images()`
   LANCZOS 降採樣到 794×1123 — 不再跑第二輪渲染
 - **dirty-skip**：輸出前以 `_album_render_hash()`（版面 + 合併後頁面資料 +
-  學生姓名 + `_RENDER_PIPELINE_VERSION`）比對上次的指紋檔（key 見
-  [storage.md](storage.md#storage-key-格式)）；一致且 PDF 還在就直接跳過，
-  回傳 `skipped=True`。全班重渲只重做真的改過的學生
-- 圖層 `layer_name` / `locked` 是編輯器 metadata，不納入相冊與預覽的渲染指紋；
-  `visible` 會改變像素，因此必須納入
-- **改渲染邏輯必把 `_RENDER_PIPELINE_VERSION` +1**，否則舊輸出因指紋一致
-  不會被重渲（視覺修正不會生效）
+  完整姓名 + effective 相本稱呼 + `_RENDER_PIPELINE_VERSION`）比對上次的指紋檔（key 見
+  [storage.md](storage.md#storage-key-格式)）；只有指紋一致、print/screen 兩份 PDF
+  與所有 print/screen 單頁圖都存在時才跳過並回傳 `skipped=True`。任一承諾輸出遺失
+  就重建整套 canonical outputs；全班重渲只重做真的改過或輸出不完整的學生
+- 文字維持模板字級，不做 auto-fit 或縮字。前後端都先在 canonical 794×1123 座標排版，
+  使用相同的 word-wrap、advance width、字距、浮點行距與前 N 行可見規則；glyph／陰影
+  超出 local frame 的部分先裁切再旋轉。溢框稽核另走未裁切量測路徑，操作方式見
+  [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)
+- 姓名變數由後端 `text_variables.py` 解析，前端 `textVariables.js` 鏡像同一契約：
+  `{name}` 使用 `Student.effective_album_name`，`{full_name}` 使用完整姓名；raw 文字、兩個
+  replacement 與 final 結果都套用 200 字上限。TemplateCanvas 的一般文字與 footer 先分別顯示
+  `（相本稱呼）`、`（完整姓名）`，與後端模板預覽一致；契約由
+  `tests/test_render_name_variables.py`、`frontend/tests/unit/text.test.mjs` 與
+  `tests/fixtures/template_text_variable_parity.json` 釘住。相本稱呼屬像素輸入，必須同時納入
+  preview payload、render hash 與 publish CAS。
+- 圖層 `layer_name` / `locked` 與素材文字 link 是編輯器 metadata，不納入相冊與預覽的渲染指紋；
+  沒有群組時，僅為 link 存在的 `group_contract` 也不納入；`visible` 會改變像素，因此必須納入
+- `_RENDER_PIPELINE_VERSION` 由 `_RENDER_PIPELINE_FILES` 的實際內容自動雜湊；
+  新增渲染來源檔時必加入清單，否則舊輸出可能因指紋未變而跳過重渲
 - 背景圖採內容版本 key，layout 的 `background_version=sha256:...` 也會納入指紋；同名新內容
   不覆寫舊資產
+- 背景、貼圖與素材文字框分析一律先依實際輸出框做 bounded decode，再執行
+  EXIF transpose、ICC / RGB / RGBA 轉換。背景新上傳最多接受一張 print 頁面的像素數
+  （2480×3508），貼圖最多接受合法最大 leaf 的兩張 print 頁面像素數；舊 storage 的
+  超額 JPEG 只有在 decoder `draft` 後落入相同安全預算才繼續，超額 PNG / WebP 在
+  配置像素前直接略過渲染或由分析端回 422。模板預覽最多同時 4 個，模板素材上傳／分析
+  與照片處理共用最多 2 個重工作槽。照片列表縮圖在 cache miss 時也先 bounded decode；
+  同一縮圖 key 使用 single-flight，且不同尺寸的縮圖生成共用照片重工作槽
 - 渲染捕捉 `Project.template_revision` 與內容快照，完成後在 per-student render lock 內做
   revision/content CAS 才發布 canonical PDF/JPG 與 `output_filename`。模板若在慢渲染途中更新，
   舊渲染不得晚到覆寫新輸出或重新發布已失效 PDF；CAS 也包含 Project／Student `created_at`，
@@ -74,7 +99,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   static inspector。Phone/tablet 選取物件不會自動開 inspector；完整互動與驗收契約見
   [mobile-template-editor-v1.md](../specs/mobile-template-editor-v1.md)。
 - 三種元素對應 `layout_json` 的三個陣列（格式見
-  [data-model.md 的 layout_json](data-model.md#layout_json-格式)）：
+  [layout-data-model.md 的 layout_json](layout-data-model.md#layout_json-格式)）：
   photo → `photo_slots`、text → `text_labels`、sticker → `stickers`（`StickerNode`）
 - **Illustrator 式通用巢狀群組**：`groups[]` 可引用 photo/text/sticker/group，但不是第四種
   可繪製物件。Renderer 以每個 group subtree 當 stacking block，依 scope `children[]` 遞迴展平；
@@ -86,7 +111,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   只保相容 exports；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
   元素仍只畫一次。前端 export/model 契約由 `frontend/tests/unit/groups-contract.test.mjs` 釘住。
   圖層可見性契約見
-  [data-model.md 的 layout_json](data-model.md#layout_json-格式)。
+  [layout-data-model.md 的 layout_json](layout-data-model.md#layout_json-格式)。
 - 任一 scope 的 direct group 可移動、旋轉、四角等比縮放；雙擊或 Enter 每次進一層 isolation 後，
   direct children 才能分別編輯。Group bounds 由 descendant world geometry 即時計算，不存入 layout；
   group scale 改 leaf frame，但 text typography 在即時預覽與 commit 後皆保持原值。素材文字 link
@@ -122,20 +147,38 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   （`alpha² / 255`），陰影變約 ¼ 濃度
 - 違反：輸出陰影幾乎看不見
 
-### 中文標點對齊：逐字 anchor='la'
+### 文字換行與字距：advance width + Konva word-wrap
 
-- `draw_helpers.py` 的 `draw_line_with_spacing()` 以 `anchor='la'`
-  （ascender line）逐字繪製，先用全字串 `textbbox(anchor='la')[1]` 換算 `la_y`
-  統一 baseline
-- 違反：用 `anchor='lt'` 會讓 `，`、`。` 以自身 glyph 頂端對齊，標點往上飄
+- `draw_helpers.py` 的 `wrap_text()` 鏡像 Konva `wrap='word'`：優先在空白／連字號
+  斷行並 trim 行尾／行首空白；計寬用 glyph advance，不用 ink bbox
+- Konva 的 line width 會加 `字元數 × letterSpacing`（包含行尾 spacing）；
+  後端 `_line_width_with_spacing()` 與置中／靠右起點使用同一公式
+- 違反：英文／中英混排會在不同字元斷行，置中與靠右位置也會漂移
 
-### 文字垂直對齊：konva_v_offset
+### 文字垂直對齊：固定 alphabetic baseline
 
-- `element_renderers.py` 的 `render_text_label()`：`start_y` 加
-  `konva_v_offset = int(line_height_float / 2 - descent + la_offset)`，
-  補償 Konva `textBaseline='middle'` 相對 PIL 視覺頂端的落差
-  （msjh 28pt / lineHeight=1.4 約 18px）
-- 違反：文字在編輯器看起來置中、PDF 輸出偏上或偏下
+- `text_layout.py` 保留浮點 `font_size × line_height`，以固定 baseline 序列排列每一行；
+  `draw_line_with_spacing()` 使用 `anchor='ls'`，標點、英文 descender 與中文字共用 baseline
+- 固定高度只保留最前面可容納的 N 行再垂直置中，與 Konva 相同；後端 preview／print
+  由未縮放的 `_text_layout_source` 決定相同行內容，再映射到輸出尺寸
+- 違反：若逐行按 glyph 視覺頂端排，`。，`、`gjpqy` 等行會相差 8px 以上；
+  若把全文置中後才裁切，前端顯示開頭、PDF 卻可能只剩中間段落
+
+### 前端文字量測：canonical real space
+
+- `textRenderModel.js` 讓 Konva Text 在 794×1123 real space 使用原始框尺寸、字級與字距，
+  並以 64× 座標消除 Canvas／FreeType 小字 hinting 的換行邊界差，再縮回 real space；
+  外層才以 `CANVAS_SCALE` 顯示。後端 `text_layout.py` 使用同一倍率
+- `TemplateCanvas.jsx` 將 Konva scene backing density 固定為 `794 / 530`，不跟隨裝置
+  DPR；100% 顯示時原生 scene canvas 為 794×1123，CSS 尺寸為 530×750。hit canvas
+  維持 1× 邏輯座標，不改變選取與拖曳行為
+- 已連結素材的文字框以 `measureTextLabelCjkCapacity()` 和相同 canonical Konva 排版，
+  單次量測全形「字」的 advance，再以每行字數 × 可見行數 O(1) 推算容量，並在屬性
+  面板顯示約可容納字數；結果只供設計提示、不寫入
+  layout，也不縮字。中英混排與手動換行仍以實際預覽為準
+- 不得加未存入 schema 的左右 inset、最小 display 字級或內容截斷；local clip group
+  同時裁 glyph 與文字陰影
+- 違反：字型 hinting、隱性 padding 或 60 字上限會改變可容納字數
 
 ### 貼圖透明通道：render_sticker 不經 to_srgb
 
@@ -165,6 +208,19 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
     連續運算比瀏覽器的「先 clamp 再算」结果更亮，PDF 會比預覽亮
   - 樞軸誤用 128：與 CSS 實際的 127.5 有 ±0.25 個灰階的系統性偏差
 
+### 照片 zoom 裁切：只配置最後可見區域
+
+- `draw_helpers.py` 的 `load_key_for_box()` 先把既有「整張 cover resize 後再依
+  scale／offset 裁切」公式反算成原圖 source box，只裁出可見區、視需要 `reduce()`，
+  再做 ICC→sRGB 與 LANCZOS 到照片框；中間 resize 不得隨 zoom 放大超過輸出框。
+- 前端、API 與舊 DB renderer 共用的 zoom 上限是 3×；JPEG 依 cover×zoom 的 2×
+  取樣需求先走 orientation-aware draft，且完整 decode 必須落在安全 pixel cap 後才做
+  EXIF transpose。超額非 JPEG 在 pixel load 前拒絕。
+- `scale` / `offset_x` / `offset_y` 的像素語意由小圖 reference regression 與舊公式逐像素
+  比對釘住；舊 DB 的非有限或超界 transform 在 renderer 先依 API 合法範圍收斂。
+- 違反：滿頁照片在 print 模式搭配 `scale=10` 會先嘗試建立約
+  24800×35080 RGBA 中間圖，單張即可耗盡 worker 記憶體。
+
 ### EXIF 方向：open_image 統一 transpose
 
 - `LocalStorageAdapter.open_image()` 開檔後立即 `ImageOps.exif_transpose(img)`
@@ -173,17 +229,34 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 
 ## 字型
 
-- `draw_helpers.py` 的 `get_font(size, family)` 走 `FONT_MAP` / `CJK_FONTS`
-  fallback 列表；Windows 讀 `C:/Windows/Fonts/`，Linux 容器由 Dockerfile 安裝
-  noto-cjk / wqy（見 [deployment.md](deployment.md)）
+- `draw_helpers.py` 的 `get_font(size, family)` 優先讀
+  `frontend/public/fonts/`（Docker 為 `/frontend/dist/fonts/`）內的 OFL Noto TC
+  可變字型；sans keys 共用 Noto Sans TC，serif keys 共用 Noto Serif TC，
+  `msjhbd` 固定選 Bold named instance，其餘固定選 Regular
+- 前端以 `@font-face` 宣告同一批字型，瀏覽器優先下載較小的 WOFF2，同源 TTF
+  留作 fallback；React 應用先正常掛載，只有模板編輯器 route 在 Konva 掛載前等待
+  Regular、Bold 與 Serif。載入失敗時顯示明確錯誤並保持畫布未掛載，不可用 generic
+  fallback 進入編輯器。45 秒 timeout 只處理瀏覽器字型 API 永久 pending；
+  `loadingerror`、Promise rejection 與空 face 結果會立即失敗。timeout 可在同一頁延續
+  尚在下載的 FontFace；已進入 terminal error 的 CSS FontFace 必須 reload 新 document
+- FastAPI 靜態檔服務必須明確註冊 `.woff2`、`.woff`、`.ttf` MIME；Windows
+  `mimetypes` registry 不保證內建這些類型，而全域 `nosniff` 不允許以
+  `text/plain` 僥倖載入
+- 系統 CJK 字型只作 bundled asset 遺失時的 fallback（見
+  [deployment.md](deployment.md)）
 - 全部路徑都找不到時 fallback `ImageFont.load_default()`（點陣字，中文渲染崩）—
   容器必裝 CJK 字型
 - 前端字型選項與粗體判斷集中在 `constants/fonts.js`
   （`FONT_OPTIONS` / `getFontCss()` / `isFontBold()`），需與後端 `FONT_MAP` 對應
+- `tests/test_font_parity.py` 驗證前後端 family 映射、Regular / Bold instance、
+  OFL 授權、資產 SHA-256 manifest 與 Docker 路徑；manifest 也納入 render pipeline
+  fingerprint，換字型會使既有輸出失效並重繪
 
 ## 渲染一致性測試
 
 `tests/test_render_regression.py`（後端像素區域檢查）與
-`npm run test:render-parity`（前端 stage model + Konva rasterize）共用同一份
-`tests/fixtures/render_smoke_layout.json` 固定版型；改渲染邏輯必跑，
-指令見 [testing.md](testing.md)。
+`npm run test:render-parity` 涵蓋 stage model、Konva rasterize，以及真 Chromium／production
+Pillow 使用同源 bundled variable font（瀏覽器 WOFF2、Pillow TTF）的 8 組文字排版與
+5 組 raster 比較；前者釘住完整換行、
+可見行、x、baseline 與行距，後者釘住 regular／bold／serif、overflow、旋轉陰影的 alpha bbox、
+row bands、雙向 mask overlap 與框外裁切。改渲染邏輯必跑，指令見 [testing.md](testing.md)。

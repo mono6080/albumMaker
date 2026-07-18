@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Album Noto Sans TC";
+  src:
+    url("/fonts/NotoSansTC-VF.woff2") format("woff2"),
+    url("/fonts/NotoSansTC-VF.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Album Noto Serif TC";
+  src:
+    url("/fonts/NotoSerifTC-VF.woff2") format("woff2"),
+    url("/fonts/NotoSerifTC-VF.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+}
+
 #root {
   min-height: 100svh;
   display: flex;

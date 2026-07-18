@@ -5,6 +5,7 @@ import io
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path, PureWindowsPath
 
 import pytest
 from PIL import Image
@@ -15,7 +16,14 @@ from services import storage_factory
 from services.file_service import ProcessedImageUpload, content_versioned_filename
 from services.student_pages import apply_photo_to_page
 from services.storage import LocalStorageAdapter, R2StorageAdapter, _validate_r2_serve_mode
-from services.student_render_service import _clear_student_render_outputs
+from services.storage_local import (
+    _relative_to_resolved_base,
+    _windows_comparison_path,
+)
+from services.student_render_service import (
+    _clear_legacy_student_render_outputs,
+    _clear_student_render_outputs,
+)
 
 
 class FakeClientError(Exception):
@@ -159,6 +167,97 @@ def test_local_storage_shared_prefix_escape_blocked(tmp_path):
     assert not (sibling_dir / "pwned.txt").exists()
 
 
+def test_windows_extended_length_path_compares_with_same_canonical_base():
+    """合法的 Windows extended-length path 不可誤判 traversal，sibling 仍須拒絕。"""
+    base = PureWindowsPath(r"E:\projects\album_maker\uploads")
+    extended_target = PureWindowsPath(
+        r"\\?\E:\projects\album_maker\uploads"
+        r"\projects\proj1\photos\student1\thumbnails\360\photo.jpg"
+    )
+    extended_sibling = PureWindowsPath(
+        r"\\?\E:\projects\album_maker\uploads_evil\photo.jpg"
+    )
+
+    relative_target = _windows_comparison_path(extended_target).relative_to(
+        _windows_comparison_path(base)
+    )
+
+    assert relative_target == PureWindowsPath(
+        r"projects\proj1\photos\student1\thumbnails\360\photo.jpg"
+    )
+    if os.name == "nt":
+        assert _relative_to_resolved_base(
+            extended_target,
+            base,
+        ) == relative_target
+    with pytest.raises(ValueError):
+        _windows_comparison_path(extended_sibling).relative_to(
+            _windows_comparison_path(base)
+        )
+
+
+def test_windows_extended_unc_path_is_case_insensitive_and_stays_in_share():
+    """UNC token/server/share 大小寫不同仍可比對，shared-prefix sibling 不可。"""
+    base = PureWindowsPath(r"\\Server\Share\uploads")
+    extended_target = PureWindowsPath(
+        r"\\?\unc\SERVER\SHARE\uploads\projects\proj1\photo.jpg"
+    )
+    extended_sibling = PureWindowsPath(
+        r"\\?\UNC\server\share\uploads_evil\photo.jpg"
+    )
+
+    relative_target = _windows_comparison_path(extended_target).relative_to(
+        _windows_comparison_path(base)
+    )
+
+    assert relative_target == PureWindowsPath(r"projects\proj1\photo.jpg")
+    with pytest.raises(ValueError):
+        _windows_comparison_path(extended_sibling).relative_to(
+            _windows_comparison_path(base)
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-length path integration")
+def test_local_storage_windows_long_path_put_get_list_delete(tmp_path):
+    """超過 260 字元的合法 key 可完成 LocalStorage 全生命週期。"""
+    extended_base = Path("\\\\?\\" + str((tmp_path / "uploads").resolve()))
+    adapter = LocalStorageAdapter(extended_base)
+    long_segments = [
+        f"segment_{segment_index}_" + "x" * 40
+        for segment_index in range(7)
+    ]
+    directory_key = "/".join(long_segments)
+    key = f"{directory_key}/photo.jpg"
+    assert len(str(adapter._path(key))) > 260
+
+    adapter.put(key, b"long-path-photo")
+
+    assert adapter.get_bytes(key) == b"long-path-photo"
+    assert adapter.list_keys(directory_key) == [key]
+    adapter.delete(key)
+    assert adapter.exists(key) is False
+    assert adapter.list_keys(directory_key) == []
+    adapter.delete_prefix(long_segments[0])
+
+
+def test_local_storage_symlink_cannot_escape_base(tmp_path):
+    """resolve 後落到 base 外的 symlink 必須維持 traversal 拒絕。"""
+    base_dir = tmp_path / "uploads"
+    outside_dir = tmp_path / "outside"
+    base_dir.mkdir()
+    outside_dir.mkdir()
+    link_path = base_dir / "outside-link"
+    try:
+        link_path.symlink_to(outside_dir, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"目前環境不可建立 directory symlink：{error}")
+
+    adapter = LocalStorageAdapter(base_dir)
+    with pytest.raises(ValueError):
+        adapter.put("outside-link/escaped.txt", b"x")
+    assert not (outside_dir / "escaped.txt").exists()
+
+
 def test_r2_storage_put_get_move_delete_lifecycle():
     """R2 adapter 應符合 StorageAdapter 的基本生命週期合約。"""
     client = FakeS3Client()
@@ -199,8 +298,8 @@ def test_r2_delete_prefix_does_not_delete_shared_prefix_siblings():
     assert client.objects["templates/tmpl10/backgrounds/b.jpg"] == b"b"
 
 
-def test_r2_delete_prefix_removes_render_output_variants():
-    """輸出清理需要同時移除 stem.pdf、stem_screen.pdf 與 stem/images/*。"""
+def test_r2_delete_prefix_stays_within_namespace_boundary():
+    """R2 prefix 只能匹配 exact key／子路徑，不可跨到 .、_ 或文字 sibling。"""
     client = FakeS3Client()
     adapter = R2StorageAdapter(bucket="bucket", s3_client=client)
     adapter.put("projects/proj1/output/demo.pdf", b"print")
@@ -210,27 +309,47 @@ def test_r2_delete_prefix_removes_render_output_variants():
 
     adapter.delete_prefix("projects/proj1/output/demo")
 
-    assert "projects/proj1/output/demo.pdf" not in client.objects
-    assert "projects/proj1/output/demo_screen.pdf" not in client.objects
+    assert client.objects["projects/proj1/output/demo.pdf"] == b"print"
+    assert client.objects["projects/proj1/output/demo_screen.pdf"] == b"screen"
     assert "projects/proj1/output/demo/images/print/demo_page1.jpg" not in client.objects
     assert client.objects["projects/proj1/output/demo-other.pdf"] == b"other"
 
 
-def test_student_output_cleanup_keeps_same_prefix_student():
+def test_legacy_student_output_cleanup_protects_sibling_collision():
     client = FakeS3Client()
     adapter = R2StorageAdapter(bucket="bucket", s3_client=client)
     prefix = "projects/proj1/output"
     adapter.put(f"{prefix}/班級-小明.pdf", b"print")
-    adapter.put(f"{prefix}/班級-小明_screen.pdf", b"screen")
-    adapter.put(f"{prefix}/班級-小明/images/print/page.jpg", b"image")
-    adapter.put(f"{prefix}/班級-小明二.pdf", b"other")
+    adapter.put(f"{prefix}/班級-小明_screen.pdf", b"sibling-print")
+    adapter.put(f"{prefix}/班級-小明_screen_screen.pdf", b"sibling-screen")
+    adapter.put(f"{prefix}/班級-小明/images/print/page.jpg", b"first-image")
+    adapter.put(f"{prefix}/班級-小明_screen/images/print/page.jpg", b"sibling-image")
 
-    _clear_student_render_outputs(adapter, prefix, "班級-小明")
+    _clear_legacy_student_render_outputs(
+        adapter,
+        f"{prefix}/班級-小明.pdf",
+        (f"{prefix}/班級-小明_screen.pdf",),
+    )
 
     assert f"{prefix}/班級-小明.pdf" not in client.objects
-    assert f"{prefix}/班級-小明_screen.pdf" not in client.objects
+    assert client.objects[f"{prefix}/班級-小明_screen.pdf"] == b"sibling-print"
+    assert client.objects[f"{prefix}/班級-小明_screen_screen.pdf"] == b"sibling-screen"
     assert f"{prefix}/班級-小明/images/print/page.jpg" not in client.objects
-    assert client.objects[f"{prefix}/班級-小明二.pdf"] == b"other"
+    assert client.objects[f"{prefix}/班級-小明_screen/images/print/page.jpg"] == b"sibling-image"
+
+
+def test_canonical_student_output_cleanup_keeps_similar_student_id_namespace():
+    client = FakeS3Client()
+    adapter = R2StorageAdapter(bucket="bucket", s3_client=client)
+    first_prefix = "projects/proj1/output/students/student2"
+    sibling_prefix = "projects/proj1/output/students/student20"
+    adapter.put(f"{first_prefix}/pdf/print.pdf", b"first")
+    adapter.put(f"{sibling_prefix}/pdf/print.pdf", b"sibling")
+
+    _clear_student_render_outputs(adapter, first_prefix)
+
+    assert f"{first_prefix}/pdf/print.pdf" not in client.objects
+    assert client.objects[f"{sibling_prefix}/pdf/print.pdf"] == b"sibling"
 
 
 def test_r2_serve_proxy_returns_file_bytes_with_content_type():

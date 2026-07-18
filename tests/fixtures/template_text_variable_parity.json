@@ -1,0 +1,31 @@
+{
+  "canvas_width": 794,
+  "canvas_height": 1123,
+  "photo_slots": [],
+  "text_labels": [
+    {
+      "id": "token-label",
+      "x": 40,
+      "y": 80,
+      "width": 714,
+      "height": 120,
+      "text": "標題：{name}／{full_name}",
+      "text_role": "static",
+      "font_size": 24,
+      "font_family": "msjh",
+      "font_color": "#1F2937",
+      "line_height": 1.25,
+      "text_align": "center"
+    }
+  ],
+  "stickers": [],
+  "footer": {
+    "text": "頁尾：{name}／{full_name}",
+    "x": 40,
+    "y": 1080,
+    "font_size": 20,
+    "font_color": "#2563EB"
+  },
+  "expected_text_label": "標題：（相本稱呼）／（完整姓名）",
+  "expected_footer": "頁尾：（相本稱呼）／（完整姓名）"
+}

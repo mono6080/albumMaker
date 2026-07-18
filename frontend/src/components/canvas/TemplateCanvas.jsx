@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import Konva from "konva";
 import toast from "react-hot-toast";
 import { Group as KonvaGroup, Layer, Stage, Transformer } from "react-konva";
 
@@ -35,10 +36,14 @@ import {
 import {
   CANVAS_DISPLAY_HEIGHT,
   CANVAS_DISPLAY_WIDTH,
+  CANVAS_SCENE_PIXEL_RATIO,
   ELEMENT_ARRAY_KEY,
   toDisplayCoord,
   toRealCoord,
 } from "../../utils/renderLayoutModel";
+
+// Scene backing 固定使用 canonical 密度；Stage 與 hit canvas 仍維持 CSS 邏輯座標。
+Konva.pixelRatio = CANVAS_SCENE_PIXEL_RATIO;
 
 const DESKTOP_CANVAS_CAMERA = {
   mode: "manual",

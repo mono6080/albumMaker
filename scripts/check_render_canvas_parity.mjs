@@ -12,6 +12,10 @@ import {
   getFooterModel,
   toDisplayCoord,
 } from "../frontend/src/utils/renderLayoutModel.js";
+import {
+  getTemplateTextLabelRenderModel,
+  measureTextLabelRenderLayout,
+} from "../frontend/src/utils/textRenderModel.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const frontendRequire = createRequire(resolve(repoRoot, "frontend/package.json"));
@@ -20,6 +24,11 @@ await import(pathToFileURL(frontendRequire.resolve("konva/canvas-backend")).href
 
 const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 const layout = JSON.parse(await readFile(fixturePath, "utf8"));
+const tokenFixturePath = resolve(
+  repoRoot,
+  "tests/fixtures/template_text_variable_parity.json",
+);
+const tokenLayout = JSON.parse(await readFile(tokenFixturePath, "utf8"));
 
 function hexToRgb(hex) {
   const normalized = hex.replace("#", "");
@@ -110,6 +119,8 @@ function addPhotoSlot(layer, data, elemIndex, pageIndex) {
 
 function addTextLabel(layer, data) {
   const model = buildRenderLayoutModel({ text_labels: [data] }).elements[0];
+  const textModel = getTemplateTextLabelRenderModel(data);
+  const textLayout = measureTextLabelRenderLayout(textModel, Konva.Text);
   const group = makeGroup(model.box);
   group.add(new Konva.Rect({
     width: model.box.width,
@@ -120,21 +131,37 @@ function addTextLabel(layer, data) {
     dash: [4, 3],
     listening: false,
   }));
-  group.add(new Konva.Text({
-    x: 4,
-    y: 0,
-    width: model.box.width - 8,
-    height: model.box.height,
-    text: model.text,
-    fontSize: model.fontSize,
-    fill: model.fontColor,
-    align: model.align,
-    verticalAlign: "middle",
-    wrap: "word",
-    lineHeight: model.lineHeight,
+  const textClip = new Konva.Group({
+    scaleX: textModel.canvasScale,
+    scaleY: textModel.canvasScale,
+    clipX: 0,
+    clipY: 0,
+    clipWidth: textModel.width,
+    clipHeight: textModel.height,
     listening: false,
-  }));
+  });
+  for (let lineIndex = 0; lineIndex < textLayout.visibleLines.length; lineIndex += 1) {
+    textClip.add(new Konva.Text({
+      x: textLayout.lineXPositions[lineIndex],
+      y: textLayout.lineYPositions[lineIndex],
+      height: textLayout.lineHeightPx,
+      text: textLayout.visibleLines[lineIndex],
+      fontSize: textModel.fontSize,
+      fill: textModel.fontColor,
+      fontFamily: textModel.fontFamily,
+      fontStyle: textModel.fontStyle,
+      align: "left",
+      verticalAlign: "middle",
+      wrap: "none",
+      lineHeight: textModel.lineHeight,
+      letterSpacing: textModel.letterSpacing,
+      ...textModel.shadowProps,
+      listening: false,
+    }));
+  }
+  group.add(textClip);
   layer.add(group);
+  return textModel;
 }
 
 function addFooter(layer, footer) {
@@ -151,6 +178,7 @@ function addFooter(layer, footer) {
     verticalAlign: "middle",
     listening: false,
   }));
+  return model;
 }
 
 const stage = new Konva.Stage({ width: CANVAS_DISPLAY_WIDTH, height: CANVAS_DISPLAY_HEIGHT });
@@ -180,4 +208,22 @@ assertPixelNear(canvas, 55, 67, "#EEEEEE");
 assert.ok(countNonWhitePixels(canvas, { x: 58, y: 250, width: 300, height: 82 }) > 20);
 assert.ok(countNonWhitePixels(canvas, { x: 36, y: 1058, width: 250, height: 44 }) > 10);
 
-console.log("render parity fixture draws expected Konva canvas regions");
+const tokenStage = new Konva.Stage({
+  width: CANVAS_DISPLAY_WIDTH,
+  height: CANVAS_DISPLAY_HEIGHT,
+});
+const tokenLayer = new Konva.Layer();
+tokenStage.add(tokenLayer);
+const tokenLabelModel = addTextLabel(tokenLayer, tokenLayout.text_labels[0]);
+const tokenFooterModel = addFooter(tokenLayer, tokenLayout.footer);
+tokenLayer.draw();
+
+assert.equal(tokenLabelModel.text, tokenLayout.expected_text_label);
+assert.equal(tokenFooterModel.text, tokenLayout.expected_footer);
+const tokenCanvasTexts = tokenLayer.find("Text").map(node => node.text());
+assert.ok(tokenCanvasTexts.includes(tokenLayout.expected_text_label));
+assert.ok(tokenCanvasTexts.includes(tokenLayout.expected_footer));
+assert.ok(tokenCanvasTexts.every(textValue => !textValue.includes("{name}")));
+assert.ok(tokenCanvasTexts.every(textValue => !textValue.includes("{full_name}")));
+
+console.log("render parity fixtures draw expected regions and resolved template name tokens");

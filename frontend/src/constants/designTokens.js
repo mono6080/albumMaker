@@ -9,5 +9,8 @@ export const DESIGN_TOKENS = {
     "default_border_width": 8,
     "bottom_inset_multiplier": 3,
     "content_min_width": 60
-  }
+  },
+  "text_layout": { "measurement_scale": 64 },
+  "text_content": { "max_label_text_length": 200 },
+  "photo_transform": { "max_scale": 3.0 }
 };

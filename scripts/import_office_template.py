@@ -53,6 +53,7 @@ DEFAULT_UPLOADS_DIR = ROOT_DIR / "backend" / "uploads"
 
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 from services.draw_helpers import get_font, wrap_text  # noqa: E402  真正的渲染引擎用的字型/換行邏輯
+from services.text_layout import TEXT_LAYOUT_MEASUREMENT_SCALE  # noqa: E402
 
 CANVAS_W, CANVAS_H = 794, 1123
 PLACEHOLDER_TEXT = "{name}的文字標題的文字標題的文字標題的文字標題"
@@ -377,8 +378,14 @@ def estimate_placeholder_height(width_px: float, font_size: float, line_height: 
     因為預留字樣的寬度是固定的，但每個對話泡泡的框寬是照原始文案量出來的，
     原始文案越短、框越窄，同樣的長預留字樣就要排越多行，固定倍數在窄框上
     會算出不夠高的框，導致文字被裁切。"""
-    font = get_font(int(round(font_size)))
-    lines = wrap_text(PLACEHOLDER_TEXT, font, max(1, int(round(width_px))), _MEASURE_DRAW)
+    measurement_scale = TEXT_LAYOUT_MEASUREMENT_SCALE
+    font = get_font(font_size * measurement_scale)
+    lines = wrap_text(
+        PLACEHOLDER_TEXT,
+        font,
+        max(1, width_px * measurement_scale),
+        _MEASURE_DRAW,
+    )
     return max(2, len(lines)) * line_height_px + line_height_px * 0.3
 
 

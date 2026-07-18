@@ -9,6 +9,8 @@
 
 import json
 import hashlib
+import math
+import re
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -48,6 +50,49 @@ def lock_student_page_writes(student_ids):
 
 # ── pages_data 基本操作（空頁 schema 與雙形態相容的唯一真相來源） ──────────────
 
+_INTEGER_TEXT_PATTERN = re.compile(r"[+-]?\d+")
+
+
+def coerce_page_index_for_write(value, *, field: str = "page_index") -> int:
+    """將 API 頁面 identity 正規化為非負整數；拒絕 bool 與非整數 float。"""
+    if isinstance(value, bool):
+        raise HTTPException(status_code=422, detail=f"{field} 必須是非負整數")
+    if isinstance(value, int):
+        page_index = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise HTTPException(status_code=422, detail=f"{field} 必須是非負整數")
+        page_index = int(value)
+    elif isinstance(value, str) and _INTEGER_TEXT_PATTERN.fullmatch(value):
+        page_index = int(value)
+    else:
+        raise HTTPException(status_code=422, detail=f"{field} 必須是非負整數")
+    if page_index < 0:
+        raise HTTPException(status_code=422, detail=f"{field} 必須是非負整數")
+    return page_index
+
+
+def validate_student_page_indices(
+    page_indices,
+    *,
+    template_page_count: int,
+) -> tuple[int, ...]:
+    """所有學生頁面 mutation 的共同邊界檢查。"""
+    normalized = tuple(
+        coerce_page_index_for_write(value, field="page_index")
+        for value in page_indices
+    )
+    for page_index in normalized:
+        if page_index >= template_page_count:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"page_index {page_index} 超出模板頁面範圍 "
+                    f"0..{max(template_page_count - 1, 0)}"
+                ),
+            )
+    return normalized
+
 def parse_pages_data(raw: str) -> list:
     """安全解析 pages_data_json，格式損壞時回 422 而非 500。"""
     try:
@@ -84,7 +129,14 @@ def page_has_photo(pages_data: list, page_index: int, slot_id: int) -> bool:
 
 # ── 併發安全寫入入口 ──────────────────────────────────────────────────────────
 
-def mutate_student_pages(db, student: Student, mutate):
+def mutate_student_pages(
+    db,
+    student: Student,
+    mutate,
+    *,
+    page_indices,
+    template_page_count: int,
+):
     """在學生寫鎖內執行 pages_data 的 read-modify-write。
 
     流程：進鎖 → db.refresh(student) 拿最新 → mutate(pages_data)（可安全做
@@ -92,6 +144,10 @@ def mutate_student_pages(db, student: Student, mutate):
     mutate 的回傳值原樣帶出。呼叫端若在 async 路由，整段下放 threadpool
     （持鎖狀態不可跨 await）。
     """
+    validate_student_page_indices(
+        page_indices,
+        template_page_count=template_page_count,
+    )
     with _student_write_lock(student.id):
         db.refresh(student)
         pages_data = parse_pages_data(student.pages_data_json)

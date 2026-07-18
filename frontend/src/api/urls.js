@@ -3,11 +3,16 @@
 // 避免各元件各自拼接字串，確保路徑格式一致
 
 const API_BASE = "/api";
+export const PREVIEW_RENDER_BUILD_VERSION =
+  import.meta.env?.VITE_APP_BUILD_ID || "dev";
 
 const appendCacheVersion = (url, version) =>
   version === undefined || version === null || version === ""
     ? url
     : `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
+
+const appendRenderBuildVersion = (url) =>
+  `${url}${url.includes("?") ? "&" : "?"}render_build=${encodeURIComponent(PREVIEW_RENDER_BUILD_VERSION)}`;
 
 /** 專案預覽的瀏覽器快取版本：內容時間戳 + 模板版本。 */
 export const appendPreviewCacheVersion = (url, timestamp, templateRevision = null) => {
@@ -23,11 +28,11 @@ export const appendPreviewCacheVersion = (url, timestamp, templateRevision = nul
 
 /** 模板頁面背景圖的預覽端點 URL */
 export const buildTemplatePagePreviewUrl = (templateId, pageId) =>
-  `${API_BASE}/templates/${templateId}/pages/${pageId}/preview`;
+  appendRenderBuildVersion(`${API_BASE}/templates/${templateId}/pages/${pageId}/preview`);
 
 /** 模板雙頁合併預覽端點 URL */
 export const buildTemplateSpreadPreviewUrl = (templateId, startPageIndex) =>
-  `${API_BASE}/templates/${templateId}/spread-preview/${startPageIndex}`;
+  appendRenderBuildVersion(`${API_BASE}/templates/${templateId}/spread-preview/${startPageIndex}`);
 
 /** 模板貼圖素材的存取 URL */
 export const buildStickerUrl = (templateId, filename) =>
@@ -35,13 +40,23 @@ export const buildStickerUrl = (templateId, filename) =>
 
 // ── 專案相關 URL ──────────────────────────────────────────────────────────────
 
+/** 批次自動填入既有學生相本稱呼的 apiClient 相對路徑。 */
+export const buildStudentAlbumNamesAutoFillPath = (projectId) =>
+  `/projects/${projectId}/students/album-names/auto-fill`;
+
+/** 單一學生自動填入相本稱呼的 apiClient 相對路徑。 */
+export const buildStudentAlbumNameAutoFillPath = (projectId, studentId) =>
+  `/projects/${projectId}/students/${studentId}/album-name/auto-fill`;
+
 /** 專案層級對應文字的頁面預覽端點 URL */
 export const buildProjectPagePreviewUrl = (projectId, pageIndex) =>
-  `${API_BASE}/projects/${projectId}/preview/${pageIndex}`;
+  appendRenderBuildVersion(`${API_BASE}/projects/${projectId}/preview/${pageIndex}`);
 
 /** 學生個人頁面的渲染預覽端點 URL；scale 供縮圖清單抓小尺寸（0.4-1.0） */
 export const buildStudentPagePreviewUrl = (projectId, studentId, pageIndex, scale) =>
-  `${API_BASE}/projects/${projectId}/students/${studentId}/preview/${pageIndex}${scale ? `?scale=${scale}` : ""}`;
+  appendRenderBuildVersion(
+    `${API_BASE}/projects/${projectId}/students/${studentId}/preview/${pageIndex}${scale ? `?scale=${scale}` : ""}`,
+  );
 
 /** 學生個人照片的存取 URL */
 export const buildPhotoUrl = (projectId, studentId, pageIndex, slotId, version) =>

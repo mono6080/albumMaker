@@ -1,7 +1,11 @@
 import { useRef } from "react";
 import CompositionTextarea from "./CompositionTextarea";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "./ResponsiveActionGroup";
-import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
+import {
+  NAME_VARIABLE,
+  STUDENT_NAME_VARIABLES,
+  insertTextToken,
+} from "../utils/textVariables";
 
 export default function TextVariableTextarea({
   value,
@@ -21,9 +25,15 @@ export default function TextVariableTextarea({
   const statusText = hasOverride
     ? value === "" ? "空白輸出" : "自訂文字"
     : "使用預設文字";
+  const maxLength = Number(textareaProps.maxLength);
+  const clampText = nextValue => (
+    Number.isFinite(maxLength) && maxLength >= 0
+      ? nextValue.slice(0, maxLength)
+      : nextValue
+  );
 
   const updateText = (nextValue) => {
-    onChange(nextValue);
+    onChange(clampText(nextValue));
   };
 
   const handleRestoreDefault = () => {
@@ -36,19 +46,21 @@ export default function TextVariableTextarea({
     onScheduleSave?.();
   };
 
-  const handleInsertName = () => {
+  const handleInsertVariable = (token) => {
     const textarea = textareaRef.current;
     const next = insertTextToken(
       textarea?.value ?? visibleValue ?? "",
       textarea?.selectionStart,
       textarea?.selectionEnd,
-      NAME_VARIABLE,
+      token,
     );
-    onChange(next.text);
+    const boundedText = clampText(next.text);
+    onChange(boundedText);
     onScheduleSave?.();
     requestAnimationFrame(() => {
       textarea?.focus();
-      textarea?.setSelectionRange(next.caret, next.caret);
+      const caret = Math.min(next.caret, boundedText.length);
+      textarea?.setSelectionRange(caret, caret);
     });
   };
 
@@ -82,15 +94,21 @@ export default function TextVariableTextarea({
               設為空白
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleInsertName}
-            data-guide={buttonGuideId}
-            disabled={disabled}
-            className={`${responsiveActionItemClass} px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors whitespace-nowrap disabled:pointer-events-none disabled:opacity-40`}
-          >
-            插入 {NAME_VARIABLE}
-          </button>
+          {STUDENT_NAME_VARIABLES.map(variable => (
+            <button
+              key={variable.token}
+              type="button"
+              onClick={() => handleInsertVariable(variable.token)}
+              data-guide={variable.token === NAME_VARIABLE
+                ? buttonGuideId
+                : buttonGuideId ? `${buttonGuideId}-full-name` : undefined}
+              title={variable.description}
+              disabled={disabled}
+              className={`${responsiveActionItemClass} px-2 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors whitespace-nowrap disabled:pointer-events-none disabled:opacity-40`}
+            >
+              {variable.label} {variable.token}
+            </button>
+          ))}
         </ResponsiveActionGroup>
       </div>
       <CompositionTextarea

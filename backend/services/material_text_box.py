@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import deque
 from typing import Any
 
@@ -11,8 +12,93 @@ from PIL import Image, ImageFilter, ImageOps
 
 
 DETECTOR_VERSION = "alpha-inner-rect-v1"
-_MAX_WORKING_SIDE = 512
+MATERIAL_TEXT_ANALYSIS_MAX_SIDE = 512
 _MIN_IMAGE_SIDE = 8
+
+
+def _round_geometry(value: float) -> float:
+    """與前端 layoutGroupGeometry.js 的 roundGeometry() 使用相同 0.001 精度。"""
+    return math.floor((float(value) + float.fromhex("0x1.0000000000000p-52")) * 1000 + 0.5) / 1000
+
+
+def _normalize_angle(value: float) -> float:
+    return _round_geometry(((float(value) + 180) % 360 + 360) % 360 - 180)
+
+
+def _rotate_point(
+    point: tuple[float, float],
+    center: tuple[float, float],
+    degrees: float,
+) -> tuple[float, float]:
+    radians = float(degrees) * math.pi / 180
+    cosine = math.cos(radians)
+    sine = math.sin(radians)
+    delta_x = point[0] - center[0]
+    delta_y = point[1] - center[1]
+    return (
+        center[0] + delta_x * cosine - delta_y * sine,
+        center[1] + delta_x * sine + delta_y * cosine,
+    )
+
+
+def project_normalized_box_to_sticker(sticker: dict, normalized_box: dict) -> dict[str, float]:
+    """把分析框投影到貼圖目前的 world geometry。
+
+    跨語言鏡像：frontend/src/utils/layoutGroupGeometry.js 的
+    projectNormalizedBoxToSticker()；兩端案例由各自單元測試釘住。
+    """
+    values = [
+        normalized_box.get("x"),
+        normalized_box.get("y"),
+        normalized_box.get("width"),
+        normalized_box.get("height"),
+    ]
+    if not all(
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        for value in values
+    ):
+        raise ValueError("圖片分析框必須是有限數值")
+    normalized_x = float(normalized_box["x"])
+    normalized_y = float(normalized_box["y"])
+    normalized_width = float(normalized_box["width"])
+    normalized_height = float(normalized_box["height"])
+    if (
+        normalized_x < 0
+        or normalized_y < 0
+        or normalized_width <= 0
+        or normalized_height <= 0
+        or normalized_x + normalized_width > 1.000001
+        or normalized_y + normalized_height > 1.000001
+    ):
+        raise ValueError("圖片分析框超出素材範圍")
+
+    sticker_x = float(sticker.get("x", 0) or 0)
+    sticker_y = float(sticker.get("y", 0) or 0)
+    sticker_width = float(sticker.get("width", 0) or 0)
+    sticker_height = float(sticker.get("height", 0) or 0)
+    if sticker_width <= 0 or sticker_height <= 0:
+        raise ValueError("圖片素材尺寸無效")
+    rotation = float(sticker.get("rotation", 0) or 0)
+    sticker_center = (
+        sticker_x + sticker_width / 2,
+        sticker_y + sticker_height / 2,
+    )
+    local_center = (
+        sticker_center[0] + (normalized_x + normalized_width / 2 - 0.5) * sticker_width,
+        sticker_center[1] + (normalized_y + normalized_height / 2 - 0.5) * sticker_height,
+    )
+    world_center = _rotate_point(local_center, sticker_center, rotation)
+    width = normalized_width * sticker_width
+    height = normalized_height * sticker_height
+    return {
+        "x": _round_geometry(world_center[0] - width / 2),
+        "y": _round_geometry(world_center[1] - height / 2),
+        "width": _round_geometry(width),
+        "height": _round_geometry(height),
+        "rotation": _normalize_angle(rotation),
+    }
 
 
 def decode_rgba_image(image: Image.Image) -> Image.Image:
@@ -242,7 +328,7 @@ def analyze_material_text_box(image: Image.Image) -> dict[str, Any]:
     if min(rgba.size) < _MIN_IMAGE_SIDE:
         return _unavailable("image_too_small")
 
-    scale = min(1.0, _MAX_WORKING_SIDE / max(rgba.size))
+    scale = min(1.0, MATERIAL_TEXT_ANALYSIS_MAX_SIDE / max(rgba.size))
     if scale < 1.0:
         rgba = rgba.resize(
             (max(1, round(rgba.width * scale)), max(1, round(rgba.height * scale))),

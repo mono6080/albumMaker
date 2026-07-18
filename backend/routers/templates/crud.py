@@ -3,7 +3,6 @@
 # 路由層僅負責 HTTP 接收與回應，複製流程委派給 services/template_service
 
 import json
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from sqlalchemy import case, func
@@ -195,6 +194,8 @@ def replace_pages_snapshot(
 @router.post("/{template_id}/pages", deprecated=True)
 def add_page(
     template_id: int,
+    confirm_project_sync: bool = Query(False),
+    project_sync_change_hash: str | None = Query(None, min_length=16, max_length=128),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
@@ -213,7 +214,8 @@ def add_page(
         "logo": None,
     }
 
-    client_id = f"legacy-add-{uuid4().hex}"
+    # 舊端點的首次 409 與確認 retry 必須產生相同 change hash。
+    client_id = f"legacy-add-{template.id}-{template.revision}"
     result = replace_template_pages_snapshot(
         template,
         [page.id for page in template.pages],
@@ -226,6 +228,8 @@ def add_page(
         ],
         db,
         expected_revision=template.revision,
+        confirm_project_sync=confirm_project_sync,
+        project_sync_change_hash=project_sync_change_hash,
     )
     new_page = next(page for page in result["pages"] if page["client_id"] == client_id)
     return {"id": new_page["id"], "page_number": new_page["page_number"]}
@@ -236,6 +240,8 @@ def update_page_layout(
     template_id: int,
     page_id: int,
     layout: dict,
+    confirm_project_sync: bool = Query(False),
+    project_sync_change_hash: str | None = Query(None, min_length=16, max_length=128),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
@@ -256,6 +262,8 @@ def update_page_layout(
         ],
         db,
         expected_revision=template.revision,
+        confirm_project_sync=confirm_project_sync,
+        project_sync_change_hash=project_sync_change_hash,
     )
     return {"ok": True}
 
@@ -264,6 +272,8 @@ def update_page_layout(
 def delete_page(
     template_id: int,
     page_id: int,
+    confirm_project_sync: bool = Query(False),
+    project_sync_change_hash: str | None = Query(None, min_length=16, max_length=128),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
@@ -280,5 +290,7 @@ def delete_page(
         ],
         db,
         expected_revision=template.revision,
+        confirm_project_sync=confirm_project_sync,
+        project_sync_change_hash=project_sync_change_hash,
     )
     return {"ok": True}

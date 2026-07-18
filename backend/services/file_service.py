@@ -10,6 +10,11 @@ from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
+from services.render_image_loader import (
+    MAX_BOUNDED_DECODE_PIXELS,
+    open_bounded_storage_image,
+)
+
 _BROWSER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _HEIF_IMAGE_TYPES = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
 _HEIF_EXTENSIONS = {".heic", ".heif", ".hif"}
@@ -88,19 +93,29 @@ def content_versioned_filename(
     return f"{stem}_{revision}{suffix}"
 
 
-def _assert_image_dimensions(image: Image.Image) -> None:
+def _assert_image_dimensions(
+    image: Image.Image,
+    *,
+    max_pixels: int = MAX_IMAGE_PIXELS,
+) -> None:
     width, height = image.size
     if width <= 0 or height <= 0:
         raise HTTPException(status_code=415, detail="圖片尺寸無效")
-    if width * height > MAX_IMAGE_PIXELS:
+    if width * height > max_pixels:
         raise HTTPException(status_code=413, detail="圖片像素尺寸過大，請先降低解析度")
 
 
-def _validate_image_bytes(file_bytes: bytes) -> None:
+def _validate_image_bytes(
+    file_bytes: bytes,
+    *,
+    max_pixels: int = MAX_IMAGE_PIXELS,
+) -> tuple[int, int]:
     try:
         with Image.open(io.BytesIO(file_bytes)) as image:
-            _assert_image_dimensions(image)
+            _assert_image_dimensions(image, max_pixels=max_pixels)
+            image_size = image.size
             image.verify()
+            return image_size
     except HTTPException:
         raise
     except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
@@ -134,20 +149,29 @@ PHOTO_THUMBNAIL_QUALITY = 78
 
 
 def build_photo_thumbnail_jpeg(storage, photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> bytes:
-    """從原圖生成長邊上限 size 的 JPEG 縮圖（照片管理列表用）。"""
-    image = storage.open_image(photo_key)
+    """在完整解碼前先縮到目標框，再生成照片管理列表 JPEG。"""
+    image = open_bounded_storage_image(
+        storage,
+        photo_key,
+        target_size=(size, size),
+        fit="contain",
+        source_pixel_limit=MAX_BOUNDED_DECODE_PIXELS,
+    )
+    thumbnail = None
     try:
-        image.load()
-        thumbnail = image.copy()
+        thumbnail = _flatten_to_rgb(image)
+        buffer = io.BytesIO()
+        thumbnail.save(
+            buffer,
+            format="JPEG",
+            quality=PHOTO_THUMBNAIL_QUALITY,
+            optimize=True,
+        )
+        return buffer.getvalue()
     finally:
+        if thumbnail is not None and thumbnail is not image:
+            thumbnail.close()
         image.close()
-
-    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-    thumbnail.thumbnail((size, size), resample=resample)
-
-    buffer = io.BytesIO()
-    _flatten_to_rgb(thumbnail).save(buffer, format="JPEG", quality=PHOTO_THUMBNAIL_QUALITY, optimize=True)
-    return buffer.getvalue()
 
 
 def get_photo_thumbnail_key(photo_key: str, size: int = PHOTO_THUMBNAIL_SIZE) -> str:
@@ -184,14 +208,23 @@ def get_sticker_key(template_id: int, original_filename: str) -> str:
     return f"templates/tmpl{template_id}/stickers/{safe_filename}"
 
 
-async def read_and_validate_image(file: UploadFile, max_mb: int = 10) -> bytes:
+async def read_and_validate_image(
+    file: UploadFile,
+    max_mb: int = 10,
+    *,
+    max_pixels: int = MAX_IMAGE_PIXELS,
+) -> bytes:
     """讀取並驗證上傳圖片的類型與大小，回傳 bytes；不符則拋 HTTPException。"""
     if file.content_type not in _ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=415, detail="僅支援 JPEG、PNG、WebP 格式")
     file_bytes = await file.read()
     if len(file_bytes) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {max_mb} MB")
-    await run_in_threadpool(_validate_image_bytes, file_bytes)
+    await run_in_threadpool(
+        _validate_image_bytes,
+        file_bytes,
+        max_pixels=max_pixels,
+    )
     return file_bytes
 
 
@@ -210,7 +243,7 @@ def _flatten_to_rgb(image: Image.Image) -> Image.Image:
         background = Image.new("RGB", rgba.size, (255, 255, 255))
         background.paste(rgba, mask=rgba.getchannel("A"))
         return background
-    return image.convert("RGB")
+    return image if image.mode == "RGB" else image.convert("RGB")
 
 
 # 列印輸出（A4@300dpi）長邊為 3508px，再高的解析度輸出用不到；
@@ -236,6 +269,16 @@ def _compress_image_to_jpeg(file_bytes: bytes, target_mb: int, is_heif: bool = F
             _register_heif_opener()
         with Image.open(io.BytesIO(file_bytes)) as raw_image:
             _assert_image_dimensions(raw_image)
+            raw_image.draft(
+                None,
+                (PHOTO_MAX_LONG_EDGE, PHOTO_MAX_LONG_EDGE),
+            )
+            if max(raw_image.size) > PHOTO_MAX_LONG_EDGE:
+                raw_image.thumbnail(
+                    (PHOTO_MAX_LONG_EDGE, PHOTO_MAX_LONG_EDGE),
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=3.0,
+                )
             image = _flatten_to_rgb(ImageOps.exif_transpose(raw_image))
             image.load()
     except HTTPException:
@@ -286,12 +329,16 @@ async def read_and_process_photo_upload(
         raise HTTPException(status_code=413, detail=f"檔案過大，上限 {hard_limit_mb} MB")
 
     if not is_heif and len(file_bytes) <= compress_over_mb * _BYTES_PER_MB:
-        await run_in_threadpool(_validate_image_bytes, file_bytes)
-        return ProcessedImageUpload(
-            data=file_bytes,
-            filename=sanitize_upload_filename(file.filename, "photo"),
-            compressed=False,
+        image_width, image_height = await run_in_threadpool(
+            _validate_image_bytes,
+            file_bytes,
         )
+        if max(image_width, image_height) <= PHOTO_MAX_LONG_EDGE:
+            return ProcessedImageUpload(
+                data=file_bytes,
+                filename=sanitize_upload_filename(file.filename, "photo"),
+                compressed=False,
+            )
 
     compressed_bytes = await run_in_threadpool(_compress_image_to_jpeg, file_bytes, target_mb, is_heif)
     return ProcessedImageUpload(

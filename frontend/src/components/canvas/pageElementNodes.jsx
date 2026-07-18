@@ -3,6 +3,7 @@
 // 更新與選取回呼）一律以 ctx 參數傳入，不建立額外 context。
 
 import { Fragment } from "react";
+import Konva from "konva";
 import { Group, Rect, Text as KonvaText } from "react-konva";
 
 import { getFontCss, isFontBold } from "../../constants/fonts";
@@ -22,6 +23,13 @@ import {
   snapPhotoSlotStandardRatio,
 } from "../../utils/photoFrameGeometry.js";
 import { isFillableTextLabel } from "../../utils/textLabelRoles";
+import {
+  getTextLabelClipGroupProps,
+  getTextLabelLineRenderProps,
+  getTextLabelRenderModel,
+  getTemplateTextLabelRenderModel,
+  measureTextLabelRenderLayout,
+} from "../../utils/textRenderModel.js";
 import {
   OBJECT_HOVER_OUTLINE_NAME,
   OBJECT_HOVER_STROKE,
@@ -298,18 +306,7 @@ export function makePhotoControlProps(data, {
 // ── 各元素節點渲染 ──────────────────────────────────────────────────────────
 
 export function getTextShadowProps(data, typographyScale = 1) {
-  const shadowEnabled = !!(data.text_shadow_enabled ?? false);
-  if (!shadowEnabled) return {};
-  const safeScale = Number.isFinite(typographyScale) && typographyScale > 0 ? typographyScale : 1;
-
-  return {
-    shadowEnabled: true,
-    shadowColor: data.text_shadow_color ?? "#000000",
-    shadowOpacity: (data.text_shadow_opacity ?? 120) / 255,
-    shadowOffsetX: toDisplayCoord(data.text_shadow_offset_x ?? 3) / safeScale,
-    shadowOffsetY: toDisplayCoord(data.text_shadow_offset_y ?? 3) / safeScale,
-    shadowBlur: toDisplayCoord(data.text_shadow_blur ?? 4) * 1.74 / safeScale,
-  };
+  return getTextLabelRenderModel(data, typographyScale).shadowProps;
 }
 
 export function renderPhotoSlotNode(
@@ -411,8 +408,8 @@ export function renderTextLabelNode(
   const safeTypographyScale = Number.isFinite(typographyScale) && typographyScale > 0
     ? typographyScale
     : 1;
-  const fontSize = Math.max(8, toDisplayCoord(data.font_size ?? 24)) / safeTypographyScale;
-  const textInset = 4 / safeTypographyScale;
+  const textModel = getTemplateTextLabelRenderModel(data, safeTypographyScale);
+  const textLayout = measureTextLabelRenderLayout(textModel, Konva.Text);
   const isFillable = isFillableTextLabel(data);
   const showHoverOutline = isHovered && !isSelected;
   return (
@@ -432,23 +429,34 @@ export function renderTextLabelNode(
         dash={[]}
         listening={false}
       />
-      <KonvaText
-        name="typography-content"
-        x={textInset} y={0}
-        width={Math.max(1, displayW - textInset * 2)} height={displayH}
-        text={(data.text ?? "").substring(0, 60)}
-        fontSize={fontSize}
-        fill={data.font_color ?? "#333333"}
-        fontFamily={getFontCss(data.font_family)}
-        fontStyle={isFontBold(data.font_family) ? "bold" : "normal"}
-        align={data.text_align ?? "center"}
-        verticalAlign="middle"
-        wrap="word"
-        lineHeight={data.line_height ?? 1.4}
-        letterSpacing={toDisplayCoord(data.letter_spacing ?? 0) / safeTypographyScale}
-        {...getTextShadowProps(data, safeTypographyScale)}
-        listening={false}
-      />
+      <Group
+        {...getTextLabelClipGroupProps(textModel)}
+      >
+        <KonvaText
+          name="typography-content"
+          visible={false}
+          x={0} y={0}
+          width={textModel.width} height={textModel.height}
+          text={textModel.text}
+          fontSize={textModel.fontSize}
+          fill={textModel.fontColor}
+          fontFamily={textModel.fontFamily}
+          fontStyle={textModel.fontStyle}
+          align={textModel.align}
+          verticalAlign="middle"
+          wrap="word"
+          lineHeight={textModel.lineHeight}
+          letterSpacing={textModel.letterSpacing}
+          listening={false}
+        />
+        {textLayout.visibleLines.map((_, lineIndex) => (
+          <KonvaText
+            key={`text-line-${lineIndex}`}
+            name="typography-line"
+            {...getTextLabelLineRenderProps(textModel, textLayout, lineIndex)}
+          />
+        ))}
+      </Group>
       {/* 透明點擊感應區 */}
       <Rect width={displayW} height={displayH} fill="transparent" />
     </Group>

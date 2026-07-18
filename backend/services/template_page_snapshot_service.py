@@ -2,11 +2,16 @@
 # 將頁面新增、刪除、排序與版面更新放在同一個資料庫 transaction 中。
 
 import json
+import math
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from database import Template, TemplatePage
+from services.layout_geometry_validation import (
+    validate_layout_geometry,
+    validate_template_page_count,
+)
 from services.layout_group_validation import validate_layout_groups
 from services.student_pages import lock_student_page_writes
 from services.template_project_sync_service import (
@@ -15,6 +20,46 @@ from services.template_project_sync_service import (
     require_structural_sync_confirmation,
 )
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
+
+
+_TEXT_TYPOGRAPHY_RANGES = {
+    "font_size": (1.0, 96.0),
+    "line_height": (0.1, 10.0),
+    "letter_spacing": (-100.0, 100.0),
+}
+
+
+def _validate_text_label_typography(layout: dict) -> list[dict]:
+    """限制會進入 Pillow 配置／字型載入的數值，避免 NaN、除零與巨量配置。"""
+    errors = []
+    text_labels = layout.get("text_labels", [])
+    if not isinstance(text_labels, list):
+        return errors
+    for index, label in enumerate(text_labels):
+        if not isinstance(label, dict):
+            continue
+        for field_name, (minimum, maximum) in _TEXT_TYPOGRAPHY_RANGES.items():
+            path = f"text_labels[{index}].{field_name}"
+            if field_name not in label:
+                continue
+            value = label[field_name]
+            try:
+                is_finite_number = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                )
+            except (OverflowError, ValueError):
+                is_finite_number = False
+            if not is_finite_number:
+                errors.append({"path": path, "message": "must be a finite number"})
+                continue
+            if not minimum <= float(value) <= maximum:
+                errors.append({
+                    "path": path,
+                    "message": f"must be between {minimum:g} and {maximum:g}",
+                })
+    return errors
 
 
 def normalize_template_page_layout(layout: dict) -> dict:
@@ -42,6 +87,24 @@ def normalize_template_page_layout(layout: dict) -> dict:
                 "errors": group_errors,
             },
         )
+    typography_errors = _validate_text_label_typography(normalized_layout)
+    if typography_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_layout_typography",
+                "errors": typography_errors,
+            },
+        )
+    geometry_errors = validate_layout_geometry(normalized_layout)
+    if geometry_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_layout_geometry",
+                "errors": geometry_errors,
+            },
+        )
     return normalized_layout
 
 
@@ -57,6 +120,9 @@ def _validate_snapshot(
     expected_page_ids: list[int],
     page_items: list[dict],
 ) -> tuple[list[TemplatePage], list[dict]]:
+    page_count_errors = validate_template_page_count(len(page_items))
+    if page_count_errors:
+        raise _invalid_snapshot(page_count_errors[0]["message"])
     current_pages = list(template.pages)
     current_page_ids = [page.id for page in current_pages]
     if len(expected_page_ids) != len(set(expected_page_ids)):

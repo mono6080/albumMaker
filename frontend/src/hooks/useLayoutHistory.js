@@ -29,9 +29,11 @@ export function getEditorPageKey(page) {
 // onLayoutRestored：undo/redo 套用歷史版面後呼叫；編輯器可依快照校正隔離與選取。
 export default function useLayoutHistory({ currentPage, pageLayout, setPageLayout, onLayoutRestored }) {
   const draftLayouts = useRef({});
+  const pageLayoutBaselines = useRef({});
   const layoutHistories = useRef({});
   const activeHistoryGroupRef = useRef(null);
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+  const [, setDraftRevision] = useState(0);
 
   const endHistoryGroup = useCallback((historyGroup) => {
     const activeHistoryGroup = activeHistoryGroupRef.current;
@@ -56,6 +58,7 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
   const beginPageSession = useCallback((page) => {
     endHistoryGroup();
     const pageKey = getEditorPageKey(page);
+    pageLayoutBaselines.current[pageKey] = cloneLayout(page.layout);
     getPageHistory(layoutHistories.current, pageKey);
     refreshHistoryAvailability(pageKey);
     return cloneLayout(draftLayouts.current[pageKey] ?? page.layout);
@@ -65,6 +68,7 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
   const dropPageHistory = useCallback((pageId) => {
     endHistoryGroup();
     delete draftLayouts.current[pageId];
+    delete pageLayoutBaselines.current[pageId];
     delete layoutHistories.current[pageId];
   }, [endHistoryGroup]);
 
@@ -97,6 +101,47 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     setPageLayout(nextSnapshot);
     refreshHistoryAvailability(pageId);
   }, [currentPage, endHistoryGroup, pageLayout, setPageLayout, refreshHistoryAvailability]);
+
+  // 非同步素材上傳可在切頁後完成；將結果寫回發起上傳的頁面草稿，
+  // 僅當該頁仍是目前頁面時才更新畫布與 undo/redo 按鈕。
+  const commitPageLayoutForPage = useCallback((
+    page,
+    layoutUpdater,
+    { activePageKey = null } = {},
+  ) => {
+    const pageKey = getEditorPageKey(page);
+    if (!pageKey || !page?.layout) return { committed: false, isActive: false };
+    const baseLayout = draftLayouts.current[pageKey]
+      ?? pageLayoutBaselines.current[pageKey]
+      ?? page.layout;
+    const nextLayout = typeof layoutUpdater === "function"
+      ? layoutUpdater(baseLayout)
+      : layoutUpdater;
+    if (!nextLayout || layoutsEqual(baseLayout, nextLayout)) {
+      return {
+        committed: false,
+        isActive: String(activePageKey) === String(pageKey),
+      };
+    }
+
+    const history = getPageHistory(layoutHistories.current, pageKey);
+    history.undo.push(cloneLayout(baseLayout));
+    if (history.undo.length > MAX_LAYOUT_HISTORY) history.undo.shift();
+    history.redo = [];
+    const nextSnapshot = cloneLayout(nextLayout);
+    draftLayouts.current[pageKey] = nextSnapshot;
+
+    const isActive = String(activePageKey) === String(pageKey);
+    if (isActive) {
+      endHistoryGroup();
+      activeHistoryGroupRef.current = null;
+      setPageLayout(nextSnapshot);
+      refreshHistoryAvailability(pageKey);
+    } else {
+      setDraftRevision(revision => revision + 1);
+    }
+    return { committed: true, isActive };
+  }, [endHistoryGroup, refreshHistoryAvailability, setPageLayout]);
 
   const undoLayout = useCallback(() => {
     endHistoryGroup();
@@ -134,9 +179,16 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
   // 儲存請求期間若又有編輯，引用不同的新版草稿會保留並搬到正式 page id。
   const reconcileSavedPages = useCallback((pageMappings) => {
     endHistoryGroup();
-    for (const { sourcePageId, savedPageId, savedDraftReference } of pageMappings) {
+    for (const {
+      sourcePageId,
+      savedPageId,
+      savedDraftReference,
+      savedLayout,
+    } of pageMappings) {
       const sourceKey = String(sourcePageId);
       const targetKey = String(savedPageId);
+      pageLayoutBaselines.current[targetKey] = cloneLayout(savedLayout);
+      if (sourceKey !== targetKey) delete pageLayoutBaselines.current[sourceKey];
       const currentDraft = draftLayouts.current[sourceKey];
       if (currentDraft !== undefined) {
         if (sourceKey === targetKey) {
@@ -162,6 +214,7 @@ export default function useLayoutHistory({ currentPage, pageLayout, setPageLayou
     beginPageSession,
     dropPageHistory,
     commitPageLayout,
+    commitPageLayoutForPage,
     endHistoryGroup,
     undoLayout,
     redoLayout,

@@ -266,6 +266,7 @@ export default function TemplateEditor() {
     beginPageSession,
     dropPageHistory,
     commitPageLayout,
+    commitPageLayoutForPage,
     endHistoryGroup,
     undoLayout,
     redoLayout,
@@ -380,6 +381,7 @@ export default function TemplateEditor() {
       return;
     }
     const backgroundPageId = currentPage.id;
+    const backgroundPageKey = getEditorPageKey(currentPage);
     const expectedRevision = templateRef.current?.revision;
     if (expectedRevision == null) {
       toast.error("找不到模板版本，請重新整理後再試");
@@ -405,9 +407,11 @@ export default function TemplateEditor() {
       };
       templateRef.current = nextTemplate;
       setTemplate(nextTemplate);
-      setBackgroundUrl(
-        `/api/templates/${templateId}/pages/${backgroundPageId}/background?t=${Date.now()}`
-      );
+      if (String(activePageSessionIdRef.current) === String(backgroundPageKey)) {
+        setBackgroundUrl(
+          `/api/templates/${templateId}/pages/${backgroundPageId}/background?t=${Date.now()}`
+        );
+      }
       toast.success(buildTemplateSyncSuccessMessage("背景已上傳", response.data?.sync));
     } catch (error) {
       const detail = error?.response?.data?.detail;
@@ -420,9 +424,18 @@ export default function TemplateEditor() {
   };
 
   const handleStickerUpload = async (stickerFile) => {
-    if (!stickerFile) return;
+    if (!stickerFile || !currentPage) return;
+    const stickerPage = currentPage;
+    const stickerPageKey = getEditorPageKey(currentPage);
     try {
       const response = await uploadSticker(templateId, stickerFile);
+      const pageStillExists = templateRef.current?.pages.some(
+        page => String(getEditorPageKey(page)) === String(stickerPageKey),
+      );
+      if (!pageStillExists) {
+        toast.error("貼圖上傳完成，但原頁面已被刪除");
+        return;
+      }
       const {
         path: stickerPath,
         filename: stickerFilename,
@@ -441,14 +454,23 @@ export default function TemplateEditor() {
         rotation: 0,
         ...(stickerAssetRevision ? { asset_revision: stickerAssetRevision } : {}),
       };
-      commitPageLayout(currentLayout => ({
-        ...currentLayout,
-        stickers: [...(currentLayout.stickers || []), newSticker],
-      }));
-      setIsolationPath([]);
-      setInspectorTab("properties");
-      setSelectedElement({ type: "sticker", id: newSticker.id });
-      toast.success("貼圖已上傳");
+      const commitResult = commitPageLayoutForPage(
+        stickerPage,
+        currentLayout => ({
+          ...currentLayout,
+          stickers: [...(currentLayout.stickers || []), newSticker],
+        }),
+        { activePageKey: activePageSessionIdRef.current },
+      );
+      if (commitResult.isActive) {
+        setIsolationPath([]);
+        setInspectorTab("properties");
+        setSelectedElement({ type: "sticker", id: newSticker.id });
+        toast.success("貼圖已上傳");
+      } else {
+        const pageNumber = Number(stickerPage.page_number) + 1;
+        toast.success(`貼圖已加入第 ${pageNumber} 頁`);
+      }
     } catch {
       toast.error("上傳失敗");
     }

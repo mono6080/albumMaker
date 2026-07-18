@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ class TemplatePageDelta:
     removed_photo_ids: set[str]
     added_text_ids: set[str]
     removed_text_ids: set[str]
+    deleted_photo_ids: set[str] = field(default_factory=set)
+    deleted_text_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -144,13 +147,32 @@ def _parse_json(raw: str | None, expected_type, *, field: str, project_id: int, 
 def _coerce_page_index(value, *, field: str, project_id: int, student_id=None) -> int:
     if isinstance(value, bool):
         raise _invalid_project_data(field, project_id=project_id, student_id=student_id)
-    try:
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise _invalid_project_data(field, project_id=project_id, student_id=student_id)
         page_index = int(value)
-    except (TypeError, ValueError) as exc:
-        raise _invalid_project_data(field, project_id=project_id, student_id=student_id) from exc
+    else:
+        try:
+            page_index = int(value)
+        except (TypeError, ValueError) as exc:
+            raise _invalid_project_data(field, project_id=project_id, student_id=student_id) from exc
     if page_index < 0:
         raise _invalid_project_data(field, project_id=project_id, student_id=student_id)
     return page_index
+
+
+def _coerce_template_page_id(
+    value,
+    *,
+    project_id: int,
+    student_id: int,
+) -> int:
+    return _coerce_page_index(
+        value,
+        field="pages_data_json.template_page_id 格式不正確，模板未儲存",
+        project_id=project_id,
+        student_id=student_id,
+    )
 
 
 def _student_entries_by_page_id(
@@ -171,8 +193,12 @@ def _student_entries_by_page_id(
         raw_page_id = entry.get("template_page_id")
         if raw_page_id is not None:
             try:
-                page_id = int(raw_page_id)
-            except (TypeError, ValueError):
+                page_id = _coerce_template_page_id(
+                    raw_page_id,
+                    project_id=project_id,
+                    student_id=student_id,
+                )
+            except HTTPException:
                 orphans.append(entry)
                 continue
             if page_id not in old_ids:
@@ -239,6 +265,19 @@ def _visible_binding_ids(layout: dict) -> tuple[set[str], set[str]]:
         element_id = canonical_id(element.get("id"))
         (photo_ids if element_type == "photo" else label_ids).add(element_id)
     return photo_ids, label_ids
+
+
+def _all_binding_ids(layout: dict) -> tuple[set[str], set[str]]:
+    """取得實際仍存在的 binding；visible=false 只是隱藏，不代表刪除。"""
+    result: list[set[str]] = [set(), set()]
+    for result_index, collection_name in enumerate(("photo_slots", "text_labels")):
+        collection = layout.get(collection_name, [])
+        if not isinstance(collection, list):
+            continue
+        for element in collection:
+            if isinstance(element, dict) and element.get("id") is not None:
+                result[result_index].add(canonical_id(element["id"]))
+    return result[0], result[1]
 
 
 def _content_counts(entry: dict | None) -> tuple[int, int, int]:
@@ -351,15 +390,23 @@ def prepare_template_sync_plan(
             render_changed = True
         old_photos, old_labels = _visible_binding_ids(old_layout)
         new_photos, new_labels = _visible_binding_ids(new_layout)
+        old_all_photos, old_all_labels = _all_binding_ids(old_layout)
+        new_all_photos, new_all_labels = _all_binding_ids(new_layout)
         page_deltas_by_id[page_id] = TemplatePageDelta(
             page_id=page_id,
             removed_photo_ids=old_photos - new_photos,
             removed_text_ids=old_labels - new_labels,
             added_photo_ids=new_photos - old_photos,
             added_text_ids=new_labels - old_labels,
+            deleted_photo_ids=old_all_photos - new_all_photos,
+            deleted_text_ids=old_all_labels - new_all_labels,
         )
-        removed_photo_slots += len(old_photos - new_photos)
-        removed_labels += len(old_labels - new_labels)
+        removed_photo_slots += len(
+            (old_photos - new_photos) | (old_all_photos - new_all_photos)
+        )
+        removed_labels += len(
+            (old_labels - new_labels) | (old_all_labels - new_all_labels)
+        )
         added_photo_slots += len(new_photos - old_photos)
         added_labels += len(new_labels - old_labels)
 
@@ -373,6 +420,8 @@ def prepare_template_sync_plan(
                 page_delta.removed_text_ids,
                 page_delta.added_photo_ids,
                 page_delta.added_text_ids,
+                page_delta.deleted_photo_ids,
+                page_delta.deleted_text_ids,
             )
         )
     )
@@ -433,12 +482,17 @@ def prepare_template_sync_plan(
                 student_labels = entry.get("label_texts") or {}
                 if isinstance(photos, dict):
                     affected_photos += sum(
-                        str(slot_id) in page_delta.removed_photo_ids and bool(value)
+                        str(slot_id) in (
+                            page_delta.removed_photo_ids | page_delta.deleted_photo_ids
+                        )
+                        and bool(value)
                         for slot_id, value in photos.items()
                     )
                 if isinstance(student_labels, dict):
                     affected_student_labels += sum(
-                        str(label_id) in page_delta.removed_text_ids
+                        str(label_id) in (
+                            page_delta.removed_text_ids | page_delta.deleted_text_ids
+                        )
                         for label_id in student_labels
                     )
             student_states.append(StudentSyncState(
@@ -459,7 +513,9 @@ def prepare_template_sync_plan(
             page_labels = labels_by_page_id.get(page_id) or {}
             if isinstance(page_labels, dict):
                 affected_project_labels += sum(
-                    str(label_id) in page_delta.removed_text_ids
+                    str(label_id) in (
+                        page_delta.removed_text_ids | page_delta.deleted_text_ids
+                    )
                     for label_id in page_labels
                 )
 
@@ -640,11 +696,16 @@ def apply_template_project_sync(
     for state in plan.project_states:
         project = state.project
         if plan.structural_change:
-            remapped_labels = {
-                str(new_index_by_id[page_id]): value
-                for page_id, value in state.labels_by_page_id.items()
-                if page_id in retained_ids
-            }
+            remapped_labels = {}
+            for page_id, value in state.labels_by_page_id.items():
+                if page_id not in retained_ids:
+                    continue
+                remapped_value = deepcopy(value)
+                page_delta = plan.page_deltas_by_id.get(page_id)
+                if isinstance(remapped_value, dict) and page_delta is not None:
+                    for label_id in page_delta.deleted_text_ids:
+                        remapped_value.pop(label_id, None)
+                remapped_labels[str(new_index_by_id[page_id])] = remapped_value
             project.label_texts_json = json.dumps(remapped_labels, ensure_ascii=False)
         project.template_revision = next_revision
         if plan.render_changed:
@@ -674,6 +735,16 @@ def apply_template_project_sync(
                     page_entry["template_page_id"] = page.id
                     page_entry.setdefault("photos", {})
                     page_entry.setdefault("label_texts", {})
+                    page_delta = plan.page_deltas_by_id.get(page.id)
+                    if page_delta is not None:
+                        photos = page_entry.get("photos")
+                        if isinstance(photos, dict):
+                            for slot_id in page_delta.deleted_photo_ids:
+                                photos.pop(slot_id, None)
+                        label_texts = page_entry.get("label_texts")
+                        if isinstance(label_texts, dict):
+                            for label_id in page_delta.deleted_text_ids:
+                                label_texts.pop(label_id, None)
                     next_pages_data.append(page_entry)
                 removed_entries += sum(page_id not in retained_ids for page_id in entries)
                 student.pages_data_json = json.dumps(next_pages_data, ensure_ascii=False)

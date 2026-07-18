@@ -257,6 +257,7 @@ export default function useTemplateEditorDocument({
               sourcePageId: editorKey,
               savedPageId: editorKey,
               savedDraftReference: snapshotsByKey.get(String(editorKey))?.draftReference,
+              savedLayout: page.layout,
             };
           }));
           persistedPageIdsRef.current = nextTemplate.pages.map(page => page.id);

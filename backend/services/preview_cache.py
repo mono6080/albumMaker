@@ -1,6 +1,6 @@
 # 預覽圖的內容定址快取（cache-aside）
 #
-# key = {prefix}/{payload 內容 hash}.jpg：layout 與 page_data 全文都在 hash 內，
+# key = {prefix}/{payload 內容 hash}.png：layout 與 page_data 全文都在 hash 內，
 # 任何實質變更都會換 key，因此不需要失效通知；無關的編輯（例如別的學生的照片）
 # 不會作廢既有快取。讀寫細節（cache-only 寫入、limiter 內二次查）都在這裡，
 # 路由層只負責權限檢查與組 Response。
@@ -17,9 +17,8 @@ from services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
-PREVIEW_JPEG_QUALITY = 80
-# v7：圖層 visible 契約會影響像素，locked／layer_name 不影響。
-PREVIEW_CACHE_VERSION = "project-preview-v7-layer-visibility"
+# v10：背景與貼圖在色彩轉換前先縮到 canonical 實際輸出框。
+PREVIEW_CACHE_VERSION = "project-preview-v10-bounded-assets"
 
 
 def preview_scale_key(scale: float) -> str:
@@ -41,17 +40,26 @@ def _preview_payload_hash(payload: dict) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()[:24]
 
 
-def render_preview_jpeg_bytes(layout: dict, student_name: str, page_data: dict, page_index: int, scale: float) -> bytes:
-    """渲染單頁預覽並編成 JPEG bytes。"""
+def render_preview_png_bytes(
+    layout: dict,
+    student_name: str,
+    page_data: dict,
+    page_index: int,
+    scale: float,
+    *,
+    album_name: str | None = None,
+) -> bytes:
+    """渲染單頁預覽並編成無損 PNG bytes。"""
     preview_image = render_preview_page(
         layout,
         student_name,
         page_data,
         page_index=page_index,
         scale=scale,
+        album_name=album_name,
     )
     image_buffer = io.BytesIO()
-    preview_image.convert("RGB").save(image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY)
+    preview_image.save(image_buffer, format="PNG")
     return image_buffer.getvalue()
 
 
@@ -65,13 +73,13 @@ def _read_cached_preview_bytes(storage, cache_key: str):
 
 
 def get_or_render_preview(cache_prefix: str, payload: dict, render_bytes) -> tuple[bytes, str, bool]:
-    """取得（或渲染並回填）內容定址的預覽 JPEG。
+    """取得（或渲染並回填）內容定址的預覽 PNG。
 
-    回傳 (jpeg bytes, cache_key, 是否命中快取)。render_bytes 是無參數的
+    回傳 (png bytes, cache_key, 是否命中快取)。render_bytes 是無參數的
     渲染 callback，只在 miss 時於 preview limiter 內執行。
     """
     storage = get_storage()
-    cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
+    cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.png"
 
     cached_bytes = _read_cached_preview_bytes(storage, cache_key)
     if cached_bytes is not None:

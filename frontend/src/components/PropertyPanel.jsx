@@ -1,14 +1,22 @@
 // PropertyPanel — 模板編輯器右側屬性面板
 // 依選取元素類型（照片格 / 純文字 / 貼圖）顯示對應屬性控制項
 
-import { useId, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
+import Konva from "konva";
 
 import ColorPicker from "./ColorPicker";
 import CompositionTextarea from "./CompositionTextarea";
 import { FONT_OPTIONS } from "../constants/fonts";
-import { NAME_VARIABLE, insertTextToken } from "../utils/textVariables";
+import { MAX_LABEL_TEXT_LENGTH } from "../constants/textContent.js";
+import {
+  FULL_NAME_VARIABLE,
+  NAME_VARIABLE,
+  STUDENT_NAME_VARIABLES,
+  insertTextToken,
+} from "../utils/textVariables";
 import { TEXT_LABEL_ROLES, getTextLabelRole } from "../utils/textLabelRoles";
 import { snapPhotoSlotStandardRatio } from "../utils/photoFrameGeometry.js";
+import { measureTextLabelCjkCapacity } from "../utils/textRenderModel.js";
 
 function InspectorSection({ title, children, defaultOpen = true, dataGuide, className = "" }) {
   const contentId = useId();
@@ -114,15 +122,15 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
   const textareaId = useId();
   const textareaRef = useRef(null);
 
-  const handleInsertName = () => {
+  const handleInsertVariable = (token) => {
     const textarea = textareaRef.current;
     const next = insertTextToken(
       textarea?.value ?? value ?? "",
       textarea?.selectionStart,
       textarea?.selectionEnd,
-      NAME_VARIABLE,
+      token,
     );
-    onChange(next.text);
+    onChange(next.text.slice(0, MAX_LABEL_TEXT_LENGTH));
     requestAnimationFrame(() => {
       textarea?.focus();
       textarea?.setSelectionRange(next.caret, next.caret);
@@ -131,23 +139,30 @@ function VariableTextarea({ label, value, rows = 3, onChange, guideId }) {
 
   return (
     <div className="flex flex-col gap-1" data-guide={guideId}>
-      <span className="flex items-center justify-between gap-2">
-        <label htmlFor={textareaId} className="text-xs text-gray-500">{label}</label>
-        <button
-          type="button"
-          onClick={handleInsertName}
-          data-guide={guideId ? `${guideId}-insert-name` : undefined}
-          className="min-h-11 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-100"
-        >
-          插入 {NAME_VARIABLE}
-        </button>
-      </span>
+      <label htmlFor={textareaId} className="text-xs text-gray-500">{label}</label>
+      <div className="grid grid-cols-2 gap-1.5">
+        {STUDENT_NAME_VARIABLES.map(variable => (
+          <button
+            key={variable.token}
+            type="button"
+            onClick={() => handleInsertVariable(variable.token)}
+            data-guide={guideId
+              ? `${guideId}-insert-${variable.token === NAME_VARIABLE ? "name" : "full-name"}`
+              : undefined}
+            title={variable.description}
+            className="min-h-11 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-100"
+          >
+            {variable.label} {variable.token}
+          </button>
+        ))}
+      </div>
       <CompositionTextarea
         id={textareaId}
         ref={textareaRef}
         rows={rows}
+        maxLength={MAX_LABEL_TEXT_LENGTH}
         value={value ?? ""}
-        onChange={onChange}
+        onChange={nextValue => onChange(nextValue.slice(0, MAX_LABEL_TEXT_LENGTH))}
         className="min-h-11 rounded border px-2 py-1 text-sm"
       />
     </div>
@@ -617,7 +632,7 @@ function TextContentSection({ elementData, onPropertyChange }) {
       <VariableTextarea
         label={getTextLabelRole(elementData) === TEXT_LABEL_ROLES.STATIC
           ? "固定文字內容"
-          : `文字內容（可用 ${NAME_VARIABLE} 代入姓名）`}
+          : `文字內容（${NAME_VARIABLE}=相本稱呼，${FULL_NAME_VARIABLE}=完整姓名）`}
         value={elementData.text ?? ""}
         onChange={textValue => onPropertyChange({ text: textValue })}
         guideId="text-content"
@@ -735,6 +750,15 @@ export default function PropertyPanel({
   onUngroup,
   onAnalyzeMaterial,
 }) {
+  const materialTextCapacity = useMemo(() => {
+    if (selectedElement.type !== "text" || !materialTextLink) return null;
+    return measureTextLabelCjkCapacity(elementData, Konva.Text);
+  }, [
+    elementData,
+    materialTextLink,
+    selectedElement.type,
+  ]);
+
   if (selectedElement.type === "group") {
     return (
       <PropertyCommitBoundary onPropertyCommit={onPropertyCommit}>
@@ -789,16 +813,28 @@ export default function PropertyPanel({
           )}
 
           {!materialActionsDisabled && (isSticker || (isTextLabel && materialTextLink)) && (
-            <button
-              type="button"
-              disabled={isAnalyzingMaterial}
-              onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
-              className="min-h-11 w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isAnalyzingMaterial
-                ? "分析圖片中…"
-                : materialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={isAnalyzingMaterial}
+                onClick={() => onAnalyzeMaterial?.({ type: selectedElement.type, id: selectedElement.id })}
+                className="min-h-11 w-full rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isAnalyzingMaterial
+                  ? "分析圖片中…"
+                  : materialTextLink ? "重新分析並重設文字框" : "分析圖片並建立文字框"}
+              </button>
+              {isTextLabel && materialTextCapacity != null && (
+                <p
+                  data-guide="material-text-capacity"
+                  className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600"
+                >
+                  目前文字框約可放
+                  <strong className="mx-1 font-semibold text-slate-800">{materialTextCapacity}</strong>
+                  個全形中文字（不縮字）
+                </p>
+              )}
+            </>
           )}
 
           {/* 照片格專屬屬性 */}

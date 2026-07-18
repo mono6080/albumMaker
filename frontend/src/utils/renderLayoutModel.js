@@ -1,4 +1,5 @@
 import { getTextLabelRole, isFillableTextLabel } from "./textLabelRoles.js";
+import { resolveTemplatePreviewTextVariables } from "./textVariables.js";
 import { buildRootRenderNodes, getFlattenedRenderElements } from "./layoutGroups.js";
 import { getVisibleLayoutElementOrdinals } from "./layoutLayerState.js";
 
@@ -16,6 +17,8 @@ export const CANVAS_REAL_HEIGHT = DESIGN_TOKENS.canvas.height;
 export const CANVAS_DISPLAY_WIDTH = 530;
 export const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH;
 export const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_REAL_HEIGHT * CANVAS_SCALE);
+// 避免 530 × ratio 因 IEEE 浮點成為 793.999…，被原生 canvas 截成 793px。
+export const CANVAS_SCENE_PIXEL_RATIO = 1 / CANVAS_SCALE + Number.EPSILON;
 export const STICKER_DEFAULT_MAX_SIDE = 150;
 
 const Z_BASE = { photo: 0, text: 200, sticker: 300 };
@@ -135,9 +138,9 @@ export function getTextLabelModel(data) {
     isFillable: isFillableTextLabel(data),
     box: getDisplayBox(data),
     stroke: "#AAAAAA",
-    text: (data.text ?? "").substring(0, 60),
+    text: resolveTemplatePreviewTextVariables(data.text),
     fontColor: data.font_color ?? "#333333",
-    fontSize: Math.max(8, toDisplayCoord(data.font_size ?? 24)),
+    fontSize: toDisplayCoord(data.font_size ?? 24),
     align: data.text_align ?? "center",
     lineHeight: data.line_height ?? 1.4,
   };
@@ -154,7 +157,7 @@ export function getFooterModel(footer) {
       width: toDisplayCoord(CANVAS_REAL_WIDTH - (footer.x ?? 0)),
       height: toDisplayCoord(fontSize * 2),
     },
-    text: footer.text ?? "",
+    text: resolveTemplatePreviewTextVariables(footer.text),
     fontColor: footer.font_color ?? "#3B6B8C",
     fontSize: Math.max(8, toDisplayCoord(fontSize)),
   };

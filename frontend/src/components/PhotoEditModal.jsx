@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { PHOTO_SCALE_MAX } from "../constants/photoTransform.js";
 import { photoDims, clampPan, getPhotoCropBox, buildPhotoFilterCss } from "../utils/photoUtils";
 import useDialogA11y from "../hooks/useDialogA11y";
 
@@ -23,7 +24,9 @@ export function usePhotoEditModal({ items, displayUrl, onApplyTransform }) {
   const adjustZoom = useCallback((delta) => {
     const m = editModalRef.current;
     if (!m?.imgAspect) return;
-    const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
+    const newScale = parseFloat(
+      Math.max(1.0, Math.min(PHOTO_SCALE_MAX, m.scale + delta)).toFixed(3),
+    );
     const ratio = newScale / m.scale;
     const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
     setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
@@ -159,7 +162,9 @@ export default function PhotoEditModal({ edit, items, displayUrl }) {
       const m = editModalRef.current;
       if (!m?.imgAspect) return;
       const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      const newScale = parseFloat(Math.max(1.0, Math.min(3.0, m.scale + delta)).toFixed(3));
+      const newScale = parseFloat(
+        Math.max(1.0, Math.min(PHOTO_SCALE_MAX, m.scale + delta)).toFixed(3),
+      );
       const ratio = newScale / m.scale;
       const { panX, panY } = clampPan(m.panX * ratio, m.panY * ratio, m.cropW, m.cropH, m.imgAspect, newScale);
       setEditModal(prev => prev ? { ...prev, scale: newScale, panX, panY } : prev);
@@ -265,7 +270,7 @@ export default function PhotoEditModal({ edit, items, displayUrl }) {
               <ZoomOut className="w-3.5 h-3.5 text-gray-600" />
             </button>
             <input
-              type="range" min="1.0" max="3.0" step="0.02"
+              type="range" min="1.0" max={PHOTO_SCALE_MAX} step="0.02"
               value={scale}
               onChange={handleSliderChange}
               className="flex-1 accent-violet-500"
