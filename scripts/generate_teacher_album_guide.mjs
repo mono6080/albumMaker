@@ -23,8 +23,8 @@ const assetDir = resolve(docsDir, "assets/teacher-guide");
 const htmlPath = resolve(docsDir, "teacher-album-guide.html");
 const pdfPath = resolve(docsDir, "teacher-album-guide-step-by-step.pdf");
 const targetMetaPath = resolve(assetDir, "guide-targets.json");
-const baseUrl = "http://127.0.0.1:5173";
-const apiUrl = "http://127.0.0.1:8765/api";
+const baseUrl = process.env.GUIDE_BASE_URL ?? "http://127.0.0.1:5173";
+const apiUrl = process.env.GUIDE_API_URL ?? "http://127.0.0.1:8765/api";
 const adminPassword = process.env.GUIDE_ADMIN_PASSWORD ?? "admin";
 const teacherPassword = "teacher-guide-123";
 const A4_WIDTH = 794;
@@ -140,6 +140,14 @@ async function login(context, username, password) {
   );
 }
 
+async function getTemplateRevision(context, templateId) {
+  const response = await requireOk(
+    await context.request.get(`${apiUrl}/templates/${templateId}`),
+    "load template revision",
+  );
+  return (await response.json()).revision;
+}
+
 // 模板一定隸屬期別，而且老師建專案只能用「使用中」期別的模板；
 // 沒有現成 active 期別就補建一個（新建的才在收尾時封存，避免動到現場資料）
 async function ensureActivePeriod(context) {
@@ -148,7 +156,8 @@ async function ensureActivePeriod(context) {
     "list active template periods",
   );
   const periods = await listResponse.json();
-  if (periods.length > 0) return { period: periods[0], created: false };
+  const infantPeriod = periods.find(period => period.department === "infant");
+  if (infantPeriod) return { period: infantPeriod, created: false };
   const createResponse = await requireOk(
     await context.request.post(`${apiUrl}/templates/periods`, {
       form: { name: `教學示範期別 ${Date.now()}`, department: "infant", status: "active" },
@@ -176,8 +185,10 @@ async function createTemplate(context, browser, periodId) {
       `create template page ${pageNumber}`,
     );
     const pageInfo = await pageResponse.json();
+    const expectedRevision = await getTemplateRevision(context, template.id);
     const uploadResponse = await requireOk(
       await context.request.post(`${apiUrl}/templates/${template.id}/pages/${pageInfo.id}/background`, {
+        params: { expected_revision: expectedRevision },
         multipart: {
           file: {
             name: `teacher-guide-bg-${pageNumber}.png`,
@@ -249,7 +260,7 @@ async function createTemplate(context, browser, periodId) {
 // 與 createTemplate 的版面同步：每頁的照片格 id 清單（改版面時記得一起改）
 const TEMPLATE_PHOTO_SLOTS = { 0: [1, 2, 3], 1: [1, 2, 3, 4] };
 
-async function createTeacher(context) {
+async function createGuideOrganization(context) {
   const suffix = Date.now();
   const supervisorResponse = await requireOk(
     await context.request.post(`${apiUrl}/users/`, {
@@ -270,31 +281,76 @@ async function createTeacher(context) {
         display_name: "教學用老師",
         password: teacherPassword,
         role: "teacher",
-        supervisor_id: supervisor.id,
       },
     }),
     "create guide teacher",
   );
   const teacher = await teacherResponse.json();
-  return { supervisor, teacher };
+  const campusResponse = await requireOk(
+    await context.request.post(`${apiUrl}/organization/campuses`, {
+      data: { name: `教學示範分校 ${suffix}` },
+    }),
+    "create guide campus",
+  );
+  const campus = await campusResponse.json();
+  await requireOk(
+    await context.request.put(`${apiUrl}/organization/campuses/${campus.id}/supervisors`, {
+      data: {
+        campus_supervisor_ids: [supervisor.id],
+        department_supervisors: [
+          { department: "infant", supervisor_ids: [supervisor.id] },
+          { department: "academy", supervisor_ids: [] },
+        ],
+      },
+    }),
+    "set guide campus and department supervisors",
+  );
+  const classroomResponse = await requireOk(
+    await context.request.post(`${apiUrl}/organization/classrooms`, {
+      data: {
+        campus_id: campus.id,
+        department: "infant",
+        name: "蘋果班",
+      },
+    }),
+    "create guide classroom",
+  );
+  const classroom = await classroomResponse.json();
+  await requireOk(
+    await context.request.put(`${apiUrl}/organization/classrooms/${classroom.id}/teachers`, {
+      data: { teachers: [{ teacher_id: teacher.id, duty: "lead" }] },
+    }),
+    "set guide lead teacher",
+  );
+  const memberResponse = await requireOk(
+    await context.request.post(`${apiUrl}/organization/classrooms/${classroom.id}/members/batch`, {
+      data: { members: ["小安", "小晴", "小宇"].map(name => ({ name })) },
+    }),
+    "add guide current classroom members",
+  );
+  const members = (await memberResponse.json()).created;
+  return { supervisor, teacher, campus, classroom, members };
 }
 
-async function createProjectAsTeacher(context, templateId) {
+async function createProjectAsTeacher(context, classroomId, templateId, teacherId) {
   const projectResponse = await requireOk(
-    await context.request.post(`${apiUrl}/projects/`, {
-      form: { name: "2026-05 中班 校園探索 蘋果班", template_id: templateId },
+    await context.request.post(`${apiUrl}/organization/classrooms/${classroomId}/projects`, {
+      data: {
+        name: "2026-05 蘋果班 校園探索",
+        template_id: templateId,
+        owner_id: teacherId,
+      },
     }),
-    "create guide project",
+    "create guide classroom project as lead teacher",
   );
   const project = await projectResponse.json();
-  await requireOk(
-    await context.request.post(`${apiUrl}/projects/${project.id}/students/batch`, {
-      data: ["小安", "小晴", "小宇"],
-    }),
-    "add guide students",
-  );
+  const projectWithStudents = await (await requireOk(
+    await context.request.get(`${apiUrl}/projects/${project.id}`),
+    "fetch guide project revision",
+  )).json();
   await requireOk(
     await context.request.put(`${apiUrl}/projects/${project.id}/label_texts`, {
+      params: { expected_template_revision: projectWithStudents.template_revision },
       data: {
         "0": { "1": "{name} 的校園探索" },
         "1": { "1": "今天我最喜歡的是：戶外觀察" },
@@ -309,12 +365,13 @@ async function createProjectAsTeacher(context, templateId) {
   return projectDetail;
 }
 
-async function uploadStudentPhotos(context, browser, projectId, studentId) {
+async function uploadStudentPhotos(context, browser, projectId, templateRevision, studentId) {
   const photo1 = await createPhotoImage(browser, "teacher-photo-1.png", "校園觀察", "#bae6fd");
   const photo2 = await createPhotoImage(browser, "teacher-photo-2.png", "探索分享", "#bbf7d0");
   for (const [slotId, photoPath] of [[1, photo1], [2, photo2]]) {
     await requireOk(
       await context.request.post(`${apiUrl}/projects/${projectId}/students/${studentId}/pages/0/photos/${slotId}`, {
+        params: { expected_template_revision: templateRevision },
         multipart: {
           file: {
             name: `guide-photo-${slotId}.png`,
@@ -329,13 +386,14 @@ async function uploadStudentPhotos(context, browser, projectId, studentId) {
 }
 
 // 用「全班同一張」端點把所有照片格補齊，讓班級總覽進到階段 2（可標記全班完成、出現交件下載）
-async function fillAllSharedPhotos(context, browser, projectId) {
+async function fillAllSharedPhotos(context, browser, projectId, templateRevision) {
   const groupPhoto = await createPhotoImage(browser, "teacher-photo-group.png", "全班合照", "#fde68a");
   const buffer = await readFile(groupPhoto);
   for (const [pageIndex, slotIds] of Object.entries(TEMPLATE_PHOTO_SLOTS)) {
     for (const slotId of slotIds) {
       await requireOk(
         await context.request.post(`${apiUrl}/projects/${projectId}/photos/shared/pages/${pageIndex}/slots/${slotId}`, {
+          params: { expected_template_revision: templateRevision },
           multipart: {
             file: {
               name: `guide-shared-${pageIndex}-${slotId}.png`,
@@ -352,32 +410,30 @@ async function fillAllSharedPhotos(context, browser, projectId) {
 
 const GUIDE_MARKERS = {
   projectList: [
-    { n: 1, selector: '[data-guide="project-create-button"]', text: "「新建專案」。每個班級每一期建立一個相本專案。" },
-    { n: 2, selector: '[data-guide="project-card"]', text: "專案卡片。可以看到學生數、建立日期與完成狀態。" },
+    { n: 1, selector: '[data-guide="project-create-button"]', text: "主教從目前任教班級按「建立新一期相本」；學生快照與製作權限直接由園所設定形成。" },
+    { n: 2, selector: '[data-guide="project-card"]', text: "各期相本直接列在所屬班級下，可看到學生數、建立日期與完成狀態。" },
     { n: 3, selector: '[data-guide="project-edit-link"]', text: "「編輯相本」。放照片、填文字都從這裡進去。" },
-    { n: 4, selector: '[data-guide="project-review-link"]', text: "「班級總覽」。看進度、管名單、標記完成與下載交件。" },
+    { n: 4, selector: '[data-guide="project-review-link"]', text: "「班級總覽」。看本期快照與進度、標記完成並下載交件。" },
   ],
   projectCreate: [
-    { n: 1, selector: '[data-guide="project-create-form"]', text: "選部門與期別、挑設計組做好的模板，補上分校或班級名稱；也可以從上一期專案複製學生名單。" },
+    { n: 1, selector: '[data-guide="project-create-form"]', text: "只要命名並選同部門的使用中期別與模板；系統會從班級目前名單建立本期快照，所有目前帶班老師直接取得製作權限。" },
   ],
   reviewWorkbench: [
     { n: 1, selector: '[data-guide="review-progress"]', text: "工作台橫幅。左邊看階段（1 製作 → 2 全班完成 → 3 交件）、中間看照片進度、右邊是這個階段的下一步按鈕。" },
-    { n: 2, selector: '[data-guide="review-roster-button"]', text: "「學生名單」。批次新增、改名或刪除學生。" },
+    { n: 2, selector: '[data-guide="review-roster-button"]', text: "「本期學生」。核對建立相本時帶入的固定快照，並設定相本稱呼。" },
     { n: 3, selector: 'a:has-text("繼續製作")', text: "階段 1 的下一步：「繼續製作」，會帶你進編輯相本。" },
     { n: 4, selector: '[data-guide="review-student-card"]', text: "學生卡片。照片進度一目了然，點名字或鉛筆進個別編輯。" },
     { n: 5, selector: '[data-guide="review-preview-student"]', text: "點頁面縮圖直接放大預覽，不用進編輯頁。" },
   ],
   rosterModal: [
-    { n: 1, selector: '[data-guide="roster-add-input"]', text: "把學生姓名貼進來：一行一位，或用逗號、頓號分隔。" },
-    { n: 2, selector: '[data-guide="roster-add-button"]', text: "「新增」。重複的名字會自動略過。" },
-    { n: 3, selector: '[data-guide="roster-modal"]', text: "已登記學生清單。可以行內改名、刪除，也看得到每位的照片進度。" },
+    { n: 1, selector: '[data-guide="roster-modal"]', text: "本期學生是建立相本當下的固定快照；完整姓名只讀，這裡只調整相本稱呼。" },
   ],
   classEdit: [
     { n: 1, selector: '[data-guide="scope-switcher"]', text: "編輯範圍：「全班」＝改的內容套用到所有學生；「個別」＝只改單一學生。" },
     { n: 2, selector: '[data-guide="scope-switcher"]', text: "編輯範圍切換。「全班／個別」兩顆按鈕，同一個編輯器不用換頁。" },
     { n: 3, selector: '[data-guide="class-page-nav"]', text: "頁碼導航。預覽、照片、文字三個面板會一起換頁。" },
     { n: 4, selector: '[data-guide="class-photo-panel"]', text: "照片管理（全班）。點一個照片格開始放全班照片；右上「依檔名整批匯入」給已命名好的整批檔案。" },
-    { n: 5, selector: '[data-guide="class-text-panel"]', text: "全班文字。{name} 會自動代入每位學生的姓名。" },
+    { n: 5, selector: '[data-guide="class-text-panel"]', text: "全班文字。{name} 代入相本稱呼，{full_name} 代入完整姓名。" },
     { n: 6, selector: '[data-guide="class-preview-panel"]', text: "頁面預覽。確認文字套上模板後的位置與內容，可按重新整理預覽。" },
   ],
   classPhotoModal: [
@@ -423,7 +479,7 @@ async function buildPdf(screenshots) {
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <title>老師製作相冊使用教學</title>
+  <title>老師製作相本使用教學</title>
   <style>
     @page { size: A4; margin: 14mm 13mm; }
     * { box-sizing: border-box; }
@@ -460,15 +516,15 @@ async function buildPdf(screenshots) {
 <body>
   <section class="cover">
     <div class="eyebrow">ALBUM MAKER · TEACHER GUIDE</div>
-    <h1>老師製作相冊使用教學</h1>
-    <p class="subtitle">給帶班老師使用。這份 PDF 以實際系統截圖說明整個流程：建立相本專案、在班級總覽管理學生名單、先編輯全班共用的照片與文字、再逐位微調，最後標記全班完成並下載交件。</p>
-    <p class="meta">產出檔案：<strong>${docsRelative(pdfPath)}</strong><br>網頁內也可在相本專案、班級總覽與編輯相本頁點「製作教學」查看互動導覽。</p>
+    <h1>老師製作相本使用教學</h1>
+    <p class="subtitle">給帶班老師使用。整個流程從「相本工作」的目前班級開始：主教建立新一期，系統依園所設定帶入學生名單與老師權限；接著編輯全班共用內容、逐位微調，最後標記全班完成並下載交件。</p>
+    <p class="meta">產出檔案：<strong>${docsRelative(pdfPath)}</strong><br>網頁內也可在相本工作、班級總覽與編輯相本頁點「製作教學」查看互動導覽。</p>
     <div class="toc">
       <h3>快速目錄</h3>
       <ol>
-        <li>建立相本專案</li>
+        <li>從目前班級建立新一期相本</li>
         <li>班級總覽：老師的工作台</li>
-        <li>登記學生名單</li>
+        <li>核對本期學生快照</li>
         <li>編輯全班共用內容（照片與文字）</li>
         <li>個別學生微調</li>
         <li>全班完成與交件下載</li>
@@ -478,21 +534,22 @@ async function buildPdf(screenshots) {
   </section>
 
   <section>
-    <h2>1. 建立相本專案</h2>
-    <p class="step-intro">登入後進入「相本專案」。每個班級每一期建立一個專案，專案會套用設計組完成的模板。專案卡片下方有兩個入口：「編輯相本」做內容、「班級總覽」看進度與交件。</p>
+    <h2>1. 從目前班級建立新一期相本</h2>
+    <p class="step-intro">登入後進入「相本工作」，系統會依園所設定列出你目前任教的班級與各期相本。主教從班級建立新一期；協同老師在建立後會直接看到並可製作，不需逐本另外授權。</p>
     <ol class="actions">
-      <li>點右上「新建專案」。</li>
-      <li>選部門與期別，再選這一期要用的模板（會顯示頁數與照片格數）。</li>
-      <li>補上分校或班級名稱，確認專案全名後點「建立專案」。</li>
-      <li>上一期已經建過名單的話，可直接選「複製學生名單」帶入全班。</li>
+      <li>找到要製作的目前班級；確認班級顯示的主教與目前學生人數正確。</li>
+      <li>主教在班級區按「建立新一期相本」。</li>
+      <li>填相本名稱，再選該班部門可用的期別與模板。</li>
+      <li>確認後建立。系統會把班級目前學生做成本期固定快照，並讓所有目前帶班老師直接製作。</li>
     </ol>
-    ${stepFigure(screenshots.projectList, "步驟 1：相本專案列表與專案卡片的兩個入口。")}
-    ${stepFigure(screenshots.projectCreate, "步驟 1-2：新建專案視窗。")}
+    <div class="note">看不到班級、職責或學生不正確時，請管理員先到「園所設定」修正；不要另建未歸班相本。</div>
+    ${stepFigure(screenshots.projectList, "步驟 1：相本工作依目前班級呈現各期相本與操作入口。")}
+    ${stepFigure(screenshots.projectCreate, "步驟 1-2：從班級開啟「建立新一期相本」視窗。")}
   </section>
 
   <section class="page-break">
     <h2>2. 班級總覽：老師的工作台</h2>
-    <p class="step-intro">「班級總覽」是整本相冊的指揮台。最上方的橫幅一條看完：目前階段（1 製作 → 2 全班完成 → 3 交件）、全班照片進度，以及依階段建議的下一步按鈕。</p>
+    <p class="step-intro">「班級總覽」是整本相本的指揮台。最上方的橫幅一條看完：目前階段（1 製作 → 2 全班完成 → 3 交件）、全班照片進度，以及依階段建議的下一步按鈕。</p>
     <ol class="actions">
       <li>階段 1 製作中：按「繼續製作」進編輯相本補照片。</li>
       <li>點「缺照片 N 位」會直接篩選出還缺照片的學生。</li>
@@ -503,25 +560,26 @@ async function buildPdf(screenshots) {
   </section>
 
   <section class="page-break">
-    <h2>3. 登記學生名單</h2>
-    <p class="step-intro">名單在班級總覽右上的「學生名單」按鈕裡管理，不用換頁。先把本次要製作相冊的學生加齊，再開始放照片。</p>
+    <h2>3. 核對本期學生快照</h2>
+    <p class="step-intro">新一期建立時，系統已把園所設定中的班級目前學生帶入這本相本。這份名單是本期固定快照，不必每一期重新建立或從上一期複製。</p>
     <ol class="actions">
-      <li>在班級總覽點右上「學生名單」。</li>
-      <li>在批次新增框貼上姓名：一行一位，或用逗號、頓號分隔。</li>
-      <li>點「新增」，系統會自動略過重複名稱。</li>
-      <li>在下方清單確認人數；需要時可行內改名或刪除。</li>
+      <li>在班級總覽點右上「本期學生」。</li>
+      <li>核對本期學生與人數；完整姓名用於名冊與檔案辨識，在相本內只讀。</li>
+      <li>老師不需也不能在每一期另外新增、改名或刪除學生；這些資料由園所設定建立快照。</li>
+      <li>相本只想顯示名字或暱稱時，編輯該生的「相本稱呼」；留空則沿用完整姓名。</li>
+      <li>若班級目前名單本身錯誤，請管理員回「園所設定」修正；修正只影響之後建立的相本，不會改寫既有快照。</li>
     </ol>
-    ${stepFigure(screenshots.rosterModal, "步驟 3：學生名單視窗。")}
+    ${stepFigure(screenshots.rosterModal, "步驟 3：核對本期學生快照與相本稱呼。")}
   </section>
 
   <section class="page-break">
     <h2>4. 編輯全班共用內容（照片與文字）</h2>
-    <p class="step-intro">從專案卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：頁面預覽｜照片管理｜頁面文字，和個別編輯同一套版面。</p>
+    <p class="step-intro">從相本卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：頁面預覽｜照片管理｜頁面文字，和個別編輯同一套版面。</p>
     <ol class="actions">
       <li>用頁碼導航切頁，三個面板會一起換頁。</li>
       <li>點一個照片格，會開「放照片」視窗選分配方式：<strong>每人不同張</strong>（一次上傳多張、自動分給每位學生）或<strong>全班同一張</strong>（團體照套用到全班同一格）。</li>
       <li>行政已經照「姓名＋頁格」命名好的整批檔案，用照片面板右上的「依檔名整批匯入」。</li>
-      <li>在全班文字填共用文案；需要學生姓名的位置用 <span class="kbd">{name}</span>，輸出時自動替換。</li>
+      <li>在全班文字填共用文案；<span class="kbd">{name}</span> 代入相本稱呼（未設定時沿用完整姓名），<span class="kbd">{full_name}</span> 固定代入完整姓名。</li>
       <li>清空欄位會輸出空白；按「恢復預設」可回到模板文字。</li>
     </ol>
     ${stepFigure(screenshots.classEdit, "步驟 4：編輯相本（全班範圍）三欄工作台。")}
@@ -548,7 +606,7 @@ async function buildPdf(screenshots) {
     <p class="step-intro">全班照片備齊後，回到班級總覽，橫幅會自動跳到階段 2。先逐位點縮圖預覽確認，再標記全班完成、下載交件。</p>
     <ol class="actions">
       <li>確認照片進度顯示「全班照片齊」。</li>
-      <li>逐位點學生卡片縮圖，確認照片與 <span class="kbd">{name}</span> 文字都正確。</li>
+      <li>逐位點學生卡片縮圖，確認照片、相本稱呼與姓名文字都正確。</li>
       <li>按「全班完成」。標記後內容鎖定，之後需要主管或管理員退回才能修改。</li>
       <li>用「PDF ZIP」批次下載全班 PDF；「全部圖片」下載每頁圖片（手機會開啟系統分享）。</li>
       <li>也可以在學生卡片上只下載單一學生的 PDF 或圖片。</li>
@@ -561,8 +619,9 @@ async function buildPdf(screenshots) {
     <h2>7. 交付前檢查表</h2>
     <div class="grid">
       <ul>
-        <li>□ 專案使用正確期別與模板。</li>
-        <li>□ 學生名單完整且沒有重複。</li>
+        <li>□ 相本位於正確的分校／班級，並使用正確期別與模板。</li>
+        <li>□ 園所設定的帶班老師與目前學生正確；本期快照完整且沒有重複。</li>
+        <li>□ 每位學生的相本稱呼已確認。</li>
         <li>□ 全班共用照片與文字已填好。</li>
         <li>□ 每位學生照片格都已補齊（橫幅顯示全班照片齊）。</li>
         <li>□ 個別文字沒有漏填或超出畫面。</li>
@@ -583,9 +642,11 @@ async function buildPdf(screenshots) {
     <h3>某位學生少一頁</h3>
     <p>到該學生個別編輯頁檢查是否按過「刪除此頁」，需要時在預覽區按「還原此頁」。</p>
     <h3>文字沒有帶入姓名</h3>
-    <p>全班文字或模板文字要使用 <span class="kbd">{name}</span>，不要直接打固定姓名。</p>
+    <p>全班文字或模板文字要使用變數：相本稱呼用 <span class="kbd">{name}</span>，完整姓名用 <span class="kbd">{full_name}</span>，不要直接打固定姓名。</p>
     <h3>標記全班完成後想再修改</h3>
     <p>內容已鎖定，請主管或管理員在班級總覽按「退回修改」。</p>
+    <h3>看不到班級或新一期相本</h3>
+    <p>班級、帶班職責與主管查看範圍都來自「園所設定」。請管理員確認你仍在該班目前老師編制中；只有主教能建立新一期，協同老師會在建立後直接取得製作權限。</p>
     <p class="small">本文件由本機系統截圖產生，截圖素材位於 docs/assets/teacher-guide/。</p>
   </section>
 </body>
@@ -627,6 +688,10 @@ async function main() {
   let projectId;
   let teacherUser;
   let supervisorUser;
+  let campusId;
+  let classroomId;
+  let classroomName;
+  let classroomMemberIds = [];
   let createdPeriodId;
   let screenshots;
   try {
@@ -637,27 +702,43 @@ async function main() {
     if (periodCreated) createdPeriodId = period.id;
     const template = await createTemplate(adminContext, browser, period.id);
     templateId = template.id;
-    const users = await createTeacher(adminContext);
-    teacherUser = users.teacher;
-    supervisorUser = users.supervisor;
+    const organization = await createGuideOrganization(adminContext);
+    teacherUser = organization.teacher;
+    supervisorUser = organization.supervisor;
+    campusId = organization.campus.id;
+    classroomId = organization.classroom.id;
+    classroomName = organization.classroom.name;
+    classroomMemberIds = organization.members.map(member => member.id);
 
     teacherContext = await browser.newContext({ baseURL: baseUrl, viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     await login(teacherContext, teacherUser.username, teacherPassword);
-    const project = await createProjectAsTeacher(teacherContext, templateId);
+    const project = await createProjectAsTeacher(
+      teacherContext,
+      classroomId,
+      templateId,
+      teacherUser.id,
+    );
     projectId = project.id;
     const firstStudent = project.students[0];
-    await uploadStudentPhotos(teacherContext, browser, projectId, firstStudent.id);
+    await uploadStudentPhotos(
+      teacherContext,
+      browser,
+      projectId,
+      project.template_revision,
+      firstStudent.id,
+    );
 
     const page = await teacherContext.newPage();
 
-    // 1. 專案列表：卡片與兩個入口
+    // 1. 相本工作：目前班級、各期相本與兩個入口
     await page.goto("/projects");
     await page.getByText(project.name).first().waitFor();
     const projectList = await screenshot(page, "01-project-list.png", GUIDE_MARKERS.projectList);
 
-    // 1-2. 新建專案 Modal
-    await page.getByRole("button", { name: "新建專案" }).click();
-    await page.getByText("新建相本專案").waitFor();
+    // 1-2. 從目前班級開啟建立新一期 Modal；不能退回通用建專案入口
+    await page.getByRole("button", { name: "建立新一期相本", exact: true }).click();
+    await page.getByRole("heading", { name: `建立新一期相本：${classroomName}` }).waitFor();
+    await page.locator('[data-guide="project-create-form"]').waitFor();
     const projectCreate = await screenshot(page, "02-project-create.png", GUIDE_MARKERS.projectCreate);
     await page.keyboard.press("Escape");
 
@@ -667,9 +748,9 @@ async function main() {
     await page.getByText("照片進度").waitFor();
     const reviewWorkbench = await screenshot(page, "03-review-workbench.png", GUIDE_MARKERS.reviewWorkbench);
 
-    // 3. 學生名單 Modal
+    // 3. 本期學生快照 Modal
     await page.locator('[data-guide="review-roster-button"]').click();
-    await page.getByText("批次新增").waitFor();
+    await page.locator('[data-guide="roster-modal"]').waitFor();
     const rosterModal = await screenshot(page, "04-roster-modal.png", GUIDE_MARKERS.rosterModal);
     await page.keyboard.press("Escape");
 
@@ -695,7 +776,7 @@ async function main() {
     const studentEdit = await screenshot(page, "07-student-edit.png", GUIDE_MARKERS.studentEdit);
 
     // 6. 補齊全班照片 → 班級總覽進入階段 2（全班完成＋交件下載）
-    await fillAllSharedPhotos(teacherContext, browser, projectId);
+    await fillAllSharedPhotos(teacherContext, browser, projectId, project.template_revision);
     await page.goto(`/projects/${projectId}/review`);
     await page.getByRole("button", { name: "全班完成" }).waitFor();
     await page.getByText("全班照片齊").waitFor();
@@ -723,6 +804,43 @@ async function main() {
       // 期別沒有刪除端點：本次新建的改為封存，避免留在「使用中」清單干擾現場
       await adminContext.request
         .patch(`${apiUrl}/templates/periods/${createdPeriodId}`, { form: { status: "archived" } })
+        .catch(() => {});
+    }
+    if (adminContext && classroomId) {
+      for (const memberId of classroomMemberIds) {
+        await adminContext.request
+          .patch(`${apiUrl}/organization/classrooms/${classroomId}/members/${memberId}`, {
+            data: { status: "ended", end_reason: "departed" },
+          })
+          .catch(() => {});
+      }
+      await adminContext.request
+        .put(`${apiUrl}/organization/classrooms/${classroomId}/teachers`, {
+          data: { teachers: [] },
+        })
+        .catch(() => {});
+      await adminContext.request
+        .patch(`${apiUrl}/organization/classrooms/${classroomId}`, {
+          data: { is_active: false },
+        })
+        .catch(() => {});
+    }
+    if (adminContext && campusId) {
+      await adminContext.request
+        .put(`${apiUrl}/organization/campuses/${campusId}/supervisors`, {
+          data: {
+            campus_supervisor_ids: [],
+            department_supervisors: [
+              { department: "infant", supervisor_ids: [] },
+              { department: "academy", supervisor_ids: [] },
+            ],
+          },
+        })
+        .catch(() => {});
+      await adminContext.request
+        .patch(`${apiUrl}/organization/campuses/${campusId}`, {
+          data: { is_active: false },
+        })
         .catch(() => {});
     }
     if (adminContext && teacherUser?.id) {
