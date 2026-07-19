@@ -15,11 +15,61 @@ import {
 
 import { Button, SegmentedControl, Surface } from "../ui";
 
+function ProgressMetric({
+  label,
+  filled,
+  total,
+  emptyMessage,
+  completeMessage,
+  ariaLabel,
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-medium text-gray-600">{label}</span>
+        {total === 0 ? (
+          <span className="text-gray-400">{emptyMessage}</span>
+        ) : (
+          <>
+            <span className={`font-semibold tabular-nums ${filled === total ? "text-emerald-600" : "text-gray-700"}`}>
+              {filled} / {total} 格
+            </span>
+            {filled === total && (
+              <span className="inline-flex items-center gap-1 font-medium text-emerald-600">
+                <CheckCircle2 className="h-3 w-3" />
+                {completeMessage}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {total > 0 && (
+        <div
+          role="progressbar"
+          aria-label={ariaLabel}
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={filled}
+          aria-valuetext={`已填 ${filled}／${total} 格`}
+          className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-100"
+        >
+          <div
+            className={`h-full rounded-full transition-all ${filled === total ? "bg-emerald-500" : "bg-indigo-500"}`}
+            style={{ width: `${(filled / total) * 100}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectReviewProgress({
   projectId,
   workStage,
   classPhotoFilled,
   classPhotoTotal,
+  classTextFilled,
+  classTextTotal,
   incompleteStudentCount,
   commentsCount,
   canEditCurrentProject,
@@ -67,16 +117,24 @@ export default function ProjectReviewProgress({
           ))}
         </div>
 
-        <div className="min-w-0 flex-1 lg:border-l lg:border-gray-100 lg:pl-4">
+        <div className="min-w-0 flex-1 space-y-2.5 lg:border-l lg:border-gray-100 lg:pl-4">
+          <ProgressMetric
+            label="照片進度"
+            filled={classPhotoFilled}
+            total={classPhotoTotal}
+            emptyMessage="此模板沒有照片格"
+            completeMessage="全班照片齊"
+            ariaLabel="全班照片完成度"
+          />
+          <ProgressMetric
+            label="文字進度"
+            filled={classTextFilled}
+            total={classTextTotal}
+            emptyMessage="此模板沒有可填文字"
+            completeMessage="全班文字齊"
+            ariaLabel="全班文字完成度"
+          />
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-medium text-gray-600">照片進度</span>
-            {classPhotoTotal === 0 ? (
-              <span className="text-gray-400">此模板沒有照片格（純文字相本）</span>
-            ) : (
-              <span className={`font-semibold tabular-nums ${classPhotoFilled === classPhotoTotal ? "text-emerald-600" : "text-gray-700"}`}>
-                {classPhotoFilled} / {classPhotoTotal} 格
-              </span>
-            )}
             {incompleteStudentCount > 0 ? (
               <button
                 type="button"
@@ -84,12 +142,12 @@ export default function ProjectReviewProgress({
                 className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-700 transition-colors hover:bg-amber-100"
               >
                 <Clock className="h-3 w-3" />
-                缺照片 {incompleteStudentCount} 位
+                尚未完成 {incompleteStudentCount} 位
               </button>
-            ) : classPhotoTotal > 0 && (
+            ) : (
               <span className="inline-flex items-center gap-1 font-medium text-emerald-600">
                 <CheckCircle2 className="h-3 w-3" />
-                全班照片齊
+                全班內容齊
               </span>
             )}
             {commentsCount > 0 && (
@@ -102,14 +160,6 @@ export default function ProjectReviewProgress({
               </a>
             )}
           </div>
-          {classPhotoTotal > 0 && (
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-all ${classPhotoFilled === classPhotoTotal ? "bg-emerald-500" : "bg-indigo-500"}`}
-                style={{ width: `${(classPhotoFilled / classPhotoTotal) * 100}%` }}
-              />
-            </div>
-          )}
         </div>
 
         <div className="flex flex-col gap-2 lg:w-72 lg:flex-shrink-0 lg:border-l lg:border-gray-100 lg:pl-4">
@@ -118,9 +168,9 @@ export default function ProjectReviewProgress({
               <>
                 <Button as={Link} to={`/projects/${projectId}/edit`} variant="primary" fullWidth>
                   <Pencil className="h-4 w-4" />
-                  繼續製作（{incompleteStudentCount} 位缺照片）
+                  繼續製作（{incompleteStudentCount} 位未完成）
                 </Button>
-                {classPhotoFilled > 0 && (
+                {(classPhotoFilled > 0 || classTextFilled > 0) && (
                   <Button onClick={onCompleteProject} disabled={isBatchRendering} variant="successSoft" size="sm" fullWidth>
                     <CheckCircle2 className="h-4 w-4" />
                     直接標記全班完成
@@ -128,7 +178,7 @@ export default function ProjectReviewProgress({
                 )}
               </>
             ) : (
-              <p className="text-sm text-gray-500">製作中：還有 {incompleteStudentCount} 位學生缺照片。</p>
+              <p className="text-sm text-gray-500">製作中：還有 {incompleteStudentCount} 位學生未完成。</p>
             )
           )}
           {workStage === 2 && (
@@ -139,11 +189,11 @@ export default function ProjectReviewProgress({
                   全班完成
                 </Button>
                 <p className="text-xs leading-relaxed text-gray-400">
-                  照片已備齊。標記完成後內容鎖定，需主管或管理員退回才能修改。
+                  照片與文字已備齊。標記完成後內容鎖定，並開放 PDF／圖片下載；需主管或管理員退回才能修改。
                 </p>
               </>
             ) : (
-              <p className="text-sm text-gray-500">照片已備齊，待老師標記全班完成。</p>
+              <p className="text-sm text-gray-500">照片與文字已備齊，待老師標記全班完成。</p>
             )
           )}
           {workStage === 3 && (
@@ -165,7 +215,8 @@ export default function ProjectReviewProgress({
               <div className="flex gap-2">
                 <Button
                   onClick={onDownloadAll}
-                  disabled={isBatchRendering}
+                  disabled={isBatchRendering || workStage !== 3}
+                  title={workStage === 3 ? undefined : "請先標記全班完成，才能下載 PDF"}
                   data-guide="review-download-all"
                   variant={workStage === 3 ? "success" : "neutral"}
                   size="sm"
@@ -182,7 +233,8 @@ export default function ProjectReviewProgress({
                 </Button>
                 <Button
                   onClick={onDownloadAllImages}
-                  disabled={isBatchRendering}
+                  disabled={isBatchRendering || workStage !== 3}
+                  title={workStage === 3 ? undefined : "請先標記全班完成，才能下載圖片"}
                   variant={workStage === 3 ? "info" : "neutral"}
                   size="sm"
                   className="flex-1"

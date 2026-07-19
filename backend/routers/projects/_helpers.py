@@ -10,6 +10,7 @@ from services.project_access_service import (
     assert_comment_deletable as assert_comment_deletable,
     assert_project_completion_revertible as assert_project_completion_revertible,
     assert_project_content_writable as assert_project_content_writable,
+    assert_project_downloadable as assert_project_downloadable,
     assert_project_readable as assert_project_readable,
     assert_project_writable as assert_project_writable,
 )

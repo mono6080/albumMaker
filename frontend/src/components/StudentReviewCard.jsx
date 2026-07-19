@@ -1,4 +1,4 @@
-// 班級總覽的學生卡片：縮圖列（點縮圖預覽）＋ 姓名與照片進度 ＋ 單人下載動作。
+// 班級總覽的學生卡片：縮圖列（點縮圖預覽）＋ 姓名與內容進度 ＋ 單人下載動作。
 // 可編輯者主要區是進編輯頁的 Link；唯讀角色改為開啟預覽的 button。
 
 import { Link } from "react-router-dom";
@@ -18,7 +18,9 @@ export default function StudentReviewCard({
   templateRevision,
   canEditCurrentProject,
   canDownloadCurrentProject,
+  isProjectCompleted,
   photoProgress,
+  textProgress,
   isRendering,
   isImageRendering,
   isImageShareReady,
@@ -28,15 +30,17 @@ export default function StudentReviewCard({
   onDownloadImages,
 }) {
   const isStudentPhotoComplete = photoProgress.total === 0 || photoProgress.filled === photoProgress.total;
+  const isStudentTextComplete = textProgress.total === 0 || textProgress.filled === textProgress.total;
+  const isStudentContentComplete = isStudentPhotoComplete && isStudentTextComplete;
   const isStudentBusy = isRendering || isImageRendering;
   const hasRenderedOutput = Boolean(student.output_filename);
-  const canStartDownload = canEditCurrentProject || hasRenderedOutput;
+  const canStartDownload = isProjectCompleted && (canEditCurrentProject || hasRenderedOutput);
   const studentSkippedPages = new Set(
     (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
   );
 
-  // 照片進度 badge：可編輯（Link）與唯讀（button）兩個分支共用同一份 JSX
-  const photoProgressBadge = (
+  // 內容進度 badge：可編輯（Link）與唯讀（button）兩個分支共用同一份 JSX
+  const contentProgressBadges = (
     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
       {photoProgress.total > 0 && (
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
@@ -49,6 +53,17 @@ export default function StudentReviewCard({
             : `照片 ${photoProgress.filled}/${photoProgress.total}`}
         </span>
       )}
+      {textProgress.total > 0 && (
+        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+          textProgress.filled === textProgress.total
+            ? "bg-emerald-50 text-emerald-700"
+            : "bg-amber-50 text-amber-700"
+        }`}>
+          {textProgress.filled === textProgress.total
+            ? "✓ 文字齊"
+            : `文字 ${textProgress.filled}/${textProgress.total}`}
+        </span>
+      )}
     </div>
   );
 
@@ -58,7 +73,7 @@ export default function StudentReviewCard({
       style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
       padding="none"
       className={`overflow-hidden transition-all hover:shadow-md ${
-        isStudentPhotoComplete ? "border-emerald-100" : "border-gray-200"
+        isStudentContentComplete ? "border-emerald-100" : "border-gray-200"
       }`}
     >
       {/* Thumbnail strip — 跳過已刪除的頁面；點縮圖即預覽 */}
@@ -98,7 +113,7 @@ export default function StudentReviewCard({
             <div className="truncate font-semibold text-gray-900 transition-colors group-hover/main:text-indigo-700">
               {student.name}
             </div>
-            {photoProgressBadge}
+            {contentProgressBadges}
           </Link>
         ) : (
           <button
@@ -107,7 +122,7 @@ export default function StudentReviewCard({
             className="min-w-0 flex-1 text-left"
           >
             <div className="truncate font-semibold text-gray-900">{student.name}</div>
-            {photoProgressBadge}
+            {contentProgressBadges}
           </button>
         )}
         <div className="flex flex-shrink-0 items-center gap-0.5">
@@ -122,11 +137,19 @@ export default function StudentReviewCard({
               <Pencil className="h-4 w-4" />
             </Link>
           )}
-          {/* 唯讀角色可下載既有產物，但不能觸發需要 can_edit 的重新渲染。 */}
+          {/* 完成後，唯讀角色可下載既有產物，但不能觸發需要 can_edit 的重新渲染。 */}
           {canDownloadCurrentProject && (
             <>
               <IconButton
-                label={isRendering ? "PDF 產生中" : canStartDownload ? "下載 PDF" : "尚未產生 PDF"}
+                label={
+                  !isProjectCompleted
+                    ? "請先標記全班完成，才能下載 PDF"
+                    : isRendering
+                      ? "PDF 產生中"
+                      : canStartDownload
+                        ? "下載 PDF"
+                        : "尚未產生 PDF"
+                }
                 onClick={() => onDownloadPdf(student.id)}
                 disabled={isStudentBusy || !canStartDownload}
                 data-guide="review-download-student"
@@ -137,7 +160,15 @@ export default function StudentReviewCard({
                   : <Download className="h-4 w-4" />}
               </IconButton>
               <IconButton
-                label={isImageShareReady ? "開始分享圖片" : canStartDownload ? "下載圖片" : "尚未產生圖片"}
+                label={
+                  !isProjectCompleted
+                    ? "請先標記全班完成，才能下載圖片"
+                    : isImageShareReady
+                      ? "開始分享圖片"
+                      : canStartDownload
+                        ? "下載圖片"
+                        : "尚未產生圖片"
+                }
                 onClick={() => onDownloadImages(student.id)}
                 disabled={isStudentBusy || !canStartDownload}
                 variant="info"

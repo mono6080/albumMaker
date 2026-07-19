@@ -98,7 +98,8 @@
   `layer_name` / `visible` / `locked`。沒存 `visible` 等同可見，只有布林值 `false`
   才隱藏；沒存 `locked` 等同未鎖定。群組隱藏會使整個 descendant subtree 不渲染，
   也不列入專案照片格／文字格與進度統計；既有學生照片和文字覆寫仍保留，
-  重新顯示後可繼續使用。舊 layout 不需 migration。
+  重新顯示後可繼續使用。文字框 `text_role=static` 或 `editable=false` 是固定文字，
+  不出現在老師填寫欄位，也不列入文字進度；其他文字框預設為可填。舊 layout 不需 migration。
 - 儲存模板時，`canvas_width` / `canvas_height` 缺省時採 794×1123，存在時也必須
   分別等於這組 canonical 整數，避免正式輸出縮放放大字級或效果配置；三種 leaf 的
   `x` / `y` / `width` / `height` / `rotation` 都必須是有限安全數值；元素可保留數個

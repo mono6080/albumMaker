@@ -81,7 +81,7 @@ export function canUserReadProject(_role, project) {
   return project?.permissions?.can_read === true;
 }
 
-// PDF／圖片下載端點只要求 object read capability；產生新檔仍由 can_edit 控制。
+// PDF／圖片下載需 object read capability，且後端另要求專案已標記全班完成；產生新檔仍由 can_edit 控制。
 export function canUserDownloadProject(_role, project) {
   return project?.permissions?.can_read === true;
 }

@@ -46,6 +46,7 @@ const FILTER_LABELS = {
 const ATTENTION_LABELS = {
   empty_project: "空相本",
   submitted_with_missing_photos: "交件後仍缺照片",
+  submitted_with_missing_texts: "交件後仍缺文字",
   missing_print_pdf: "缺列印 PDF",
   partial_print_pdf: "列印 PDF 未齊",
 };
@@ -92,20 +93,27 @@ function classroomMatchesStatus(classroom, statusFilter) {
   ));
 }
 
-function PhotoProgressBar({ project, classroomName, periodLabel }) {
-  const filled = project.photo_filled ?? 0;
-  const total = project.photo_total ?? 0;
+function ContentProgressBar({
+  project,
+  classroomName,
+  periodLabel,
+  label,
+  filledField,
+  totalField,
+}) {
+  const filled = project[filledField] ?? 0;
+  const total = project[totalField] ?? 0;
   if (total === 0) return null;
   const percent = Math.round((filled / total) * 100);
   return (
     <div className="flex items-center gap-2">
       <div
         role="progressbar"
-        aria-label={`${classroomName} ${periodLabel} ${project.project_name} 照片完成度`}
+        aria-label={`${classroomName} ${periodLabel} ${project.project_name} ${label}完成度`}
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={filled}
-        aria-valuetext={`已填 ${filled}／${total} 格照片`}
+        aria-valuetext={`已填 ${filled}／${total} 格${label}`}
         className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-100"
       >
         <div
@@ -114,7 +122,7 @@ function PhotoProgressBar({ project, classroomName, periodLabel }) {
         />
       </div>
       <span className="flex-shrink-0 text-[11px] tabular-nums text-gray-500">
-        {filled}/{total}
+        {label} {filled}/{total}
       </span>
     </div>
   );
@@ -127,8 +135,8 @@ function ProjectStatusCard({ project, classroomName, periodLabel }) {
     ? "success"
     : project.content_status === "empty" ? "danger" : "warning";
   const contentLabel = project.content_status === "ready"
-    ? "照片完整"
-    : project.content_status === "empty" ? "空相本" : "照片未齊";
+    ? "內容完整"
+    : project.content_status === "empty" ? "空相本" : "內容未齊";
   const exportLabel = project.export_status === "ready"
     ? "PDF 已就緒"
     : project.export_status === "partial"
@@ -166,8 +174,23 @@ function ProjectStatusCard({ project, classroomName, periodLabel }) {
         )}
       </div>
 
-      <div className="mt-2">
-        <PhotoProgressBar project={project} classroomName={classroomName} periodLabel={periodLabel} />
+      <div className="mt-2 space-y-1.5">
+        <ContentProgressBar
+          project={project}
+          classroomName={classroomName}
+          periodLabel={periodLabel}
+          label="照片"
+          filledField="photo_filled"
+          totalField="photo_total"
+        />
+        <ContentProgressBar
+          project={project}
+          classroomName={classroomName}
+          periodLabel={periodLabel}
+          label="文字"
+          filledField="text_filled"
+          totalField="text_total"
+        />
       </div>
 
       <p className="mt-2 text-[11px] text-gray-500">

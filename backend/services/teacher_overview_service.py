@@ -32,12 +32,18 @@ from services.storage_factory import get_storage
 from services.student_render_service import get_template_page_layouts
 
 
+def _text_label_is_fillable(label: dict) -> bool:
+    """與前端 textLabelRoles.js 相同：固定文字不列入老師填寫進度。"""
+    role = label.get("text_role", label.get("textRole"))
+    return role != "static" and label.get("editable") is not False
+
+
 def _summarize_student_progress(
     pages_data: list,
     page_layouts: list[dict],
     project_label_texts: dict,
-) -> tuple[int, int, int]:
-    """回傳單一學生的照片已填、照片總格及空白輸出文字格。"""
+) -> tuple[int, int, int, int]:
+    """回傳單一學生的照片與老師可填文字之已填／總格數。"""
     merged_pages = merge_project_label_texts_into_pages(
         pages_data,
         project_label_texts,
@@ -51,7 +57,8 @@ def _summarize_student_progress(
 
     photo_filled_count = 0
     photo_total_count = 0
-    blank_text_count = 0
+    text_filled_count = 0
+    text_total_count = 0
     for page_index, layout in enumerate(page_layouts):
         page_data = merged_by_index.get(page_index, {})
         if page_data.get("skip"):
@@ -64,15 +71,19 @@ def _summarize_student_progress(
                 if page_photos.get(str(element.get("id"))):
                     photo_filled_count += 1
                 continue
-            if element_type != "text":
+            if element_type != "text" or not _text_label_is_fillable(element):
                 continue
+            text_total_count += 1
             label_id = str(element.get("id"))
             effective_text = get_label_entry_text(merged_label_texts.get(label_id))
-            if effective_text is None:
-                effective_text = element.get("text")
-            if not str(effective_text or "").strip():
-                blank_text_count += 1
-    return photo_filled_count, photo_total_count, blank_text_count
+            if str(effective_text or "").strip():
+                text_filled_count += 1
+    return (
+        photo_filled_count,
+        photo_total_count,
+        text_filled_count,
+        text_total_count,
+    )
 
 
 def _serialize_term_period(term_period: AcademicTermPeriod) -> dict:
@@ -217,36 +228,47 @@ def _serialize_project_progress(
     students_payload = []
     photo_filled = 0
     photo_total = 0
-    blank_text_count = 0
+    text_filled = 0
+    text_total = 0
     pdf_ready_count = 0
     for student in project.students:
-        student_photo_filled, student_photo_total, student_blank_text_count = (
-            _summarize_student_progress(
-                _parse_json_list(student.pages_data_json),
-                page_layouts,
-                project_label_texts,
-            )
+        (
+            student_photo_filled,
+            student_photo_total,
+            student_text_filled,
+            student_text_total,
+        ) = _summarize_student_progress(
+            _parse_json_list(student.pages_data_json),
+            page_layouts,
+            project_label_texts,
         )
         print_pdf_key = student_pdf_key(student, "print")
         has_pdf = bool(print_pdf_key and print_pdf_key in existing_output_keys)
         pdf_ready_count += int(has_pdf)
         photo_filled += student_photo_filled
         photo_total += student_photo_total
-        blank_text_count += student_blank_text_count
+        text_filled += student_text_filled
+        text_total += student_text_total
         students_payload.append({
             "student_id": student.id,
             "student_name": student.name,
             "photo_filled": student_photo_filled,
             "photo_total": student_photo_total,
-            "blank_text_count": student_blank_text_count,
+            "text_filled": student_text_filled,
+            "text_total": student_text_total,
+            "blank_text_count": student_text_total - student_text_filled,
             "has_pdf": has_pdf,
         })
 
     student_count = len(students_payload)
+    is_content_ready = (
+        photo_filled == photo_total
+        and text_filled == text_total
+    )
     content_status = (
         "empty"
         if student_count == 0
-        else "ready" if photo_filled == photo_total else "incomplete"
+        else "ready" if is_content_ready else "incomplete"
     )
     workflow_status = "submitted_locked" if project.completed_at else "working"
     if student_count == 0 or pdf_ready_count == 0:
@@ -259,8 +281,10 @@ def _serialize_project_progress(
     attention_codes = []
     if content_status == "empty":
         attention_codes.append("empty_project")
-    if project.completed_at and content_status == "incomplete":
+    if project.completed_at and photo_filled < photo_total:
         attention_codes.append("submitted_with_missing_photos")
+    if project.completed_at and text_filled < text_total:
+        attention_codes.append("submitted_with_missing_texts")
     if export_status == "missing":
         attention_codes.append("missing_print_pdf")
     elif export_status == "partial":
@@ -274,7 +298,9 @@ def _serialize_project_progress(
         "student_count": student_count,
         "photo_filled": photo_filled,
         "photo_total": photo_total,
-        "blank_text_count": blank_text_count,
+        "text_filled": text_filled,
+        "text_total": text_total,
+        "blank_text_count": text_total - text_filled,
         "content_status": content_status,
         "workflow_status": workflow_status,
         "export_status": export_status,
@@ -478,7 +504,7 @@ def build_teacher_overview_workbook(
         "single_slot_count": "單一專案工作格",
         "multiple_projects_slot_count": "多專案工作格",
         "project_count": "專案數",
-        "content_ready_project_count": "照片內容已齊專案",
+        "content_ready_project_count": "照片與文字內容已齊專案",
         "submitted_project_count": "已交件鎖定專案",
         "export_ready_project_count": "列印 PDF 已齊專案",
         "attention_project_count": "需注意專案",
@@ -504,6 +530,8 @@ def build_teacher_overview_workbook(
         "相本學生數",
         "照片已填",
         "照片總格",
+        "文字已填",
+        "文字總格",
         "內容狀態",
         "空白文字格",
         "PDF 已產生",
@@ -523,6 +551,8 @@ def build_teacher_overview_workbook(
         "學生",
         "照片已填",
         "照片總格",
+        "文字已填",
+        "文字總格",
         "空白文字格",
         "工作流",
         "PDF 狀態",
@@ -557,6 +587,8 @@ def build_teacher_overview_workbook(
                 sum(project["student_count"] for project in projects),
                 sum(project["photo_filled"] for project in projects),
                 sum(project["photo_total"] for project in projects),
+                sum(project["text_filled"] for project in projects),
+                sum(project["text_total"] for project in projects),
                 "、".join(project["content_status"] for project in projects),
                 sum(project["blank_text_count"] for project in projects),
                 sum(project["pdf_ready_count"] for project in projects),
@@ -581,6 +613,8 @@ def build_teacher_overview_workbook(
                         student["student_name"],
                         student["photo_filled"],
                         student["photo_total"],
+                        student["text_filled"],
+                        student["text_total"],
                         student["blank_text_count"],
                         project["workflow_status"],
                         "ready" if student["has_pdf"] else "missing",

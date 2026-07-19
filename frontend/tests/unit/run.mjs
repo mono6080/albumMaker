@@ -13,6 +13,7 @@ import "./groups-contract.test.mjs";
 import "./groups-commands.test.mjs";
 import "./groups-nested.test.mjs";
 import "./text.test.mjs";
+import "./text-progress.test.mjs";
 import "./roles.test.mjs";
 import "./classroom-assignments.test.mjs";
 

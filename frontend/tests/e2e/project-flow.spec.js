@@ -17,6 +17,27 @@ import {
 } from "./helpers.js";
 
 
+async function updateProjectLabelTexts(page, projectId, labelTexts) {
+  const project = await fetchProjectDetail(page, projectId);
+  const response = await page.request.put(
+    `/api/projects/${projectId}/label_texts?expected_template_revision=${project.template_revision}`,
+    { data: labelTexts },
+  );
+  expect(response.ok()).toBeTruthy();
+}
+
+
+async function updateStudentLabelTexts(page, projectId, studentId, pageIndex, labelTexts) {
+  const project = await fetchProjectDetail(page, projectId);
+  const response = await page.request.put(
+    `/api/projects/${projectId}/students/${studentId}/pages/${pageIndex}/texts`
+      + `?expected_template_revision=${project.template_revision}`,
+    { data: labelTexts },
+  );
+  expect(response.ok()).toBeTruthy();
+}
+
+
 test("lead teacher creates a class project from the current roster snapshot", async ({ page }) => {
   const layout = await loadFixtureLayout();
   const templateName = `E2E 專案模板 ${Date.now()}`;
@@ -193,7 +214,7 @@ test("lead teacher creates a class project from the current roster snapshot", as
   await expect(page.getByText("Alice", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "製作教學" }).click();
   await expect(page.locator(".driver-popover")).toContainText("班級進度");
-  await expect(page.locator(".driver-popover")).toContainText("缺照片");
+  await expect(page.locator(".driver-popover")).toContainText("照片與文字進度");
   await closeProductGuide(page);
 
   await page.locator('[data-guide="review-student-card"]').filter({ hasText: "Alice" }).getByRole("link", { name: "編輯" }).click();
@@ -320,12 +341,24 @@ test("class completion locks content while scope switching stays usable", async 
   for (const student of detail.students) {
     await uploadStudentPhoto(page, project.id, student.id, slotId, "lock.png", redPng);
   }
+  await updateProjectLabelTexts(page, project.id, {
+    0: { [String(layout.text_labels[0].id)]: "全班文字已完成" },
+  });
 
-  // 照片備齊（階段 2）→ 標記全班完成
+  // 照片與文字備齊（階段 2）→ 標記全班完成
   await page.goto(`/projects/${project.id}/review`);
-  await page.getByRole("button", { name: "全班完成" }).click();
-  await page.getByRole("dialog", { name: "全班完成" }).getByRole("button", { name: "全班完成" }).click();
+  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載 PDF" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載圖片" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "PDF ZIP", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "全部圖片", exact: true })).toBeDisabled();
+
+  await page.getByRole("button", { name: "全班完成", exact: true }).click();
+  await page.getByRole("dialog", { name: "全班完成" }).getByRole("button", { name: "全班完成", exact: true }).click();
   await expect(page.getByText("✓ 全班完成")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下載 PDF", exact: true }).first()).toBeEnabled();
+  await expect(page.getByRole("button", { name: "下載圖片", exact: true }).first()).toBeEnabled();
+  await expect(page.getByRole("button", { name: "PDF ZIP", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "全部圖片", exact: true })).toBeEnabled();
 
   // 鎖定後編輯器內的 scope 切換必須仍可用（flushSave 無變更時不得打 API 被 403 卡住）
   await page.goto(`/projects/${project.id}/edit`);
@@ -342,5 +375,69 @@ test("class completion locks content while scope switching stays usable", async 
   await page.getByRole("link", { name: "班級總覽", exact: true }).click();
   await page.getByRole("button", { name: "退回修改" }).click();
   await page.getByRole("dialog", { name: "退回修改" }).getByRole("button", { name: "退回修改" }).click();
-  await expect(page.getByRole("button", { name: "全班完成" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "全班完成", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載 PDF" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載圖片" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "PDF ZIP", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "全部圖片", exact: true })).toBeDisabled();
+});
+
+
+test("class text progress combines eleven class fields with each student's last field", async ({ page }) => {
+  const layout = await loadFixtureLayout();
+  layout.photo_slots = [];
+  layout.text_labels = Array.from({ length: 12 }, (_, index) => ({
+    id: index + 1,
+    x: 48,
+    y: 48 + index * 84,
+    width: 360,
+    height: 60,
+    text: `模板範例 ${index + 1}`,
+    font_size: 24,
+    font_color: "#333333",
+  }));
+  const templateName = `E2E 文字進度模板 ${Date.now()}`;
+  const projectName = `E2E 文字進度專案 ${Date.now()}`;
+
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, templateName, layout);
+  const project = await createProject(
+    page,
+    projectName,
+    templateId,
+    ["Text Alice", "Text Bob"],
+  );
+  const projectTexts = Object.fromEntries(
+    Array.from({ length: 11 }, (_, index) => [String(index + 1), `全班 ${index + 1}`]),
+  );
+  await updateProjectLabelTexts(page, project.id, { 0: projectTexts });
+
+  const detail = await fetchProjectDetail(page, project.id);
+  await updateStudentLabelTexts(
+    page,
+    project.id,
+    detail.students[0].id,
+    0,
+    { 12: "第一位個人文字" },
+  );
+
+  await page.goto(`/projects/${project.id}/review`);
+  const textProgress = page.getByRole("progressbar", { name: "全班文字完成度" });
+  await expect(textProgress).toHaveAttribute("aria-valuemax", "24");
+  await expect(textProgress).toHaveAttribute("aria-valuenow", "23");
+  await expect(page.getByText("尚未完成 1 位", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "全班完成", exact: true })).toHaveCount(0);
+
+  await updateStudentLabelTexts(
+    page,
+    project.id,
+    detail.students[1].id,
+    0,
+    { 12: "第二位個人文字" },
+  );
+  await page.reload();
+
+  await expect(textProgress).toHaveAttribute("aria-valuenow", "24");
+  await expect(page.getByText("全班文字齊", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "全班完成", exact: true })).toBeVisible();
 });

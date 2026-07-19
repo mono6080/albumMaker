@@ -108,6 +108,21 @@ def test_auth_missing_resource_and_validation_edges():
         invalid_single_image_mode = client.get(f"/api/projects/{project_id}/students/{student_id}/images/1?mode=web")
         assert_status(invalid_single_image_mode, 422)
 
+        download_paths = [
+            f"/api/projects/{project_id}/students/{student_id}/pdf",
+            f"/api/projects/{project_id}/students/{student_id}/images",
+            f"/api/projects/{project_id}/students/{student_id}/images/1",
+            f"/api/projects/{project_id}/download/all",
+            f"/api/projects/{project_id}/download/all/images",
+        ]
+        for download_path in download_paths:
+            download_before_completion = client.get(download_path)
+            assert_status(download_before_completion, 409)
+            assert download_before_completion.json()["detail"] == "請先標記全班完成，再下載 PDF 或圖片"
+
+        complete = client.post(f"/api/projects/{project_id}/complete")
+        assert_status(complete, 200)
+
         pdf_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf")
         assert_status(pdf_before_render, 404)
         images_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/images")

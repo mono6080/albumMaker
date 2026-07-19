@@ -150,14 +150,14 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 | ProjectList | `/`、`/projects` | 「相本工作」：teacher 以目前班級為主體，主教從尚未開工的正式學期期別工作格選模板建立相本；其他角色依 object permission 顯示 |
 | ClassEdit | `/projects/:id/edit` | 相本編輯器（全班 scope）：全班共用照片（選格→選分配方式→上傳；依檔名整批匯入為獨立入口）+ 全班對應文字；舊 `/projects/:id/batch` 轉址至此 |
 | StudentEdit | `/projects/:projectId/students/:studentId/edit` | 相本編輯器（學生 scope）：單一學生照片 + 個別文字；與 ClassEdit 以 ScopeSwitcher 的全班/個別按鈕互切；下載集中在班級總覽 |
-| ProjectReview | `/projects/:id/review` | 「班級總覽」工作台：本期學生固定快照與相本稱呼、照片進度與階段引導（製作→全班完成→交件）、單人與全班下載、審閱留言 |
+| ProjectReview | `/projects/:id/review` | 「班級總覽」工作台：本期學生固定快照與相本稱呼、照片與文字進度及階段引導（製作→全班完成→交件）、標記全班完成後的單人與全班下載、審閱留言 |
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
 | OrganizationManagement | `/admin/organization` | 園所設定：校／部門主管、班級老師與學生、相本建立／逐位 identity 決策後顯式歸班，以及 owner 進度歸戶（admin） |
 | TermReclassification | `/admin/organization/new-term` | 新學期編班草稿：完整學生／老師目標、差異驗證與確認套用（admin） |
 | SemesterExport | `/admin/semester-export` | 依正式學期校／班快照與穩定學生身分顯示各期 cell 狀態；admin 補渲染與下載 ZIP，主管限 scope 唯讀 |
-| TeacherOverview | `/admin/teacher-overview` | 正式學期班級×期別矩陣；分開顯示建立、照片內容、交件、列印 PDF 與 Excel（admin 全部；主管限 active scope） |
+| TeacherOverview | `/admin/teacher-overview` | 正式學期班級×期別矩陣；分開顯示建立、照片與文字內容、交件、列印 PDF 與 Excel（admin 全部；主管限 active scope） |
 | Settings | `/settings` | 個人 UI 偏好（字體縮放） |
 
 各路由的角色守衛（`PrivateRoute` + `allowedRoles`）見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)。

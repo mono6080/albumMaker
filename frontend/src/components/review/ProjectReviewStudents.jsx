@@ -5,8 +5,8 @@ import { Badge, SegmentedControl, fieldControlClass } from "../ui";
 
 const REVIEW_STATUS_FILTER_OPTIONS = [
   { value: "all", label: "全部", icon: Users, guideId: "review-filter-all" },
-  { value: "incomplete", label: "缺照片", icon: Clock, guideId: "review-filter-pending" },
-  { value: "complete", label: "照片齊", icon: CheckCircle2, guideId: "review-filter-done" },
+  { value: "incomplete", label: "未完成", icon: Clock, guideId: "review-filter-pending" },
+  { value: "complete", label: "已完成", icon: CheckCircle2, guideId: "review-filter-done" },
 ];
 
 export default function ProjectReviewStudents({
@@ -18,7 +18,9 @@ export default function ProjectReviewStudents({
   templateRevision,
   canEditCurrentProject,
   canDownloadCurrentProject,
+  isProjectCompleted,
   photoProgressByStudentId,
+  textProgressByStudentId,
   rendering,
   renderingImages,
   studentSearch,
@@ -84,7 +86,9 @@ export default function ProjectReviewStudents({
               templateRevision={templateRevision}
               canEditCurrentProject={canEditCurrentProject}
               canDownloadCurrentProject={canDownloadCurrentProject}
+              isProjectCompleted={isProjectCompleted}
               photoProgress={photoProgressByStudentId.get(student.id)}
+              textProgress={textProgressByStudentId.get(student.id)}
               isRendering={rendering[student.id]}
               isImageRendering={renderingImages[student.id]}
               isImageShareReady={isImageShareReady(student.id)}

@@ -167,7 +167,8 @@ commit。空班、同格重複與錯配一律回 409/422，不建立部分資料
 
 每個 Project 分開回傳四個正交狀態：
 
-- `content_status`: `empty|incomplete|ready`，含照片 filled/total 與空白文字數。
+- `content_status`: `empty|incomplete|ready`，含照片與文字各自的 filled/total；
+  只有兩者都填滿才是 `ready`，並保留空白文字數供既有匯出使用。
 - `workflow_status`: `working|submitted_locked`，只由 `completed_at` 決定。
 - `export_status`: `missing|partial|ready`，由 print PDF 數決定。
 - `attention_codes`: 空相本、已交件但缺照片、缺 PDF 等。
@@ -176,6 +177,12 @@ commit。空班、同格重複與錯配一律回 409/422，不建立部分資料
 摘要計工作格與 Project，不把跨期 Student snapshots 加總稱為學生人數。
 
 Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別、學生明細。
+
+文字進度的分母是「Project 學生 × 該學生未跳過頁面的可見可填文字框」。每一格先套用
+學生個別文字，沒有個別文字才套用全班文字；最後文字去除空白後非空才算已填。模板預設
+範例字、固定文字與隱藏文字都不算老師已填。因而 12 格文字中，全班填 11 格、所有學生
+各自填好最後 1 格時，文字進度是全班的 `12 × 學生數 / 12 × 學生數`，視為完成；少一位
+學生未補最後一格，就仍是未完成。
 
 ## Semester Export Contract
 
@@ -212,6 +219,7 @@ filter signature、AbortController 與 sequence，舊回應不得覆蓋目前畫
 - infant 查詢不含 academy 班級或老師；協同老師不會多一筆未開始。
 - 同班同期兩個舊 Project 只算一格；新流程無法再建立第二個。
 - 空格、空相本、照片完成未交件、交件後缺照片與 PDF partial 分別顯示。
+- 12 格文字由全班填 11 格、每位學生個別補最後 1 格時文字完成；少一人未補時仍未完成。
 - 班級停用後，目前校／部門主管仍可開歷史 Project；舊主管回 403。
 - Project name 與班名不同、兩校同名班時仍正確分組。
 - 離園孩子後期是 departed；新入園前期是 not_enrolled；真正缺相本是 no_album。

@@ -38,6 +38,8 @@ function project({
     student_count: 2,
     photo_filled: contentStatus === "ready" ? 4 : 2,
     photo_total: 4,
+    text_filled: contentStatus === "ready" ? 4 : 3,
+    text_total: 4,
     blank_text_count: contentStatus === "ready" ? 0 : 1,
     content_status: contentStatus,
     workflow_status: workflowStatus,
@@ -215,7 +217,8 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await page.getByRole("button", { name: /和平校.*星星班/ }).click();
   const starPanel = page.locator("#teacher-classroom-1001");
   await expect(starPanel.getByText("未建立相本", { exact: true })).toBeVisible();
-  await expect(starPanel.getByText("照片完整", { exact: true })).toBeVisible();
+  await expect(starPanel.getByText("內容完整", { exact: true })).toBeVisible();
+  await expect(starPanel.getByRole("progressbar", { name: /文字完成度/ })).toHaveAttribute("aria-valuenow", "4");
   await expect(starPanel.getByText("製作中", { exact: true })).toBeVisible();
   await expect(starPanel.getByText("PDF 1/2", { exact: true })).toBeVisible();
   await expect(starPanel.getByText("負責人：星星班主教", { exact: true })).toBeVisible();

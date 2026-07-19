@@ -103,6 +103,7 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
         assert submitted_project["content_status"] == "incomplete"
         assert submitted_project["attention_codes"] == [
             "submitted_with_missing_photos",
+            "submitted_with_missing_texts",
             "missing_print_pdf",
         ]
 

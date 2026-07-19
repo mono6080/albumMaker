@@ -146,6 +146,16 @@ def assert_project_readable(
     raise HTTPException(status_code=403, detail="無此專案的存取權限")
 
 
+def assert_project_downloadable(project: Project) -> None:
+    """確認專案已標記全班完成，才可下載交件檔。"""
+    if project.completed_at is not None:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail="請先標記全班完成，再下載 PDF 或圖片",
+    )
+
+
 def assert_project_writable(
     project: Project,
     current_user: User,

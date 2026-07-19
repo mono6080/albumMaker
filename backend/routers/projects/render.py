@@ -43,6 +43,7 @@ from services.text_variables import (
 
 from ._helpers import (
     _parse_json_field,
+    assert_project_downloadable,
     assert_project_readable,
     assert_project_writable,
 )
@@ -292,6 +293,7 @@ def download_student_pdf(
     """下載學生個人相冊 PDF。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
+    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
 
     pdf_bytes, download_filename = get_student_pdf_download(
@@ -319,6 +321,7 @@ def download_student_images_as_zip(
     """下載學生個人相冊的單頁 JPG 圖片 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
+    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
 
 
@@ -354,6 +357,7 @@ def download_student_image(
     """下載學生個人相冊的單頁 JPG。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
+    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
 
 
@@ -386,6 +390,7 @@ def download_all_pdfs_as_zip(
     """將所有已渲染的學生 PDF 打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
+    assert_project_downloadable(project)
 
 
     zip_filename = f"{project.name}.zip"
@@ -409,6 +414,7 @@ def download_all_images_as_zip(
     """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
+    assert_project_downloadable(project)
 
 
     screen_suffix = "_screen" if effective_mode == "screen" else ""

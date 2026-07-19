@@ -1137,6 +1137,22 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert rerender_response.json()["pdf"] == render_payload["pdf"]
         assert rerender_response.json()["pages"] == 1
 
+        download_paths = [
+            f"/api/projects/{project_id}/students/{student_id}/pdf?mode=print",
+            f"/api/projects/{project_id}/students/{student_id}/images",
+            f"/api/projects/{project_id}/students/{student_id}/images/1",
+            f"/api/projects/{project_id}/download/all?mode=screen",
+            f"/api/projects/{project_id}/download/all/images?mode=screen",
+        ]
+        for download_path in download_paths:
+            download_before_completion = client.get(download_path)
+            assert_status(download_before_completion, 409)
+            assert download_before_completion.json()["detail"] == "請先標記全班完成，再下載 PDF 或圖片"
+
+        complete = client.post(f"/api/projects/{project_id}/complete")
+        assert_status(complete, 200)
+        assert complete.json()["completed_at"] is not None
+
         download_pdf = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf?mode=print")
         assert_status(download_pdf, 200)
         assert download_pdf.headers["content-type"].startswith("application/pdf")
@@ -1204,6 +1220,12 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
             assert len(all_image_names) == 1
             assert all_image_names[0].count("/") == 1
             assert all_image_names[0].endswith("_screen_page1.jpg")
+
+        reopen = client.post(f"/api/projects/{project_id}/reopen")
+        assert_status(reopen, 200)
+        download_after_reopen = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf")
+        assert_status(download_after_reopen, 409)
+        assert download_after_reopen.json()["detail"] == "請先標記全班完成，再下載 PDF 或圖片"
 
         mapping_response = client.put(
             revisioned_project_url(

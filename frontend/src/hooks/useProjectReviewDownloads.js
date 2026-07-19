@@ -46,6 +46,12 @@ export default function useProjectReviewDownloads({
     setAllImagesShareDraft(null);
   }, [projectLoadSequence]);
 
+  const ensureProjectCompleted = () => {
+    if (project?.completed_at) return true;
+    toast.error("請先標記全班完成，再下載 PDF 或圖片");
+    return false;
+  };
+
   const buildShareImageFiles = async (students, requestTimestamp, onProgress) => {
     const files = [];
     for (let studentIndex = 0; studentIndex < students.length; studentIndex++) {
@@ -74,6 +80,7 @@ export default function useProjectReviewDownloads({
   };
 
   const handleDownloadOne = async (studentId) => {
+    if (!ensureProjectCompleted()) return;
     setRendering(previous => ({ ...previous, [studentId]: true }));
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
@@ -98,6 +105,7 @@ export default function useProjectReviewDownloads({
   };
 
   const handleDownloadOneImages = async (studentId) => {
+    if (!ensureProjectCompleted()) return;
     setRenderingImages(previous => ({ ...previous, [studentId]: true }));
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
@@ -177,6 +185,7 @@ export default function useProjectReviewDownloads({
   };
 
   const handleDownloadAll = async () => {
+    if (!ensureProjectCompleted()) return;
     const students = project.students;
     if (!students.length) return;
     setRenderingAll(true);
@@ -213,6 +222,7 @@ export default function useProjectReviewDownloads({
   };
 
   const handleDownloadAllImages = async () => {
+    if (!ensureProjectCompleted()) return;
     const students = project.students;
     if (!students.length) return;
     setRenderingAllImages(true);

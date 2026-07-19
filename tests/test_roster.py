@@ -923,15 +923,19 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         slot = next(slot for slot in classroom["slots"] if slot["projects"])
         assert slot["creation_status"] == "single"
         project_progress = slot["projects"][0]
-        # smoke_layout 每頁 1 照片格：2 位學生共 2 格、已填 1 格；預設文字非空 → 無空白格
+        # smoke_layout 每頁 1 照片格與 1 個可填文字；模板範例字不算老師已填。
         assert project_progress["photo_total"] == 2
         assert project_progress["photo_filled"] == 1
-        assert project_progress["blank_text_count"] == 0
+        assert project_progress["text_total"] == 2
+        assert project_progress["text_filled"] == 0
+        assert project_progress["blank_text_count"] == 2
         progress_by_student = {
             student["student_name"]: student for student in project_progress["students"]
         }
         assert progress_by_student[first_student_name]["photo_filled"] == 1
         assert progress_by_student[second_student_name]["photo_filled"] == 0
+        assert progress_by_student[first_student_name]["text_total"] == 1
+        assert progress_by_student[first_student_name]["text_filled"] == 0
 
         # admin 也是依全園目前編制展開，不把只有 teacher 角色但未編班的帳號塞進進度。
         client.cookies.clear()
@@ -977,6 +981,15 @@ def test_teacher_progress_ignores_hidden_group_photos_and_texts():
         "height": 96,
         "text": "",
     })
+    layout["text_labels"].append({
+        "id": 3,
+        "x": 96,
+        "y": 600,
+        "width": 360,
+        "height": 96,
+        "text": "固定標題",
+        "text_role": "static",
+    })
     layout["group_contract"] = "nested-world-v2"
     layout["groups"] = [{
         "id": "hidden-progress",
@@ -996,10 +1009,59 @@ def test_teacher_progress_ignores_hidden_group_photos_and_texts():
             "label_texts": {"2": ""},
         }],
         [layout],
-        {},
+        {"0": {"1": "老師已填"}},
     )
 
-    assert result == (1, 1, 0)
+    assert result == (1, 1, 1, 1)
+
+
+def test_teacher_progress_combines_class_and_individual_text_coverage():
+    layout = smoke_layout()
+    layout["photo_slots"] = []
+    layout["text_labels"] = [
+        {
+            "id": label_id,
+            "x": 40,
+            "y": label_id * 50,
+            "width": 300,
+            "height": 40,
+            "text": f"模板範例 {label_id}",
+        }
+        for label_id in range(1, 13)
+    ]
+    project_label_texts = {
+        "0": {
+            str(label_id): f"全班文字 {label_id}"
+            for label_id in range(1, 12)
+        }
+    }
+
+    first_student = _summarize_student_progress(
+        [{"page_index": 0, "label_texts": {"12": "甲的個人文字"}}],
+        [layout],
+        project_label_texts,
+    )
+    second_student = _summarize_student_progress(
+        [{"page_index": 0, "label_texts": {"12": "乙的個人文字"}}],
+        [layout],
+        project_label_texts,
+    )
+    missing_second_student = _summarize_student_progress(
+        [{"page_index": 0, "label_texts": {}}],
+        [layout],
+        project_label_texts,
+    )
+
+    assert first_student == (0, 0, 12, 12)
+    assert second_student == (0, 0, 12, 12)
+    assert (
+        first_student[2] + second_student[2],
+        first_student[3] + second_student[3],
+    ) == (24, 24)
+    assert (
+        first_student[2] + missing_second_student[2],
+        first_student[3] + missing_second_student[3],
+    ) == (23, 24)
 
 
 def start_and_wait_render_job(client: TestClient, period_ids: list[int], timeout_seconds: float = 60) -> dict:

@@ -20,12 +20,13 @@ import useProjectReviewComments from "../hooks/useProjectReviewComments";
 import useProjectReviewDownloads from "../hooks/useProjectReviewDownloads";
 import { computeStudentPhotoProgress } from "../utils/photoProgress";
 import { startProductGuide } from "../utils/productGuide";
+import { computeStudentTextProgress } from "../utils/textProgress";
 
 const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-progress"]',
     title: "班級進度與下一步",
-    description: "一條看完班級進度：照片進度、缺照片人數（點它會篩選出誰還缺），右側依階段建議下一步：製作 → 全班完成 → 交件。",
+    description: "一條看完班級進度：照片與文字進度、未完成人數（點它會篩選出誰還缺），右側依階段建議下一步：製作 → 全班完成 → 交件。",
     side: "bottom",
     align: "start",
   },
@@ -53,14 +54,14 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-download-student"]',
     title: "下載單一學生",
-    description: "只產出並下載這位學生的 PDF；圖片按鈕在電腦下載 ZIP，手機會開啟系統分享。",
+    description: "標記全班完成後，可只產出並下載這位學生的 PDF；圖片按鈕在電腦下載 ZIP，手機會開啟系統分享。",
     side: "bottom",
     align: "end",
   },
   {
     element: '[data-guide="review-download-all"]',
     title: "交件下載",
-    description: "批次產生並下載全班 PDF ZIP；全部圖片在電腦下載 ZIP，手機會準備圖片後開啟分享。",
+    description: "標記全班完成後，可批次產生並下載全班 PDF ZIP；全部圖片在電腦下載 ZIP，手機會準備圖片後開啟分享。",
     side: "left",
     align: "center",
   },
@@ -157,7 +158,7 @@ export default function ProjectReview() {
 
   const handleCompleteProject = () => {
     setConfirmModal({
-      message: "確定標記「全班完成」？完成後全班照片與文字將鎖定，需主管或管理員退回才能再修改；仍可預覽與下載。",
+      message: "確定標記「全班完成」？完成後全班照片與文字將鎖定，並開放 PDF／圖片下載；需主管或管理員退回才能再修改。",
       confirmLabel: "全班完成",
       confirmVariant: "success",
       onConfirm: async () => {
@@ -192,7 +193,7 @@ export default function ProjectReview() {
   const handleStartGuide = () => {
     const unavailableGuideElements = new Set();
     if (!canEditCurrentProject) unavailableGuideElements.add('[data-guide="review-roster-button"]');
-    if (!canDownloadCurrentProject || (!canEditCurrentProject && !hasRenderedStudents)) {
+    if (!isProjectCompleted || !canDownloadCurrentProject || (!canEditCurrentProject && !hasRenderedStudents)) {
       unavailableGuideElements.add('[data-guide="review-download-student"]');
       unavailableGuideElements.add('[data-guide="review-download-all"]');
     }
@@ -228,24 +229,48 @@ export default function ProjectReview() {
     .reduce((sum, progress) => sum + progress.filled, 0);
   const classPhotoTotal = [...photoProgressByStudentId.values()]
     .reduce((sum, progress) => sum + progress.total, 0);
+  const textProgressByStudentId = new Map(
+    project.students.map(student => [
+      student.id,
+      computeStudentTextProgress(
+        student.pages_data,
+        template.pages,
+        project.label_texts,
+      ),
+    ]),
+  );
+  const classTextFilled = [...textProgressByStudentId.values()]
+    .reduce((sum, progress) => sum + progress.filled, 0);
+  const classTextTotal = [...textProgressByStudentId.values()]
+    .reduce((sum, progress) => sum + progress.total, 0);
   const incompleteStudents = project.students.filter(student => {
-    const progress = photoProgressByStudentId.get(student.id);
-    return progress.total > 0 && progress.filled < progress.total;
+    const photoProgress = photoProgressByStudentId.get(student.id);
+    const textProgress = textProgressByStudentId.get(student.id);
+    const isPhotoComplete = photoProgress.total === 0
+      || photoProgress.filled === photoProgress.total;
+    const isTextComplete = textProgress.total === 0
+      || textProgress.filled === textProgress.total;
+    return !isPhotoComplete || !isTextComplete;
   });
   const workStage = isProjectCompleted
     ? 3
-    : classPhotoTotal === 0 || incompleteStudents.length === 0
+    : incompleteStudents.length === 0
       ? 2
       : 1;
 
   const trimmedStudentSearch = studentSearch.trim().toLowerCase();
   const visibleStudents = project.students.filter(student => {
-    const progress = photoProgressByStudentId.get(student.id);
-    const isPhotoComplete = progress.total === 0 || progress.filled === progress.total;
+    const photoProgress = photoProgressByStudentId.get(student.id);
+    const textProgress = textProgressByStudentId.get(student.id);
+    const isPhotoComplete = photoProgress.total === 0
+      || photoProgress.filled === photoProgress.total;
+    const isTextComplete = textProgress.total === 0
+      || textProgress.filled === textProgress.total;
+    const isContentComplete = isPhotoComplete && isTextComplete;
     const matchesStatus =
       studentStatusFilter === "all" ||
-      (studentStatusFilter === "incomplete" && !isPhotoComplete) ||
-      (studentStatusFilter === "complete" && isPhotoComplete);
+      (studentStatusFilter === "incomplete" && !isContentComplete) ||
+      (studentStatusFilter === "complete" && isContentComplete);
     const matchesSearch =
       !trimmedStudentSearch ||
       (student.name ?? "").toLowerCase().includes(trimmedStudentSearch);
@@ -326,6 +351,8 @@ export default function ProjectReview() {
           workStage={workStage}
           classPhotoFilled={classPhotoFilled}
           classPhotoTotal={classPhotoTotal}
+          classTextFilled={classTextFilled}
+          classTextTotal={classTextTotal}
           incompleteStudentCount={incompleteStudents.length}
           commentsCount={comments.length}
           canEditCurrentProject={canEditCurrentProject}
@@ -373,7 +400,9 @@ export default function ProjectReview() {
         templateRevision={project.template_revision}
         canEditCurrentProject={canEditCurrentProject}
         canDownloadCurrentProject={canDownloadCurrentProject}
+        isProjectCompleted={isProjectCompleted}
         photoProgressByStudentId={photoProgressByStudentId}
+        textProgressByStudentId={textProgressByStudentId}
         rendering={downloadState.rendering}
         renderingImages={downloadState.renderingImages}
         studentSearch={studentSearch}
