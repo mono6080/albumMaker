@@ -54,7 +54,7 @@ export function measureTextLabelRenderLayout(textModel, KonvaText) {
     fontStyle: textModel.fontStyle,
     align: textModel.align,
     verticalAlign: "middle",
-    wrap: "word",
+    wrap: "char",
     lineHeight: textModel.lineHeight,
     letterSpacing: textModel.letterSpacing * measurementScale,
   };

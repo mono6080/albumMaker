@@ -773,6 +773,48 @@ const TemplateCanvas = forwardRef(function TemplateCanvas({
   }, [endGesture, onCommitLayout]);
 
   const handleCanvasError = useCallback((message) => toast.error(message), []);
+  const zoomToolbar = isResponsiveCanvas ? (
+    <div
+      className={`${isPhoneEditor
+        ? "absolute bottom-2 left-1/2 z-20 -translate-x-1/2"
+        : ""} flex items-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-lg backdrop-blur`}
+      role="toolbar"
+      aria-label="畫布縮放"
+    >
+      <button
+        type="button"
+        data-guide="zoom-out"
+        aria-label="縮小畫布"
+        disabled={!isCameraReady}
+        onClick={() => zoomAtPoint(cameraRef.current.zoom / CANVAS_ZOOM_STEP)}
+        className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+      >
+        −
+      </button>
+      <span className="min-w-12 text-center text-xs font-medium text-gray-600" aria-live="polite">
+        {Math.round(activeCamera.zoom * 100)}%
+      </span>
+      <button
+        type="button"
+        data-guide="zoom-fit"
+        disabled={!isCameraReady}
+        onClick={fitToViewport}
+        className="inline-flex min-h-11 min-w-20 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-40"
+      >
+        適合畫面
+      </button>
+      <button
+        type="button"
+        data-guide="zoom-in"
+        aria-label="放大畫布"
+        disabled={!isCameraReady}
+        onClick={() => zoomAtPoint(cameraRef.current.zoom * CANVAS_ZOOM_STEP)}
+        className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+      >
+        ＋
+      </button>
+    </div>
+  ) : null;
 
   return (
     <>
@@ -786,7 +828,7 @@ const TemplateCanvas = forwardRef(function TemplateCanvas({
           isResponsiveCanvas
             ? isPhoneEditor
               ? "h-full w-full rounded-none border-x-0"
-              : "h-full w-full rounded"
+              : "w-full flex-1 rounded"
             : "h-[752px] w-[532px] bg-white"
         }`}
         data-guide="editor-canvas-viewport"
@@ -794,46 +836,7 @@ const TemplateCanvas = forwardRef(function TemplateCanvas({
       >
         <div className="absolute inset-0" data-guide="canvas-frame">
           {selectionOverlay}
-          {isResponsiveCanvas && (
-            <div
-              className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-lg backdrop-blur"
-              role="toolbar"
-              aria-label="畫布縮放"
-            >
-              <button
-                type="button"
-                data-guide="zoom-out"
-                aria-label="縮小畫布"
-                disabled={!isCameraReady}
-                onClick={() => zoomAtPoint(cameraRef.current.zoom / CANVAS_ZOOM_STEP)}
-                className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
-              >
-                −
-              </button>
-              <span className="min-w-12 text-center text-xs font-medium text-gray-600" aria-live="polite">
-                {Math.round(activeCamera.zoom * 100)}%
-              </span>
-              <button
-                type="button"
-                data-guide="zoom-fit"
-                disabled={!isCameraReady}
-                onClick={fitToViewport}
-                className="inline-flex min-h-11 min-w-20 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-40"
-              >
-                適合畫面
-              </button>
-              <button
-                type="button"
-                data-guide="zoom-in"
-                aria-label="放大畫布"
-                disabled={!isCameraReady}
-                onClick={() => zoomAtPoint(cameraRef.current.zoom * CANVAS_ZOOM_STEP)}
-                className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-lg text-gray-600 hover:bg-gray-100 disabled:opacity-40"
-              >
-                ＋
-              </button>
-            </div>
-          )}
+          {isPhoneEditor && zoomToolbar}
           <Stage
             ref={stageRef}
             width={stageSize.width}
@@ -948,6 +951,14 @@ const TemplateCanvas = forwardRef(function TemplateCanvas({
           </Stage>
         </div>
       </div>
+      {isResponsiveCanvas && !isPhoneEditor && (
+        <div
+          className="flex h-14 flex-shrink-0 items-center justify-center"
+          data-guide="canvas-zoom-rail"
+        >
+          {zoomToolbar}
+        </div>
+      )}
       <p className="mt-1.5 hidden text-xs text-gray-400 md:block">
         提示：點選工具後在畫布上點擊放置；拖曳移動；四角拖曳調整大小；頂部圓點旋轉
       </p>

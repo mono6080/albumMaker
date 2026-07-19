@@ -501,7 +501,7 @@ def wrap_text(
     draw: ImageDraw.ImageDraw,
     letter_spacing: float = 0,
 ) -> list[str]:
-    """依 Konva ``wrap='word'`` 規則換行，不縮字、不加省略號。"""
+    """依 Konva ``wrap='char'`` 規則逐字換行，不縮字、不加省略號。"""
     lines: list[str] = []
     for paragraph in text.split("\n"):
         remaining = paragraph
@@ -514,7 +514,6 @@ def wrap_text(
             low = 0
             high = len(units)
             match = ""
-            match_width = 0.0
             while low < high:
                 middle = (low + high) // 2
                 candidate = "".join(units[: middle + 1])
@@ -527,30 +526,11 @@ def wrap_text(
                 if candidate_width <= max_width:
                     low = middle + 1
                     match = candidate
-                    match_width = candidate_width
                 else:
                     high = middle
 
             if not match:
                 break
-
-            match_units = _text_units(match)
-            next_character = units[len(match_units)] if len(match_units) < len(units) else ""
-            if next_character in (" ", "-") and match_width <= max_width:
-                wrap_index = len(match_units)
-            else:
-                last_space_index = max(
-                    (index for index, unit in enumerate(match_units) if unit == " "),
-                    default=-1,
-                )
-                last_dash_index = max(
-                    (index for index, unit in enumerate(match_units) if unit == "-"),
-                    default=-1,
-                )
-                wrap_index = max(last_space_index, last_dash_index) + 1
-            if wrap_index > 0:
-                low = wrap_index
-                match = "".join(units[:low])
 
             lines.append(match.rstrip())
             remaining = "".join(units[low:]).lstrip()

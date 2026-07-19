@@ -14,19 +14,19 @@ class FixedAdvanceDraw:
         return sum(widths.get(character, 10) for character in text)
 
 
-def test_wrap_text_matches_konva_word_boundaries_and_trims_break_spaces():
+def test_wrap_text_matches_konva_character_boundaries():
     draw = FixedAdvanceDraw()
     font = FixedAdvanceFont()
 
-    lines = wrap_text(
-        "Alpha Beta-Gamma",
-        font,
-        70,
-        draw,
-        0,
-    )
+    assert wrap_text("ABC DEF", font, 44, draw, 0) == ["ABC D", "EF"]
+    assert wrap_text("ABC-DEF", font, 45, draw, 0) == ["ABC-D", "EF"]
 
-    assert lines == ["Alpha", "Beta-", "Gamma"]
+
+def test_wrap_text_preserves_explicit_newlines():
+    draw = FixedAdvanceDraw()
+    font = FixedAdvanceFont()
+
+    assert wrap_text("ABC\nDEF", font, 100, draw, 0) == ["ABC", "DEF"]
 
 
 def test_line_width_counts_trailing_letter_spacing_like_konva():

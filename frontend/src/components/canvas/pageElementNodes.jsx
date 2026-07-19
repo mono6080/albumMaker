@@ -444,7 +444,7 @@ export function renderTextLabelNode(
           fontStyle={textModel.fontStyle}
           align={textModel.align}
           verticalAlign="middle"
-          wrap="word"
+          wrap="char"
           lineHeight={textModel.lineHeight}
           letterSpacing={textModel.letterSpacing}
           listening={false}

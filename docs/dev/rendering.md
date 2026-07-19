@@ -43,7 +43,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   與所有 print/screen 單頁圖都存在時才跳過並回傳 `skipped=True`。任一承諾輸出遺失
   就重建整套 canonical outputs；全班重渲只重做真的改過或輸出不完整的學生
 - 文字維持模板字級，不做 auto-fit 或縮字。前後端都先在 canonical 794×1123 座標排版，
-  使用相同的 word-wrap、advance width、字距、浮點行距與前 N 行可見規則；glyph／陰影
+  使用相同的 character-wrap、advance width、字距、浮點行距與前 N 行可見規則；glyph／陰影
   超出 local frame 的部分先裁切再旋轉。溢框稽核另走未裁切量測路徑，操作方式見
   [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)
 - 姓名變數由後端 `text_variables.py` 解析，前端 `textVariables.js` 鏡像同一契約：
@@ -147,10 +147,11 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   （`alpha² / 255`），陰影變約 ¼ 濃度
 - 違反：輸出陰影幾乎看不見
 
-### 文字換行與字距：advance width + Konva word-wrap
+### 文字換行與字距：advance width + Konva character-wrap
 
-- `draw_helpers.py` 的 `wrap_text()` 鏡像 Konva `wrap='word'`：優先在空白／連字號
-  斷行並 trim 行尾／行首空白；計寬用 glyph advance，不用 ink bbox
+- `draw_helpers.py` 的 `wrap_text()` 鏡像 Konva `wrap='char'`：填滿實際框寬後逐字
+  斷行，空白／連字號不是特殊斷點；仍 trim 行尾／行首空白，計寬用 glyph advance，
+  不用 ink bbox
 - Konva 的 line width 會加 `字元數 × letterSpacing`（包含行尾 spacing）；
   後端 `_line_width_with_spacing()` 與置中／靠右起點使用同一公式
 - 違反：英文／中英混排會在不同字元斷行，置中與靠右位置也會漂移

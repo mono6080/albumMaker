@@ -11,7 +11,7 @@
     "letter_spacing": 0
   },
   {
-    "name": "english_word_wrap",
+    "name": "english_character_wrap",
     "text": "Alpha Beta Gamma Delta 2026",
     "width": 150,
     "height": 130,
@@ -22,7 +22,7 @@
     "letter_spacing": 0
   },
   {
-    "name": "mixed_hyphen_wrap",
+    "name": "mixed_hyphen_character_wrap",
     "text": "Level 12 ABC-123 感官活動完成",
     "width": 175,
     "height": 130,

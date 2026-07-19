@@ -19,6 +19,7 @@ const PHONE_CONTEXT = {
 
 const FIRST_TEXT_ID = 8101;
 const SECOND_TEXT_ID = 8102;
+const LOWER_TEXT_ID = 8103;
 
 function createMobileLayout({ includeSecondText = false } = {}) {
   const firstText = {
@@ -54,6 +55,20 @@ function createMobileLayout({ includeSecondText = false } = {}) {
     footer: null,
     logo: null,
   };
+}
+
+function createLowerCanvasLayout() {
+  const layout = createMobileLayout();
+  layout.text_labels = [{
+    ...layout.text_labels[0],
+    id: LOWER_TEXT_ID,
+    x: 280,
+    y: 1000,
+    width: 220,
+    height: 80,
+    text: "畫布下方文字",
+  }];
+  return layout;
 }
 
 async function createAndOpenEditor(page, layout, nameSuffix) {
@@ -653,6 +668,71 @@ test.describe("phone template editor", () => {
     await page.touchscreen.tap(portraitTextPoint.x, portraitTextPoint.y);
     await expect.poll(() => readSelectedNodeIds(page)).toEqual([`text-${FIRST_TEXT_ID}`]);
     await expect(page.locator('[data-guide="editor-sheet"]')).toBeHidden();
+  });
+});
+
+test.describe("computer-width tablet template editor", () => {
+  test.use({
+    viewport: { width: 1023, height: 720 },
+    deviceScaleFactor: 1,
+    isMobile: false,
+    hasTouch: false,
+  });
+
+  test("lower canvas objects remain draggable and resizable outside the zoom controls", async ({
+    page,
+  }) => {
+    const { templateId } = await createAndOpenEditor(
+      page,
+      createLowerCanvasLayout(),
+      "computer-tablet-lower-canvas",
+    );
+    const canvasViewport = page.locator('[data-guide="editor-canvas-viewport"]');
+    const zoomRail = page.locator('[data-guide="canvas-zoom-rail"]');
+    await expect(zoomRail).toBeVisible();
+    const [canvasBox, zoomRailBox] = await Promise.all([
+      canvasViewport.boundingBox(),
+      zoomRail.boundingBox(),
+    ]);
+    if (!canvasBox || !zoomRailBox) throw new Error("Canvas or zoom rail has no bounding box");
+    expect(zoomRailBox.y).toBeGreaterThanOrEqual(canvasBox.y + canvasBox.height - 1);
+
+    const nodeId = `text-${LOWER_TEXT_ID}`;
+    const initialScene = await readNodeScene(page, nodeId);
+    const nodePoint = await readNodeScreenPoint(page, nodeId);
+    expect(initialScene).not.toBeNull();
+    expect(nodePoint).not.toBeNull();
+    expect(nodePoint.y).toBeGreaterThan(canvasBox.y + canvasBox.height * 2 / 3);
+
+    await page.mouse.move(nodePoint.x, nodePoint.y);
+    await page.mouse.down();
+    await page.mouse.move(nodePoint.x + 24, nodePoint.y - 18, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(async () => (await readNodeScene(page, nodeId))?.x)
+      .toBeGreaterThan(initialScene.x + 5);
+
+    const movedPoint = await readNodeScreenPoint(page, nodeId);
+    await page.mouse.click(movedPoint.x, movedPoint.y);
+    await expect.poll(() => readSelectedNodeIds(page)).toEqual([nodeId]);
+    const beforeResize = await readNodeScene(page, nodeId);
+    const resizeStart = await readTransformerAnchorScreenPoint(page, "bottom-right");
+    expect(resizeStart).not.toBeNull();
+    await page.mouse.move(resizeStart.x, resizeStart.y);
+    await page.mouse.down();
+    await page.mouse.move(resizeStart.x + 24, resizeStart.y + 8, { steps: 12 });
+    await page.mouse.up();
+    await expect.poll(async () => (await readNodeScene(page, nodeId))?.width)
+      .toBeGreaterThan(beforeResize.width + 5);
+    const resizedScene = await readNodeScene(page, nodeId);
+    expect(resizedScene.scaleX).toBeCloseTo(1, 3);
+    expect(resizedScene.scaleY).toBeCloseTo(1, 3);
+
+    await saveTemplateLayout(page);
+    const savedLayout = await fetchTemplatePageLayout(page, templateId);
+    const savedText = savedLayout.text_labels.find(textLabel => textLabel.id === LOWER_TEXT_ID);
+    expect(savedText.x).toBeGreaterThan(280);
+    expect(savedText.y).toBeLessThan(1000);
+    expect(savedText.width).toBeGreaterThan(220);
   });
 });
 
