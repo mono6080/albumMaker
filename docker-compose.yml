@@ -1,6 +1,10 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      # 部署帶入 git SHA（見 deployment.md）；commit 變更即強制重編前端
+      args:
+        APP_BUILD_ID: ${APP_BUILD_ID:-dev}
     volumes:
       - uploads:/app/uploads
       - db:/app/db

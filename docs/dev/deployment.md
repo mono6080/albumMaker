@@ -37,11 +37,20 @@
 
 ```bash
 cp .env.example .env      # 填入 SECRET_KEY（產生方式見下表）
-docker compose up -d --build
+APP_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
-正式部署：上傳專案至 VPS → 建 `.env` → `docker compose up -d --build` →
+正式部署：上傳專案至 VPS → 建 `.env` →
+`APP_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build` →
 把 `deploy/album_maker.conf` 加入現有 nginx compose 並重啟 nginx。
+
+**務必帶 `APP_BUILD_ID`**（Dockerfile 的 frontend-builder ARG 會消費它）：
+`COPY frontend/ .` 的內容雜湊快取在部分 Docker 版本不可靠，曾發生 backend
+更新、但前端 build layer 被重用而持續服務舊 bundle（症狀：前端改動 deploy
+後畫面沒變）。帶 git SHA 讓 commit 一變就強制重編前端。懷疑仍服務舊前端時，
+以 `sudo docker compose exec -T app grep -l "<minify 後仍存在的字串>"
+/frontend/dist/assets/*.js` 驗證（注意區域識別字會被 minify 改名，需挑
+字串常值或內建 API 名如 `new Image` 當標記），或直接 `--no-cache` 重建。
 
 ## 環境變數
 

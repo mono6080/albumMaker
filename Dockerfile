@@ -4,8 +4,12 @@ FROM node:20-slim AS frontend-builder
 WORKDIR /build
 COPY frontend/package*.json ./
 RUN npm ci --legacy-peer-deps
+# APP_BUILD_ID 由部署帶入 git SHA：被下面的 build 指令消費，
+# 因此 commit 一變就強制重編前端——不倚賴 COPY 的內容雜湊快取，
+# 避免 backend 有更新但前端 build layer 被重用而服務到舊 bundle
+ARG APP_BUILD_ID=dev
 COPY frontend/ .
-RUN npm run build
+RUN APP_BUILD_ID="${APP_BUILD_ID}" npm run build
 
 
 # ── Stage 2：Python 後端 ───────────────────────────────────────────────────────
