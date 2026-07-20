@@ -13,7 +13,7 @@ python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
-python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；93 routes、零債務）
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；96 routes、零債務）
 
 # 前端
 cd frontend
@@ -63,16 +63,18 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     學生快照或 SQLite ID 重用時，鎖內身份 CAS 回 409，且替代學生與同批其他學生皆零寫入
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
     使用者批次匯入、刪除的 transaction 邊界
-  - `test_student_input_limits.py`：班級目前名單的姓名、單批與總量上限，以及相本快照只有
-    dedicated `album-name` identity mutation route（數值見 [api.md 的園所端點](api.md#園所管理-apiorganization)）
-  - `test_student_album_name.py`：相本稱呼 nullable JSON API、快照建立／既有名單的保守自動推導、
-    fixed-point 碰撞、人工值保留、輸出失效、完成專案鎖與 migration 契約
-  - `test_student_album_name_candidates.py`：相本稱呼候選的保守規則、同班碰撞／完成專案
+  - `test_student_input_limits.py`：班級目前名單的姓名、中央相本稱呼、單批與總量上限，
+    以及已歸班 Project Student 不接受相本內稱呼 mutation
+    （數值見 [api.md 的園所端點](api.md#園所管理-apiorganization)）
+  - `test_student_album_name.py`：`RosterChild.album_name` 單一來源、名冊建立與園所設定單筆／
+    整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 Student 值忽略與輸出失效契約
+  - `test_student_album_name_candidates.py`：未歸班 legacy 相本稱呼候選的保守規則、碰撞／完成專案
     review flag、報告 hash、全量 preflight、crash reconciliation 與同 manifest apply 鎖
   - `test_organization.py` / `test_organization_schema_migrations.py`：分校／班級學生與老師
     區間、校／部門主管、fresh legacy Student link 保持 NULL、姓名推定 link 不在 startup
     自動拆合、class-backed identity anomaly（含封存相本）整本隔離與 append-only audit、
-    identity resolution ledger／freeze trigger、舊 editor 結束、schema constraint 與 migration 冪等
+    identity resolution ledger／freeze trigger、名冊稱呼的既有／未來 Project 共用 authority、
+    舊 editor 結束、schema constraint 與 migration 冪等
   - `test_organization_project_migration.py`：歸班 preview 零寫入且不按姓名預選、decision 集合
     必須完整、`source_fingerprint` stale 與 `confirmed_all` gate、`existing` 只收 established
     identity、同名候選的校／部門／班級、membership active／ended 與歷史相本期別 evidence、
@@ -147,8 +149,10 @@ python scripts/suggest_student_album_names.py --scope active
 [2026-07 正式切換 runbook](production-cutover-202607.md)。舊標題保留為連結，
 避免值班人員誤用本檔過時的片段命令。
 
-相本稱呼腳本只對既有 `album_name IS NULL` 的學生產生候選，不在 startup migration
-自動拆姓；新學生的 runtime 規則見 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
+相本稱呼腳本只對**未歸班 legacy Project** 中 `Student.album_name IS NULL` 的學生產生候選；
+已歸班相本改由園所設定的 `RosterChild.album_name` 管理，報告產生會排除，apply 前若相本
+已被歸班也會整批阻擋。新學生規則見
+[data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 純漢字二至三字姓名可列候選；單字、四字以上與混合姓名保持未設定並列人工
 處理。同專案候選碰撞、已知複姓候選與已完成專案會寫入 review flag。套用只能使用原始
 報告 hash 與 manifest 保存的固定計畫；若有 flag 還必須帶同一份 plan hash：

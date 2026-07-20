@@ -953,6 +953,8 @@ class RosterChild(Base):
     __tablename__ = "roster_children"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, index=True)
+    # 已歸班相本的相本稱呼唯一來源；所有既有與未來相本都即時引用。
+    album_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     students = relationship("Student", back_populates="roster_child")
     class_roster_members = relationship(
@@ -960,13 +962,18 @@ class RosterChild(Base):
         back_populates="roster_child",
     )
 
+    @property
+    def effective_album_name(self) -> str:
+        """回傳名冊目前設定的有效相本稱呼。"""
+        return self.album_name or self.name
+
 
 class Student(Base):
     __tablename__ = "students"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     name = Column(String, nullable=False)
-    # 相本稱呼只影響版面文字；NULL 時沿用名冊姓名 name。
+    # 只供未歸班舊相本相容；已歸班相本一律讀 RosterChild.album_name。
     album_name = Column(String, nullable=True)
     order_index = Column(Integer, default=0)
     pages_data_json = Column(Text, nullable=False, default="[]")
@@ -979,9 +986,17 @@ class Student(Base):
     roster_child = relationship("RosterChild", back_populates="students")
 
     @property
+    def resolved_album_name(self) -> str | None:
+        """依相本是否正式歸班，解析唯一可信的相本稱呼來源。"""
+        if self.project is not None and self.project.classroom_id is not None:
+            # 已歸班資料即使 child link 異常，也不可回頭採用 Student 的舊稱呼。
+            return self.roster_child.album_name if self.roster_child is not None else None
+        return self.album_name
+
+    @property
     def effective_album_name(self) -> str:
-        """回傳相本實際顯示名，不改變名冊姓名語意。"""
-        return self.album_name or self.name
+        """回傳相本實際顯示名；未設定稱呼時沿用該本完整姓名快照。"""
+        return self.resolved_album_name or self.name
 
 
 class TemplateProjectSyncBackup(Base):

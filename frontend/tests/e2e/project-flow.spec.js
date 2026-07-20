@@ -52,7 +52,7 @@ test("lead teacher creates a class project from the current roster snapshot", as
   const { teacher, teacherPassword, classroom } = await createClassroomFixture(
     page,
     template.department,
-    ["Alice", "王小明"],
+    [{ name: "Alice" }, { name: "王小明", album_name: "小明" }],
   );
 
   await page.context().clearCookies();
@@ -106,69 +106,24 @@ test("lead teacher creates a class project from the current roster snapshot", as
   await page.locator(".group").filter({ hasText: projectName }).first().locator('[data-guide="project-review-link"]').click();
   await expect(page.getByText(projectName)).toBeVisible();
 
-  // 工作台只核對本期固定快照，完整姓名唯讀；本期只設定相本稱呼。
+  // 工作台核對本期成員與完整姓名快照；相本稱呼只讀且跟隨園所設定。
   await page.getByRole("button", { name: "本期學生" }).click();
-  const rosterDialog = page.getByRole("dialog", { name: "本期學生快照" });
+  const rosterDialog = page.getByRole("dialog", { name: "本期學生" });
   await expect(rosterDialog).toBeVisible();
   await expect.poll(() => rosterDialog.evaluate(dialog => dialog.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape");
   await expect(rosterDialog).toHaveCount(0);
   await page.getByRole("button", { name: "本期學生" }).click();
   await expect(rosterDialog).toBeVisible();
-  await expect(rosterDialog).toContainText("建立相本當下的班級目前學生形成固定快照");
+  await expect(rosterDialog).toContainText("相本稱呼統一跟隨園所設定");
   await expect(rosterDialog.getByText("本期學生（2 位）")).toBeVisible();
   await expect(rosterDialog.getByText("Alice", { exact: true })).toBeVisible();
   await expect(rosterDialog.getByText("王小明", { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText("完整姓名 · 固定快照")).toHaveCount(2);
+  await expect(rosterDialog.getByText("相本稱呼（園所設定）：小明", { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText("完整姓名 · 本期快照")).toHaveCount(2);
   await expect(rosterDialog.getByRole("button", { name: "編輯 Alice 的完整姓名" })).toHaveCount(0);
   await expect(rosterDialog.getByRole("button", { name: "新增" })).toHaveCount(0);
-
-  await rosterDialog.getByRole("button", { name: "編輯 Alice 的相本稱呼" }).click();
-  await rosterDialog.getByRole("textbox", { name: "相本稱呼：Alice" }).fill("Ally");
-  const updateAlbumNameResponse = page.waitForResponse(response => (
-    /\/students\/\d+\/album-name$/.test(new URL(response.url()).pathname)
-    && response.request().method() === "PUT"
-  ));
-  await rosterDialog.getByRole("button", { name: "儲存相本稱呼" }).click();
-  const updateAlbumNameResult = await updateAlbumNameResponse;
-  expect(updateAlbumNameResult.ok()).toBeTruthy();
-  expect(updateAlbumNameResult.request().postDataJSON()).toEqual({ album_name: "Ally" });
-  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
-
-  await rosterDialog.getByRole("button", { name: "清除 王小明 的相本稱呼" }).click();
-  await expect(rosterDialog.getByText("相本稱呼：沿用完整姓名", { exact: true })).toHaveCount(1);
-  await rosterDialog.getByRole("button", { name: "編輯 王小明 的相本稱呼" }).click();
-  await expect(rosterDialog.getByRole("textbox", { name: "相本稱呼：王小明" })).toHaveValue("");
-  await rosterDialog.getByRole("button", { name: "取消編輯相本稱呼" }).click();
-
-  const singleAutoFillAlbumNameResponse = page.waitForResponse(
-    response => /\/students\/\d+\/album-name\/auto-fill$/.test(new URL(response.url()).pathname) &&
-      response.request().method() === "POST" && response.ok(),
-  );
-  await rosterDialog.getByRole("button", { name: "自動偵測 王小明 的相本稱呼" }).click();
-  const singleAutoFillAlbumNameResult = await singleAutoFillAlbumNameResponse;
-  expect(await singleAutoFillAlbumNameResult.json()).toEqual({ updated: 1, unresolved: 0 });
-  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
-  await expect(
-    rosterDialog.getByRole("button", { name: "自動偵測 王小明 的相本稱呼" }),
-  ).toHaveCount(0);
-
-  // 單筆與整批兩個入口都必須能從空白稱呼恢復，且不能覆蓋既有人工稱呼。
-  await rosterDialog.getByRole("button", { name: "清除 王小明 的相本稱呼" }).click();
-  await expect(rosterDialog.getByText("相本稱呼：沿用完整姓名", { exact: true })).toHaveCount(1);
-  const autoFillAlbumNamesButton = rosterDialog.getByRole("button", { name: "自動填入相本稱呼" });
-  const autoFillAlbumNamesResponse = page.waitForResponse(
-    response => response.url().includes("/students/album-names/auto-fill") &&
-      response.request().method() === "POST" && response.ok(),
-  );
-  await autoFillAlbumNamesButton.click();
-  const autoFillAlbumNamesResult = await autoFillAlbumNamesResponse;
-  expect(await autoFillAlbumNamesResult.json()).toEqual({ updated: 1, unresolved: 0 });
-  await expect(rosterDialog.getByText("相本稱呼：小明", { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText("相本稱呼：Ally", { exact: true })).toBeVisible();
-  await expect(autoFillAlbumNamesButton).toBeDisabled();
+  await expect(rosterDialog.getByRole("button", { name: /(編輯|清除|自動偵測|自動填入).*相本稱呼/ })).toHaveCount(0);
 
   await rosterDialog.getByRole("button", { name: "關閉" }).click();
   await expect(rosterDialog).toHaveCount(0);
@@ -205,9 +160,7 @@ test("lead teacher creates a class project from the current roster snapshot", as
   const wangXiaoming = projectDetail.students.find(item => item.name === "王小明");
   expect(alice).toBeTruthy();
   expect(wangXiaoming).toBeTruthy();
-  expect(alice.album_name).toBe("Ally");
-  expect(alice.effective_album_name).toBe("Ally");
-  expect(wangXiaoming.album_name).toBe("小明");
+  expect(alice.effective_album_name).toBe("Alice");
   expect(wangXiaoming.effective_album_name).toBe("小明");
 
   await page.getByRole("link", { name: "班級總覽", exact: true }).click();
@@ -226,7 +179,7 @@ test("lead teacher creates a class project from the current roster snapshot", as
   await closeProductGuide(page);
 
   const studentTextArea = page.locator('[data-guide="student-text-fields"] textarea').first();
-  await expect(page.locator('[data-guide="student-text-fields"]')).toContainText("預設：Ally/Alice/Ally");
+  await expect(page.locator('[data-guide="student-text-fields"]')).toContainText("預設：Alice/Alice/Alice");
   await studentTextArea.fill("學生：");
   await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "相本稱呼 {name}" }).click();
   await page.locator('[data-guide="student-text-fields"]').getByRole("button", { name: "完整姓名 {full_name}" }).click();

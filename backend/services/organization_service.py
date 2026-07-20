@@ -51,13 +51,17 @@ from services.organization_transaction import (
     organization_write_transaction,
 )
 from services.roster_identity_service import normalize_child_name
-from services.student_album_name_policy import assign_automatic_album_names
+from services.student_album_name_policy import (
+    assign_automatic_album_names,
+    suggest_automatic_album_name,
+)
 from services.student_input_policy import (
     assert_project_student_capacity,
+    normalize_student_album_name,
     normalize_student_name,
     validate_student_batch_size,
 )
-from services.template_sync_locks import lock_template_write
+from services.template_sync_locks import lock_project_content_writes, lock_template_write
 from template_periods import VALID_TEMPLATE_DEPARTMENTS
 
 
@@ -93,6 +97,8 @@ def _serialize_member(member: ClassRosterMember) -> dict:
         "classroom_id": member.classroom_id,
         "roster_child_id": member.roster_child_id,
         "name": member.roster_child.name,
+        "album_name": member.roster_child.album_name,
+        "effective_album_name": member.roster_child.effective_album_name,
         "status": "ended" if member.ended_at is not None else "active",
         "started_at": member.started_at,
         "ended_at": member.ended_at,
@@ -126,7 +132,7 @@ def _serialize_project(project: Project) -> dict:
             {
                 "id": student.id,
                 "name": student.name,
-                "album_name": student.album_name,
+                "album_name": student.resolved_album_name,
                 "effective_album_name": student.effective_album_name,
                 "order_index": student.order_index,
                 "roster_child_id": student.roster_child_id,
@@ -355,7 +361,8 @@ def get_organization_overview(db: Session) -> dict:
             .selectinload(ClassRosterMember.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
-            .selectinload(Project.students),
+            .selectinload(Project.students)
+            .selectinload(Student.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.assignment_history),
@@ -1210,15 +1217,30 @@ def batch_add_classroom_members(
         raise HTTPException(status_code=409, detail="只能編輯使用中的分校與班級")
     validate_student_batch_size(len(members))
     normalized_names = [normalize_student_name(item["name"]) for item in members]
+    normalized_album_names = [
+        normalize_student_album_name(item.get("album_name")) for item in members
+    ]
     created_members: list[ClassRosterMember] = []
     skipped_names: list[str] = []
     names_seen: set[str] = set()
-    active_count = db.query(ClassRosterMember.id).filter(
+    active_members = db.query(ClassRosterMember).options(
+        selectinload(ClassRosterMember.roster_child)
+    ).filter(
         ClassRosterMember.classroom_id == classroom_id,
         ClassRosterMember.ended_at.is_(None),
-    ).count()
+    ).all()
+    active_count = len(active_members)
+    existing_effective_album_names = [
+        str(member.roster_child.effective_album_name)
+        for member in active_members
+    ]
+    created_children: list[RosterChild] = []
 
-    for member_name in normalized_names:
+    for member_name, album_name in zip(
+        normalized_names,
+        normalized_album_names,
+        strict=True,
+    ):
         normalized_identity = normalize_child_name(member_name)
         if not normalized_identity:
             continue
@@ -1237,7 +1259,10 @@ def batch_add_classroom_members(
         if active_membership:
             skipped_names.append(member_name)
             continue
-        roster_child = RosterChild(name=normalized_identity)
+        roster_child = RosterChild(
+            name=normalized_identity,
+            album_name=album_name,
+        )
         db.add(roster_child)
         db.flush()
         member = ClassRosterMember(
@@ -1246,8 +1271,29 @@ def batch_add_classroom_members(
         )
         db.add(member)
         created_members.append(member)
+        created_children.append(roster_child)
 
     assert_project_student_capacity(active_count, len(created_members))
+    children_without_album_name = [
+        child for child in created_children if child.album_name is None
+    ]
+    automatic_album_names = assign_automatic_album_names(
+        [str(child.name) for child in children_without_album_name],
+        [
+            *existing_effective_album_names,
+            *(
+                str(child.album_name)
+                for child in created_children
+                if child.album_name is not None
+            ),
+        ],
+    )
+    for child, album_name in zip(
+        children_without_album_name,
+        automatic_album_names,
+        strict=True,
+    ):
+        child.album_name = album_name
     db.flush()
     _sync_current_term_student_snapshots(
         db,
@@ -1319,8 +1365,257 @@ def _assert_classroom_capacity(db: Session, classroom_id: int) -> None:
     assert_project_student_capacity(active_count, 1)
 
 
-@organization_mutation
-def update_classroom_member(
+def _set_roster_child_album_name(
+    db: Session,
+    roster_child: RosterChild,
+    raw_album_name: str | None,
+) -> bool:
+    """更新名冊唯一稱呼來源，並讓所有已歸班相本的舊輸出失效。"""
+    album_name = normalize_student_album_name(raw_album_name)
+    if roster_child.album_name == album_name:
+        return False
+
+    affected_students = (
+        db.query(Student)
+        .join(Project, Project.id == Student.project_id)
+        .filter(
+            Student.roster_child_id == roster_child.id,
+            Project.classroom_id.isnot(None),
+        )
+        .all()
+    )
+    now = utc_now()
+    roster_child.album_name = album_name
+    affected_project_ids: set[int] = set()
+    for student in affected_students:
+        student.output_filename = None
+        student.updated_at = now
+        affected_project_ids.add(int(student.project_id))
+    if affected_project_ids:
+        db.query(Project).filter(Project.id.in_(affected_project_ids)).update(
+            {Project.updated_at: now},
+            synchronize_session=False,
+        )
+    return True
+
+
+def _assigned_project_ids_for_roster_child(
+    db: Session,
+    roster_child_id: int,
+) -> list[int]:
+    """列出稱呼變更會影響的已歸班相本，供 transaction 前依序加鎖。"""
+    return sorted({
+        int(project_id)
+        for (project_id,) in (
+            db.query(Student.project_id)
+            .join(Project, Project.id == Student.project_id)
+            .filter(
+                Student.roster_child_id == roster_child_id,
+                Project.classroom_id.isnot(None),
+            )
+            .all()
+        )
+    })
+
+
+def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
+    """依目前班級與所有已歸班相本，推導不會碰撞的中央稱呼。"""
+    roster_children = db.query(RosterChild).order_by(RosterChild.id).all()
+    candidate_by_child_id = {
+        int(roster_child.id): suggest_automatic_album_name(str(roster_child.name))
+        for roster_child in roster_children
+        if not roster_child.album_name
+    }
+    active_candidate_by_child_id = {
+        child_id: candidate
+        for child_id, candidate in candidate_by_child_id.items()
+        if candidate is not None
+    }
+    album_name_by_child_id = {
+        int(roster_child.id): (
+            str(roster_child.album_name) if roster_child.album_name else None
+        )
+        for roster_child in roster_children
+    }
+    collision_scopes: dict[
+        tuple[str, int],
+        list[tuple[int, str]],
+    ] = {}
+
+    for classroom_id, child_id, child_name in (
+        db.query(
+            ClassRosterMember.classroom_id,
+            RosterChild.id,
+            RosterChild.name,
+        )
+        .join(
+            RosterChild,
+            RosterChild.id == ClassRosterMember.roster_child_id,
+        )
+        .filter(ClassRosterMember.ended_at.is_(None))
+        .order_by(ClassRosterMember.classroom_id, ClassRosterMember.id)
+        .all()
+    ):
+        collision_scopes.setdefault(("classroom", int(classroom_id)), []).append(
+            (int(child_id), str(child_name))
+        )
+
+    for project_id, child_id, student_name in (
+        db.query(Student.project_id, Student.roster_child_id, Student.name)
+        .join(Project, Project.id == Student.project_id)
+        .filter(
+            Project.classroom_id.isnot(None),
+            Student.roster_child_id.isnot(None),
+        )
+        .order_by(Student.project_id, Student.order_index, Student.id)
+        .all()
+    ):
+        collision_scopes.setdefault(("project", int(project_id)), []).append(
+            (int(child_id), str(student_name))
+        )
+
+    while True:
+        rejected_child_ids: set[int] = set()
+        for scope_members in collision_scopes.values():
+            effective_names = [
+                album_name_by_child_id.get(child_id)
+                or active_candidate_by_child_id.get(child_id)
+                or fallback_name
+                for child_id, fallback_name in scope_members
+            ]
+            effective_name_counts = Counter(effective_names)
+            rejected_child_ids.update(
+                child_id
+                for (child_id, _fallback_name), effective_name in zip(
+                    scope_members,
+                    effective_names,
+                    strict=True,
+                )
+                if child_id in active_candidate_by_child_id
+                and effective_name_counts[effective_name] > 1
+            )
+        if not rejected_child_ids:
+            break
+        for child_id in rejected_child_ids:
+            active_candidate_by_child_id.pop(child_id, None)
+
+    return {
+        child_id: active_candidate_by_child_id.get(child_id)
+        for child_id in candidate_by_child_id
+    }
+
+
+def _auto_fill_roster_children(
+    db: Session,
+    roster_child_ids: list[int],
+) -> dict[str, int]:
+    roster_children = (
+        db.query(RosterChild)
+        .filter(RosterChild.id.in_(sorted(set(roster_child_ids))))
+        .order_by(RosterChild.id)
+        .all()
+        if roster_child_ids
+        else []
+    )
+    eligible_children = [
+        roster_child
+        for roster_child in roster_children
+        if not roster_child.album_name
+    ]
+    automatic_album_names = _automatic_roster_album_names(db)
+    updated_count = 0
+    unresolved_count = 0
+    for roster_child in eligible_children:
+        album_name = automatic_album_names.get(int(roster_child.id))
+        if album_name is None:
+            unresolved_count += 1
+            continue
+        if _set_roster_child_album_name(db, roster_child, album_name):
+            updated_count += 1
+    return {"updated": updated_count, "unresolved": unresolved_count}
+
+
+def auto_fill_roster_child_album_name(
+    db: Session,
+    roster_child_id: int,
+) -> dict[str, int]:
+    """只替空白的園所孩子身分填入可安全推導的中央稱呼。"""
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        roster_child = db.get(RosterChild, roster_child_id)
+        if roster_child is None:
+            raise HTTPException(status_code=404, detail="Roster child not found")
+        project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
+        with lock_project_content_writes(project_ids):
+            with organization_write_transaction(db):
+                if db.get(RosterChild, roster_child_id) is None:
+                    raise HTTPException(status_code=404, detail="Roster child not found")
+                result = _auto_fill_roster_children(db, [roster_child_id])
+                db.commit()
+                return result
+
+
+def auto_fill_classroom_member_album_names(
+    db: Session,
+    classroom_id: int,
+) -> dict[str, int]:
+    """整批填入班級目前名單中尚未設定且不碰撞的中央稱呼。"""
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        get_classroom_or_404(classroom_id, db)
+        child_ids = [
+            int(child_id)
+            for (child_id,) in db.query(ClassRosterMember.roster_child_id).filter(
+                ClassRosterMember.classroom_id == classroom_id,
+                ClassRosterMember.ended_at.is_(None),
+            ).all()
+        ]
+        project_ids = sorted({
+            project_id
+            for child_id in child_ids
+            for project_id in _assigned_project_ids_for_roster_child(db, child_id)
+        })
+        with lock_project_content_writes(project_ids):
+            with organization_write_transaction(db):
+                get_classroom_or_404(classroom_id, db)
+                result = _auto_fill_roster_children(db, child_ids)
+                db.commit()
+                return result
+
+
+def update_roster_child_album_name(
+    db: Session,
+    roster_child_id: int,
+    album_name: str | None,
+) -> dict:
+    """讓無目前 membership 的既有已歸班學生也能由園所設定修改稱呼。"""
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        roster_child = db.get(RosterChild, roster_child_id)
+        if roster_child is None:
+            raise HTTPException(status_code=404, detail="Roster child not found")
+        project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
+        with lock_project_content_writes(project_ids):
+            with organization_write_transaction(db):
+                roster_child = db.get(RosterChild, roster_child_id)
+                if roster_child is None:
+                    raise HTTPException(status_code=404, detail="Roster child not found")
+                _set_roster_child_album_name(db, roster_child, album_name)
+                db.commit()
+                db.refresh(roster_child)
+                return {
+                    "ok": True,
+                    "roster_child_id": roster_child.id,
+                    "name": roster_child.name,
+                    "album_name": roster_child.album_name,
+                    "effective_album_name": roster_child.effective_album_name,
+                }
+
+
+def _update_classroom_member_in_transaction(
     db: Session,
     classroom_id: int,
     member_id: int,
@@ -1346,6 +1641,13 @@ def update_classroom_member(
                 child_name=normalized_identity,
             )
         member.roster_child.name = normalized_identity
+
+    if "album_name" in changes:
+        _set_roster_child_album_name(
+            db,
+            member.roster_child,
+            changes["album_name"],
+        )
 
     target_classroom_id = changes.get("target_classroom_id")
     status = changes.get("status")
@@ -1424,6 +1726,32 @@ def update_classroom_member(
             else None
         ),
     }
+
+
+def update_classroom_member(
+    db: Session,
+    classroom_id: int,
+    member_id: int,
+    changes: dict,
+) -> dict:
+    """依 organization→project→DB 鎖序更新名單與中央相本稱呼。"""
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        member = get_class_roster_member_or_404(member_id, classroom_id, db)
+        project_ids = (
+            _assigned_project_ids_for_roster_child(db, int(member.roster_child_id))
+            if "album_name" in changes
+            else []
+        )
+        with lock_project_content_writes(project_ids):
+            with organization_write_transaction(db):
+                return _update_classroom_member_in_transaction(
+                    db,
+                    classroom_id,
+                    member_id,
+                    changes,
+                )
 
 
 def _migration_error(
@@ -1649,6 +1977,8 @@ def _build_established_identity_candidates(
         candidates.append({
             "roster_child_id": child.id,
             "name": child.name,
+            "album_name": child.album_name,
+            "effective_album_name": child.effective_album_name,
             "evidence": evidence,
         })
 
@@ -1714,6 +2044,8 @@ def _build_project_classroom_migration_preview(
         student_rows.append({
             "student_id": student.id,
             "name": student.name,
+            "album_name": student.album_name,
+            "effective_album_name": student.effective_album_name,
             "order_index": student.order_index,
             "original_roster_child": (
                 {
@@ -1951,7 +2283,7 @@ def _preflight_resolved_roster_seed(
         )
 
 
-def assign_project_to_classroom(
+def _assign_project_to_classroom_in_transaction(
     db: Session,
     current_admin: User,
     project_id: int,
@@ -2093,13 +2425,46 @@ def assign_project_to_classroom(
             )
 
         resolved_child_by_student_id = dict(existing_child_by_student_id)
+        created_children: list[RosterChild] = []
         for student in students:
             if student.id not in create_name_by_student_id:
                 continue
-            child = RosterChild(name=create_name_by_student_id[student.id])
+            child = RosterChild(
+                name=create_name_by_student_id[student.id],
+                album_name=normalize_student_album_name(student.album_name),
+            )
             db.add(child)
             db.flush()
             resolved_child_by_student_id[student.id] = child
+            created_children.append(child)
+
+        created_children_without_album_name = [
+            child for child in created_children if child.album_name is None
+        ]
+        protected_effective_album_names: list[str] = []
+        for student in students:
+            child = resolved_child_by_student_id[student.id]
+            if child in created_children_without_album_name:
+                continue
+            # Project 內的空白中央稱呼回退該期 Student.name 快照，不能拿
+            # RosterChild.name 現值代替；seed 時還要同時保護目前班級 scope。
+            protected_effective_album_names.append(
+                str(child.album_name or student.name)
+            )
+            if seed_current_roster:
+                protected_effective_album_names.append(
+                    str(child.album_name or child.name)
+                )
+        automatic_album_names = assign_automatic_album_names(
+            [str(child.name) for child in created_children_without_album_name],
+            protected_effective_album_names,
+        )
+        for child, album_name in zip(
+            created_children_without_album_name,
+            automatic_album_names,
+            strict=True,
+        ):
+            child.album_name = album_name
 
         resolved_ids = [
             resolved_child_by_student_id[student.id].id for student in students
@@ -2112,6 +2477,10 @@ def assign_project_to_classroom(
             )
         for student in students:
             student.roster_child_id = resolved_child_by_student_id[student.id].id
+            # 歸班後 authority 改讀 RosterChild；舊輸出必須重新產生。
+            student.album_name = None
+            student.output_filename = None
+            student.updated_at = utc_now()
         db.flush()
 
         applied_at = utc_now()
@@ -2234,6 +2603,7 @@ def assign_project_to_classroom(
         project.campus_name_snapshot = classroom.campus.name
         project.classroom_name_snapshot = classroom.name
         project.class_period_work_slot_id = work_slot.id
+        project.updated_at = applied_at
         db.flush()
         _sync_current_term_student_snapshots(db, set(resolved_ids))
         db.commit()
@@ -2257,6 +2627,33 @@ def assign_project_to_classroom(
         ],
         "migration_status": _organization_migration_status(db),
     }
+
+
+def assign_project_to_classroom(
+    db: Session,
+    current_admin: User,
+    project_id: int,
+    *,
+    classroom_id: int,
+    source_fingerprint: str,
+    seed_current_roster: bool,
+    student_identity_decisions: list[dict],
+) -> dict:
+    """依 organization→project→DB 鎖序切換舊相本的名冊 authority。"""
+    with organization_acl_lock:
+        db.rollback()
+        db.expire_all()
+        get_project_or_404(project_id, db)
+        with lock_project_content_writes([project_id]):
+            return _assign_project_to_classroom_in_transaction(
+                db,
+                current_admin,
+                project_id,
+                classroom_id=classroom_id,
+                source_fingerprint=source_fingerprint,
+                seed_current_roster=seed_current_roster,
+                student_identity_decisions=student_identity_decisions,
+            )
 
 
 def create_classroom_project(
@@ -2432,7 +2829,6 @@ def create_classroom_project(
                         "names": duplicate_names,
                     },
                 )
-            album_names = assign_automatic_album_names(student_names, [])
             project = build_project_record(
                 db,
                 template,
@@ -2449,13 +2845,11 @@ def create_classroom_project(
             )
             work_slot.started_at = utc_now()
             db.flush()
-            for order_index, (member, album_name) in enumerate(
-                zip(active_members, album_names, strict=True)
-            ):
+            for order_index, member in enumerate(active_members):
                 db.add(Student(
                     project_id=project.id,
                     name=member.roster_child.name,
-                    album_name=album_name,
+                    album_name=None,
                     order_index=order_index,
                     pages_data_json="[]",
                     roster_child_id=member.roster_child_id,

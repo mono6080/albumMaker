@@ -13,18 +13,22 @@ import {
   ExternalLink,
   GraduationCap,
   History,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   School,
   ShieldCheck,
+  Sparkles,
   UserMinus,
   UserPlus,
   Users,
 } from "lucide-react";
 
 import {
+  autoFillClassroomMemberAlbumNames,
+  autoFillRosterChildAlbumName,
   assignProjectOwner,
   batchAddClassroomMembers,
   createCampus,
@@ -37,6 +41,7 @@ import {
   updateClassroom,
   updateClassroomTeachers,
   updateClassroomMember,
+  updateRosterChildAlbumName,
 } from "../api/organizationApi";
 import CompositionTextarea from "../components/CompositionTextarea";
 import ConfirmModal from "../components/ConfirmModal";
@@ -54,6 +59,7 @@ import {
 } from "../components/ui";
 import { getApiErrorMessage } from "../utils/apiError";
 import { buildClassroomOwnerOptions } from "../utils/classroomAssignments";
+import { showRetryToast } from "../utils/retryToast";
 import { getAssignableAccountLabel, ROLE_LABELS } from "../utils/userRoles";
 
 const VIEW_OPTIONS = [
@@ -192,6 +198,8 @@ export default function OrganizationManagement() {
   const [migrationProject, setMigrationProject] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAutoFillingClassroomAlbumNames, setIsAutoFillingClassroomAlbumNames] = useState(false);
+  const [autoFillingRosterChildId, setAutoFillingRosterChildId] = useState(null);
   const [expandedHistoryProjectId, setExpandedHistoryProjectId] = useState(null);
   const [historyByProjectId, setHistoryByProjectId] = useState({});
   const [loadingHistoryProjectId, setLoadingHistoryProjectId] = useState(null);
@@ -254,6 +262,9 @@ export default function OrganizationManagement() {
     campusIsActive: campus.is_active,
   })));
   const activeMembers = selectedClassroom?.members.filter(member => member.status === "active") ?? [];
+  const unsetActiveMemberAlbumNameCount = activeMembers.filter(
+    member => !(member.album_name || "").trim(),
+  ).length;
   const historicalMembers = selectedClassroom?.members.filter(member => member.status === "ended") ?? [];
   const availableTemplates = overview?.templates.filter(template => (
     template.period_status === "active"
@@ -339,7 +350,7 @@ export default function OrganizationManagement() {
   };
 
   const closeFormModal = () => {
-    if (isSubmitting) return;
+    if (isSubmitting || autoFillingRosterChildId !== null) return;
     if (formModal?.type === "supervisors") {
       setSupervisorDraft(buildSupervisorDraft(selectedCampus));
       setSupervisorSearchQuery("");
@@ -479,18 +490,101 @@ export default function OrganizationManagement() {
     }
   };
 
-  const handleMemberNameSubmit = async (event) => {
+  const handleAutoFillClassroomAlbumNames = async () => {
+    if (!selectedClassroom || unsetActiveMemberAlbumNameCount === 0) return;
+    const classroomId = selectedClassroom.id;
+    setIsAutoFillingClassroomAlbumNames(true);
+    try {
+      const response = await autoFillClassroomMemberAlbumNames(classroomId);
+      const { updated = 0, unresolved = 0 } = response.data || {};
+      await loadOverview();
+
+      if (updated > 0 && unresolved > 0) {
+        toast.success(`已自動填入 ${updated} 位學生；${unresolved} 位需手動確認`);
+      } else if (updated > 0) {
+        toast.success(`已自動填入 ${updated} 位學生的相本稱呼`);
+      } else if (unresolved > 0) {
+        toast.error(`無法安全判斷；${unresolved} 位學生需手動設定`);
+      } else {
+        toast("目前沒有未設定的相本稱呼");
+      }
+    } catch {
+      showRetryToast("自動填入相本稱呼失敗", handleAutoFillClassroomAlbumNames);
+    } finally {
+      setIsAutoFillingClassroomAlbumNames(false);
+    }
+  };
+
+  const handleAutoFillRosterChildAlbumName = async () => {
+    const rosterChildId = formModal?.rosterChildId;
+    if (!rosterChildId || autoFillingRosterChildId !== null) return;
+    const studentName = formModal.studentName ?? formModal.name;
+    setAutoFillingRosterChildId(rosterChildId);
+    try {
+      const response = await autoFillRosterChildAlbumName(rosterChildId);
+      const { updated = 0, unresolved = 0 } = response.data || {};
+      if (updated > 0) setFormModal(null);
+      await loadOverview();
+
+      if (updated > 0) {
+        toast.success(`已自動填入「${studentName}」的相本稱呼`);
+      } else if (unresolved > 0) {
+        toast.error(`無法安全判斷「${studentName}」的相本稱呼，請手動設定`);
+      } else {
+        toast(`「${studentName}」目前不需自動填入`);
+      }
+    } catch {
+      showRetryToast(
+        `自動偵測「${studentName}」的相本稱呼失敗`,
+        handleAutoFillRosterChildAlbumName,
+      );
+    } finally {
+      setAutoFillingRosterChildId(null);
+    }
+  };
+
+  const handleMemberDetailsSubmit = async (event) => {
     event.preventDefault();
+    if (autoFillingRosterChildId !== null) return;
     const name = formModal.name.trim();
     if (!name) return;
+    const albumName = formModal.albumName.trim() || null;
+    const changes = {};
+    if (name !== formModal.originalName) changes.name = name;
+    if (albumName !== formModal.originalAlbumName) changes.album_name = albumName;
+    if (Object.keys(changes).length === 0) {
+      setFormModal(null);
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await updateClassroomMember(formModal.classroomId, formModal.memberId, { name });
-      toast.success("學生姓名已更新");
+      await updateClassroomMember(formModal.classroomId, formModal.memberId, changes);
+      toast.success("學生資料已更新");
       setFormModal(null);
       await loadOverview();
     } catch (error) {
-      toast.error(getApiErrorMessage(error, "更新姓名失敗"));
+      toast.error(getApiErrorMessage(error, "更新學生資料失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRosterChildAlbumNameSubmit = async (event) => {
+    event.preventDefault();
+    if (autoFillingRosterChildId !== null) return;
+    const albumName = formModal.albumName.trim() || null;
+    if (albumName === formModal.originalAlbumName) {
+      setFormModal(null);
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await updateRosterChildAlbumName(formModal.rosterChildId, albumName);
+      toast.success("園所相本稱呼已更新");
+      setFormModal(null);
+      await loadOverview();
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "更新園所相本稱呼失敗"));
     } finally {
       setIsSubmitting(false);
     }
@@ -903,7 +997,7 @@ export default function OrganizationManagement() {
               />
             </FormField>
             <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-700">
-              這裡是目前班級名單；相本稱呼會在建立每一期相本時形成獨立快照。
+              新增後可在目前名單設定相本稱呼；園所設定是唯一來源，既有已歸班與之後建立的相本都會立即套用。
             </p>
             <div className="flex justify-end gap-2">
               <Button onClick={closeFormModal} disabled={isSubmitting}>取消</Button>
@@ -916,25 +1010,108 @@ export default function OrganizationManagement() {
       </FormModal>
 
       <FormModal
-        isOpen={formModal?.type === "member-name"}
-        title="修改學生完整姓名"
+        isOpen={formModal?.type === "member-details"}
+        title="修改學生資料"
         onClose={closeFormModal}
         maxWidthClass="max-w-md"
       >
-        {formModal?.type === "member-name" && (
-          <form className="space-y-4" onSubmit={handleMemberNameSubmit}>
+        {formModal?.type === "member-details" && (
+          <form className="space-y-4" onSubmit={handleMemberDetailsSubmit}>
             <FormField label="完整姓名">
               <input
                 autoFocus
                 required
+                maxLength={100}
                 value={formModal.name}
                 onChange={event => setFormModal(current => ({ ...current, name: event.target.value }))}
                 className={fieldControlClass}
               />
             </FormField>
+            <FormField
+              label="相本稱呼（選填）"
+              hint="留空時相本會沿用完整姓名；修改後，既有已歸班與之後建立的相本都會立即套用。"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  maxLength={100}
+                  value={formModal.albumName}
+                  onChange={event => setFormModal(current => ({ ...current, albumName: event.target.value }))}
+                  className={`${fieldControlClass} min-w-0 flex-1`}
+                  placeholder="例如：小明"
+                />
+                {!formModal.albumName.trim() && formModal.originalAlbumName === null && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="secondary"
+                    disabled={
+                      isSubmitting
+                      || autoFillingRosterChildId !== null
+                      || formModal.name.trim() !== formModal.originalName
+                    }
+                    onClick={handleAutoFillRosterChildAlbumName}
+                  >
+                    {autoFillingRosterChildId === formModal.rosterChildId
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <Sparkles className="h-3.5 w-3.5" />}
+                    {autoFillingRosterChildId === formModal.rosterChildId ? "偵測中…" : "自動偵測"}
+                  </Button>
+                )}
+              </div>
+            </FormField>
             <div className="flex justify-end gap-2">
-              <Button onClick={closeFormModal} disabled={isSubmitting}>取消</Button>
-              <Button type="submit" variant="primary" disabled={isSubmitting}>
+              <Button onClick={closeFormModal} disabled={isSubmitting || autoFillingRosterChildId !== null}>取消</Button>
+              <Button type="submit" variant="primary" disabled={isSubmitting || autoFillingRosterChildId !== null}>
+                {isSubmitting ? "儲存中..." : "儲存"}
+              </Button>
+            </div>
+          </form>
+        )}
+      </FormModal>
+
+      <FormModal
+        isOpen={formModal?.type === "roster-child-album-name"}
+        title="修改園所相本稱呼"
+        onClose={closeFormModal}
+        maxWidthClass="max-w-md"
+      >
+        {formModal?.type === "roster-child-album-name" && (
+          <form className="space-y-4" onSubmit={handleRosterChildAlbumNameSubmit}>
+            <p className="text-sm text-gray-600">
+              完整姓名：<span className="font-medium text-gray-900">{formModal.studentName}</span>
+            </p>
+            <FormField
+              label="相本稱呼（選填）"
+              hint="這是園所唯一來源；儲存後，這位學生所有既有已歸班與未來相本都會立即套用。"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  maxLength={100}
+                  value={formModal.albumName}
+                  onChange={event => setFormModal(current => ({ ...current, albumName: event.target.value }))}
+                  className={`${fieldControlClass} min-w-0 flex-1`}
+                  placeholder="留空時各期相本沿用該期完整姓名"
+                />
+                {!formModal.albumName.trim() && formModal.originalAlbumName === null && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="secondary"
+                    disabled={isSubmitting || autoFillingRosterChildId !== null}
+                    onClick={handleAutoFillRosterChildAlbumName}
+                  >
+                    {autoFillingRosterChildId === formModal.rosterChildId
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <Sparkles className="h-3.5 w-3.5" />}
+                    {autoFillingRosterChildId === formModal.rosterChildId ? "偵測中…" : "自動偵測"}
+                  </Button>
+                )}
+              </div>
+            </FormField>
+            <div className="flex justify-end gap-2">
+              <Button onClick={closeFormModal} disabled={isSubmitting || autoFillingRosterChildId !== null}>取消</Button>
+              <Button type="submit" variant="primary" disabled={isSubmitting || autoFillingRosterChildId !== null}>
                 {isSubmitting ? "儲存中..." : "儲存"}
               </Button>
             </div>
@@ -991,7 +1168,7 @@ export default function OrganizationManagement() {
         {formModal?.type === "project" && (
           <form className="space-y-4" onSubmit={handleCreateProjectSubmit}>
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-              將目前 {activeMembers.length} 位學生複製成這一期的相本快照；之後離園或轉班不會讓快照消失。
+              將目前 {activeMembers.length} 位學生的成員與完整姓名形成這一期快照；之後離園或轉班不會讓快照消失，相本稱呼則持續跟隨園所設定。
             </p>
             <FormField label="相本名稱">
               <input
@@ -1568,12 +1745,33 @@ export default function OrganizationManagement() {
 
                 {activeView === "active" && (
                   <Surface>
-                    <div className="mb-4 flex items-center justify-between gap-2">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <h3 className="font-semibold text-gray-900">目前名單</h3>
-                        <p className="mt-0.5 text-xs text-gray-500">只代表現在所在班級，不會回寫已建立的相本。</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          成員異動不回寫已建立的相本；相本稱呼是園所唯一來源，會同步套用於既有與未來相本。
+                        </p>
                       </div>
-                      <Badge tone="success">{activeMembers.length} 位</Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone="success">{activeMembers.length} 位</Badge>
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          disabled={
+                            isAutoFillingClassroomAlbumNames
+                            || autoFillingRosterChildId !== null
+                            || unsetActiveMemberAlbumNameCount === 0
+                            || !selectedCampus?.is_active
+                            || !selectedClassroom?.is_active
+                          }
+                          onClick={handleAutoFillClassroomAlbumNames}
+                        >
+                          {isAutoFillingClassroomAlbumNames
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Sparkles className="h-3.5 w-3.5" />}
+                          {isAutoFillingClassroomAlbumNames ? "偵測中…" : "自動填入相本稱呼"}
+                        </Button>
+                      </div>
                     </div>
                     {activeMembers.length === 0 ? (
                       <EmptyState>目前沒有在班學生。</EmptyState>
@@ -1585,19 +1783,28 @@ export default function OrganizationManagement() {
                               <div className="flex items-center gap-1">
                                 <span className="truncate font-medium text-gray-900">{member.name}</span>
                                 <IconButton
-                                  label={`修改 ${member.name} 姓名`}
+                                  label={`修改 ${member.name} 的完整姓名與相本稱呼`}
                                   size="xs"
                                   onClick={() => setFormModal({
-                                    type: "member-name",
+                                    type: "member-details",
                                     classroomId: selectedClassroom.id,
                                     memberId: member.id,
+                                    rosterChildId: member.roster_child_id,
                                     name: member.name,
+                                    originalName: member.name,
+                                    albumName: member.album_name ?? "",
+                                    originalAlbumName: member.album_name ?? null,
                                   })}
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </IconButton>
                               </div>
-                              <div className="mt-0.5 text-xs text-gray-500">加入：{formatDateTime(member.started_at)}</div>
+                              <div className="mt-0.5 text-xs leading-5 text-gray-500">
+                                <div className="break-words">
+                                  {`相本稱呼：${member.effective_album_name}${member.album_name ? "" : "（未另設）"}`}
+                                </div>
+                                <div>加入：{formatDateTime(member.started_at)}</div>
+                              </div>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <Button
@@ -1688,7 +1895,25 @@ export default function OrganizationManagement() {
                             <div key={member.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center">
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <div className="font-medium text-gray-800">{member.name}</div>
+                                  <div className="flex min-w-0 items-center gap-1">
+                                    <div className="truncate font-medium text-gray-800">{member.name}</div>
+                                    <IconButton
+                                      label={`修改 ${member.name} 的完整姓名與相本稱呼`}
+                                      size="xs"
+                                      onClick={() => setFormModal({
+                                        type: "member-details",
+                                        classroomId: selectedClassroom.id,
+                                        memberId: member.id,
+                                        rosterChildId: member.roster_child_id,
+                                        name: member.name,
+                                        originalName: member.name,
+                                        albumName: member.album_name ?? "",
+                                        originalAlbumName: member.album_name ?? null,
+                                      })}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </IconButton>
+                                  </div>
                                   <Badge tone={
                                     ["transfer", "term_reassignment"].includes(member.end_reason)
                                       ? "info"
@@ -1697,8 +1922,11 @@ export default function OrganizationManagement() {
                                     {END_REASON_LABELS[member.end_reason] ?? "原因未記錄"}
                                   </Badge>
                                 </div>
-                                <div className="mt-0.5 text-xs text-gray-500">
-                                  {formatDateTime(member.started_at)} ～ {formatDateTime(member.ended_at)}
+                                <div className="mt-0.5 text-xs leading-5 text-gray-500">
+                                  <div className="break-words">
+                                    {`相本稱呼：${member.effective_album_name}${member.album_name ? "" : "（未另設）"}`}
+                                  </div>
+                                  <div>{formatDateTime(member.started_at)} ～ {formatDateTime(member.ended_at)}</div>
                                 </div>
                               </div>
                               {currentClassroom ? (
@@ -1799,9 +2027,12 @@ export default function OrganizationManagement() {
                           <div className="mt-4">
                             <div className="mb-2 flex items-center gap-2">
                               <CalendarDays className="h-4 w-4 text-gray-500" />
-                              <h4 className="text-sm font-semibold text-gray-800">本期學生快照</h4>
+                              <h4 className="text-sm font-semibold text-gray-800">本期學生</h4>
                               <Badge>{project.students.length} 位</Badge>
                             </div>
+                            <p className="mb-2 text-xs text-gray-500">
+                              成員與完整姓名是本期快照；相本稱呼持續跟隨園所設定。
+                            </p>
                             {project.students.length === 0 ? (
                               <p className="text-xs text-gray-500">此期相本沒有學生。</p>
                             ) : (
@@ -1809,15 +2040,30 @@ export default function OrganizationManagement() {
                                 {[...project.students]
                                   .sort((firstStudent, secondStudent) => firstStudent.order_index - secondStudent.order_index)
                                   .map(student => (
-                                    <span
+                                    <div
                                       key={student.id}
-                                      className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-700"
+                                      className="flex items-center gap-1 rounded-full border border-gray-200 bg-white py-1 pl-2.5 pr-1 text-xs text-gray-700"
                                     >
-                                      {student.name}
+                                      <span>{student.name}</span>
                                       {student.effective_album_name !== student.name && (
                                         <span className="ml-1 text-gray-500">相本：{student.effective_album_name}</span>
                                       )}
-                                    </span>
+                                      {student.roster_child_id && (
+                                        <IconButton
+                                          label={`修改 ${student.name} 的園所相本稱呼`}
+                                          size="xs"
+                                          onClick={() => setFormModal({
+                                            type: "roster-child-album-name",
+                                            rosterChildId: student.roster_child_id,
+                                            studentName: student.name,
+                                            albumName: student.album_name ?? "",
+                                            originalAlbumName: student.album_name ?? null,
+                                          })}
+                                        >
+                                          <Pencil className="h-3 w-3" />
+                                        </IconButton>
+                                      )}
+                                    </div>
                                   ))}
                               </div>
                             )}

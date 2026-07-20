@@ -117,17 +117,27 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
 | POST / PATCH | `/classrooms`、`/classrooms/{id}` | 建立／更新班級（分校、`infant\|academy` 部門、名稱、啟用狀態） |
 | PUT | `/classrooms/{id}/teachers` | admin 以完整集合原子替換目前老師；非空集合恰有一位 `lead`，其餘為 `co_teacher`，歷史區間保留 |
-| POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
-| PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
+| POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
+| PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
+| POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
+| PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
+| POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
 | GET | `/projects/{project_id}/classroom-migration-preview?classroom_id=…` | admin 讀取固定 Student 快照、目標班狀態、established identity options 與 `source_fingerprint`；零寫入且不按姓名預選 decision |
 | PUT | `/projects/{project_id}/classroom` | admin 以完整 `student_identity_decisions` 顯式解析每位 Student 並歸班；可在空班以 `seed_current_roster` 全量建立目前名單 |
 | POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子切換目前編制、產生學期快照／工作格並啟用目標學期；或取消且不動目前狀態 |
 
-學生／老師異動與新學期套用不回寫既有 Project、Student 或 owner；但目前老師集合會
-立即決定該班所有相本讀寫權。未歸班 Project 保持 admin-only，管理員在 overview 逐本選班，
+名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
+相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本讀寫權。
+未歸班 Project 保持 admin-only，管理員在 overview 逐本選班，
 系統不從 owner、名稱、舊主管關係或 provisional child link 推測。歸班 request shape 為：
+
+名冊 `album_name` 最多 100 字，首尾空白會移除，空字串或 `null` 代表清除。它跟隨
+`RosterChild` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
+相關學生輸出指標會失效，必須重新渲染。完整姓名與成員集合仍維持各期快照。
+自動推導與跨班／跨既有相本碰撞規則見
+[data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 
 preview response 固定回 `source_fingerprint`、`target_classroom`（含目前名單數與
 `seed_allowed`）、`students`（固定快照、original provisional evidence、
@@ -191,9 +201,9 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 | POST | `/{id}/reopen` | 退回全班完成（admin 或該校／部門 scope supervisor） |
 | POST | `/{id}/assignment` | admin 把進度負責人轉給該班目前老師並寫 from/to/operator 快照與原因；owner 不授權 |
 | GET | `/{id}/assignment-history` | admin 查詢完整負責人轉交時間線 |
-| POST | `/{id}/students/album-names/auto-fill` | 只為既有學生的空白相本稱呼做保守批次推導，回傳 `updated` / `unresolved` 計數 |
-| POST | `/{id}/students/{sid}/album-name/auto-fill` | 只為指定學生的空白相本稱呼做保守推導，回傳 `updated` / `unresolved` 計數 |
-| PUT | `/{id}/students/{sid}/album-name` | JSON `{ "album_name": string\|null }` 更新相本稱呼；空字串正規化為 `null`，額外欄位回 422，成功回 `{ok,name,album_name,effective_album_name}` |
+| POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
+| POST | `/{id}/students/{sid}/album-name/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
+| PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `Student.album_name`；已歸班回 409，必須改園所名冊中央值 |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全體 |
@@ -227,11 +237,9 @@ Project 的學生集合與 `Student.name` 沒有 runtime 新增、複製、刪�
 只在班級端點建立時從目前名單產生快照；舊相本只有在未歸班時可由 admin 歸班流程解析
 identity，成功後同樣凍結。preview 與 apply 以外沒有 link／merge／split 入口。
 完整 authority 與跨期語意見 [data-model.md 的班級名單與每期快照](data-model.md#班級名單組織權限每期快照與相本遷移)。
-相本稱呼最多 100 字，空字串或 `null` 代表清除並回退完整姓名；修改它不改姓名、學生集合
-或名冊連結。
-學生 detail／editor response 同時回傳 `name`、`album_name`、`effective_album_name`。
-既有學生批次或單筆自動補齊只處理空白 `album_name`，已設定值絕不覆寫；實際更新的學生
-會失效舊輸出並更新專案時間。規則與碰撞語意見
+學生 detail／editor response 同時回傳 `name`、解析後的 `album_name` 與
+`effective_album_name`。已歸班相本動態讀 `RosterChild.album_name`；未歸班 Project 即使有
+provisional child link 仍讀 legacy `Student.album_name`。來源、回退與輸出失效規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 班級目前名單與由它建立的 Project 快照最多 100 位學生；姓名最多 100 字，批次加入
 目前名單最多 100 筆。容量在 organization 名單寫入與相本建立時 preflight，超限回 422

@@ -438,6 +438,153 @@ def test_class_roster_changes_only_affect_future_project_snapshots():
         )
 
 
+def test_roster_album_name_is_admin_managed_and_updates_existing_and_future_projects():
+    with started_client() as client:
+        login(client)
+        first_template_id = _create_active_template(client)
+        campus_id, classroom_id = _create_campus_and_classroom(client)
+        _, target_classroom_id = _create_campus_and_classroom(
+            client,
+            campus_id=campus_id,
+        )
+        lead_teacher = _create_teacher(client)
+        _replace_teachers(
+            client,
+            classroom_id,
+            [{"teacher_id": lead_teacher["id"], "duty": "lead"}],
+        )
+        add_response = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={
+                "members": [
+                    {"name": "王小明", "album_name": "  明明  "},
+                    {"name": "李小華", "album_name": "   "},
+                    {"name": "陳小真", "album_name": "小華"},
+                ],
+            },
+        )
+        assert_status(add_response, 201)
+        members = {
+            member["name"]: member for member in add_response.json()["created"]
+        }
+        assert members["王小明"]["album_name"] == "明明"
+        assert members["王小明"]["effective_album_name"] == "明明"
+        assert members["李小華"]["album_name"] is None
+        assert members["李小華"]["effective_album_name"] == "李小華"
+
+        first_project = _create_classroom_project(
+            client,
+            classroom_id,
+            first_template_id,
+            lead_teacher["id"],
+        )
+        first_students = {
+            student["name"]: student for student in first_project["students"]
+        }
+        assert first_students["王小明"]["album_name"] == "明明"
+        assert first_students["李小華"]["album_name"] is None
+        assert first_students["陳小真"]["album_name"] == "小華"
+
+        project_album_name_response = client.put(
+            f"/api/projects/{first_project['id']}/students/"
+            f"{first_students['王小明']['id']}/album-name",
+            json={"album_name": "本期明明"},
+        )
+        assert_status(project_album_name_response, 409)
+        assert (
+            project_album_name_response.json()["detail"]["code"]
+            == "roster_album_name_authority"
+        )
+        roster_overview = client.get("/api/organization/overview")
+        assert_status(roster_overview, 200)
+        roster_member = next(
+            member
+            for campus in roster_overview.json()["campuses"]
+            for classroom in campus["classrooms"]
+            if classroom["id"] == classroom_id
+            for member in classroom["members"]
+            if member["id"] == members["王小明"]["id"]
+        )
+        assert roster_member["album_name"] == "明明"
+
+        client.cookies.clear()
+        login(client, lead_teacher["username"], USER_PASSWORD)
+        forbidden = client.patch(
+            f"/api/organization/classrooms/{classroom_id}/members/"
+            f"{members['王小明']['id']}",
+            json={"album_name": "老師不可改"},
+        )
+        assert_status(forbidden, 403)
+
+        client.cookies.clear()
+        login(client)
+        update_response = client.patch(
+            f"/api/organization/classrooms/{classroom_id}/members/"
+            f"{members['王小明']['id']}",
+            json={"album_name": "  新稱呼  "},
+        )
+        assert_status(update_response, 200)
+        assert update_response.json()["member"]["album_name"] == "新稱呼"
+        assert (
+            update_response.json()["member"]["effective_album_name"]
+            == "新稱呼"
+        )
+
+        first_project_detail = client.get(
+            f"/api/projects/{first_project['id']}"
+        )
+        assert_status(first_project_detail, 200)
+        persisted_first_students = {
+            student["name"]: student
+            for student in first_project_detail.json()["students"]
+        }
+        assert persisted_first_students["王小明"]["album_name"] == "新稱呼"
+
+        second_template_id = _create_active_template(client)
+        second_project = _create_classroom_project(
+            client,
+            classroom_id,
+            second_template_id,
+            lead_teacher["id"],
+        )
+        second_students = {
+            student["name"]: student for student in second_project["students"]
+        }
+        assert second_students["王小明"]["album_name"] == "新稱呼"
+        assert second_students["李小華"]["album_name"] is None
+
+        transfer_response = client.patch(
+            f"/api/organization/classrooms/{classroom_id}/members/"
+            f"{members['王小明']['id']}",
+            json={"target_classroom_id": target_classroom_id},
+        )
+        assert_status(transfer_response, 200)
+        transferred_member = transfer_response.json()["transferred_member"]
+        assert transferred_member["album_name"] == "新稱呼"
+
+        clear_response = client.patch(
+            f"/api/organization/classrooms/{target_classroom_id}/members/"
+            f"{transferred_member['id']}",
+            json={"album_name": None},
+        )
+        assert_status(clear_response, 200)
+        assert clear_response.json()["member"]["album_name"] is None
+        assert (
+            clear_response.json()["member"]["effective_album_name"]
+            == "王小明"
+        )
+        for project_id in (first_project["id"], second_project["id"]):
+            project_detail = client.get(f"/api/projects/{project_id}")
+            assert_status(project_detail, 200)
+            student = next(
+                student
+                for student in project_detail.json()["students"]
+                if student["name"] == "王小明"
+            )
+            assert student["album_name"] is None
+            assert student["effective_album_name"] == "王小明"
+
+
 def test_classroom_project_locks_organization_then_template_before_db_write(
     monkeypatch,
 ):

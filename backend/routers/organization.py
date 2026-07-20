@@ -11,6 +11,8 @@ from auth import get_current_user, require_role
 from database import User, get_db
 from services.organization_service import (
     assign_project_to_classroom as assign_project_to_classroom_use_case,
+    auto_fill_classroom_member_album_names as auto_fill_classroom_album_names_use_case,
+    auto_fill_roster_child_album_name as auto_fill_roster_album_name_use_case,
     batch_add_classroom_members as batch_add_classroom_members_use_case,
     create_campus as create_campus_use_case,
     create_classroom as create_classroom_use_case,
@@ -23,6 +25,7 @@ from services.organization_service import (
     update_campus as update_campus_use_case,
     update_classroom as update_classroom_use_case,
     update_classroom_member as update_classroom_member_use_case,
+    update_roster_child_album_name as update_roster_child_album_name_use_case,
 )
 from services.organization_term_service import (
     apply_term_reclassification_plan as apply_term_reclassification_plan_use_case,
@@ -33,6 +36,7 @@ from services.organization_term_service import (
     update_term_reclassification_plan as update_term_reclassification_plan_use_case,
     validate_term_reclassification_plan as validate_term_reclassification_plan_use_case,
 )
+from services.student_input_policy import STUDENT_ALBUM_NAME_MAX_LENGTH
 
 
 router = APIRouter(prefix="/api/organization", tags=["organization"])
@@ -108,6 +112,10 @@ class ClassroomUpdateBody(BaseModel):
 
 class ClassRosterMemberInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    album_name: str | None = Field(
+        None,
+        max_length=STUDENT_ALBUM_NAME_MAX_LENGTH,
+    )
 
 
 class ClassRosterBatchBody(BaseModel):
@@ -116,9 +124,22 @@ class ClassRosterBatchBody(BaseModel):
 
 class ClassRosterMemberUpdateBody(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
+    album_name: str | None = Field(
+        None,
+        max_length=STUDENT_ALBUM_NAME_MAX_LENGTH,
+    )
     status: Literal["active", "ended"] | None = None
     end_reason: Literal["departed"] | None = None
     target_classroom_id: int | None = None
+
+
+class RosterChildAlbumNameUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    album_name: str | None = Field(
+        ...,
+        max_length=STUDENT_ALBUM_NAME_MAX_LENGTH,
+    )
 
 
 class ClassroomProjectCreateBody(BaseModel):
@@ -303,6 +324,38 @@ def update_classroom_member(
 ):
     changes = body.model_dump(exclude_unset=True)
     return update_classroom_member_use_case(db, classroom_id, member_id, changes)
+
+
+@router.post("/classrooms/{classroom_id}/members/album-names/auto-fill")
+def auto_fill_classroom_member_album_names(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return auto_fill_classroom_album_names_use_case(db, classroom_id)
+
+
+@router.patch("/roster-children/{roster_child_id}/album-name")
+def update_roster_child_album_name(
+    roster_child_id: int,
+    body: RosterChildAlbumNameUpdateBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return update_roster_child_album_name_use_case(
+        db,
+        roster_child_id,
+        body.album_name,
+    )
+
+
+@router.post("/roster-children/{roster_child_id}/album-name/auto-fill")
+def auto_fill_roster_child_album_name(
+    roster_child_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return auto_fill_roster_album_name_use_case(db, roster_child_id)
 
 
 @router.post(

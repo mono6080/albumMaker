@@ -294,8 +294,19 @@ def collect_project_instances(
         project_label_texts = parse_json(project["label_texts_json"], {})
         page_layouts = [page_record["layout"] for page_record in page_records]
         students = connection.execute(
-            """SELECT id, name, album_name, pages_data_json
-               FROM students WHERE project_id = ? ORDER BY id""",
+            """SELECT student.id, student.name,
+                      CASE
+                          WHEN project.classroom_id IS NOT NULL
+                          THEN child.album_name
+                          ELSE student.album_name
+                      END AS album_name,
+                      student.pages_data_json
+               FROM students AS student
+               JOIN projects AS project ON project.id = student.project_id
+               LEFT JOIN roster_children AS child
+                   ON child.id = student.roster_child_id
+               WHERE student.project_id = ?
+               ORDER BY student.id""",
             (project["id"],),
         ).fetchall()
         for student in students:

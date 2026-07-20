@@ -72,7 +72,8 @@ Student (id, project_id FK, name, album_name nullable, order_index, pages_data_j
          created_at, updated_at)
   └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
 
-RosterChild (id, name〔正規化後、不設 UNIQUE〕, created_at)   — 園所層級孩子名冊
+RosterChild (id, name〔正規化後、不設 UNIQUE〕, album_name nullable, created_at)
+  — 園所層級孩子名冊與已歸班相本的唯一稱呼來源
   ├─ students → Student.roster_child_id
   └─ class_roster_members → ClassRosterMember.roster_child_id
 
@@ -132,10 +133,12 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
 
 - 在園所設定把新入園學生加入班級目前名單時，每位學生建立新的 `RosterChild` 與第一段
   `ClassRosterMember`；`name` 不設 UNIQUE，因此同名孩子仍是不同 id。
-- 改完整姓名會更新目前名冊的 `RosterChild.name`；轉班、回班與新學期重新編班沿用原
-  `RosterChild.id`，只結束／建立 `ClassRosterMember` 區間，不另建孩子身分。
-- 從目前名單建立相本時，`Student.roster_child_id` 沿用該穩定 id，`Student.name` 則保存
-  建立當下姓名快照；兩者在 Project runtime 都不可修改。
+- 改完整姓名或相本稱呼會更新 `RosterChild.name`／`RosterChild.album_name`；轉班、
+  回班與新學期重新編班沿用原 `RosterChild.id`，只結束／建立 `ClassRosterMember` 區間，
+  不另建孩子身分。
+- 從目前名單建立相本時，`Student.roster_child_id` 沿用該穩定 id，`Student.name` 保存
+  建立當下姓名快照；`Student.album_name` 固定為 `NULL`，相本稱呼動態讀取
+  `RosterChild.album_name`。園所修改稱呼會套用同一孩子所有既有與未來的已歸班相本。
 - fresh legacy schema 首次加入 `students.roster_child_id` 時保持 `NULL`；不得依姓名建立或
   共用 identity。已跑過舊姓名推定 migration 的非 NULL link，在 Project 未歸班期間仍只是
   provisional evidence，不能當 established identity、候選預設值或報表分組依據。
@@ -155,8 +158,8 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
   不可重複。班級的 `department` 沿用模板部門代碼 `infant` / `academy`。
 - 新入園由班級目前名單新增流程建立全新的 `RosterChild`；從班級建立新一期 Project 時，
   只複製當下 active members 成為 `Student` 快照並沿用
-  `roster_child_id`；相本稱呼在這次建立時推導。之後新增、離園、轉班或名冊改名都不
-  自動增刪或改寫既有 Project/Student。
+  `roster_child_id`。未明確提供稱呼的新入園名單會在建立 `RosterChild` 時保守推導一次；
+  之後修改稱呼不改寫 Project/Student 快照，但所有已歸班相本會動態取得新值。
 - `Student` 集合與 `Student.name` 在 Project runtime 不可新增、複製、刪除或改名；完整姓名
   只由建立當下的班級目前名單快照決定。跨期重新編班只改目前名單區間，下一期建立新相本
   時才形成新的學生快照。
@@ -195,25 +198,31 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
 
 ## 相本稱呼與姓名變數
 
-- `Student.name` 是建立相本時固定的完整姓名快照，用於名冊身份、照片檔名配對、管理搜尋與下載檔名。
-- `Student.album_name` 是可選的相本稱呼；`NULL` 時
-  `Student.effective_album_name` 回退完整姓名。空白輸入或 JSON `null` 正規化為 `NULL`；
-  這是 Project runtime 唯一可修改的學生 identity 顯示欄位，不改完整姓名或名冊連結。
-- 從班級目前名單建立 Project 快照時，`student_album_name_policy.py` 只替一般二至三字純漢字姓名移除首字；
-  已知複姓、單字、四字以上或混合字元不自動設定。候選若撞到同專案既有學生或同批
-  其他學生的 effective 相本稱呼，碰撞候選會一起撤回並重算，直到不再碰撞；撤回者保持
-  `NULL`；規則由 `tests/test_student_album_name.py` 釘住。
-- 既有學生可手動觸發同一套批次推導：目標包含所有空白 `album_name` 的學生，
-  已有非空白稱呼則作為 protected effective 名稱，不參與更新也絕不覆寫。
-  所有目標一起經過 fixed-point 碰撞重算；實際補上稱呼者在單一 transaction
-  失效舊輸出，無法安全推導者維持原狀。
-- 單筆推導只把指定且空白 `album_name` 的學生當目標；同專案其他所有學生都作為
-  protected effective 名稱，其中空白或舊資料純空白稱呼以完整姓名回退。這可避免
-  單筆候選撞到另一位尚未設定稱呼學生的完整姓名；已設定的指定學生維持原值。
+- `RosterChild.album_name` 是已歸班相本的唯一稱呼來源；空白或 `null` 代表未指定，並由每本
+  `Student.name` 完整姓名快照回退。它跟隨同一 `RosterChild.id` 跨轉班、回班與新學期沿用。
+  管理員在園所設定修改後，同一孩子所有既有與未來已歸班 Project 立即解析為新值；實際變更
+  會把相關 `output_filename` 清空並更新時間，避免下載舊輸出。契約由
+  `tests/test_student_album_name.py` 與 `tests/test_render_revision_guard.py` 釘住。
+- `Student.name` 是建立相本時固定的完整姓名快照，用於名冊身份、照片檔名配對、管理搜尋、
+  下載檔名與未設定稱呼時的回退值。
+- `Student.album_name` 只供 `Project.classroom_id IS NULL` 的舊相本相容；即使未歸班 Student
+  帶有 provisional `roster_child_id`，仍不得讀取名冊稱呼。Project 成功歸班後改讀
+  `RosterChild.album_name`，相本內三個舊稱呼 mutation 端點回 409
+  `roster_album_name_authority`，避免第二份 authority。
+- 新入園名單未明確提供稱呼時，`student_album_name_policy.py` 在建立 `RosterChild` 時只替
+  一般二至三字純漢字姓名移除首字；已知複姓、單字、四字以上、混合字元或與同班 effective
+  名稱碰撞者保持 `NULL`。園所設定另提供目前名單整批與單一孩子自動填入，只處理空白中央值、
+  不覆蓋人工值，並把所有目前班級與已歸班 Project 當成碰撞 scope 反覆撤回衝突候選；安全規則
+  由 `tests/test_student_album_name.py` 釘住。舊相本歸班建立新孩子身分時也套用同一保守規則。
+- schema migration 只從已歸班且正式連結的 Student 升格一致的非空舊稱呼，完全排除未歸班
+  provisional link；同一孩子有多個不同舊值時拒絕啟動並要求人工處理。升格後清除已歸班
+  `Student.album_name`，讓該欄只剩 legacy 語意。切換會以 `schema_migration_markers` 留下永久
+  marker，只執行一次；所有實際渲染字串有變的舊輸出都先失效，後續重啟不會再次清除新輸出。
 - 模板／專案／學生文字中的 `{name}` 代入 effective 相本稱呼，`{full_name}` 一律代入
   完整姓名。兩個 token 都在三層文字合併後、排版前解析；渲染與快取契約見
   [rendering.md](rendering.md#相冊輸出與-dirty-skip)。
-- 現有姓名不在 startup migration 自動拆姓。既有資料的候選產生與人工審核套用流程見
+- 現有姓名不在 startup migration 自動拆姓。已歸班孩子由管理員在園所設定明確執行中央
+  自動填入；未歸班 legacy Project 的候選產生與人工審核套用流程見
   [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)。
 
 ## 對應文字（label_texts）三層覆蓋

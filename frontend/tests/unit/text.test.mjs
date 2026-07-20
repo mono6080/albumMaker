@@ -85,12 +85,15 @@ test("student name variables use backend effective album name and replace every 
   assert.equal(
     replaceStudentNameVariables(
       "{name}／{full_name}／{name}／{full_name}",
-      { name: "王大明", album_name: "大明", effective_album_name: "大明" },
+      { name: "王大明", album_name: "舊的局部稱呼", effective_album_name: "大明" },
     ),
     "大明／王大明／大明／王大明",
   );
   assert.equal(
-    replaceStudentNameVariables("{name}／{full_name}", { name: "完整姓名" }),
+    replaceStudentNameVariables(
+      "{name}／{full_name}",
+      { name: "完整姓名", album_name: "不可再使用的相本局部稱呼" },
+    ),
     "完整姓名／完整姓名",
   );
 });

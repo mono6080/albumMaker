@@ -53,7 +53,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-create-button"]',
     title: "建立新一期相本",
-    description: "主教直接在目前任教班級建立新一期；學生快照與製作權限直接由園所設定形成。",
+    description: "主教直接在目前任教班級建立新一期；成員與完整姓名形成本期快照，相本稱呼持續跟隨園所設定。",
     side: "left",
     align: "center",
   },
@@ -95,7 +95,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-review-link"]',
     title: "班級總覽",
-    description: "看全班進度、核對本期學生快照與相本稱呼、標記全班完成並下載 PDF 或圖片。",
+    description: "看全班進度、核對本期學生與園所設定的相本稱呼、標記全班完成並下載 PDF 或圖片。",
     side: "bottom",
     align: "end",
   },
@@ -520,7 +520,7 @@ export default function ProjectList() {
         {classProjectDraft && (
           <form className="space-y-4" onSubmit={handleCreateClassProject} data-guide="project-create-form">
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-              會以目前 {classProjectDraft.classroom.members.length} 位學生形成本期固定快照；主教是進度負責人，所有目前當班老師都可直接製作本班相本。
+              會以目前 {classProjectDraft.classroom.members.length} 位學生形成成員與完整姓名快照；相本稱呼會持續跟隨園所設定。主教是進度負責人，所有目前當班老師都可直接製作本班相本。
             </p>
             <FormField label="相本名稱">
               <input

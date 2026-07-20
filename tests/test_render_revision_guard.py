@@ -12,6 +12,7 @@ from database import (
     Classroom,
     ClassroomTeacherAssignment,
     Project,
+    RosterChild,
     SessionLocal,
     Student,
     Template,
@@ -35,7 +36,6 @@ from services.output_keys import (
     get_student_pdf_key,
     student_pdf_key_for_mode,
 )
-from services.organization_lock import organization_acl_lock
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
@@ -452,68 +452,53 @@ def test_teacher_removed_during_render_cannot_publish(monkeypatch, tmp_path):
     assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
 
 
-def test_teacher_removed_while_album_name_write_waits_cannot_commit(monkeypatch):
+def test_assigned_album_name_write_is_rejected_before_mutation():
     seeded = _seed_render_target()
     scope = _attach_render_teacher_scope(seeded)
-    real_organization_lock = organization_acl_lock
-    lock_attempted = threading.Event()
-
-    class ObservedOrganizationLock:
-        def __enter__(self):
-            lock_attempted.set()
-            real_organization_lock.acquire()
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            real_organization_lock.release()
-
-    monkeypatch.setattr(
-        project_student_service,
-        "organization_acl_lock",
-        ObservedOrganizationLock(),
-    )
-    update_result: dict = {}
-
-    def update_album_name() -> None:
-        db = SessionLocal()
-        try:
-            actor = db.get(User, scope["teacher_id"])
-            update_result["value"] = project_student_service.update_student_album_name(
+    db = SessionLocal()
+    try:
+        actor = db.get(User, scope["teacher_id"])
+        with pytest.raises(HTTPException) as error:
+            project_student_service.update_student_album_name(
                 db,
                 actor,
                 seeded["project_id"],
                 seeded["student_id"],
-                "撤權後不得寫入",
+                "不得寫入相本快照",
             )
-        except BaseException as error:
-            update_result["error"] = error
-        finally:
-            db.close()
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "roster_album_name_authority"
+        assert db.get(Student, seeded["student_id"]).album_name is None
+    finally:
+        db.close()
 
-    with real_organization_lock:
-        update_thread = threading.Thread(target=update_album_name)
-        update_thread.start()
-        assert lock_attempted.wait(5)
 
-        db = SessionLocal()
-        try:
-            admin = db.get(User, scope["admin_id"])
-            organization_service.replace_classroom_teachers(
-                db,
-                admin,
-                scope["classroom_id"],
-                [],
-            )
-        finally:
-            db.close()
-
-    update_thread.join(5)
-    assert not update_thread.is_alive()
-    assert isinstance(update_result.get("error"), HTTPException)
-    assert update_result["error"].status_code == 403
-
+def test_roster_album_name_is_captured_in_assigned_render_cas_token():
+    seeded = _seed_render_target()
+    _attach_render_teacher_scope(seeded)
     db = SessionLocal()
     try:
-        assert db.get(Student, seeded["student_id"]).album_name is None
+        student = db.get(Student, seeded["student_id"])
+        roster_child = db.get(RosterChild, student.roster_child_id)
+        roster_child.album_name = "園所原稱呼"
+        db.commit()
+
+        captured = student_render_service._capture_student_render_input(
+            seeded["project_id"],
+            seeded["student_id"],
+            db,
+        )
+        assert captured["album_name"] == "園所原稱呼"
+
+        roster_child = db.get(RosterChild, student.roster_child_id)
+        roster_child.album_name = "園所新稱呼"
+        db.commit()
+
+        assert student_render_service._current_student_render_token(
+            seeded["project_id"],
+            seeded["student_id"],
+            db,
+        ) != captured["state_token"]
     finally:
         db.close()
 

@@ -70,6 +70,191 @@ def _execute_integrity_error(migration_engine, statement: str):
             connection.execute(text(statement))
 
 
+def test_roster_child_album_name_migration_is_idempotent_and_preserves_rows(
+    tmp_path,
+):
+    import migrations
+
+    migration_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'roster-child-album-name.db').as_posix()}"
+    )
+    try:
+        with migration_engine.connect() as connection:
+            connection.execute(text("""
+                CREATE TABLE roster_children (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL
+                )
+            """))
+            connection.execute(text(
+                "INSERT INTO roster_children (id, name) VALUES (1, '王小明')"
+            ))
+            connection.commit()
+
+            migrations._add_roster_child_album_name_column(connection)
+            migrations._add_roster_child_album_name_column(connection)
+
+            columns = {
+                row[1]
+                for row in connection.execute(text(
+                    "PRAGMA table_info(roster_children)"
+                ))
+            }
+            assert "album_name" in columns
+            assert connection.execute(text(
+                "SELECT name, album_name FROM roster_children WHERE id = 1"
+            )).one() == ("王小明", None)
+    finally:
+        migration_engine.dispose()
+
+
+def _create_album_name_authority_schema(connection):
+    connection.execute(text("""
+        CREATE TABLE roster_children (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            album_name VARCHAR
+        )
+    """))
+    connection.execute(text("""
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY,
+            classroom_id INTEGER,
+            updated_at DATETIME
+        )
+    """))
+    connection.execute(text("""
+        CREATE TABLE students (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            roster_child_id INTEGER,
+            name VARCHAR NOT NULL,
+            album_name VARCHAR,
+            output_filename VARCHAR,
+            updated_at DATETIME
+        )
+    """))
+
+
+def test_assigned_album_name_authority_migration_backfills_and_ignores_provisional(
+    tmp_path,
+):
+    import migrations
+
+    migration_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'assigned-album-authority.db').as_posix()}"
+    )
+    try:
+        with migration_engine.connect() as connection:
+            _create_album_name_authority_schema(connection)
+            connection.execute(text("""
+                INSERT INTO roster_children (id, name, album_name)
+                VALUES
+                    (1, '王小明', NULL),
+                    (2, '未歸班孩子', NULL),
+                    (3, '中央孩子', '中央稱呼'),
+                    (4, '林小華', NULL),
+                    (5, '空白舊值', NULL)
+            """))
+            connection.execute(text("""
+                INSERT INTO projects (id, classroom_id, updated_at)
+                VALUES
+                    (1, 10, '2000-01-01'),
+                    (2, 10, '2000-01-01'),
+                    (3, NULL, '2000-01-01'),
+                    (4, 10, '2000-01-01'),
+                    (5, 10, '2000-01-01'),
+                    (6, 10, '2000-01-01')
+            """))
+            connection.execute(text("""
+                INSERT INTO students (
+                    id, project_id, roster_child_id, name, album_name,
+                    output_filename, updated_at
+                ) VALUES
+                    (1, 1, 1, '王小明', '小明', 'same.pdf', '2000-01-01'),
+                    (2, 2, 1, '王小明', NULL, 'changed.pdf', '2000-01-01'),
+                    (3, 3, 2, '未歸班快照', '舊相本稱呼', 'legacy.pdf', '2000-01-01'),
+                    (4, 4, 3, '中央孩子', '舊稱呼', 'prepopulated.pdf', '2000-01-01'),
+                    (5, 5, 4, '林小華', '  小華  ', 'padded.pdf', '2000-01-01'),
+                    (6, 6, 5, '空白舊值', '', 'empty.pdf', '2000-01-01')
+            """))
+            connection.commit()
+
+            migrations._migrate_assigned_album_names_to_roster_authority(connection)
+            migrations._migrate_assigned_album_names_to_roster_authority(connection)
+
+            assert list(connection.execute(text("""
+                SELECT id, album_name FROM roster_children ORDER BY id
+            """))) == [
+                (1, "小明"),
+                (2, None),
+                (3, "中央稱呼"),
+                (4, "小華"),
+                (5, None),
+            ]
+            assert list(connection.execute(text("""
+                SELECT id, album_name, output_filename
+                FROM students ORDER BY id
+            """))) == [
+                (1, None, "same.pdf"),
+                (2, None, None),
+                (3, "舊相本稱呼", "legacy.pdf"),
+                (4, None, None),
+                (5, None, None),
+                (6, None, None),
+            ]
+            assert connection.execute(text("""
+                SELECT COUNT(*)
+                FROM schema_migration_markers
+                WHERE migration_key = '202607_roster_child_album_name_authority_v1'
+            """)).scalar_one() == 1
+    finally:
+        migration_engine.dispose()
+
+
+def test_assigned_album_name_authority_migration_refuses_conflicting_values(
+    tmp_path,
+):
+    import migrations
+
+    migration_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'assigned-album-conflict.db').as_posix()}"
+    )
+    try:
+        with migration_engine.connect() as connection:
+            _create_album_name_authority_schema(connection)
+            connection.execute(text("""
+                INSERT INTO roster_children (id, name, album_name)
+                VALUES (1, '王小明', NULL)
+            """))
+            connection.execute(text("""
+                INSERT INTO projects (id, classroom_id, updated_at)
+                VALUES (1, 10, '2000-01-01'), (2, 10, '2000-01-01')
+            """))
+            connection.execute(text("""
+                INSERT INTO students (
+                    id, project_id, roster_child_id, name, album_name,
+                    output_filename, updated_at
+                ) VALUES
+                    (1, 1, 1, '王小明', '小明', 'one.pdf', '2000-01-01'),
+                    (2, 2, 1, '王小明', '明明', 'two.pdf', '2000-01-01')
+            """))
+            connection.commit()
+
+            with pytest.raises(RuntimeError, match="roster_child_ids=1"):
+                migrations._migrate_assigned_album_names_to_roster_authority(
+                    connection
+                )
+            assert connection.execute(text("""
+                SELECT album_name FROM roster_children WHERE id = 1
+            """)).scalar_one() is None
+            assert list(connection.execute(text("""
+                SELECT album_name, output_filename FROM students ORDER BY id
+            """))) == [("小明", "one.pdf"), ("明明", "two.pdf")]
+    finally:
+        migration_engine.dispose()
+
+
 def test_fresh_legacy_students_remain_unlinked_even_when_names_match(tmp_path):
     import migrations
 

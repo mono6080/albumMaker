@@ -4,10 +4,6 @@
 
 // 使用統一的 Cookie 認證 axios clients（含 401 interceptor）
 import { apiClient, renderClient } from "./authApi.js";
-import {
-  buildStudentAlbumNameAutoFillPath,
-  buildStudentAlbumNamesAutoFillPath,
-} from "./urls.js";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 
@@ -48,21 +44,6 @@ export const reopenProject = (projectId) =>
   apiClient.post(`/projects/${projectId}/reopen`);
 
 // ── 本期學生快照 ──────────────────────────────────────────────────────────────
-
-/** 僅替尚未設定相本稱呼的既有學生，自動填入可安全判斷的稱呼。 */
-export const autoFillStudentAlbumNames = (projectId) =>
-  apiClient.post(buildStudentAlbumNamesAutoFillPath(projectId));
-
-/** 僅替指定且尚未設定相本稱呼的學生，自動填入可安全判斷的稱呼。 */
-export const autoFillStudentAlbumName = (projectId, studentId) =>
-  apiClient.post(buildStudentAlbumNameAutoFillPath(projectId, studentId));
-
-/** 更新相本內顯示的稱呼；空字串代表改回沿用完整姓名。 */
-export const updateStudentAlbumName = (projectId, studentId, albumName) =>
-  apiClient.put(
-    `/projects/${projectId}/students/${studentId}/album-name`,
-    { album_name: albumName?.trim() || null },
-  );
 
 /** 設定或取消學生某頁的跳過旗標 */
 export const setStudentPageSkip = (projectId, expectedTemplateRevision, studentId, pageIndex, skip) =>

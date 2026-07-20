@@ -690,6 +690,14 @@ def test_second_historical_project_reuses_first_established_identity_and_ledgers
         ]
         assert resolved_child_id not in {first_original_id, second_original_id}
 
+        db = SessionLocal()
+        try:
+            second_student = db.get(Student, second_project["students"][0]["id"])
+            second_student.album_name = "不得升格的舊稱呼"
+            db.commit()
+        finally:
+            db.close()
+
         second_preview = client.get(
             f"/api/organization/projects/{second_project['id']}/classroom-migration-preview",
             params={"classroom_id": classroom["id"]},
@@ -743,6 +751,139 @@ def test_second_historical_project_reuses_first_established_identity_and_ledgers
                 ClassRosterMember.classroom_id == classroom["id"],
                 ClassRosterMember.ended_at.is_(None),
             ).count() == 1
+            assert db.get(Student, second_project["students"][0]["id"]).album_name is None
+            assert db.get(RosterChild, resolved_child_id).album_name is None
+        finally:
+            db.close()
+
+        # 每次啟動都會重跑 migration；existing decision 不得在重啟後把舊值升格。
+        from migrations import run_migrations
+
+        run_migrations()
+        db = SessionLocal()
+        try:
+            assert db.get(RosterChild, resolved_child_id).album_name is None
+        finally:
+            db.close()
+
+
+def test_create_new_identity_autofills_safe_central_album_name():
+    with started_client() as client:
+        login(client)
+        template_id = _create_active_template(client)
+        project = _create_unassigned_project(
+            client,
+            template_id,
+            ["李小華", "歐陽明"],
+        )
+        _, classroom = _create_classroom(client)
+
+        response = _assign_project(
+            client,
+            project["id"],
+            classroom["id"],
+            seed_current_roster=True,
+        )
+        assert_status(response, 200)
+        resolved_child_ids = [
+            row["resolved_roster_child_id"]
+            for row in response.json()["identity_resolutions"]
+        ]
+
+        db = SessionLocal()
+        try:
+            resolved_children = {
+                child.name: child.album_name
+                for child in db.query(RosterChild).filter(
+                    RosterChild.id.in_(resolved_child_ids),
+                )
+            }
+            assert resolved_children == {
+                "李小華": "小華",
+                "歐陽明": None,
+            }
+            assert all(
+                student.album_name is None
+                for student in db.query(Student).filter(
+                    Student.project_id == project["id"],
+                )
+            )
+        finally:
+            db.close()
+
+
+def test_create_new_alias_checks_existing_students_historical_name_snapshot():
+    with started_client() as client:
+        login(client)
+        template_id = _create_active_template(client)
+        first_project = _create_unassigned_project(
+            client,
+            template_id,
+            ["李小華"],
+        )
+        _, classroom = _create_classroom(client)
+        first_response = _assign_project(
+            client,
+            first_project["id"],
+            classroom["id"],
+            seed_current_roster=True,
+        )
+        assert_status(first_response, 200)
+        established_child_id = first_response.json()["identity_resolutions"][0][
+            "resolved_roster_child_id"
+        ]
+
+        db = SessionLocal()
+        try:
+            db.get(RosterChild, established_child_id).album_name = None
+            db.commit()
+        finally:
+            db.close()
+
+        historical_project = _create_unassigned_project(
+            client,
+            template_id,
+            ["小華", "王小華"],
+        )
+        student_ids = {
+            student["name"]: student["id"]
+            for student in historical_project["students"]
+        }
+        preview = client.get(
+            f"/api/organization/projects/{historical_project['id']}"
+            "/classroom-migration-preview",
+            params={"classroom_id": classroom["id"]},
+        )
+        assert_status(preview, 200)
+        response = client.put(
+            f"/api/organization/projects/{historical_project['id']}/classroom",
+            json={
+                "classroom_id": classroom["id"],
+                "source_fingerprint": preview.json()["source_fingerprint"],
+                "confirmed_all": True,
+                "seed_current_roster": False,
+                "student_identity_decisions": [
+                    {
+                        "student_id": student_ids["小華"],
+                        "action": "existing",
+                        "roster_child_id": established_child_id,
+                    },
+                    {
+                        "student_id": student_ids["王小華"],
+                        "action": "create_new",
+                    },
+                ],
+            },
+        )
+        assert_status(response, 200)
+
+        db = SessionLocal()
+        try:
+            created_student = db.get(Student, student_ids["王小華"])
+            assert created_student.roster_child.album_name is None
+            existing_student = db.get(Student, student_ids["小華"])
+            assert existing_student.roster_child_id == established_child_id
+            assert existing_student.effective_album_name == "小華"
         finally:
             db.close()
 

@@ -183,7 +183,14 @@ def _load_students(database_path: Path, scope: str) -> list[dict[str, Any]]:
         connection.row_factory = sqlite3.Row
         if "album_name" not in _column_names(connection, "students"):
             raise RuntimeError("students.album_name 尚未建立，請先執行資料庫 migration")
-        where_clause = "WHERE projects.deleted_at IS NULL" if scope == "active" else ""
+        project_columns = _column_names(connection, "projects")
+        filters = []
+        if "classroom_id" in project_columns:
+            # 已歸班相本改由 RosterChild 單一管理，本腳本只處理未歸班 legacy。
+            filters.append("projects.classroom_id IS NULL")
+        if scope == "active":
+            filters.append("projects.deleted_at IS NULL")
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
         rows = connection.execute(
             f"""SELECT students.id AS student_id,
                        students.project_id AS project_id,
@@ -415,15 +422,22 @@ def _load_current_student_rows(
 ) -> tuple[dict[int, sqlite3.Row], list[str]]:
     current_rows: dict[int, sqlite3.Row] = {}
     errors: list[str] = []
+    project_columns = _column_names(connection, "projects")
+    classroom_id_select = (
+        "projects.classroom_id AS project_classroom_id,"
+        if "classroom_id" in project_columns
+        else "NULL AS project_classroom_id,"
+    )
     for student_plan in student_plans:
         student_id = int(student_plan["student_id"])
         current_row = connection.execute(
-            """SELECT students.id AS student_id,
+            f"""SELECT students.id AS student_id,
                       students.project_id AS project_id,
                       students.name AS full_name,
                       students.album_name AS album_name,
                       students.created_at AS student_created_at,
                       students.output_filename AS output_filename,
+                      {classroom_id_select}
                       projects.deleted_at AS project_deleted_at,
                       projects.completed_at AS project_completed_at
                FROM students
@@ -435,6 +449,10 @@ def _load_current_student_rows(
             errors.append(f"student_id={student_id} 不存在")
             continue
         current_rows[student_id] = current_row
+        if current_row["project_classroom_id"] is not None:
+            errors.append(
+                f"student_id={student_id} 已歸班，請改由園所設定管理相本稱呼"
+            )
         comparisons = {
             "project_id": (
                 int(current_row["project_id"]),

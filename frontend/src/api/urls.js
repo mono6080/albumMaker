@@ -40,14 +40,6 @@ export const buildStickerUrl = (templateId, filename) =>
 
 // ── 專案相關 URL ──────────────────────────────────────────────────────────────
 
-/** 批次自動填入既有學生相本稱呼的 apiClient 相對路徑。 */
-export const buildStudentAlbumNamesAutoFillPath = (projectId) =>
-  `/projects/${projectId}/students/album-names/auto-fill`;
-
-/** 單一學生自動填入相本稱呼的 apiClient 相對路徑。 */
-export const buildStudentAlbumNameAutoFillPath = (projectId, studentId) =>
-  `/projects/${projectId}/students/${studentId}/album-name/auto-fill`;
-
 /** 專案層級對應文字的頁面預覽端點 URL */
 export const buildProjectPagePreviewUrl = (projectId, pageIndex) =>
   appendRenderBuildVersion(`${API_BASE}/projects/${projectId}/preview/${pageIndex}`);

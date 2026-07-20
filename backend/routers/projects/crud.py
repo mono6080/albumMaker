@@ -138,7 +138,7 @@ def get_project(
             {
                 "id": student.id,
                 "name": student.name,
-                "album_name": student.album_name,
+                "album_name": student.resolved_album_name,
                 "effective_album_name": student.effective_album_name,
                 "order_index": student.order_index,
                 "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
@@ -163,7 +163,8 @@ def get_student_editor_detail(
     assert_project_readable(project, current_user, db, organization_scope)
     student = get_student_or_404(student_id, project_id, db)
     student_summaries = (
-        db.query(Student.id, Student.name, Student.album_name, Student.order_index)
+        db.query(Student)
+        .options(joinedload(Student.roster_child))
         .filter(Student.project_id == project_id)
         .order_by(Student.order_index)
         .all()
@@ -184,8 +185,8 @@ def get_student_editor_detail(
                 {
                     "id": item.id,
                     "name": item.name,
-                    "album_name": item.album_name,
-                    "effective_album_name": item.album_name or item.name,
+                    "album_name": item.resolved_album_name,
+                    "effective_album_name": item.effective_album_name,
                     "order_index": item.order_index,
                 }
                 for item in student_summaries
@@ -194,7 +195,7 @@ def get_student_editor_detail(
         "student": {
             "id": student.id,
             "name": student.name,
-            "album_name": student.album_name,
+            "album_name": student.resolved_album_name,
             "effective_album_name": student.effective_album_name,
             "order_index": student.order_index,
             "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),

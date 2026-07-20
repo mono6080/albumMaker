@@ -66,6 +66,8 @@ def run_migrations():
         _retire_active_project_editor_assignments(connection)
         _archive_legacy_teacher_supervisor_links(connection)
         _add_academic_term_reporting_schema(connection)
+        _add_roster_child_album_name_column(connection)
+        _migrate_assigned_album_names_to_roster_authority(connection)
 
 
 def _add_academic_term_reporting_schema(connection):
@@ -1676,6 +1678,154 @@ def _add_student_album_name_column(connection):
     if "album_name" not in existing_columns:
         connection.execute(text("ALTER TABLE students ADD COLUMN album_name VARCHAR"))
         connection.commit()
+
+
+def _add_roster_child_album_name_column(connection):
+    """為園所孩子名冊加入已歸班相本共用的可選稱呼。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(roster_children)"))
+    }
+    if "album_name" not in existing_columns:
+        connection.execute(text(
+            "ALTER TABLE roster_children ADD COLUMN album_name VARCHAR"
+        ))
+        connection.commit()
+
+
+def _migrate_assigned_album_names_to_roster_authority(connection):
+    """把可信的已歸班舊稱呼升格為名冊唯一來源，未歸班資料完全不碰。"""
+    migration_key = "202607_roster_child_album_name_authority_v1"
+    connection.execute(text("""
+        CREATE TABLE IF NOT EXISTS schema_migration_markers (
+            migration_key VARCHAR PRIMARY KEY,
+            applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    if connection.execute(
+        text("""
+            SELECT 1
+            FROM schema_migration_markers
+            WHERE migration_key = :migration_key
+        """),
+        {"migration_key": migration_key},
+    ).first() is not None:
+        connection.commit()
+        return
+
+    overlong_child_ids = [
+        int(row[0])
+        for row in connection.execute(text("""
+            SELECT DISTINCT student.roster_child_id
+            FROM students AS student
+            JOIN projects AS project ON project.id = student.project_id
+            JOIN roster_children AS child ON child.id = student.roster_child_id
+            WHERE project.classroom_id IS NOT NULL
+              AND child.album_name IS NULL
+              AND LENGTH(TRIM(student.album_name)) > 100
+            ORDER BY student.roster_child_id
+        """))
+    ]
+    if overlong_child_ids:
+        raise RuntimeError(
+            "已歸班舊相本稱呼超過 100 字，需先人工處理 roster_child_ids="
+            + ",".join(str(child_id) for child_id in overlong_child_ids)
+        )
+
+    conflicting_child_ids = [
+        int(row[0])
+        for row in connection.execute(text("""
+            SELECT student.roster_child_id
+            FROM students AS student
+            JOIN projects AS project ON project.id = student.project_id
+            JOIN roster_children AS child ON child.id = student.roster_child_id
+            WHERE project.classroom_id IS NOT NULL
+              AND child.album_name IS NULL
+              AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
+            GROUP BY student.roster_child_id
+            HAVING COUNT(DISTINCT TRIM(student.album_name)) > 1
+            ORDER BY student.roster_child_id
+        """))
+    ]
+    if conflicting_child_ids:
+        raise RuntimeError(
+            "同一名冊學生在既有已歸班相本有不同稱呼，需先人工處理 "
+            "roster_child_ids="
+            + ",".join(str(child_id) for child_id in conflicting_child_ids)
+        )
+
+    # 只有同一孩子所有明確舊值一致時才自動升格；provisional link 不參與。
+    connection.execute(text("""
+        UPDATE roster_children
+        SET album_name = (
+            SELECT MIN(TRIM(student.album_name))
+            FROM students AS student
+            JOIN projects AS project ON project.id = student.project_id
+            WHERE student.roster_child_id = roster_children.id
+              AND project.classroom_id IS NOT NULL
+              AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
+        )
+        WHERE album_name IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM students AS student
+            JOIN projects AS project ON project.id = student.project_id
+            WHERE student.roster_child_id = roster_children.id
+              AND project.classroom_id IS NOT NULL
+              AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
+          )
+    """))
+
+    # 以舊／新 runtime 真正會送進渲染器的字串比較；包含既有中央值、缺 child link
+    # 及帶空白的歷史 raw 值，不能只檢查本次 backfill 的孩子。
+    changed_student_filter = """
+        FROM students AS student
+        JOIN projects AS project ON project.id = student.project_id
+        LEFT JOIN roster_children AS child ON child.id = student.roster_child_id
+        WHERE project.classroom_id IS NOT NULL
+          AND CASE
+                  WHEN student.album_name IS NOT NULL
+                  THEN student.album_name
+                  ELSE student.name
+              END
+              != CASE
+                     WHEN child.album_name IS NOT NULL
+                     THEN child.album_name
+                     ELSE student.name
+                 END
+    """
+    connection.execute(text(f"""
+        UPDATE projects
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (SELECT project.id {changed_student_filter})
+    """))
+    connection.execute(text(f"""
+        UPDATE students
+        SET output_filename = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (SELECT student.id {changed_student_filter})
+    """))
+
+    # Student.album_name 從此只保留給未歸班舊相本，避免形成第二份真相。
+    connection.execute(text("""
+        UPDATE students
+        SET album_name = NULL
+        WHERE id IN (
+            SELECT student.id
+            FROM students AS student
+            JOIN projects AS project ON project.id = student.project_id
+            WHERE project.classroom_id IS NOT NULL
+              AND student.album_name IS NOT NULL
+        )
+    """))
+    connection.execute(
+        text("""
+            INSERT INTO schema_migration_markers (migration_key)
+            VALUES (:migration_key)
+        """),
+        {"migration_key": migration_key},
+    )
+    connection.commit()
 
 
 def _add_template_revision_tracking(connection):

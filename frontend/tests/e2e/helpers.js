@@ -123,7 +123,13 @@ export async function createClassroomFixture(page, department, memberNames = [])
   if (memberNames.length > 0) {
     const membersResponse = await page.request.post(
       `/api/organization/classrooms/${classroom.id}/members/batch`,
-      { data: { members: memberNames.map(name => ({ name })) } },
+      {
+        data: {
+          members: memberNames.map(member => (
+            typeof member === "string" ? { name: member } : member
+          )),
+        },
+      },
     );
     expect(membersResponse.ok()).toBeTruthy();
   }

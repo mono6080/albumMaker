@@ -10,7 +10,7 @@ export const STUDENT_NAME_VARIABLES = [
   {
     token: NAME_VARIABLE,
     label: "相本稱呼",
-    description: "優先使用相本稱呼，未設定時使用完整姓名",
+    description: "使用園所設定的相本稱呼，未設定時使用完整姓名",
   },
   {
     token: FULL_NAME_VARIABLE,
@@ -54,7 +54,7 @@ export function replaceStudentNameVariables(value = "", student = {}) {
   const fullName = student?.name;
   const effectiveAlbumName = typeof student?.effective_album_name === "string"
     ? student.effective_album_name
-    : student?.album_name;
+    : fullName;
   return resolveStudentNameVariables(value, fullName, effectiveAlbumName);
 }
 

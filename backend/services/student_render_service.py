@@ -280,10 +280,11 @@ def _capture_student_render_input(
             page_layouts,
         )
         template_revision = int(current_project.template_revision or 1)
+        resolved_album_name = current_student.resolved_album_name
         render_input = {
             "project_name": current_project.name,
             "student_name": current_student.name,
-            "album_name": current_student.album_name,
+            "album_name": resolved_album_name,
             "page_layouts": page_layouts,
             "student_pages_data": student_pages_data,
             "template_revision": template_revision,
@@ -293,11 +294,13 @@ def _capture_student_render_input(
                 int(current_project.template.revision or 1),
                 current_project.created_at,
                 current_project.deleted_at,
+                current_project.classroom_id,
                 current_student.created_at,
+                current_student.roster_child_id,
                 current_project.name,
                 project_label_texts_raw,
                 current_student.name,
-                current_student.album_name,
+                resolved_album_name,
                 student_pages_data_raw,
             ),
         }
@@ -313,17 +316,20 @@ def _current_student_render_token(project_id: int, student_id: int, db) -> tuple
     current_student = db.get(Student, student_id)
     if current_project is None or current_student is None or current_student.project_id != project_id:
         return None
+    resolved_album_name = current_student.resolved_album_name
     return (
         current_project.template_id,
         int(current_project.template_revision or 1),
         int(current_project.template.revision or 1),
         current_project.created_at,
         current_project.deleted_at,
+        current_project.classroom_id,
         current_student.created_at,
+        current_student.roster_child_id,
         current_project.name,
         current_project.label_texts_json or "{}",
         current_student.name,
-        current_student.album_name,
+        resolved_album_name,
         current_student.pages_data_json,
     )
 

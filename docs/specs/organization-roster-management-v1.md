@@ -36,11 +36,15 @@ Decision：舊相本的 Student 身分不按姓名自動遷移。未歸班 Proje
 - 班級目前／歷史老師編制，區分 `lead` 與 `co_teacher`。
 - 同一老師可跨班、跨分校；分校歸屬由班級推導，不另複製一份 campus teacher 表。
 - 管理員在同一園所設定頁維護校／部門主管、班級老師與學生；設定本身即授權。
+- 管理員可在學生目前或歷史名單設定中央相本稱呼；若舊相本歸班時未建立 membership，
+  也可從「各期相本」的學生旁修改。它跟隨孩子跨班／跨期沿用，並立即套用同一孩子所有
+  既有與未來的已歸班相本。空白稱呼可在園所設定單筆或整班自動推導；不得覆蓋人工值，
+  候選若在任何目前班級或既有已歸班相本碰撞就保持空白供人工確認。
 - 老師的相本工作以目前班級分組，各期 Project 直接列在班級下。
 - 老師進度按主管的校／部門 scope 開放，包含 scope 內尚未建立相本的目前班級老師。
 - 從班級建立相本時，只能選目前當班老師為 owner；權限直接來自班級目前老師集合。
-- 相本的 Student 是建立當下班級名單快照；老師只能調整相本稱呼，不可在相本內另建、
-  複製、刪除學生或修改完整姓名，避免出現第二套班級名單 authority。
+- 相本的成員與 `Student.name` 是建立當下班級名單快照；相本稱呼只讀園所設定，老師不可
+  在相本內另建、複製、刪除學生、改完整姓名或維護另一份稱呼。
 - 舊相本由管理員逐本歸入班級；完成前不向老師、主管或設計組開放。
 - 舊相本歸班前先預覽固定學生快照與 established identities，並完整確認每位學生的身分決策。
 - 班級老師、主管 scope 與全域角色共用同一個後端 object policy。
@@ -117,17 +121,20 @@ migration 一次補齊快照；未歸班資料在管理員執行歸班時寫入�
 
 `Student.name`、`roster_child_id` 與成員集合是期別快照，不是目前班級名單。從目前名單
 建立的新 Project 一開始就是凍結快照；舊 Project 在 `classroom_id=NULL` 期間只允許 admin
-透過歸班 migration 寫入 `roster_child_id`，歸班成功後同樣永久凍結。相本工作流唯一可改的
-學生識別顯示欄位是 `album_name`，它不改完整姓名、名冊身分或成員集合。新增、離園、
-轉班、改名與新學期編班只改 `ClassRosterMember`／`RosterChild`，不回寫已歸班 Project。
+透過歸班 migration 寫入 `roster_child_id`，歸班成功後同樣永久凍結。已歸班相本的
+`Student.album_name` 不再是資料來源；API、預覽與渲染都動態讀取 `RosterChild.album_name`，
+未設定時回退該本 `Student.name` 快照。園所修改中央稱呼會失效所有相關既有輸出，但不改
+成員、完整姓名或 child link。`Student.album_name` 只保留給未歸班 legacy Project。
 
 ### RosterChild identity
 
 園所設定是目前名冊的唯一 authority。管理員新增一位新入園學生時，同步建立新的
 `RosterChild` 與第一段 `ClassRosterMember`；即使姓名相同也不共用 id。改名只更新這個
-目前名冊身分，轉班、回班與新學期重新編班都沿用原 `RosterChild.id`，只改 membership
-區間。由目前名單建立 Project 時，Student 沿用該 id 並固定當下完整姓名；Project runtime
-不得改 `Student.roster_child_id` 或 `Student.name`。
+目前名冊身分；可選 `RosterChild.album_name` 是所有已歸班相本唯一稱呼來源。轉班、回班與
+新學期重新編班都沿用原 `RosterChild.id`，因此稱呼自然沿用，只改 membership 區間。
+新入園若未明確提供稱呼，加入名單時才保守自動推導一次。由目前名單建立 Project 時，
+Student 沿用 child id、固定當下完整姓名且不複製稱呼。Project runtime 不得改
+`Student.roster_child_id`、`Student.name` 或 class-backed `Student.album_name`。
 
 fresh legacy schema 加入 `students.roster_child_id` 時一律保持 `NULL`，不得按姓名建立或共用
 `RosterChild`。曾跑過舊姓名推定 migration 的資料不在 startup 自動拆分；只要 Project 尚未
@@ -203,9 +210,13 @@ v1 新入園學生仍走園所設定的「加入目前名單」流程，在加�
 - `PUT /api/organization/classrooms/{id}/teachers`：admin 原子替換 active 編制；未改變的
   assignment 不重寫，移除者結束區間，新增者建立區間。
 - `POST /api/organization/classrooms/{id}/members/batch`：admin 新增入園學生；每一筆建立新的
-  `RosterChild` 與 active membership，不按姓名重用既有身分。
-- `PATCH /api/organization/classrooms/{id}/members/{member_id}`：admin 改名、離園、轉班或回班；
-  轉班／回班沿用原 `RosterChild.id`，只新增不可覆寫的 membership 區間。
+  `RosterChild` 與 active membership，不按姓名重用既有身分；可選中央 `album_name`，
+  省略時套用保守推導。
+- `PATCH /api/organization/classrooms/{id}/members/{member_id}`：admin 改名、設定或清除中央
+  `album_name`、離園、轉班或回班；轉班／回班沿用原 `RosterChild.id`，只新增
+  不可覆寫的 membership 區間。
+- `PATCH /api/organization/roster-children/{id}/album-name`：admin 修改沒有可用 membership
+  入口、但仍被已歸班相本引用的 child；相同 authority，不建立第二份稱呼。
 - `GET /api/organization/my-classrooms`：teacher 只回自己 active 編制；supervisor 回其全校／
   部門 scope 的 active 班級；admin 回全部。不得以 owner 或逐人主管關係擴張班級 scope。
 - `POST /api/organization/classrooms/{id}/projects`：admin 或該班 active lead 可建立班級相本；
@@ -224,7 +235,8 @@ v1 新入園學生仍走園所設定的「加入目前名單」流程，在加�
 班級／分校停用時不可新增編制或相本。`role=teacher|supervisor` 的 active 操作帳號都可加入
 老師編制或主管 scope，同一帳號可同時存在於兩者且不改 `User.role`。
 Project Student 不提供新增、複製、刪除或完整姓名修改端點；
-`PUT /api/projects/{project_id}/students/{student_id}/album-name` 只更新相本稱呼。
+三個 Project 相本稱呼 mutation 端點只供未歸班 legacy 相容，已歸班固定回 409
+`roster_album_name_authority`。
 `/api/roster` 也不提供 Student link、RosterChild merge 或 split 端點。
 
 ### 新學期編班 API（admin）
@@ -355,9 +367,11 @@ active 班級端點建立，協作權只來自 active 班級老師編制。semes
 
 ## Acceptance Smoke
 
-1. admin 在園所設定指派全校主管、部門主管、兩位班級 teacher 與學生名單。
-2. 以班級目前名單建立相本；owner 是 lead，所有 active class teachers 可編，無 editor row。
-   相本工作台只能核對快照與調整 `album_name`，不存在新增／複製／刪除／改完整姓名入口。
+1. admin 在園所設定指派全校主管、部門主管、兩位班級 teacher 與學生名單，整班自動填入
+   安全可判斷的相本稱呼，碰撞者保持空白供人工設定；轉班後同一名冊身分仍保留該稱呼。
+2. 以班級目前名單建立兩期相本；owner 是 lead，Student 不保存另一份稱呼，所有 active
+   class teachers 可編且無 editor row。之後在園所設定修改或清除稱呼，兩期既有相本與後續
+   新相本都立即解析為同一中央值，舊輸出失效；相本工作台只讀稱呼，沒有學生或稱呼維護入口。
 3. lead 與 co_teacher 可編；同校全校主管及同校同部門主管可讀／退回但不能編；其他校／
    部門主管 403；art_team 只讀；admin 全部可管。
 4. 把班級 lead 從 A 改成 B；B 立即可編全部班級相本，A 失去班級權限，owner 歸戶不自動改。

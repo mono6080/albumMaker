@@ -32,8 +32,8 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   },
   {
     element: '[data-guide="review-roster-button"]',
-    title: "本期學生快照",
-    description: "核對建立相本時從班級目前名單帶入的固定快照；完整姓名只讀，這裡只調整相本稱呼。",
+    title: "本期學生",
+    description: "核對建立相本時帶入的成員與完整姓名快照；相本稱呼統一跟隨園所設定。",
     side: "bottom",
     align: "end",
   },
@@ -446,11 +446,8 @@ export default function ProjectReview() {
       <RosterModal
         isOpen={isRosterOpen}
         onClose={() => setIsRosterOpen(false)}
-        projectId={projectId}
         students={project.students}
         photoProgressByStudentId={photoProgressByStudentId}
-        onChanged={loadProject}
-        isLocked={isProjectCompleted && !isAdmin}
       />
     </div>
   );

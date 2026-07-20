@@ -420,13 +420,13 @@ const GUIDE_MARKERS = {
   ],
   reviewWorkbench: [
     { n: 1, selector: '[data-guide="review-progress"]', text: "工作台橫幅。左邊看階段（1 製作 → 2 全班完成 → 3 交件）、中間看照片進度、右邊是這個階段的下一步按鈕。" },
-    { n: 2, selector: '[data-guide="review-roster-button"]', text: "「本期學生」。核對建立相本時帶入的固定快照，並設定相本稱呼。" },
+    { n: 2, selector: '[data-guide="review-roster-button"]', text: "「本期學生」。核對建立相本時帶入的成員與完整姓名快照；相本稱呼跟隨園所設定。" },
     { n: 3, selector: 'a:has-text("繼續製作")', text: "階段 1 的下一步：「繼續製作」，會帶你進編輯相本。" },
     { n: 4, selector: '[data-guide="review-student-card"]', text: "學生卡片。照片進度一目了然，點名字或鉛筆進個別編輯。" },
     { n: 5, selector: '[data-guide="review-preview-student"]', text: "點頁面縮圖直接放大預覽，不用進編輯頁。" },
   ],
   rosterModal: [
-    { n: 1, selector: '[data-guide="roster-modal"]', text: "本期學生是建立相本當下的固定快照；完整姓名只讀，這裡只調整相本稱呼。" },
+    { n: 1, selector: '[data-guide="roster-modal"]', text: "本期成員與完整姓名是建立相本當下的快照；相本稱呼只讀園所設定，由管理員集中修改。" },
   ],
   classEdit: [
     { n: 1, selector: '[data-guide="scope-switcher"]', text: "編輯範圍：「全班」＝改的內容套用到所有學生；「個別」＝只改單一學生。" },
@@ -566,8 +566,8 @@ async function buildPdf(screenshots) {
       <li>在班級總覽點右上「本期學生」。</li>
       <li>核對本期學生與人數；完整姓名用於名冊與檔案辨識，在相本內只讀。</li>
       <li>老師不需也不能在每一期另外新增、改名或刪除學生；這些資料由園所設定建立快照。</li>
-      <li>相本只想顯示名字或暱稱時，編輯該生的「相本稱呼」；留空則沿用完整姓名。</li>
-      <li>若班級目前名單本身錯誤，請管理員回「園所設定」修正；修正只影響之後建立的相本，不會改寫既有快照。</li>
+      <li>相本只想顯示名字或暱稱時，請管理員在「園所設定」的目前／歷史名單修改；沒有名單紀錄的既有相本，也可從「各期相本」的學生旁修改。留空則沿用完整姓名。</li>
+      <li>相本稱呼會立即套用同一孩子的既有已歸班相本與未來相本；本期成員與完整姓名快照不變。</li>
     </ol>
     ${stepFigure(screenshots.rosterModal, "步驟 3：核對本期學生快照與相本稱呼。")}
   </section>

@@ -2,6 +2,7 @@
 
 import logging
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from crud.project_crud import get_project_or_404, get_student_or_404
@@ -22,6 +23,18 @@ from services.template_sync_locks import lock_project_content_writes
 
 
 logger = logging.getLogger(__name__)
+
+
+def _assert_legacy_album_name_mutable(project) -> None:
+    """已歸班相本只准從園所名冊修改稱呼。"""
+    if project.classroom_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "roster_album_name_authority",
+                "message": "已歸班相本的稱呼請至園所設定修改。",
+            },
+        )
 
 
 def _effective_album_name_for_collision(student: Student) -> str:
@@ -64,11 +77,13 @@ def auto_fill_student_album_names(
     """P→S 鎖內為既有學生批次補上可安全推導的相本稱呼。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
+    _assert_legacy_album_name_mutable(project)
     with organization_acl_lock, lock_project_content_writes([project_id]):
         db.rollback()
         db.expire_all()
         project = get_project_or_404(project_id, db)
         assert_project_content_writable(project, current_user)
+        _assert_legacy_album_name_mutable(project)
         eligible_student_ids = [
             student.id
             for student in project.students
@@ -79,6 +94,7 @@ def auto_fill_student_album_names(
             db.expire_all()
             project = get_project_or_404(project_id, db)
             assert_project_content_writable(project, current_user)
+            _assert_legacy_album_name_mutable(project)
             eligible_students = [
                 student
                 for student in project.students
@@ -159,18 +175,21 @@ def auto_fill_student_album_name(
     """P→S 鎖內只為指定學生補上可安全推導的相本稱呼。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
+    _assert_legacy_album_name_mutable(project)
     get_student_or_404(student_id, project_id, db)
     with organization_acl_lock, lock_project_content_writes([project_id]):
         db.rollback()
         db.expire_all()
         project = get_project_or_404(project_id, db)
         assert_project_content_writable(project, current_user)
+        _assert_legacy_album_name_mutable(project)
         get_student_or_404(student_id, project_id, db)
         with lock_student_page_writes([student_id]):
             db.rollback()
             db.expire_all()
             project = get_project_or_404(project_id, db)
             assert_project_content_writable(project, current_user)
+            _assert_legacy_album_name_mutable(project)
             student = get_student_or_404(student_id, project_id, db)
             if student.album_name and student.album_name.strip():
                 db.rollback()
@@ -232,6 +251,7 @@ def update_student_album_name(
     """P→S 鎖內只更新相本稱呼，學生完整姓名保持快照不變。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
+    _assert_legacy_album_name_mutable(project)
     get_student_or_404(student_id, project_id, db)
     normalized_album_name = normalize_student_album_name(album_name)
     with (
@@ -243,6 +263,7 @@ def update_student_album_name(
         db.expire_all()
         project = get_project_or_404(project_id, db)
         assert_project_content_writable(project, current_user)
+        _assert_legacy_album_name_mutable(project)
         student = get_student_or_404(student_id, project_id, db)
         if student.album_name == normalized_album_name:
             result = _serialize_student_identity(student)
@@ -280,7 +301,7 @@ def _serialize_student_identity(student: Student) -> dict:
     return {
         "ok": True,
         "name": student.name,
-        "album_name": student.album_name,
+        "album_name": student.resolved_album_name,
         "effective_album_name": student.effective_album_name,
     }
 

@@ -48,7 +48,10 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)
 - 姓名變數由後端 `text_variables.py` 解析，前端 `textVariables.js` 鏡像同一契約：
   `{name}` 使用 `Student.effective_album_name`，`{full_name}` 使用完整姓名；raw 文字、兩個
-  replacement 與 final 結果都套用 200 字上限。TemplateCanvas 的一般文字與 footer 先分別顯示
+  replacement 與 final 結果都套用 200 字上限。已歸班 Student 的 effective 值動態解析
+  `RosterChild.album_name`，未歸班才讀 legacy `Student.album_name`；名冊 raw 值與 authority
+  切換狀態都納入 publish CAS，避免修改途中發布舊輸出。
+  TemplateCanvas 的一般文字與 footer 先分別顯示
   `（相本稱呼）`、`（完整姓名）`，與後端模板預覽一致；契約由
   `tests/test_render_name_variables.py`、`frontend/tests/unit/text.test.mjs` 與
   `tests/fixtures/template_text_variable_parity.json` 釘住。相本稱呼屬像素輸入，必須同時納入

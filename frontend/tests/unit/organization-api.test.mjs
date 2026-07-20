@@ -5,6 +5,8 @@ import {
   applyTermReclassificationPlan,
   assignProjectToClassroom,
   assignProjectOwner,
+  autoFillClassroomMemberAlbumNames,
+  autoFillRosterChildAlbumName,
   batchAddClassroomMembers,
   cancelTermReclassificationPlan,
   createCampus,
@@ -22,6 +24,7 @@ import {
   updateClassroom,
   updateClassroomTeachers,
   updateClassroomMember,
+  updateRosterChildAlbumName,
   updateTermReclassificationPlan,
   validateTermReclassificationPlan,
 } from "../../src/api/organizationApi.js";
@@ -59,6 +62,10 @@ test("organization API calls keep admin route and payload contracts stable", asy
     await fetchMyClassrooms();
     await fetchAcademicTerms();
     await batchAddClassroomMembers(5, [{ name: "王小明" }]);
+    await autoFillClassroomMemberAlbumNames(5);
+    await updateClassroomMember(5, 7, { name: "王小明", album_name: "小明" });
+    await updateRosterChildAlbumName(17, "  明明  ");
+    await autoFillRosterChildAlbumName(17);
     await updateClassroomMember(5, 8, { status: "ended", end_reason: "departed" });
     await updateClassroomMember(5, 9, { target_classroom_id: 6 });
     await createClassroomProject(5, {
@@ -118,6 +125,10 @@ test("organization API calls keep admin route and payload contracts stable", asy
     ["get", "/organization/my-classrooms"],
     ["get", "/organization/academic-terms"],
     ["post", "/organization/classrooms/5/members/batch", { members: [{ name: "王小明" }] }],
+    ["post", "/organization/classrooms/5/members/album-names/auto-fill"],
+    ["patch", "/organization/classrooms/5/members/7", { name: "王小明", album_name: "小明" }],
+    ["patch", "/organization/roster-children/17/album-name", { album_name: "明明" }],
+    ["post", "/organization/roster-children/17/album-name/auto-fill"],
     ["patch", "/organization/classrooms/5/members/8", { status: "ended", end_reason: "departed" }],
     ["patch", "/organization/classrooms/5/members/9", { target_classroom_id: 6 }],
     ["post", "/organization/classrooms/5/projects", {

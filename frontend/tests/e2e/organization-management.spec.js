@@ -126,8 +126,17 @@ test("admin manages current roster while period snapshots and owner history stay
   const campusName = `北區分校 ${suffix}`;
   const sourceClassName = `星星班 ${suffix}`;
   const targetClassName = `太陽班 ${suffix}`;
-  const firstStudentName = `林小星${suffix}`;
-  const secondStudentName = `陳小陽${suffix}`;
+  const uniqueHanOffset = (Date.now() + test.info().workerIndex * 97) % 2000;
+  const firstNameMarker = String.fromCodePoint(0x4e00 + uniqueHanOffset);
+  const secondNameMarker = String.fromCodePoint(0x4e00 + uniqueHanOffset + 1);
+  const firstStudentName = `林小${firstNameMarker}`;
+  const secondStudentName = `陳陽${secondNameMarker}`;
+  const firstAutomaticAlbumName = `小${firstNameMarker}`;
+  const secondAutomaticAlbumName = `陽${secondNameMarker}`;
+  const firstStudentAlbumName = `星寶${suffix}`;
+  const updatedFirstStudentAlbumName = `星星寶${suffix}`;
+  const projectEditedStudentAlbumName = `相本頁園所稱呼${suffix}`;
+  const departedFirstStudentAlbumName = `星寶離園${suffix}`;
   const projectName = `星星班相本 ${suffix}`;
   const transferReason = `新學期改由接手老師負責 ${suffix}`;
   const legacyProjectName = `待遷移舊相本 ${suffix}`;
@@ -158,12 +167,25 @@ test("admin manages current roster while period snapshots and owner history stay
     }),
     "建立目標班級",
   );
-  await readJsonResponse(
+  const createdRoster = await readJsonResponse(
     await page.request.post(`/api/organization/classrooms/${sourceClassroom.id}/members/batch`, {
       data: { members: [{ name: firstStudentName }, { name: secondStudentName }] },
     }),
     "建立目前名單",
   );
+  const firstRosterMember = createdRoster.created.find(member => member.name === firstStudentName);
+  const secondRosterMember = createdRoster.created.find(member => member.name === secondStudentName);
+  expect(firstRosterMember).toBeTruthy();
+  expect(secondRosterMember).toBeTruthy();
+  for (const member of [firstRosterMember, secondRosterMember]) {
+    await readJsonResponse(
+      await page.request.patch(
+        `/api/organization/classrooms/${sourceClassroom.id}/members/${member.id}`,
+        { data: { album_name: null } },
+      ),
+      `清空 ${member.name} 的相本稱呼測試資料`,
+    );
+  }
   await readJsonResponse(
     await page.request.put(`/api/organization/classrooms/${sourceClassroom.id}/teachers`, {
       data: {
@@ -275,9 +297,81 @@ test("admin manages current roster while period snapshots and owner history stay
     exact: true,
   })).toBeVisible();
 
+  await page.getByRole("button", {
+    name: `修改 ${firstStudentName} 的完整姓名與相本稱呼`,
+    exact: true,
+  }).click();
+  const memberDetailsDialog = page.getByRole("dialog", { name: "修改學生資料" });
+  await expect(memberDetailsDialog).toBeVisible();
+  const firstStudentAlbumNameInput = memberDetailsDialog.getByLabel("相本稱呼（選填）");
+  await expect(firstStudentAlbumNameInput).toHaveValue("");
+  const autoFillFirstStudentResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && new URL(response.url()).pathname
+      === `/api/organization/roster-children/${firstRosterMember.roster_child_id}/album-name/auto-fill`
+  ));
+  await memberDetailsDialog.getByRole("button", { name: "自動偵測", exact: true }).click();
+  const autoFillFirstStudentResult = await readJsonResponse(
+    await autoFillFirstStudentResponse,
+    "單筆自動偵測園所相本稱呼",
+  );
+  expect(autoFillFirstStudentResult).toEqual({ updated: 1, unresolved: 0 });
+  await expect(memberDetailsDialog).toHaveCount(0);
+  await expect(page.getByText(
+    `相本稱呼：${firstAutomaticAlbumName}`,
+    { exact: true },
+  )).toBeVisible();
+
+  const autoFillClassroomAlbumNamesButton = page.getByRole("button", {
+    name: "自動填入相本稱呼",
+    exact: true,
+  });
+  await expect(autoFillClassroomAlbumNamesButton).toBeEnabled();
+  const autoFillClassroomResponse = page.waitForResponse(response => (
+    response.request().method() === "POST"
+    && new URL(response.url()).pathname
+      === `/api/organization/classrooms/${sourceClassroom.id}/members/album-names/auto-fill`
+  ));
+  await autoFillClassroomAlbumNamesButton.click();
+  const autoFillClassroomResult = await readJsonResponse(
+    await autoFillClassroomResponse,
+    "整批自動填入園所相本稱呼",
+  );
+  expect(autoFillClassroomResult).toEqual({ updated: 1, unresolved: 0 });
+  await expect(page.getByText(
+    `相本稱呼：${secondAutomaticAlbumName}`,
+    { exact: true },
+  )).toBeVisible();
+  await expect(autoFillClassroomAlbumNamesButton).toBeDisabled();
+
+  await page.getByRole("button", {
+    name: `修改 ${firstStudentName} 的完整姓名與相本稱呼`,
+    exact: true,
+  }).click();
+  await expect(memberDetailsDialog).toBeVisible();
+  await expect(firstStudentAlbumNameInput).toHaveValue(firstAutomaticAlbumName);
+  await expect(memberDetailsDialog.getByRole("button", { name: "自動偵測", exact: true })).toHaveCount(0);
+  await firstStudentAlbumNameInput.fill(firstStudentAlbumName);
+  await expect(firstStudentAlbumNameInput).toHaveValue(firstStudentAlbumName);
+  const updateMemberResponsePromise = page.waitForResponse(response => (
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname.startsWith(
+      `/api/organization/classrooms/${sourceClassroom.id}/members/`,
+    )
+  ));
+  await memberDetailsDialog.getByRole("button", { name: "儲存", exact: true }).click();
+  const updateMemberResponse = await updateMemberResponsePromise;
+  expect(updateMemberResponse.ok()).toBeTruthy();
+  expect(updateMemberResponse.request().postDataJSON()).toEqual({
+    album_name: firstStudentAlbumName,
+  });
+  await expect(page.getByText(
+    `相本稱呼：${firstStudentAlbumName}`,
+    { exact: true },
+  )).toBeVisible();
+
   await page.getByRole("button", { name: "建立新一期相本" }).click();
   const projectNameInput = page.getByLabel("相本名稱");
-  await projectNameInput.fill(projectName);
   const firstProjectSlotSelect = page.getByLabel("正式學期期別");
   const firstProjectSlotValue = await firstProjectSlotSelect.locator("option")
     .filter({ hasText: template.period_name })
@@ -287,6 +381,7 @@ test("admin manages current roster while period snapshots and owner history stay
   await firstProjectSlotSelect.selectOption(firstProjectSlotValue);
   await page.getByLabel("此期模板").selectOption(String(template.id));
   await page.getByLabel("目前負責老師").selectOption(String(initialOwner.id));
+  await projectNameInput.fill(projectName);
   await expect(projectNameInput).toHaveValue(projectName);
   const createProjectButton = page.getByRole("button", { name: "建立相本", exact: true });
   await expect(createProjectButton).toBeEnabled();
@@ -295,11 +390,67 @@ test("admin manages current roster while period snapshots and owner history stay
     && response.url().endsWith(`/api/organization/classrooms/${sourceClassroom.id}/projects`)
   ));
   await createProjectButton.click();
-  expect((await createProjectResponse).ok()).toBeTruthy();
+  const createdProject = await readJsonResponse(
+    await createProjectResponse,
+    "建立班級相本",
+  );
   await expect(page.getByRole("link", { name: projectName })).toBeVisible();
   const projectSection = page.getByRole("region", { name: `相本 ${projectName}` });
   await expect(projectSection.getByText(firstStudentName, { exact: true })).toBeVisible();
+  await expect(projectSection.getByText(`相本：${firstStudentAlbumName}`, { exact: true })).toBeVisible();
   await expect(projectSection.getByText(secondStudentName, { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "目前名單" }).click();
+  await page.getByRole("button", {
+    name: `修改 ${firstStudentName} 的完整姓名與相本稱呼`,
+    exact: true,
+  }).click();
+  const reopenedMemberDetailsDialog = page.getByRole("dialog", { name: "修改學生資料" });
+  await expect(reopenedMemberDetailsDialog).toBeVisible();
+  const updatedAlbumNameInput = reopenedMemberDetailsDialog.getByLabel("相本稱呼（選填）");
+  await expect(updatedAlbumNameInput).toHaveValue(firstStudentAlbumName);
+  await updatedAlbumNameInput.fill(updatedFirstStudentAlbumName);
+  await expect(updatedAlbumNameInput).toHaveValue(updatedFirstStudentAlbumName);
+  const updateExistingProjectAlbumNameResponse = page.waitForResponse(response => (
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname.startsWith(
+      `/api/organization/classrooms/${sourceClassroom.id}/members/`,
+    )
+  ));
+  await reopenedMemberDetailsDialog.getByRole("button", { name: "儲存", exact: true }).click();
+  expect((await updateExistingProjectAlbumNameResponse).ok()).toBeTruthy();
+  await page.getByRole("button", { name: "各期相本" }).click();
+  await expect(projectSection.getByText(`相本：${updatedFirstStudentAlbumName}`, { exact: true })).toBeVisible();
+  await expect(projectSection.getByText(`相本：${firstStudentAlbumName}`, { exact: true })).toHaveCount(0);
+
+  await projectSection.getByRole("button", {
+    name: `修改 ${firstStudentName} 的園所相本稱呼`,
+    exact: true,
+  }).click();
+  const projectAlbumNameDialog = page.getByRole("dialog", { name: "修改園所相本稱呼" });
+  await expect(projectAlbumNameDialog).toBeVisible();
+  const projectAlbumNameInput = projectAlbumNameDialog.getByLabel("相本稱呼（選填）");
+  await expect(projectAlbumNameInput).toHaveValue(updatedFirstStudentAlbumName);
+  await projectAlbumNameInput.fill(projectEditedStudentAlbumName);
+  await expect(projectAlbumNameInput).toHaveValue(projectEditedStudentAlbumName);
+  const updateRosterChildAlbumNameResponse = page.waitForResponse(response => (
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname.startsWith("/api/organization/roster-children/")
+    && new URL(response.url()).pathname.endsWith("/album-name")
+  ));
+  await projectAlbumNameDialog.getByRole("button", { name: "儲存", exact: true }).click();
+  expect((await updateRosterChildAlbumNameResponse).ok()).toBeTruthy();
+  await expect(projectSection.getByText(
+    `相本：${projectEditedStudentAlbumName}`,
+    { exact: true },
+  )).toBeVisible();
+  const existingProjectDetail = await readJsonResponse(
+    await page.request.get(`/api/projects/${createdProject.id}`),
+    "確認既有相本套用園所稱呼",
+  );
+  expect(existingProjectDetail.students.find(
+    student => student.name === firstStudentName,
+  )?.effective_album_name).toBe(projectEditedStudentAlbumName);
 
   await page.getByRole("button", { name: "目前名單" }).click();
   const departResponse = page.waitForResponse(response => (
@@ -312,6 +463,30 @@ test("admin manages current roster while period snapshots and owner history stay
   await page.getByRole("button", { name: "歷史紀錄" }).click();
   await expect(page.getByText(firstStudentName, { exact: true })).toBeVisible();
   await expect(page.getByText("離園", { exact: true })).toBeVisible();
+  await page.getByRole("button", {
+    name: `修改 ${firstStudentName} 的完整姓名與相本稱呼`,
+    exact: true,
+  }).click();
+  const historicalMemberDetailsDialog = page.getByRole("dialog", { name: "修改學生資料" });
+  await expect(historicalMemberDetailsDialog).toBeVisible();
+  const historicalAlbumNameInput = historicalMemberDetailsDialog.getByLabel("相本稱呼（選填）");
+  await expect(historicalAlbumNameInput).toHaveValue(projectEditedStudentAlbumName);
+  await historicalAlbumNameInput.fill(departedFirstStudentAlbumName);
+  await expect(historicalAlbumNameInput).toHaveValue(departedFirstStudentAlbumName);
+  const updateHistoricalMemberAlbumNameResponse = page.waitForResponse(response => (
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname.startsWith(
+      `/api/organization/classrooms/${sourceClassroom.id}/members/`,
+    )
+  ));
+  await historicalMemberDetailsDialog.getByRole("button", { name: "儲存", exact: true }).click();
+  expect((await updateHistoricalMemberAlbumNameResponse).ok()).toBeTruthy();
+  await expect(page.getByText(
+    `相本稱呼：${departedFirstStudentAlbumName}`,
+    { exact: true },
+  )).toBeVisible();
+  await page.getByRole("button", { name: "各期相本" }).click();
+  await expect(projectSection.getByText(`相本：${departedFirstStudentAlbumName}`, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "目前名單" }).click();
   await page.getByRole("button", { name: `轉班：${secondStudentName}`, exact: true }).click();

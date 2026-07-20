@@ -203,7 +203,7 @@ def preview_student_page(
             current_page_data,
             page_index,
             scale,
-            album_name=student.album_name,
+            album_name=student.resolved_album_name,
         ),
     )
 

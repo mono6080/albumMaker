@@ -3,6 +3,7 @@
 from database import RosterChild, SessionLocal
 from services.student_input_policy import (
     PROJECT_STUDENT_MAX_COUNT,
+    STUDENT_ALBUM_NAME_MAX_LENGTH,
     STUDENT_BATCH_MAX_SIZE,
     STUDENT_NAME_MAX_LENGTH,
 )
@@ -83,6 +84,51 @@ def test_classroom_name_is_trimmed_before_project_snapshot_and_overlong_is_rejec
         }
 
 
+def test_roster_album_name_limit_rejects_batch_and_patch_without_mutation():
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        classroom_id, _, _ = _create_classroom_with_lead(client, template_id)
+        maximum_album_name = "稱" * STUDENT_ALBUM_NAME_MAX_LENGTH
+        accepted_name = unique_name("accepted_album_name")
+        accepted = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={
+                "members": [
+                    {"name": accepted_name, "album_name": maximum_album_name}
+                ]
+            },
+        )
+        assert_status(accepted, 201)
+        member = accepted.json()["created"][0]
+        assert member["album_name"] == maximum_album_name
+
+        overlong_album_name = "稱" * (STUDENT_ALBUM_NAME_MAX_LENGTH + 1)
+        rejected_name = unique_name("rejected_album_name")
+        rejected_batch = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={
+                "members": [
+                    {"name": rejected_name, "album_name": overlong_album_name}
+                ]
+            },
+        )
+        assert_status(rejected_batch, 422)
+        assert not _any_roster_child_exists([rejected_name])
+
+        rejected_patch = client.patch(
+            f"/api/organization/classrooms/{classroom_id}/members/{member['id']}",
+            json={"album_name": overlong_album_name},
+        )
+        assert_status(rejected_patch, 422)
+        db = SessionLocal()
+        try:
+            child = db.get(RosterChild, member["roster_child_id"])
+            assert child.album_name == maximum_album_name
+        finally:
+            db.close()
+
+
 def test_classroom_member_batch_limit_rejects_entire_payload():
     with started_client() as client:
         login(client)
@@ -122,7 +168,7 @@ def test_classroom_capacity_is_the_project_snapshot_capacity():
         assert {student["name"] for student in project["students"]} == set(names)
 
 
-def test_openapi_only_exposes_album_name_for_project_student_identity_mutation():
+def test_openapi_exposes_central_roster_album_name_authority():
     with started_client() as client:
         schema = client.get("/openapi.json").json()
         paths = schema["paths"]
@@ -135,3 +181,14 @@ def test_openapi_only_exposes_album_name_for_project_student_identity_mutation()
         "/api/projects/{project_id}/students/{student_id}/album-name"
     ]
     assert set(album_name_path) == {"put"}
+    roster_member_patch = paths[
+        "/api/organization/classrooms/{classroom_id}/members/{member_id}"
+    ]["patch"]
+    request_schema_ref = roster_member_patch["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["$ref"]
+    request_schema_name = request_schema_ref.rsplit("/", 1)[-1]
+    request_properties = schema["components"]["schemas"][request_schema_name][
+        "properties"
+    ]
+    assert "album_name" in request_properties

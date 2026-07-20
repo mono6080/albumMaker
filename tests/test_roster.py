@@ -1200,7 +1200,21 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
             f"/api/projects/{project_id}/students/{students[student_name]}/album-name",
             json={"album_name": "小明"},
         )
-        assert_status(album_name_after_reopen, 200)
+        assert_status(album_name_after_reopen, 409)
+        assert (
+            album_name_after_reopen.json()["detail"]["code"]
+            == "roster_album_name_authority"
+        )
+        skip_after_reopen = client.patch(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/"
+                f"{students[student_name]}/pages/0/skip",
+            ),
+            json={"skip": True},
+        )
+        assert_status(skip_after_reopen, 200)
 
 
 def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):
