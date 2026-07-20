@@ -111,6 +111,8 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
+  `tests/e2e/preview-switching.spec.js` 以注入慢渲染模擬正式環境，驗證快速切頁
+  再切回原頁時預覽不會卡住不渲染（守 PagePreview 元素重用與 pending watchdog）。
   `scripts/check_frontend_bundle_budget.mjs` 從實際 `index.html` import graph 找本次 active chunks，
   防止 lazy routes 退回首包；外部 lane build 目錄即使殘留舊 hash chunk 也不會誤判。
 - **pre-commit**：`.pre-commit-config.yaml`（ruff check/format + mypy）；

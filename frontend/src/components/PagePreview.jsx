@@ -7,6 +7,12 @@ import { appendPreviewCacheVersion, buildStudentPagePreviewUrl } from "../api/ur
 import { useSettledValue } from "../hooks/useSettledValue";
 import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
+// 共 3 次嘗試；error 後 1.5s 重試，pending 卡死 15s 後強制重發
+// （15s > 後端排隊逾時 10s + 最壞渲染時間，正常慢渲染不會被誤斷）
+const PREVIEW_MAX_RETRIES = 2;
+const ERROR_RETRY_DELAY_MS = 1500;
+const PENDING_WATCHDOG_MS = 15000;
+
 // src 可覆寫圖片來源（全班編輯器用專案層級預覽，其餘沿用學生頁預覽）
 export default function PagePreview({
   projectId,
@@ -16,8 +22,8 @@ export default function PagePreview({
   templateRevision = null,
   src = null,
 }) {
-  const [isLoaded, setIsLoaded] = useState(false);
-  // 載入失敗自動重試一次（例如剛好撞上後端渲染排隊），再失敗才放棄
+  // loading / loaded / error；error 且重試額度用盡才放棄
+  const [loadState, setLoadState] = useState("loading");
   const [retryNonce, setRetryNonce] = useState(0);
 
   const targetSrc = src ?? appendPreviewCacheVersion(
@@ -30,39 +36,48 @@ export default function PagePreview({
   const isSettling = baseSrc !== targetSrc;
 
   useEffect(() => {
-    setIsLoaded(false);
+    setLoadState("loading");
     setRetryNonce(0);
   }, [baseSrc]);
+
+  // 重試統一由這裡排程：error 後短延遲重試（例如撞上後端渲染排隊回 503）；
+  // loading 逾時也強制換 nonce 重發——Chromium 對「同 URL、前次載入被切頁
+  // 中斷」的圖片偶爾不再發請求（pending 卡死、load/error 都不觸發），
+  // 換了 nonce 的新 URL 一定會發出新請求
+  useEffect(() => {
+    if (loadState === "loaded" || retryNonce >= PREVIEW_MAX_RETRIES) return undefined;
+    const delay = loadState === "error" ? ERROR_RETRY_DELAY_MS : PENDING_WATCHDOG_MS;
+    const timer = setTimeout(() => {
+      setLoadState("loading");
+      setRetryNonce(nonce => nonce + 1);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [loadState, retryNonce, baseSrc]);
 
   const imageSrc = retryNonce > 0
     ? `${baseSrc}${baseSrc.includes("?") ? "&" : "?"}retry=${retryNonce}`
     : baseSrc;
-
-  const handleError = () => {
-    if (retryNonce === 0) {
-      window.setTimeout(() => setRetryNonce(1), 1500);
-      return;
-    }
-    setIsLoaded(true);
-  };
+  const gaveUp = loadState === "error" && retryNonce >= PREVIEW_MAX_RETRIES;
 
   return (
     <div
       className="relative w-full rounded-xl overflow-hidden border border-gray-200 shadow-sm"
       style={{ aspectRatio: `${CANVAS_REAL_WIDTH} / ${CANVAS_REAL_HEIGHT}` }}
     >
-      {(!isLoaded || isSettling) && (
+      {((loadState !== "loaded" && !gaveUp) || isSettling) && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
           <Loader2 className="w-5 h-5 text-gray-300 animate-spin" />
         </div>
       )}
+      {/* 切頁沿用同一個 img 元素改 src（只在重試時重建）：每次切頁都建新元素
+          會踩到 Chromium 對中斷載入的 dedup 怪癖，切回原頁時可能完全不發請求 */}
       <img
-        key={`${baseSrc}#${retryNonce}`}
+        key={retryNonce}
         src={imageSrc}
         alt={`第 ${pageIndex + 1} 頁`}
         className="w-full h-full object-cover"
-        onLoad={() => setIsLoaded(true)}
-        onError={handleError}
+        onLoad={() => setLoadState("loaded")}
+        onError={() => setLoadState("error")}
       />
     </div>
   );
