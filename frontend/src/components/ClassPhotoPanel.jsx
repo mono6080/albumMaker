@@ -17,9 +17,10 @@ export default function ClassPhotoPanel({
   onOpenFilenameWizard,
 }) {
   // 照片卡固定 110px 高、寬依格位長寬比（見 PhotoSlotCard），
-  // 取最寬者決定格線欄寬，避免寬格位在窄欄溢出（作法同 PhotoManager）
+  // 取最寬者決定格線欄寬，避免寬格位在窄欄溢出（作法同 PhotoManager）；
+  // 下限墊到 4:3 橫式卡寬，讓全直式格的頁面與其他頁的方格一樣大
   const maxSlotCardWidth = slotItems.length
-    ? Math.max(...slotItems.map(item => Math.round(110 * item.slotW / item.slotH)))
+    ? Math.max(147, ...slotItems.map(item => Math.round(110 * item.slotW / item.slotH)))
     : 110;
 
   // 與個別編輯的照片格同款外觀（灰底方格＋角標）；點格開「放照片」Modal

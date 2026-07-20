@@ -277,9 +277,10 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
   // 計數排除已刪除頁：已刪除頁的格子照樣渲染（標示已刪除），但不算進度
   const countableItems = visibleItems.filter(it => !skippedPages.has(it.pi));
   const filledCount = countableItems.filter(it => displayUrl(it)).length;
-  // 照片卡固定 110px 高、寬依格位長寬比（見 PhotoSlotCard），取最寬者決定格線欄寬
+  // 照片卡固定 110px 高、寬依格位長寬比（見 PhotoSlotCard），取最寬者決定格線欄寬；
+  // 下限墊到 4:3 橫式卡寬，讓全直式格的頁面與其他頁的方格一樣大
   const maxSlotCardWidth = visibleItems.length
-    ? Math.max(...visibleItems.map(it => Math.round(110 * it.slotW / it.slotH)))
+    ? Math.max(147, ...visibleItems.map(it => Math.round(110 * it.slotW / it.slotH)))
     : 110;
   // 左右移的合法目標：目前檢視中、非刪除頁的格子（依 items 原始順序）
   const swappableIndexes = items
