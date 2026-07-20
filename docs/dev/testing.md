@@ -112,7 +112,11 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
   `tests/e2e/preview-switching.spec.js` 以注入慢渲染模擬正式環境，驗證快速切頁
-  再切回原頁時預覽不會卡住不渲染（守 PagePreview 元素重用與 pending watchdog）。
+  再切回原頁時預覽不會卡住不渲染；`preview-interrupt-recovery.spec.js`（僅
+  chromium，CDP throttle）在 body 傳輸中切頁中斷後量測切回恢復時間，守
+  PagePreview 的 keeper 背景收尾與 pending watchdog。兩者都可用
+  `PLAYWRIGHT_BASE_URL=http://127.0.0.1:8765` 改跑 production build＋
+  service worker 路徑。
   `scripts/check_frontend_bundle_budget.mjs` 從實際 `index.html` import graph 找本次 active chunks，
   防止 lazy routes 退回首包；外部 lane build 目錄即使殘留舊 hash chunk 也不會誤判。
 - **pre-commit**：`.pre-commit-config.yaml`（ruff check/format + mypy）；

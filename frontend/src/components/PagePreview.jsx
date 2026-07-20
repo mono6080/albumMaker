@@ -7,23 +7,34 @@ import { appendPreviewCacheVersion, buildStudentPagePreviewUrl } from "../api/ur
 import { useSettledValue } from "../hooks/useSettledValue";
 import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
-// 共 3 次嘗試；error 後 1.5s 重試，pending 卡死 15s 後強制重發
-// （15s > 後端排隊逾時 10s + 最壞渲染時間，正常慢渲染不會被誤斷）
+// 共 3 次嘗試；error 後 1.5s 重試，pending 卡死 7s 後強制重發
+// （正常 MISS 渲染＋傳輸約 1-4s；7s 仍卡多半是連線層 stall，換 URL 踢開）
 const PREVIEW_MAX_RETRIES = 2;
 const ERROR_RETRY_DELAY_MS = 1500;
-const PENDING_WATCHDOG_MS = 15000;
-
-// Chromium 會把「被切頁中斷的圖片載入」留在 per-document memory cache，
-// 之後同 URL 的載入會 dedup 到那個已死的載入上——不發請求、load/error
-// 都不觸發（正式站 log 證實）。記錄被中斷的 URL，重用時附加 reload 參數
-// 強制發出全新請求；載入成功後保留同一個 bust 值，後續回訪走 304 快路徑
-const interruptedSrcBusts = new Map();
+const PENDING_WATCHDOG_MS = 7000;
 
 const withParam = (base, key, value) =>
   `${base}${base.includes("?") ? "&" : "?"}${key}=${value}`;
 
-function markInterrupted(src) {
-  if (src) interruptedSrcBusts.set(src, (interruptedSrcBusts.get(src) ?? 0) + 1);
+// 切走時讓被中斷的載入在背景抓完：後端快取已熱、通常一秒內完成，
+// 圖進瀏覽器快取後，切回原頁同 URL 直接命中——不依賴當下的連線狀態
+// （正式站走 Cloudflare + nginx h2，被中斷的 stream 偶爾會讓後續同 URL
+// 請求 stall 十幾秒；背景收尾讓切回根本不需要發網路請求）
+const keepAliveLoaders = new Set();
+
+function finishLoadInBackground(src) {
+  if (!src) return;
+  const keeper = new Image();
+  keepAliveLoaders.add(keeper);
+  const release = () => {
+    keepAliveLoaders.delete(keeper);
+    keeper.onload = null;
+    keeper.onerror = null;
+  };
+  keeper.onload = release;
+  keeper.onerror = release;
+  keeper.src = src;
+  window.setTimeout(release, 30000);
 }
 
 // src 可覆寫圖片來源（全班編輯器用專案層級預覽，其餘沿用學生頁預覽）
@@ -58,19 +69,19 @@ export default function PagePreview({
   };
 
   useEffect(() => {
-    // 換頁時前一個載入還沒完成＝被瀏覽器中斷：記下來，之後重用要換新 URL
+    // 換頁時前一個載入還沒完成＝被瀏覽器中斷：交給背景 keeper 抓完暖快取
     const previousSrc = activeSrcRef.current;
     if (previousSrc && previousSrc !== baseSrc && loadStateRef.current === "loading") {
-      markInterrupted(previousSrc);
+      finishLoadInBackground(previousSrc);
     }
     activeSrcRef.current = baseSrc;
     updateLoadState("loading");
     setRetryNonce(0);
   }, [baseSrc]);
 
-  // unmount（行動版切分頁、離開編輯頁）時未完成的載入同樣記為中斷
+  // unmount（行動版切分頁、離開編輯頁）時未完成的載入同樣交給背景收尾
   useEffect(() => () => {
-    if (loadStateRef.current === "loading") markInterrupted(activeSrcRef.current);
+    if (loadStateRef.current === "loading") finishLoadInBackground(activeSrcRef.current);
   }, []);
 
   // 重試統一由這裡排程：error 後短延遲重試（例如撞上後端渲染排隊回 503）；
@@ -87,11 +98,7 @@ export default function PagePreview({
     return () => clearTimeout(timer);
   }, [loadState, retryNonce, baseSrc]);
 
-  // 中斷過的 URL 帶 reload 參數重載（bump 永遠發生在「別的」URL 上，
-  // 當前 render 讀到的 bust 值在本輪不會變動）
-  const interruptedBust = interruptedSrcBusts.get(baseSrc);
-  const bustedBase = interruptedBust ? withParam(baseSrc, "reload", interruptedBust) : baseSrc;
-  const imageSrc = retryNonce > 0 ? withParam(bustedBase, "retry", retryNonce) : bustedBase;
+  const imageSrc = retryNonce > 0 ? withParam(baseSrc, "retry", retryNonce) : baseSrc;
   const gaveUp = loadState === "error" && retryNonce >= PREVIEW_MAX_RETRIES;
 
   return (
