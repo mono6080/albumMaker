@@ -165,13 +165,13 @@ commit。空班、同格重複與錯配一律回 409/422，不建立部分資料
 `not_created|archived|single|multiple_projects` 與 `projects[]`。`archived`
 表示工作格曾開始、但目前只剩封存／已清除 Project；它不可被當成未建立而重做。
 
-每個 Project 分開回傳四個正交狀態：
+每個 Project 分開回傳三個正交狀態（老師進度不考慮列印 PDF 是否已產生；
+PDF 狀態只屬於學期匯出）：
 
 - `content_status`: `empty|incomplete|ready`，含照片與文字各自的 filled/total；
   只有兩者都填滿才是 `ready`，並保留空白文字數供既有匯出使用。
 - `workflow_status`: `working|submitted_locked`，只由 `completed_at` 決定。
-- `export_status`: `missing|partial|ready`，由 print PDF 數決定。
-- `attention_codes`: 空相本、已交件但缺照片、缺 PDF 等。
+- `attention_codes`: 空相本、已交件但缺照片／缺文字。
 
 協同老師只列在班級老師，不產生自己的未開始卡；owner 只列 Project metadata。
 摘要計工作格與 Project，不把跨期 Student snapshots 加總稱為學生人數。
@@ -209,7 +209,7 @@ Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別�
 filter signature、AbortController 與 sequence，舊回應不得覆蓋目前畫面。
 
 - 老師進度：桌機班級×期別矩陣、手機班級 accordion；每格分開呈現建立、
-  照片／文字、交件鎖定、PDF 與負責人。
+  照片／文字、交件鎖定與負責人，不顯示 PDF 狀態。
 - 學期匯出：依校別／班級 accordion 顯示孩子×期別；明確顯示未入園、離園、
   無相本、重複、未產生與已產生。
 - 換 term/scope/period 必須重設 selection；主管不可補渲染或下載。
@@ -218,7 +218,7 @@ filter signature、AbortController 與 sequence，舊回應不得覆蓋目前畫
 
 - infant 查詢不含 academy 班級或老師；協同老師不會多一筆未開始。
 - 同班同期兩個舊 Project 只算一格；新流程無法再建立第二個。
-- 空格、空相本、照片完成未交件、交件後缺照片與 PDF partial 分別顯示。
+- 空格、空相本、照片完成未交件與交件後缺照片分別顯示。
 - 12 格文字由全班填 11 格、每位學生個別補最後 1 格時文字完成；少一人未補時仍未完成。
 - 班級停用後，目前校／部門主管仍可開歷史 Project；舊主管回 403。
 - Project name 與班名不同、兩校同名班時仍正確分組。

@@ -27,7 +27,6 @@ function project({
   ownerName,
   contentStatus = "incomplete",
   workflowStatus = "working",
-  exportStatus = "missing",
   attentionCodes = [],
 }) {
   return {
@@ -43,9 +42,6 @@ function project({
     blank_text_count: contentStatus === "ready" ? 0 : 1,
     content_status: contentStatus,
     workflow_status: workflowStatus,
-    export_status: exportStatus,
-    pdf_ready_count: exportStatus === "ready" ? 2 : exportStatus === "partial" ? 1 : 0,
-    pdf_total_count: 2,
     attention_codes: attentionCodes,
     students: [
       { student_id: projectId * 10, student_name: "小安" },
@@ -94,8 +90,6 @@ function activeOverview() {
               projectName: "星星九月紀錄",
               ownerName: "星星班主教",
               contentStatus: "ready",
-              exportStatus: "partial",
-              attentionCodes: ["partial_print_pdf"],
             })],
           },
           {
@@ -220,9 +214,8 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await expect(starPanel.getByText("內容完整", { exact: true })).toBeVisible();
   await expect(starPanel.getByRole("progressbar", { name: /文字完成度/ })).toHaveAttribute("aria-valuenow", "4");
   await expect(starPanel.getByText("製作中", { exact: true })).toBeVisible();
-  await expect(starPanel.getByText("PDF 1/2", { exact: true })).toBeVisible();
   await expect(starPanel.getByText("負責人：星星班主教", { exact: true })).toBeVisible();
-  await expect(starPanel.getByText("列印 PDF 未齊", { exact: true })).toBeVisible();
+  await expect(starPanel.getByText(/PDF/)).toHaveCount(0);
 
   await page.getByRole("button", { name: /和平校.*月亮班/ }).click();
   const moonPanel = page.locator("#teacher-classroom-1002");

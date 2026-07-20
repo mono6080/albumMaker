@@ -24,11 +24,6 @@ from services.organization_scope_service import (
     apply_term_classroom_report_scope,
     load_reporting_term_or_404,
 )
-from services.semester_export_service import (
-    load_output_keys_by_project,
-    student_pdf_key,
-)
-from services.storage_factory import get_storage
 from services.student_render_service import get_template_page_layouts
 
 
@@ -222,7 +217,6 @@ def _parse_json_dict(value: str | None) -> dict:
 def _serialize_project_progress(
     project: Project,
     page_layouts: list[dict],
-    existing_output_keys: set[str],
 ) -> dict:
     project_label_texts = _parse_json_dict(project.label_texts_json)
     students_payload = []
@@ -230,7 +224,6 @@ def _serialize_project_progress(
     photo_total = 0
     text_filled = 0
     text_total = 0
-    pdf_ready_count = 0
     for student in project.students:
         (
             student_photo_filled,
@@ -242,9 +235,6 @@ def _serialize_project_progress(
             page_layouts,
             project_label_texts,
         )
-        print_pdf_key = student_pdf_key(student, "print")
-        has_pdf = bool(print_pdf_key and print_pdf_key in existing_output_keys)
-        pdf_ready_count += int(has_pdf)
         photo_filled += student_photo_filled
         photo_total += student_photo_total
         text_filled += student_text_filled
@@ -257,7 +247,6 @@ def _serialize_project_progress(
             "text_filled": student_text_filled,
             "text_total": student_text_total,
             "blank_text_count": student_text_total - student_text_filled,
-            "has_pdf": has_pdf,
         })
 
     student_count = len(students_payload)
@@ -271,12 +260,6 @@ def _serialize_project_progress(
         else "ready" if is_content_ready else "incomplete"
     )
     workflow_status = "submitted_locked" if project.completed_at else "working"
-    if student_count == 0 or pdf_ready_count == 0:
-        export_status = "missing"
-    elif pdf_ready_count == student_count:
-        export_status = "ready"
-    else:
-        export_status = "partial"
 
     attention_codes = []
     if content_status == "empty":
@@ -285,10 +268,6 @@ def _serialize_project_progress(
         attention_codes.append("submitted_with_missing_photos")
     if project.completed_at and text_filled < text_total:
         attention_codes.append("submitted_with_missing_texts")
-    if export_status == "missing":
-        attention_codes.append("missing_print_pdf")
-    elif export_status == "partial":
-        attention_codes.append("partial_print_pdf")
 
     return {
         "project_id": project.id,
@@ -303,10 +282,7 @@ def _serialize_project_progress(
         "blank_text_count": text_total - text_filled,
         "content_status": content_status,
         "workflow_status": workflow_status,
-        "export_status": export_status,
         "attention_codes": attention_codes,
-        "pdf_ready_count": pdf_ready_count,
-        "pdf_total_count": student_count,
         "completed_at": (
             project.completed_at.isoformat() if project.completed_at else None
         ),
@@ -351,15 +327,6 @@ def build_teacher_progress_overview(
         if department is None or period.department == department
     ]
     allowed_term_period_ids = {period.id for period in report_periods}
-    projects = [
-        project
-        for term_classroom in term_classrooms
-        for slot in term_classroom.work_slots
-        if slot.term_period_id in allowed_term_period_ids
-        for project in slot.projects
-        if project.deleted_at is None
-    ]
-    output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
     layouts_by_template: dict[int, list[dict]] = {}
 
     classrooms_payload = []
@@ -373,7 +340,6 @@ def build_teacher_progress_overview(
         "project_count": 0,
         "content_ready_project_count": 0,
         "submitted_project_count": 0,
-        "export_ready_project_count": 0,
         "attention_project_count": 0,
     }
     for term_classroom in term_classrooms:
@@ -402,7 +368,6 @@ def build_teacher_progress_overview(
                 project_payload = _serialize_project_progress(
                     project,
                     layouts_by_template[project.template_id],
-                    output_keys_by_project.get(project.id, set()),
                 )
                 projects_payload.append(project_payload)
                 summary["project_count"] += 1
@@ -411,9 +376,6 @@ def build_teacher_progress_overview(
                 )
                 summary["submitted_project_count"] += int(
                     project_payload["workflow_status"] == "submitted_locked"
-                )
-                summary["export_ready_project_count"] += int(
-                    project_payload["export_status"] == "ready"
                 )
                 summary["attention_project_count"] += int(
                     bool(project_payload["attention_codes"])
@@ -506,7 +468,6 @@ def build_teacher_overview_workbook(
         "project_count": "專案數",
         "content_ready_project_count": "照片與文字內容已齊專案",
         "submitted_project_count": "已交件鎖定專案",
-        "export_ready_project_count": "列印 PDF 已齊專案",
         "attention_project_count": "需注意專案",
     }
     for summary_key, summary_label in summary_labels.items():
@@ -534,9 +495,6 @@ def build_teacher_overview_workbook(
         "文字總格",
         "內容狀態",
         "空白文字格",
-        "PDF 已產生",
-        "PDF 總數",
-        "匯出狀態",
         "異常",
     ])
     student_sheet = workbook.create_sheet("學生明細")
@@ -555,7 +513,6 @@ def build_teacher_overview_workbook(
         "文字總格",
         "空白文字格",
         "工作流",
-        "PDF 狀態",
     ])
 
     for classroom in overview["classrooms"]:
@@ -591,9 +548,6 @@ def build_teacher_overview_workbook(
                 sum(project["text_total"] for project in projects),
                 "、".join(project["content_status"] for project in projects),
                 sum(project["blank_text_count"] for project in projects),
-                sum(project["pdf_ready_count"] for project in projects),
-                sum(project["pdf_total_count"] for project in projects),
-                "、".join(project["export_status"] for project in projects),
                 "、".join(
                     code
                     for project in projects
@@ -617,7 +571,6 @@ def build_teacher_overview_workbook(
                         student["text_total"],
                         student["blank_text_count"],
                         project["workflow_status"],
-                        "ready" if student["has_pdf"] else "missing",
                     ])
 
     for sheet in workbook.worksheets:

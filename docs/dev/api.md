@@ -257,7 +257,7 @@ provisional child link 仍讀 legacy `Student.album_name`。來源、回退與�
 | GET | `/semester-export?academic_term_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
 | POST | `/semester-export/render-missing` | body 必帶 `academic_term_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
 | GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
-| GET | `/teacher-progress?academic_term_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定、列印 PDF 四軸分開，協同老師不重複產生工作 |
+| GET | `/teacher-progress?academic_term_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
 | GET | `/teacher-overview/export?academic_term_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
 | GET | `/semester-export/download?academic_term_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
 

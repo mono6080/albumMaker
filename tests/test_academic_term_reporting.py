@@ -86,8 +86,8 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
         project = _project_progress(progress.json(), project_id)
         assert project["content_status"] == "incomplete"
         assert project["workflow_status"] == "working"
-        assert project["export_status"] == "missing"
-        assert project["attention_codes"] == ["missing_print_pdf"]
+        assert "export_status" not in project
+        assert project["attention_codes"] == []
 
         complete = client.post(f"/api/projects/{project_id}/complete")
         assert_status(complete, 200)
@@ -104,7 +104,6 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
         assert submitted_project["attention_codes"] == [
             "submitted_with_missing_photos",
             "submitted_with_missing_texts",
-            "missing_print_pdf",
         ]
 
         archived = client.delete(f"/api/projects/{project_id}")

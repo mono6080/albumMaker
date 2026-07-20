@@ -47,8 +47,6 @@ const ATTENTION_LABELS = {
   empty_project: "空相本",
   submitted_with_missing_photos: "交件後仍缺照片",
   submitted_with_missing_texts: "交件後仍缺文字",
-  missing_print_pdf: "缺列印 PDF",
-  partial_print_pdf: "列印 PDF 未齊",
 };
 
 function normalizeSearchText(value) {
@@ -129,19 +127,12 @@ function ContentProgressBar({
 }
 
 function ProjectStatusCard({ project, classroomName, periodLabel }) {
-  const pdfReadyCount = project.pdf_ready_count ?? 0;
-  const pdfTotalCount = project.pdf_total_count ?? project.student_count ?? 0;
   const contentTone = project.content_status === "ready"
     ? "success"
     : project.content_status === "empty" ? "danger" : "warning";
   const contentLabel = project.content_status === "ready"
     ? "內容完整"
     : project.content_status === "empty" ? "空相本" : "內容未齊";
-  const exportLabel = project.export_status === "ready"
-    ? "PDF 已就緒"
-    : project.export_status === "partial"
-      ? `PDF ${pdfReadyCount}/${pdfTotalCount}`
-      : "PDF 未產生";
 
   return (
     <div className="rounded-lg border border-gray-100 bg-white p-2.5 shadow-sm">
@@ -165,9 +156,6 @@ function ProjectStatusCard({ project, classroomName, periodLabel }) {
         <Badge tone={contentTone}>{contentLabel}</Badge>
         <Badge tone={project.workflow_status === "submitted_locked" ? "success" : "neutral"}>
           {project.workflow_status === "submitted_locked" ? "已交件鎖定" : "製作中"}
-        </Badge>
-        <Badge tone={project.export_status === "ready" ? "success" : "warning"}>
-          {exportLabel}
         </Badge>
         {(project.blank_text_count ?? 0) > 0 && (
           <Badge tone="warning">空白文字 {project.blank_text_count}</Badge>
@@ -519,7 +507,7 @@ export default function TeacherOverview() {
         icon={Users}
         iconTone="info"
         title="老師進度"
-        subtitle="依正式學期的班級期別工作格，分開查看相本建立、內容、交件與 PDF 狀態。"
+        subtitle="依正式學期的班級期別工作格，分開查看相本建立、內容與交件狀態。"
       />
 
       {isLoadingTerms && (
