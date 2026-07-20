@@ -36,6 +36,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   debounce，300ms）：單次切換立即載入，快速連切只對停下來的那頁發請求；
   照片存檔後只作廢實際變動頁的預覽 timestamp（diff server shadow），
   不再全書失效
+- `PagePreview` 走 `previewImageCache.js`：以 `fetch` 把預覽抓成 blob 存記憶體
+  LRU 快取，`<img>` 只吃 blob URL。預覽 URL 內容定址（帶 t/revision/
+  render_build）故 bytes 不可變，抓到即可永久快取——切回看過的頁是記憶體命中、
+  即時，不碰網路。切走不 abort 進行中的 fetch（暖快取），fetch 由 12s timeout
+  保護、只會 resolve/reject/逾時。這取代舊的 `<img src>` 直連：正式站 Cloudflare
+  + nginx h2 下，切頁 abort 的 stream 會讓同 URL 的 `<img>` 請求在連線層 stall
+  十幾秒，且 `<img>` 對被中斷載入有 dedup 怪癖
 - 渲染 endpoint 有 `time.monotonic()` 計時 log，效能問題先看 log
 
 ## 相冊輸出與 dirty-skip

@@ -52,10 +52,12 @@ test("rapid page switching never leaves the preview stuck", async ({ page }) => 
   });
 
   await page.goto(`/projects/${project.id}/students/${studentId}/edit`);
-  const previewImg = page.locator('[data-guide="student-page-preview"] img');
-  await expect
-    .poll(() => previewImg.evaluate(el => el.complete && el.naturalWidth > 0), { timeout: 30000 })
-    .toBe(true);
+  // img 只在 blob 載好後才出現，用 null-safe querySelector 判斷「已渲染出畫面」
+  const previewShown = () => page.evaluate(() => {
+    const el = document.querySelector('[data-guide="student-page-preview"] img');
+    return !!(el && el.complete && el.naturalWidth > 0);
+  });
+  await expect.poll(previewShown, { timeout: 30000 }).toBe(true);
 
   const dot = n => page.getByRole("button", { name: `第 ${n} 頁`, exact: true });
 
@@ -74,10 +76,10 @@ test("rapid page switching never leaves the preview stuck", async ({ page }) => 
       await dot(target).click();
     }
     await page.waitForTimeout(3500);
-    const ok = await previewImg.evaluate(el => el.complete && el.naturalWidth > 0);
+    const ok = await previewShown();
     if (!ok) {
       await page.waitForTimeout(8000);
-      const stillOk = await previewImg.evaluate(el => el.complete && el.naturalWidth > 0);
+      const stillOk = await previewShown();
       expect(
         stillOk,
         `round ${round}: 切到第 ${target} 頁後預覽卡住\n最近的 preview 回應:\n${previewEvents.slice(-12).join("\n")}`,

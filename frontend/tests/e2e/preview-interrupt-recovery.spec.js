@@ -47,10 +47,12 @@ test("recovery time after interrupting preview downloads mid-body", async ({ pag
     }
     console.log("SW_CONTROLLED:", await page.evaluate(() => Boolean(navigator.serviceWorker?.controller)));
   }
-  const previewImg = page.locator('[data-guide="student-page-preview"] img');
-  await expect
-    .poll(() => previewImg.evaluate(el => el.complete && el.naturalWidth > 0), { timeout: 30000 })
-    .toBe(true);
+  // img 只在 blob 載好後才出現，用 null-safe querySelector 判斷
+  const previewShown = () => page.evaluate(() => {
+    const el = document.querySelector('[data-guide="student-page-preview"] img');
+    return !!(el && el.complete && el.naturalWidth > 0);
+  });
+  await expect.poll(previewShown, { timeout: 30000 }).toBe(true);
 
   const cdp = await page.context().newCDPSession(page);
   const throttleOn = () => cdp.send("Network.emulateNetworkConditions", {
@@ -75,9 +77,7 @@ test("recovery time after interrupting preview downloads mid-body", async ({ pag
     await throttleOff();
     const started = Date.now();
     await dot(target).click();
-    await expect
-      .poll(() => previewImg.evaluate(el => el.complete && el.naturalWidth > 0), { timeout: 40000 })
-      .toBe(true);
+    await expect.poll(previewShown, { timeout: 40000 }).toBe(true);
     recoveries.push(Date.now() - started);
     await page.waitForTimeout(400);
   }

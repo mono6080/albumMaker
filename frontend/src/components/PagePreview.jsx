@@ -1,41 +1,17 @@
 // 單頁渲染預覽圖子元件
-// 依 timestamp 更新觸發重新載入，避免切頁時觸發不必要的渲染
+// 預覽經 previewBlobCache 以 fetch 抓成 blob 快取，<img> 只吃 blob URL；
+// 切回看過的頁是記憶體命中、即時，不受連線層狀態影響（見 previewImageCache.js）
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { appendPreviewCacheVersion, buildStudentPagePreviewUrl } from "../api/urls";
 import { useSettledValue } from "../hooks/useSettledValue";
+import { previewBlobCache } from "../utils/previewImageCache";
 import { CANVAS_REAL_WIDTH, CANVAS_REAL_HEIGHT } from "../utils/renderLayoutModel";
 
-// 共 3 次嘗試；error 後 1.5s 重試，pending 卡死 7s 後強制重發
-// （正常 MISS 渲染＋傳輸約 1-4s；7s 仍卡多半是連線層 stall，換 URL 踢開）
+// 共 3 次嘗試；每次失敗（含後端渲染排隊回 503）後短延遲重試
 const PREVIEW_MAX_RETRIES = 2;
-const ERROR_RETRY_DELAY_MS = 1500;
-const PENDING_WATCHDOG_MS = 7000;
-
-const withParam = (base, key, value) =>
-  `${base}${base.includes("?") ? "&" : "?"}${key}=${value}`;
-
-// 切走時讓被中斷的載入在背景抓完：後端快取已熱、通常一秒內完成，
-// 圖進瀏覽器快取後，切回原頁同 URL 直接命中——不依賴當下的連線狀態
-// （正式站走 Cloudflare + nginx h2，被中斷的 stream 偶爾會讓後續同 URL
-// 請求 stall 十幾秒；背景收尾讓切回根本不需要發網路請求）
-const keepAliveLoaders = new Set();
-
-function finishLoadInBackground(src) {
-  if (!src) return;
-  const keeper = new Image();
-  keepAliveLoaders.add(keeper);
-  const release = () => {
-    keepAliveLoaders.delete(keeper);
-    keeper.onload = null;
-    keeper.onerror = null;
-  };
-  keeper.onload = release;
-  keeper.onerror = release;
-  keeper.src = src;
-  window.setTimeout(release, 30000);
-}
+const RETRY_DELAY_MS = 1500;
 
 // src 可覆寫圖片來源（全班編輯器用專案層級預覽，其餘沿用學生頁預覽）
 export default function PagePreview({
@@ -46,13 +22,10 @@ export default function PagePreview({
   templateRevision = null,
   src = null,
 }) {
-  // loading / loaded / error；error 且重試額度用盡才放棄
-  const [loadState, setLoadState] = useState("loading");
-  const [retryNonce, setRetryNonce] = useState(0);
-  // ref 同步鏡像 loadState：baseSrc 切換與 unmount 的當下要立刻判斷
-  // 「上一個載入是否被中斷」，不能等 state 更新
-  const loadStateRef = useRef("loading");
-  const activeSrcRef = useRef(null);
+  // 目前顯示的 blob 與其對應 URL：換頁載入期間先留著舊圖（被 spinner 蓋住），
+  // 載好再換，避免閃爍
+  const [shown, setShown] = useState({ url: null, blobUrl: null });
+  const [loadState, setLoadState] = useState("loading"); // loading | loaded | error
 
   const targetSrc = src ?? appendPreviewCacheVersion(
     buildStudentPagePreviewUrl(projectId, studentId, pageIndex),
@@ -63,64 +36,68 @@ export default function PagePreview({
   const baseSrc = useSettledValue(targetSrc);
   const isSettling = baseSrc !== targetSrc;
 
-  const updateLoadState = (state) => {
-    loadStateRef.current = state;
-    setLoadState(state);
-  };
-
   useEffect(() => {
-    // 換頁時前一個載入還沒完成＝被瀏覽器中斷：交給背景 keeper 抓完暖快取
-    const previousSrc = activeSrcRef.current;
-    if (previousSrc && previousSrc !== baseSrc && loadStateRef.current === "loading") {
-      finishLoadInBackground(previousSrc);
+    let cancelled = false;
+    let retryTimer = null;
+
+    // 記憶體命中：切回看過的頁即時顯示，不發任何請求
+    // （目前顯示的正是 baseSrc 時它必已在 cache，這裡一併涵蓋 settle 抖動回同 URL）
+    const cached = previewBlobCache.getCached(baseSrc);
+    if (cached) {
+      setShown({ url: baseSrc, blobUrl: cached });
+      setLoadState("loaded");
+      return () => { cancelled = true; };
     }
-    activeSrcRef.current = baseSrc;
-    updateLoadState("loading");
-    setRetryNonce(0);
+
+    setLoadState("loading");
+    let attempts = 0;
+    const attempt = () => {
+      previewBlobCache.load(baseSrc).then(blobUrl => {
+        if (cancelled) return;
+        setShown({ url: baseSrc, blobUrl });
+        setLoadState("loaded");
+      }).catch(() => {
+        if (cancelled) return;
+        attempts += 1;
+        if (attempts > PREVIEW_MAX_RETRIES) { setLoadState("error"); return; }
+        retryTimer = window.setTimeout(attempt, RETRY_DELAY_MS);
+      });
+    };
+    attempt();
+
+    // 切走不 abort fetch：讓它抓完暖快取（timeout 由 cache 內部保護），
+    // 只丟棄本元件對結果的後續處理
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
   }, [baseSrc]);
 
-  // unmount（行動版切分頁、離開編輯頁）時未完成的載入同樣交給背景收尾
-  useEffect(() => () => {
-    if (loadStateRef.current === "loading") finishLoadInBackground(activeSrcRef.current);
-  }, []);
-
-  // 重試統一由這裡排程：error 後短延遲重試（例如撞上後端渲染排隊回 503）；
-  // loading 逾時也強制換 nonce 重發——Chromium 對「同 URL、前次載入被切頁
-  // 中斷」的圖片偶爾不再發請求（pending 卡死、load/error 都不觸發），
-  // 換了 nonce 的新 URL 一定會發出新請求
-  useEffect(() => {
-    if (loadState === "loaded" || retryNonce >= PREVIEW_MAX_RETRIES) return undefined;
-    const delay = loadState === "error" ? ERROR_RETRY_DELAY_MS : PENDING_WATCHDOG_MS;
-    const timer = setTimeout(() => {
-      updateLoadState("loading");
-      setRetryNonce(nonce => nonce + 1);
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [loadState, retryNonce, baseSrc]);
-
-  const imageSrc = retryNonce > 0 ? withParam(baseSrc, "retry", retryNonce) : baseSrc;
-  const gaveUp = loadState === "error" && retryNonce >= PREVIEW_MAX_RETRIES;
+  const showSpinner = (loadState !== "loaded" || isSettling) && loadState !== "error";
+  const showError = loadState === "error" && !isSettling;
 
   return (
     <div
       className="relative w-full rounded-xl overflow-hidden border border-gray-200 shadow-sm"
       style={{ aspectRatio: `${CANVAS_REAL_WIDTH} / ${CANVAS_REAL_HEIGHT}` }}
     >
-      {((loadState !== "loaded" && !gaveUp) || isSettling) && (
+      {shown.blobUrl && (
+        <img
+          src={shown.blobUrl}
+          alt={`第 ${pageIndex + 1} 頁`}
+          className="w-full h-full object-cover"
+        />
+      )}
+      {showSpinner && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
           <Loader2 className="w-5 h-5 text-gray-300 animate-spin" />
         </div>
       )}
-      {/* 切頁沿用同一個 img 元素改 src（只在重試時重建）：每次切頁都建新元素
-          會踩到 Chromium 對中斷載入的 dedup 怪癖，切回原頁時可能完全不發請求 */}
-      <img
-        key={retryNonce}
-        src={imageSrc}
-        alt={`第 ${pageIndex + 1} 頁`}
-        className="w-full h-full object-cover"
-        onLoad={() => updateLoadState("loaded")}
-        onError={() => updateLoadState("error")}
-      />
+      {showError && !shown.blobUrl && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
+          <span className="text-xs text-gray-400">預覽載入失敗</span>
+        </div>
+      )}
     </div>
   );
 }
