@@ -29,6 +29,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   縮圖不另跑一套字級、行距或裁切公式
 - 專案／學生預覽回傳內容定址 ETag 與 `private, no-cache, must-revalidate`；
   前端 URL 另帶 build version，部署新版渲染程式後不沿用舊頁面記住的預覽 URL
+- 專案／學生預覽路由是 async：`If-None-Match` 相符直接回 304（key 純由 payload
+  hash 決定，不先讀 storage bytes）；cache miss 排到渲染槽時若 client 已斷線
+  （快速切頁被放棄的 `<img>`），跳過渲染回 204 把槽讓給還在等的請求
+- 前端切頁／切學生的預覽與縮圖請求經 `useSettledValue`（leading+trailing
+  debounce，300ms）：單次切換立即載入，快速連切只對停下來的那頁發請求；
+  照片存檔後只作廢實際變動頁的預覽 timestamp（diff server shadow），
+  不再全書失效
 - 渲染 endpoint 有 `time.monotonic()` 計時 log，效能問題先看 log
 
 ## 相冊輸出與 dirty-skip

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createPhotoSaveCoordinator, photoSaveSessionKey } from "../../src/utils/photoSaveCoordinator.js";
 import {
+  changedPageIndexesBetweenShadows,
   createPhotoDesiredSnapshot,
   createPhotoServerShadow,
 } from "../../src/utils/photoSaveModel.js";
@@ -668,4 +669,43 @@ test("photo coordinator flushes debounce-only detach and supports a clean Strict
   assert.equal(uploadCalls.length, 1);
   assert.equal(events.length, eventCountBeforeDetach, "detached listener must not receive flushed work");
   assert.equal(coordinator.getState(sessionKey), null);
+});
+
+
+test("changed page indexes between shadows cover path and transform changes only", () => {
+  const baseItems = [
+    photoItem({ pageIndex: 0, slotId: 1, path: "projects/a.jpg" }),
+    photoItem({ pageIndex: 1, slotId: 2, path: "projects/b.jpg" }),
+    photoItem({ pageIndex: 2, slotId: 3 }),
+  ];
+  const previousShadow = shadow(baseItems);
+  const desiredSnapshot = desired(baseItems);
+
+  // 第 0 頁換照片、第 1 頁只動 transform、第 2 頁不變
+  const nextItems = [
+    photoItem({ pageIndex: 0, slotId: 1, path: "projects/a2.jpg" }),
+    {
+      ...photoItem({ pageIndex: 1, slotId: 2, path: "projects/b.jpg" }),
+      origTransform: { scale: 1.5, offsetX: 0, offsetY: 0, brightness: 1, contrast: 1 },
+    },
+    photoItem({ pageIndex: 2, slotId: 3 }),
+  ];
+  assert.deepEqual(
+    changedPageIndexesBetweenShadows(previousShadow, shadow(nextItems), desiredSnapshot),
+    [0, 1],
+  );
+  assert.deepEqual(
+    changedPageIndexesBetweenShadows(previousShadow, previousShadow, desiredSnapshot),
+    [],
+  );
+});
+
+
+test("changed page indexes fall back to null when a changed slot cannot map to a page", () => {
+  const previousShadow = shadow([photoItem({ pageIndex: 0, slotId: 9, path: "projects/x.jpg" })]);
+  const nextShadow = shadow([photoItem({ pageIndex: 0, slotId: 9, path: "projects/y.jpg" })]);
+  assert.equal(
+    changedPageIndexesBetweenShadows(previousShadow, nextShadow, desired([])),
+    null,
+  );
 });

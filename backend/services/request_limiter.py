@@ -32,8 +32,12 @@ class BusyLimiter:
         self.timeout = _env_float("HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS", 10.0)
         self._semaphore = threading.BoundedSemaphore(self.limit)
 
-    @contextmanager
-    def acquire(self, detail: str):
+    def acquire_slot(self) -> bool:
+        """排隊直到取得槽或逾時；回傳是否取得。
+
+        給 async 路由在 to_thread 中呼叫：取得後呼叫端須自行 release_slot()，
+        以便在持槽期間穿插 await（例如 client 斷線檢查）。
+        """
         started_at = time.monotonic()
         acquired = self._semaphore.acquire(timeout=self.timeout)
         waited = time.monotonic() - started_at
@@ -44,11 +48,7 @@ class BusyLimiter:
                 self.limit,
                 self.timeout,
             )
-            raise HTTPException(
-                status_code=503,
-                detail=detail,
-                headers={"Retry-After": str(max(1, int(self.timeout)))},
-            )
+            return False
 
         if waited >= 0.25:
             logger.warning(
@@ -57,6 +57,22 @@ class BusyLimiter:
                 self.limit,
                 waited,
             )
+        return True
+
+    def release_slot(self) -> None:
+        self._semaphore.release()
+
+    def busy_http_exception(self, detail: str) -> HTTPException:
+        return HTTPException(
+            status_code=503,
+            detail=detail,
+            headers={"Retry-After": str(max(1, int(self.timeout)))},
+        )
+
+    @contextmanager
+    def acquire(self, detail: str):
+        if not self.acquire_slot():
+            raise self.busy_http_exception(detail)
         try:
             yield
         finally:

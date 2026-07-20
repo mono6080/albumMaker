@@ -2,7 +2,7 @@
 // 提供單一學生的照片上傳、對應文字編輯與即時預覽，
 // 文字變更後自動防抖儲存（500ms）
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
@@ -82,13 +82,19 @@ export default function StudentEdit() {
 
   // ── 資料載入 ──────────────────────────────────────────────────────────────
 
+  // 快速切換學生時丟棄過期回應：只有最後一次載入可以寫進 state，
+  // 避免舊學生的資料晚到蓋掉目前學生
+  const loadGenerationRef = useRef(0);
+
   const loadStudentData = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     try {
       const { projectResponse: editorResponse, projectData, templateResponse } =
         await fetchProjectTemplatePair(
           () => fetchStudentEditor(projectId, studentId),
           (responseData) => responseData.project,
         );
+      if (generation !== loadGenerationRef.current) return;
       const { student: foundStudent } = editorResponse.data;
       setProject(projectData);
       setStudent(foundStudent);
@@ -116,6 +122,7 @@ export default function StudentEdit() {
       setLabelTexts(initialTexts);
       setSkippedPages(initialSkipped);
     } catch {
+      if (generation !== loadGenerationRef.current) return;
       setLoadError("找不到專案或學生");
     }
     // setLabelTexts 來自 useLabelTextsEditor（底層是 useState setter，恆穩定），列入只為滿足 lint
@@ -137,13 +144,17 @@ export default function StudentEdit() {
   const refreshPreview = (pageIdx = activePage) =>
     setPageTimestamps(prev => ({ ...prev, [pageIdx]: Date.now() }));
 
-  const refreshAllPreviews = () => {
+  const refreshPreviews = (pageIndexes) => {
     const now = Date.now();
-    const count = template?.pages.length ?? 0;
     setPageTimestamps(prev => ({
       ...prev,
-      ...Object.fromEntries(Array.from({ length: count }, (_, i) => [i, now])),
+      ...Object.fromEntries(pageIndexes.map(pi => [pi, now])),
     }));
+  };
+
+  const refreshAllPreviews = () => {
+    const count = template?.pages.length ?? 0;
+    refreshPreviews(Array.from({ length: count }, (_, i) => i));
   };
 
   // ── 頁面刪除 / 還原 ───────────────────────────────────────────────────────
@@ -344,7 +355,11 @@ export default function StudentEdit() {
             onPageFocus={setActivePage}
             onSaveStateChange={setIsPhotoSaving}
             onTemplateRevisionChanged={loadStudentData}
-            onPhotoSaved={() => { refreshAllPreviews(); }}
+            // 只作廢本次存檔實際變動頁的預覽；對不回頁面（null）才退回全頁刷新
+            onPhotoSaved={(changedPages) => {
+              if (changedPages) refreshPreviews(changedPages);
+              else refreshAllPreviews();
+            }}
           />
         )}
         textPanel={(

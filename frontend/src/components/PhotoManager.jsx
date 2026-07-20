@@ -11,6 +11,7 @@ import { buildItems } from "../utils/photoUtils";
 import { DEFAULT_PHOTO_TRANSFORM, isPhotoTransformDirty } from "../utils/photoSaveModel";
 import { getPhotoSlotDimensionMode } from "../utils/photoFrameGeometry.js";
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
+import { useSettledValue } from "../hooks/useSettledValue";
 import usePhotoAutoSave from "../hooks/usePhotoAutoSave";
 import { getVisibleLayoutElements } from "../utils/layoutLayerState.js";
 
@@ -147,6 +148,9 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
   // 檢視範圍：page＝跟著全域頁碼、book＝整本（一次上傳全書、跨頁調換用）
   const [viewScope, setViewScope] = useState("page");
   const effectiveActivePage = viewScope === "book" ? null : activePage;
+  // 快速連切頁／學生時，縮圖等停下來再載（單次切換立即載；本地 blob 預覽不受影響）
+  const photoViewKey = `${studentId}|${effectiveActivePage ?? "book"}`;
+  const thumbnailsSettled = useSettledValue(photoViewKey) === photoViewKey;
   const isOnActivePage = (it) => effectiveActivePage == null || it.pi === effectiveActivePage;
   // 換頁或換檢視時清除觸控選取：被選格會因過濾隱藏，殘留選取會讓
   // 下一次點擊和「看不見的格子」交換照片
@@ -396,7 +400,7 @@ export default function PhotoManager({ projectId, templateRevision, studentId, p
           // 只渲染當前頁的格子；items 索引保留給拖曳/交換 handler 使用
           if (!isOnActivePage(it)) return null;
           const url = displayUrl(it);
-          const thumbUrl = thumbnailUrl(it);
+          const thumbUrl = thumbnailsSettled ? thumbnailUrl(it) : (it.previewUrl ?? null);
           const dirty = isDirty(it);
           const rk = `${it.pi}_${it.slotId}`;
           const nat = aspectMap[rk];

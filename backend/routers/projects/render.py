@@ -1,6 +1,7 @@
 # 預覽、渲染與下載路由
 # 處理頁面預覽圖生成、相冊 PDF 渲染（單生 / 全班）、PDF 與 ZIP 下載
 
+import asyncio
 import io
 import logging
 import time
@@ -31,6 +32,7 @@ from services.student_render_service import (
 )
 from services.preview_cache import (
     get_or_render_preview,
+    preview_cache_key,
     preview_scale_key,
     render_preview_png_bytes,
 )
@@ -66,37 +68,51 @@ def effective_download_mode(
     return mode if current_user.role == "admin" else "screen"
 
 
-def _stored_preview_response(
+async def _stored_preview_response(
     request: Request,
     cache_prefix: str,
     payload: dict,
     render_bytes,
 ) -> Response:
     """組出預覽回應：快取讀寫與渲染細節在 services/preview_cache.py。"""
-    image_bytes, cache_key, hit = get_or_render_preview(cache_prefix, payload, render_bytes)
+    cache_key = preview_cache_key(cache_prefix, payload)
     etag = f'"{cache_key}"'
-    response_headers = {
+    base_headers = {
         **PREVIEW_CACHE_HEADERS,
         "ETag": etag,
         "X-Preview-Cache-Key": cache_key,
-        "X-Preview-Cache": "HIT" if hit else "MISS",
     }
     request_etags = {
         candidate.strip()
         for candidate in request.headers.get("if-none-match", "").split(",")
         if candidate.strip()
     }
+    # ETag 相符直接 304：key 純由 payload hash 決定，不必先把 bytes 從 storage 讀回來
     if "*" in request_etags or etag in request_etags:
-        return Response(status_code=304, headers=response_headers)
+        return Response(
+            status_code=304,
+            headers={**base_headers, "X-Preview-Cache": "ETAG"},
+        )
+    image_bytes, hit = await get_or_render_preview(
+        cache_key,
+        render_bytes,
+        is_disconnected=request.is_disconnected,
+    )
+    if image_bytes is None:
+        # client 已斷線（快速切頁被放棄的請求）：不渲染、不回內容
+        return Response(
+            status_code=204,
+            headers={**base_headers, "X-Preview-Cache": "SKIP"},
+        )
     return Response(
         content=image_bytes,
         media_type="image/png",
-        headers=response_headers,
+        headers={**base_headers, "X-Preview-Cache": "HIT" if hit else "MISS"},
     )
 
 
 @router.get("/{project_id}/preview/{page_index}")
-def preview_project_page(
+async def preview_project_page(
     project_id: int,
     page_index: int,
     request: Request,
@@ -106,27 +122,30 @@ def preview_project_page(
     current_user: User = Depends(get_current_user),
 ):
     """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 PNG。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
 
-    page_layouts = get_template_page_layouts(project)
-    if page_index < 0 or page_index >= len(page_layouts):
-        raise HTTPException(status_code=404, detail="頁面索引超出範圍")
+    # DB 讀取與 payload 組裝是 blocking 工作，整段丟 to_thread，
+    # 讓 async 路由能在排隊/渲染前後檢查 client 是否已斷線
+    def build_preview_plan():
+        project = get_project_or_404(project_id, db)
+        assert_project_readable(project, current_user, db)
 
-    project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
-    page_label_texts = project_label_texts.get(str(page_index), {})
-    page_data = {"label_texts": page_label_texts}
-    page_layout = page_layouts[page_index]
-    cache_prefix = (
-        f"projects/proj{project_id}/previews/project/"
-        f"page{page_index}/scale{preview_scale_key(scale)}"
-    )
-    return _stored_preview_response(
-        request,
-        cache_prefix,
+        page_layouts = get_template_page_layouts(project)
+        if page_index < 0 or page_index >= len(page_layouts):
+            raise HTTPException(status_code=404, detail="頁面索引超出範圍")
+
+        project_label_texts = _parse_json_field(
+            project.label_texts_json or "{}", "label_texts_json"
+        )
+        page_label_texts = project_label_texts.get(str(page_index), {})
+        page_data = {"label_texts": page_label_texts}
+        page_layout = page_layouts[page_index]
+        cache_prefix = (
+            f"projects/proj{project_id}/previews/project/"
+            f"page{page_index}/scale{preview_scale_key(scale)}"
+        )
         # 純內容定址：layout 與 page_data 全文已在 hash 內，任何實質變更都會換 key；
         # 不混入 updated_at，避免無關的編輯（例如某位學生的照片）作廢這份快取
-        {
+        payload = {
             "kind": "project",
             "full_name": FULL_NAME_PREVIEW_PLACEHOLDER,
             "album_name": ALBUM_NAME_PREVIEW_PLACEHOLDER,
@@ -134,20 +153,25 @@ def preview_project_page(
             "scale": scale,
             "layout": page_layout,
             "page_data": page_data,
-        },
-        lambda: render_preview_png_bytes(
-            page_layout,
-            FULL_NAME_PREVIEW_PLACEHOLDER,
-            page_data,
-            page_index,
-            scale,
-            album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
-        ),
-    )
+        }
+        def render_bytes():
+            return render_preview_png_bytes(
+                page_layout,
+                FULL_NAME_PREVIEW_PLACEHOLDER,
+                page_data,
+                page_index,
+                scale,
+                album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
+            )
+
+        return cache_prefix, payload, render_bytes
+
+    cache_prefix, payload, render_bytes = await asyncio.to_thread(build_preview_plan)
+    return await _stored_preview_response(request, cache_prefix, payload, render_bytes)
 
 
 @router.get("/{project_id}/students/{student_id}/preview/{page_index}")
-def preview_student_page(
+async def preview_student_page(
     project_id: int,
     student_id: int,
     page_index: int,
@@ -158,54 +182,65 @@ def preview_student_page(
     current_user: User = Depends(get_current_user),
 ):
     """渲染學生個人頁面預覽，回傳 PNG。"""
-    project = get_project_or_404(project_id, db)
-    assert_project_readable(project, current_user, db)
-    student = get_student_or_404(student_id, project_id, db)
 
-    page_layouts = get_template_page_layouts(project)
-    if page_index < 0 or page_index >= len(page_layouts):
-        raise HTTPException(status_code=404, detail="頁面索引超出範圍")
+    def build_preview_plan():
+        project = get_project_or_404(project_id, db)
+        assert_project_readable(project, current_user, db)
+        student = get_student_or_404(student_id, project_id, db)
 
-    project_label_texts = _parse_json_field(project.label_texts_json or "{}", "label_texts_json")
-    student_pages_data = merge_project_label_texts_into_pages(
-        _parse_json_field(student.pages_data_json, "pages_data_json"),
-        project_label_texts,
-        page_layouts,
-    )
+        page_layouts = get_template_page_layouts(project)
+        if page_index < 0 or page_index >= len(page_layouts):
+            raise HTTPException(status_code=404, detail="頁面索引超出範圍")
 
-    page_data_by_index = {
-        page_data["page_index"]: page_data
-        for page_data in student_pages_data
-    }
-    current_page_data = page_data_by_index.get(page_index, {})
-    page_layout = page_layouts[page_index]
-    cache_prefix = (
-        f"projects/proj{project_id}/previews/students/student{student_id}/"
-        f"page{page_index}/scale{preview_scale_key(scale)}"
-    )
-    return _stored_preview_response(
-        request,
-        cache_prefix,
+        project_label_texts = _parse_json_field(
+            project.label_texts_json or "{}", "label_texts_json"
+        )
+        student_pages_data = merge_project_label_texts_into_pages(
+            _parse_json_field(student.pages_data_json, "pages_data_json"),
+            project_label_texts,
+            page_layouts,
+        )
+
+        page_data_by_index = {
+            page_data["page_index"]: page_data
+            for page_data in student_pages_data
+        }
+        current_page_data = page_data_by_index.get(page_index, {})
+        page_layout = page_layouts[page_index]
+        cache_prefix = (
+            f"projects/proj{project_id}/previews/students/student{student_id}/"
+            f"page{page_index}/scale{preview_scale_key(scale)}"
+        )
+        # 先取成純值：render_bytes 會在另一條 thread 延後執行，不再碰 ORM 物件
+        student_name = student.name
+        effective_album_name = student.effective_album_name
+        resolved_album_name = student.resolved_album_name
         # 純內容定址（不混 updated_at）：改一位學生的字不再作廢全班 60 份快取。
         # 同名重傳造成「key 相同、bytes 不同」由照片紀錄的 v 欄位負責換 hash
-        {
+        payload = {
             "kind": "student",
-            "full_name": student.name,
-            "album_name": student.effective_album_name,
+            "full_name": student_name,
+            "album_name": effective_album_name,
             "page_index": page_index,
             "scale": scale,
             "layout": page_layout,
             "page_data": current_page_data,
-        },
-        lambda: render_preview_png_bytes(
-            page_layout,
-            student.name,
-            current_page_data,
-            page_index,
-            scale,
-            album_name=student.resolved_album_name,
-        ),
-    )
+        }
+
+        def render_bytes():
+            return render_preview_png_bytes(
+                page_layout,
+                student_name,
+                current_page_data,
+                page_index,
+                scale,
+                album_name=resolved_album_name,
+            )
+
+        return cache_prefix, payload, render_bytes
+
+    cache_prefix, payload, render_bytes = await asyncio.to_thread(build_preview_plan)
+    return await _stored_preview_response(request, cache_prefix, payload, render_bytes)
 
 
 @router.post("/{project_id}/students/{student_id}/render", response_model=RenderStudentResult)

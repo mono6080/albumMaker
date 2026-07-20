@@ -7,6 +7,8 @@ import { maybeCompressImageFile } from "../utils/imageCompression";
 import { getApiErrorMessage, isProjectTemplateRevisionError } from "../utils/apiError";
 import {
   DEFAULT_PHOTO_TRANSFORM,
+  changedPageIndexesBetweenShadows,
+  clonePhotoServerShadow,
   createPhotoDesiredSnapshot,
   createPhotoServerShadow,
   isPhotoTransformDirty,
@@ -264,6 +266,8 @@ export default function usePhotoAutoSave({
   const errorRef = useRef(null);
   const instanceId = useId();
   const pendingSequenceRef = useRef(0);
+  // 上一次「已通知存檔」時的 server shadow：diff 出本次存檔實際變動的頁面
+  const lastSavedShadowRef = useRef(null);
 
   useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => { serverItemsRef.current = serverItems; }, [serverItems]);
@@ -291,6 +295,7 @@ export default function usePhotoAutoSave({
     saveSequenceRef.current = 0;
     failureSequenceRef.current = 0;
     errorRef.current = null;
+    lastSavedShadowRef.current = createPhotoServerShadow(currentServerItems);
     setHasSavedPhotos(false);
     setPhotoRefreshKey(0);
     const generation = subscriptionGenerationRef.current + 1;
@@ -315,7 +320,13 @@ export default function usePhotoAutoSave({
         saveSequenceRef.current = state.saveSequence;
         setPhotoRefreshKey(Date.now());
         setHasSavedPhotos(true);
-        onPhotoSavedRef.current?.();
+        // 只回報本次存檔實際變動的頁面；對不回頁面時回 null（呼叫端全頁刷新）
+        const previousSavedShadow = lastSavedShadowRef.current;
+        lastSavedShadowRef.current = clonePhotoServerShadow(state.shadow);
+        const changedPages = previousSavedShadow
+          ? changedPageIndexesBetweenShadows(previousSavedShadow, state.shadow, state.desiredSnapshot)
+          : null;
+        onPhotoSavedRef.current?.(changedPages);
       }
       if (state.conflictSequence > conflictSequenceRef.current) {
         conflictSequenceRef.current = state.conflictSequence;
@@ -365,6 +376,8 @@ export default function usePhotoAutoSave({
       serverDesiredSnapshot,
       shadow: createPhotoServerShadow(serverItems),
     });
+    // revision 換版後 server 狀態已重取，變動頁 diff 從新基準重新算起
+    lastSavedShadowRef.current = createPhotoServerShadow(serverItems);
     const state = photoSaveCoordinator.getState(sessionKey);
     setItems(previousItems => materializeDesiredItems(serverItems, previousItems, state));
     previousRevisionRef.current = templateRevision;

@@ -1,3 +1,4 @@
+import asyncio
 from io import BytesIO
 from copy import deepcopy
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from zipfile import ZipFile
 from services import (
     label_texts,
     output_keys,
+    preview_cache,
     project_archive_service,
     project_export_service,
     project_service,
@@ -202,6 +204,61 @@ def test_render_fingerprints_ignore_editor_metadata_but_include_visibility():
         "layout": hidden_layout,
         "page_data": page_data[0],
     }) != base_preview_hash
+
+
+def test_preview_render_skips_when_client_disconnected(monkeypatch):
+    """快速切頁被放棄的預覽請求：排到渲染槽時 client 已斷線就不渲染。"""
+
+    class StubStorage:
+        def __init__(self):
+            self.saved = {}
+
+        def get_cached_bytes(self, key):
+            return self.saved.get(key)
+
+        def put_cache_only(self, key, data):
+            self.saved[key] = data
+
+    stub_storage = StubStorage()
+    monkeypatch.setattr(preview_cache, "get_storage", lambda: stub_storage)
+
+    render_calls = []
+
+    def render_bytes():
+        render_calls.append(1)
+        return b"png-bytes"
+
+    async def disconnected():
+        return True
+
+    async def connected():
+        return False
+
+    # client 已斷線：不渲染、回 None，讓路由回 204
+    assert asyncio.run(
+        preview_cache.get_or_render_preview(
+            "prefix/key.png", render_bytes, is_disconnected=disconnected
+        )
+    ) == (None, False)
+    assert render_calls == []
+    assert stub_storage.saved == {}
+
+    # client 在線：渲染並回填快取
+    assert asyncio.run(
+        preview_cache.get_or_render_preview(
+            "prefix/key.png", render_bytes, is_disconnected=connected
+        )
+    ) == (b"png-bytes", False)
+    assert render_calls == [1]
+    assert stub_storage.saved["prefix/key.png"] == b"png-bytes"
+
+    # 快取命中：不再渲染，斷線與否都直接回 bytes
+    assert asyncio.run(
+        preview_cache.get_or_render_preview(
+            "prefix/key.png", render_bytes, is_disconnected=disconnected
+        )
+    ) == (b"png-bytes", True)
+    assert render_calls == [1]
 
 
 def test_screen_pdf_key_preserves_path_and_extension():

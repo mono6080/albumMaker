@@ -4,7 +4,12 @@
 # 任何實質變更都會換 key，因此不需要失效通知；無關的編輯（例如別的學生的照片）
 # 不會作廢既有快取。讀寫細節（cache-only 寫入、limiter 內二次查）都在這裡，
 # 路由層只負責權限檢查與組 Response。
+#
+# 讀寫走 async：blocking 步驟（storage 讀寫、limiter 排隊、PIL 渲染）都丟
+# to_thread，取得渲染槽後先檢查 client 是否已斷線——快速切頁被放棄的 <img>
+# 請求會直接讓出槽位，不再替沒人看的頁面渲染。
 
+import asyncio
 import hashlib
 import io
 import json
@@ -63,6 +68,11 @@ def render_preview_png_bytes(
     return image_buffer.getvalue()
 
 
+def preview_cache_key(cache_prefix: str, payload: dict) -> str:
+    """內容定址 cache key：只靠 payload hash，不需讀 storage 即可算出。"""
+    return f"{cache_prefix}/{_preview_payload_hash(payload)}.png"
+
+
 def _read_cached_preview_bytes(storage, cache_key: str):
     try:
         # get_cached_bytes 是 StorageAdapter 基類方法：只查快取層、缺檔回 None
@@ -72,29 +82,51 @@ def _read_cached_preview_bytes(storage, cache_key: str):
         return None
 
 
-def get_or_render_preview(cache_prefix: str, payload: dict, render_bytes) -> tuple[bytes, str, bool]:
+def _render_and_store_preview(storage, cache_key: str, render_bytes) -> bytes:
+    image_bytes = render_bytes()
+    try:
+        storage.put_cache_only(cache_key, image_bytes)
+    except Exception as cache_error:
+        logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
+    return image_bytes
+
+
+async def get_or_render_preview(
+    cache_key: str,
+    render_bytes,
+    *,
+    is_disconnected,
+) -> tuple[bytes | None, bool]:
     """取得（或渲染並回填）內容定址的預覽 PNG。
 
-    回傳 (png bytes, cache_key, 是否命中快取)。render_bytes 是無參數的
-    渲染 callback，只在 miss 時於 preview limiter 內執行。
+    回傳 (png bytes 或 None, 是否命中快取)；None 表示 client 已斷線且尚未
+    渲染，呼叫端應直接放棄回應。render_bytes 是無參數的渲染 callback，
+    只在 miss 且 client 仍在線時於 preview limiter 內執行。
     """
     storage = get_storage()
-    cache_key = f"{cache_prefix}/{_preview_payload_hash(payload)}.png"
 
-    cached_bytes = _read_cached_preview_bytes(storage, cache_key)
+    cached_bytes = await asyncio.to_thread(_read_cached_preview_bytes, storage, cache_key)
     if cached_bytes is not None:
-        return cached_bytes, cache_key, True
+        return cached_bytes, True
 
-    with preview_render_limiter.acquire("預覽產生中，請稍後再試"):
+    if await is_disconnected():
+        return None, False
+
+    if not await asyncio.to_thread(preview_render_limiter.acquire_slot):
+        raise preview_render_limiter.busy_http_exception("預覽產生中，請稍後再試")
+    try:
+        # 排到槽時 client 可能早已放棄（快速切頁）：跳過渲染，把槽讓給還在等的人
+        if await is_disconnected():
+            return None, False
+
         # 等待 limiter 期間可能已有其他請求補好同一張預覽。
-        cached_bytes = _read_cached_preview_bytes(storage, cache_key)
+        cached_bytes = await asyncio.to_thread(_read_cached_preview_bytes, storage, cache_key)
         if cached_bytes is not None:
-            return cached_bytes, cache_key, True
+            return cached_bytes, True
 
-        image_bytes = render_bytes()
-        try:
-            storage.put_cache_only(cache_key, image_bytes)
-        except Exception as cache_error:
-            logger.warning("寫入預覽快取失敗 key=%s error=%s", cache_key, cache_error)
-
-    return image_bytes, cache_key, False
+        image_bytes = await asyncio.to_thread(
+            _render_and_store_preview, storage, cache_key, render_bytes
+        )
+        return image_bytes, False
+    finally:
+        preview_render_limiter.release_slot()

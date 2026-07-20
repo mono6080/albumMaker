@@ -131,6 +131,26 @@ export function clonePhotoServerShadow(shadow) {
   };
 }
 
+// 兩份 server shadow 之間實際變動（照片路徑或位移縮放）的頁面索引，
+// 讓存檔後只作廢受影響頁的預覽快取。變動 slot 對不回頁面（例如模板已換頁）
+// 時回傳 null，呼叫端應退回全頁刷新。
+export function changedPageIndexesBetweenShadows(previousShadow, nextShadow, desiredSnapshot) {
+  const changedPages = new Set();
+  const slotKeys = new Set([...previousShadow.slots.keys(), ...nextShadow.slots.keys()]);
+  for (const slotKey of slotKeys) {
+    const previousBinding = previousShadow.slots.get(slotKey) ?? null;
+    const nextBinding = nextShadow.slots.get(slotKey) ?? null;
+    const pathChanged = (previousBinding?.path ?? null) !== (nextBinding?.path ?? null);
+    if (!pathChanged && !isPhotoTransformDirty(previousBinding?.transform, nextBinding?.transform)) {
+      continue;
+    }
+    const pageIndex = desiredSnapshot.slots.get(slotKey)?.pageIndex;
+    if (pageIndex == null) return null;
+    changedPages.add(pageIndex);
+  }
+  return [...changedPages].sort((a, b) => a - b);
+}
+
 export function rebasePhotoDesiredSnapshot(previousSnapshot, serverSnapshot) {
   const slots = new Map();
   for (const [slotKey, serverSlot] of serverSnapshot.slots) {
