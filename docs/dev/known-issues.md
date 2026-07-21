@@ -37,9 +37,11 @@
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
 - **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`RosterChild.album_name`)
-  修改會影響已標記完成(全班或個別)相本的輸出檔名與稱呼顯示,但名冊寫入
-  不經過專案內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
-  明確不在該階段處理
+  修改會影響已標記完成(全班或個別)相本的稱呼顯示,但名冊寫入不經過專案
+  內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
+  明確不在該階段處理。下載端點的指紋補渲
+  ([rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲))已讓
+  下載產物自動跟上新稱呼;殘餘問題只剩「完成後名冊仍可改」的流程語意
 - **權限矩陣的隱藏假設**：若未來引入「主管可代老師編輯專案」，
   `assert_project_writable` 要展開（現況見
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）

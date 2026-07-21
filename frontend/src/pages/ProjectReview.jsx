@@ -174,9 +174,7 @@ export default function ProjectReview() {
     project,
     effectiveMode,
     getVisiblePageIndexes,
-    reloadProject: loadProject,
     projectLoadSequence,
-    canRender: canEditCurrentProject,
   });
 
   const handleCompleteProject = () => {

@@ -23,6 +23,7 @@ from sqlalchemy import text
 from database import SessionLocal, get_db, init_db
 from migrations import run_migrations
 from routers import auth, organization, projects, roster, templates, users
+from services.completion_render_service import start_render_reconciliation_thread
 from services.project_archive_service import purge_expired_archived_projects
 
 logger = logging.getLogger("album_maker.requests")
@@ -116,6 +117,8 @@ async def lifespan(_: FastAPI):
     init_db()
     run_migrations()
     _purge_expired_archived_projects_once()
+    # 啟動收斂:背景補渲有效完成但輸出過期的學生(部署後的 warm-up 也由此涵蓋)
+    start_render_reconciliation_thread()
     archive_purge_stop = asyncio.Event()
     archive_purge_task = asyncio.create_task(
         run_archive_purge_loop(archive_purge_stop),

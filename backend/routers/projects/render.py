@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, get_db
+from services.completion_render_service import (
+    ensure_project_renders_fresh,
+    ensure_student_render_fresh,
+)
 from services.label_texts import merge_project_label_texts_into_pages
 from services.output_keys import (
     build_combined_stem,
@@ -333,6 +337,8 @@ def download_student_pdf(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
     assert_student_downloadable(project, student)
+    # 不分角色一律拿最新：完成時已背景渲染，這裡指紋未變秒跳過、過期就地補渲
+    ensure_student_render_fresh(db, project, student)
 
     pdf_bytes, download_filename = get_student_pdf_download(
         project,
@@ -361,10 +367,7 @@ def download_student_images_as_zip(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
     assert_student_downloadable(project, student)
-
-
-    if not student.output_filename:
-        raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
+    ensure_student_render_fresh(db, project, student)
 
     combined_stem = build_combined_stem(project.name, student.name)
     screen_suffix = "_screen" if effective_mode == "screen" else ""
@@ -397,10 +400,7 @@ def download_student_image(
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
     assert_student_downloadable(project, student)
-
-
-    if not student.output_filename:
-        raise HTTPException(status_code=404, detail="尚未產生圖片，請先渲染")
+    ensure_student_render_fresh(db, project, student)
 
     image_entries = get_student_image_entries(project, student, effective_mode)
     if not image_entries:
@@ -425,11 +425,12 @@ def download_all_pdfs_as_zip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """將所有已渲染的學生 PDF 打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
+    """將所有學生 PDF 打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     assert_class_downloadable(project)
-
+    # 串流開始前逐位保證最新（常態全部指紋 skip，只在改名等清輸出後補渲）
+    ensure_project_renders_fresh(db, project)
 
     zip_filename = f"{project.name}.zip"
     content_disposition = build_content_disposition_header(zip_filename)
@@ -449,11 +450,11 @@ def download_all_images_as_zip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
+    """將所有學生的單頁 JPG 圖片打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     assert_class_downloadable(project)
-
+    ensure_project_renders_fresh(db, project)
 
     screen_suffix = "_screen" if effective_mode == "screen" else ""
     zip_filename = f"{project.name}{screen_suffix}_images.zip"

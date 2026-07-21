@@ -1,11 +1,11 @@
 // 班級總覽的下載動作:單生/全班的 PDF、頁面圖片與上傳照片 ZIP。
-// 渲染前置(帶班老師先補渲)與下載觸發在此;手機圖片分享拆在 useMobileImageShare。
+// 後端在標記完成時背景渲染、下載端點又以內容指紋保證最新,
+// 前端不再於下載前逐位渲染;手機圖片分享拆在 useMobileImageShare。
 // 交件閘門判斷一律走 utils/reviewCompletion,與按鈕 disabled 同一來源。
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
-import { renderStudent } from "../api/projectApi";
 import { renderClient } from "../api/authApi";
 import {
   buildDownloadAllImagesZipUrl,
@@ -32,15 +32,14 @@ export default function useProjectReviewDownloads({
   project,
   effectiveMode,
   getVisiblePageIndexes,
-  reloadProject,
   projectLoadSequence,
-  canRender,
 }) {
   const [rendering, setRendering] = useState({});
   const [renderingImages, setRenderingImages] = useState({});
+  // 原生下載無完成事件可等,全班 ZIP 的 busy 狀態以短暫延遲解除,僅防連點
   const [renderingAll, setRenderingAll] = useState(false);
   const [renderingAllImages, setRenderingAllImages] = useState(false);
-  const [renderAllProgress, setRenderAllProgress] = useState(null);
+  // 手機全班分享的抓圖進度(桌機原生下載無進度可回報)
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
   // 上傳照片 ZIP 的防連點狀態(後端串流打包,無進度可回報)
   const [downloadingPhotos, setDownloadingPhotos] = useState({});
@@ -57,12 +56,9 @@ export default function useProjectReviewDownloads({
   const { prefetchAllImagesShare } = mobileShare;
   useEffect(() => {
     if (!project || !isMobileDevice() || !isProjectDeliverableUnlocked(project)) return;
-    const downloadableStudents = canRender
-      ? project.students
-      : project.students.filter(student => student.output_filename);
-    prefetchAllImagesShare(downloadableStudents);
+    prefetchAllImagesShare(project.students);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, canRender, projectLoadSequence]);
+  }, [project, projectLoadSequence]);
 
   // 單生交件閘門:與卡片按鈕 disabled 同一 predicate,此處是 UI 被繞過時的最後防線
   const ensureStudentCompleted = (studentId) => {
@@ -85,22 +81,13 @@ export default function useProjectReviewDownloads({
     if (!ensureStudentCompleted(studentId)) return;
     setRendering(previous => ({ ...previous, [studentId]: true }));
     try {
-      const studentRecord = project.students.find(student => student.id === studentId);
-      if (!studentRecord?.output_filename && !canRender) {
-        toast.error("尚未產生檔案，請由帶班老師先完成產生");
-        return;
-      }
-      if (canRender) {
-        await renderStudent(projectId, studentId);
-        await reloadProject();
-      }
       await downloadApiBlob(
         renderClient,
         buildDownloadPdfUrl(projectId, studentId, effectiveMode),
         "album.pdf",
       );
     } catch {
-      showRetryToast(canRender ? "產生失敗" : "下載失敗", () => handleDownloadOne(studentId));
+      showRetryToast("下載失敗", () => handleDownloadOne(studentId));
     } finally {
       setRendering(previous => ({ ...previous, [studentId]: false }));
     }
@@ -112,138 +99,63 @@ export default function useProjectReviewDownloads({
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
       if (!studentRecord) return;
-      if (!studentRecord.output_filename && !canRender) {
-        toast.error("尚未產生檔案，請由帶班老師先完成產生");
-        return;
-      }
 
       if (isMobileDevice()) {
         await mobileShare.shareStudentImages(studentRecord);
         return;
       }
 
-      if (canRender) {
-        await renderStudent(projectId, studentId);
-        await reloadProject();
-      }
       await downloadApiBlob(
         renderClient,
         buildDownloadImagesZipUrl(projectId, studentId, effectiveMode),
         "album-images.zip",
       );
     } catch {
-      showRetryToast("產生圖片失敗", () => handleDownloadOneImages(studentId));
+      showRetryToast("下載圖片失敗", () => handleDownloadOneImages(studentId));
     } finally {
       setRenderingImages(previous => ({ ...previous, [studentId]: false }));
     }
   };
 
-  // 逐位渲染;單人失敗不中斷整批,失敗者再自動補渲一輪。
-  const renderAllStudentsWithRetry = async (students, onProgress) => {
-    const failedStudents = [];
-    for (let studentIndex = 0; studentIndex < students.length; studentIndex++) {
-      onProgress?.(studentIndex + 1, students.length);
-      try {
-        await renderStudent(projectId, students[studentIndex].id);
-      } catch {
-        failedStudents.push(students[studentIndex]);
-      }
-    }
-    const stillFailed = [];
-    for (const studentRecord of failedStudents) {
-      try {
-        await renderStudent(projectId, studentRecord.id);
-      } catch {
-        stillFailed.push(studentRecord);
-      }
-    }
-    return stillFailed;
-  };
-
-  const handleDownloadAll = async () => {
+  const handleDownloadAll = () => {
     if (!ensureProjectCompleted()) return;
-    const students = project.students;
-    if (!students.length) return;
+    if (renderingAll || !project.students.length) return;
     setRenderingAll(true);
-    setRenderAllProgress({ current: 0, total: students.length });
-    try {
-      if (canRender) {
-        const stillFailed = await renderAllStudentsWithRetry(
-          students,
-          (current, total) => setRenderAllProgress({ current, total }),
-        );
-        await reloadProject();
-        if (stillFailed.length > 0) {
-          showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAll);
-          return;
-        }
-      } else {
-        const renderedCount = students.filter(student => student.output_filename).length;
-        if (renderedCount === 0) {
-          toast.error("目前沒有已產生的檔案可下載");
-          return;
-        }
-        if (renderedCount < students.length) {
-          toast(`將下載已產生的 ${renderedCount}/${students.length} 位學生檔案`);
-        }
-      }
-      triggerNativeDownload(buildDownloadAllZipUrl(projectId, effectiveMode));
-      toast.success("已開始下載，請留意瀏覽器的下載列");
-    } catch {
-      showRetryToast("批次產生失敗", handleDownloadAll);
-    } finally {
-      setRenderingAll(false);
-      setRenderAllProgress(null);
-    }
+    triggerNativeDownload(buildDownloadAllZipUrl(projectId, effectiveMode));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => setRenderingAll(false), 3000);
   };
 
   const handleDownloadAllImages = async () => {
     if (!ensureProjectCompleted()) return;
     const students = project.students;
     if (!students.length) return;
-    setRenderingAllImages(true);
-    setRenderAllImagesProgress({ current: 0, total: students.length });
-    try {
-      const downloadableStudents = canRender
-        ? students
-        : students.filter(student => student.output_filename);
-      if (downloadableStudents.length === 0) {
-        toast.error("目前沒有已產生的檔案可下載");
-        return;
-      }
-      if (isMobileDevice()) {
-        await mobileShare.shareAllImages(
-          downloadableStudents,
-          (current, total) => setRenderAllImagesProgress({ current, total }),
-        );
-        return;
-      }
 
-      if (canRender) {
-        const stillFailed = await renderAllStudentsWithRetry(
+    if (isMobileDevice()) {
+      setRenderingAllImages(true);
+      setRenderAllImagesProgress({ current: 0, total: students.length });
+      try {
+        await mobileShare.shareAllImages(
           students,
           (current, total) => setRenderAllImagesProgress({ current, total }),
         );
-        await reloadProject();
-        if (stillFailed.length > 0) {
-          showRetryToast(`${stillFailed.map(student => student.name).join("、")} 產生失敗`, handleDownloadAllImages);
-          return;
-        }
-      } else if (downloadableStudents.length < students.length) {
-        toast(`將下載已產生的 ${downloadableStudents.length}/${students.length} 位學生檔案`);
+      } catch {
+        showRetryToast("準備分享圖片失敗", handleDownloadAllImages);
+      } finally {
+        setRenderingAllImages(false);
+        setRenderAllImagesProgress(null);
       }
-      triggerNativeDownload(buildDownloadAllImagesZipUrl(projectId, effectiveMode));
-      toast.success("已開始下載，請留意瀏覽器的下載列");
-    } catch {
-      showRetryToast("批次產生圖片失敗", handleDownloadAllImages);
-    } finally {
-      setRenderingAllImages(false);
-      setRenderAllImagesProgress(null);
+      return;
     }
+
+    if (renderingAllImages) return;
+    setRenderingAllImages(true);
+    triggerNativeDownload(buildDownloadAllImagesZipUrl(projectId, effectiveMode));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => setRenderingAllImages(false), 3000);
   };
 
   // 上傳照片 ZIP:不套交件閘門、無需渲染前置,直接原生下載(手機同樣走原生下載)。
-  // 原生下載無完成事件可等,busy 狀態以短暫延遲解除,僅防連點。
   const handleDownloadOnePhotos = (studentId) => {
     if (downloadingPhotos[studentId]) return;
     setDownloadingPhotos(previous => ({ ...previous, [studentId]: true }));
@@ -267,7 +179,6 @@ export default function useProjectReviewDownloads({
     renderingImages,
     renderingAll,
     renderingAllImages,
-    renderAllProgress,
     renderAllImagesProgress,
     isBatchRendering: renderingAll || renderingAllImages,
     isAllImagesShareReady: mobileShare.isAllImagesShareReady,

@@ -240,7 +240,7 @@ export default function ProjectReviewProgress({
                   {downloads.renderingAll ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      {downloads.renderAllProgress ? `${downloads.renderAllProgress.current}/${downloads.renderAllProgress.total}` : "產生中..."}
+                      下載中...
                     </>
                   ) : (
                     <><Package className="h-4 w-4" />PDF ZIP</>
@@ -257,7 +257,7 @@ export default function ProjectReviewProgress({
                   {downloads.renderingAllImages ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      {downloads.renderAllImagesProgress ? `${downloads.renderAllImagesProgress.current}/${downloads.renderAllImagesProgress.total}` : "產生中..."}
+                      {downloads.renderAllImagesProgress ? `${downloads.renderAllImagesProgress.current}/${downloads.renderAllImagesProgress.total}` : "下載中..."}
                     </>
                   ) : (
                     <><ImageDown className="h-4 w-4" />{downloads.isAllImagesShareReady ? "開始分享" : "全部圖片"}</>

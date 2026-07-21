@@ -132,12 +132,16 @@ def test_auth_missing_resource_and_validation_edges():
         complete = client.post(f"/api/projects/{project_id}/complete")
         assert_status(complete, 200)
 
+        # 完成後即使從未渲染，下載端點也就地補渲最新內容（不再回 404 尚未產生）
         pdf_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf")
-        assert_status(pdf_before_render, 404)
+        assert_status(pdf_before_render, 200)
+        assert pdf_before_render.content.startswith(b"%PDF")
         images_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/images")
-        assert_status(images_before_render, 404)
+        assert_status(images_before_render, 200)
+        assert images_before_render.content.startswith(b"PK")
         single_image_before_render = client.get(f"/api/projects/{project_id}/students/{student_id}/images/1")
-        assert_status(single_image_before_render, 404)
+        assert_status(single_image_before_render, 200)
+        assert single_image_before_render.content.startswith(b"\xff\xd8")
 
 
 def test_upload_size_type_and_missing_photo_edges(monkeypatch, tmp_path):

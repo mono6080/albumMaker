@@ -1525,11 +1525,12 @@ def test_student_completion_locks_downloads_and_reopen_levels(monkeypatch, tmp_p
             student["completed_at"] is None
             for student in manual_students.values()
         )
-        # 輸出已因改名清空：閘門放行後回 404（而非 409 完成鎖）
+        # 輸出已因改名清空：閘門放行後下載端點就地補渲最新內容（不再 404）
         manual_download_a = client.get(
             f"/api/projects/{project_id}/students/{student_a}/pdf"
         )
-        assert_status(manual_download_a, 404)
+        assert_status(manual_download_a, 200)
+        assert manual_download_a.content.startswith(b"%PDF")
 
 
 def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):

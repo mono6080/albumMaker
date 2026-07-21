@@ -73,7 +73,10 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 - 圖層 `layer_name` / `locked` 與素材文字 link 是編輯器 metadata，不納入相冊與預覽的渲染指紋；
   沒有群組時，僅為 link 存在的 `group_contract` 也不納入；`visible` 會改變像素，因此必須納入
 - `_RENDER_PIPELINE_VERSION` 由 `_RENDER_PIPELINE_FILES` 的實際內容自動雜湊；
-  新增渲染來源檔時必加入清單，否則舊輸出可能因指紋未變而跳過重渲
+  新增渲染來源檔時必加入清單，否則舊輸出可能因指紋未變而跳過重渲。
+  **反向也成立**：清單內檔案的任何修改（含註釋、非像素邏輯）都會讓全站輸出
+  過期、部署後觸發整批重渲 — 非渲染邏輯不要放進這些檔案（例：下載新鮮度
+  檢查住在 `completion_render_service.py`，即使它重組的是 dirty-skip 判斷）
 - 背景圖採內容版本 key，layout 的 `background_version=sha256:...` 也會納入指紋；同名新內容
   不覆寫舊資產
 - 背景、貼圖與素材文字框分析一律先依實際輸出框做 bounded decode，再執行
@@ -90,6 +93,29 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   專案／學生改名與刪除使用相同 project→student locks，完成後失效並清除舊 canonical 輸出
 - 渲染併發：單本渲染與全班/補渲染 job 都**逐位**取 `album_render_limiter`
   槽（`acquire_blocking`），不整批佔住
+
+## 渲染時機：完成觸發背景渲染與下載前補渲
+
+`services/completion_render_service.py`（單 uvicorn 程序、fire-and-forget）三層防線：
+
+- **完成即背景渲染**（即時）：標記單生完成、手動全班完成、改名清輸出
+  （`project_lifecycle_service` 三個觸發點）後，以 daemon 執行緒＋獨立
+  `SessionLocal` 逐位渲染（`actor_id=None` 系統渲染，不套編輯 ACL）。
+  完成即內容鎖定，此時渲染即定稿；失敗只記 log，由後兩層兜底
+- **啟動收斂掃描**（自癒）：server 啟動後 `reconcile_completed_renders()` 背景掃
+  全部未封存專案的有效完成學生，逐位指紋補渲 — 收斂事件觸發漏掉的過期輸出
+  （`_RENDER_PIPELINE_VERSION` 更新、重啟中斷、歷史資料），部署後的 warm-up
+  由此涵蓋。已 fresh 只花指紋比對；`RENDER_RECONCILE_ON_STARTUP=0` 可停用
+  （測試 conftest 預設關）
+- **下載一律最新**（保證）：單生 PDF／圖片 ZIP／單頁 JPG 下載端點在閘門後呼叫
+  `ensure_student_render_fresh()`；全班 PDF／圖片 ZIP 在串流前逐位
+  `ensure_project_renders_fresh()`。先走**只讀快路**
+  （`student_render_outputs_fresh()`：指紋一致＋輸出齊全，不取渲染槽）—
+  背景渲染進行中時新鮮內容的下載不排渲染佇列；過期才取槽就地補渲。
+  不分角色（含唯讀）拿到的都是當下內容，不再有「尚未產生」404
+- 前端班級總覽因此**不再於下載前逐位渲染**（`useProjectReviewDownloads`），
+  下載按鈕直接觸發；測試中背景渲染由 `tests/conftest.py` autouse fixture 停用，
+  觸發契約見 `tests/test_completion_auto_render.py`
 
 ## TemplateEditor（前端編輯器）
 

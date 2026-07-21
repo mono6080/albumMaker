@@ -78,6 +78,7 @@ APP_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build
 | `PHOTO_UPLOAD_CONCURRENCY` | `2` | 照片上傳處理併發槽 |
 | `HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS` | `10.0` | 重任務排隊逾時秒數，超時回 503（背景 job 走 `acquire_blocking` 不受此限） |
 | `ARCHIVE_PURGE_INTERVAL_SECONDS` | `300` | 服務存活期間掃描並清除已超過復原期限之封存相本的間隔秒數；啟動時也會立即掃描一次 |
+| `RENDER_RECONCILE_ON_STARTUP` | `1` | 啟動後背景收斂掃描：有效完成但輸出過期的學生逐位指紋補渲（[rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲)）；`0` 停用 |
 
 `.env` 已被 `.gitignore` 排除；金鑰不得 commit。
 

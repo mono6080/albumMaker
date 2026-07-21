@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Template, User, utc_now
+# 經模組屬性呼叫（不 from-import 函式），測試才能以 monkeypatch 停用背景渲染
+from services import completion_render_service
 from services.organization_lock import organization_acl_lock
 from services.project_access_service import (
     assert_project_completion_revertible,
@@ -121,6 +123,12 @@ def rename_project(db: Session, current_user: User, project_id: int, name: str) 
             (student.id, student.name, student.output_filename)
             for student in project.students
         ]
+        # 改名清輸出後，已可下載（有效完成）的學生排入背景重渲，下載不必現場等
+        completed_student_ids = [
+            student.id
+            for student in project.students
+            if project.completed_at is not None or student.completed_at is not None
+        ]
         project.name = normalized_name
         project.updated_at = utc_now()
         for student in project.students:
@@ -136,6 +144,10 @@ def rename_project(db: Session, current_user: User, project_id: int, name: str) 
                 student_name,
                 output_filename,
             )
+    completion_render_service.queue_background_student_renders(
+        project_id,
+        completed_student_ids,
+    )
     return {"ok": True}
 
 
@@ -199,10 +211,18 @@ def complete_project(db: Session, current_user: User, project_id: int) -> dict:
         assert_project_writable(project, current_user, db)
         if not project.students:
             raise HTTPException(status_code=400, detail="尚無學生，無法標記全班完成")
+        newly_completed_student_ids = []
         if project.completed_at is None:
             project.completed_at = utc_now()
             db.commit()
-        return {"ok": True, "completed_at": project.completed_at}
+            # 手動全班完成不逐生標記，全班一次排入背景渲染（已渲染者指紋 skip）
+            newly_completed_student_ids = [student.id for student in project.students]
+        result = {"ok": True, "completed_at": project.completed_at}
+    completion_render_service.queue_background_student_renders(
+        project_id,
+        newly_completed_student_ids,
+    )
+    return result
 
 
 def reopen_project(db: Session, current_user: User, project_id: int) -> dict:
@@ -259,6 +279,7 @@ def complete_project_student(
         assert_project_writable(project, current_user, db)
         student = get_student_or_404(student_id, project_id, db)
         # 已完成（含全班已完成）則冪等回傳既有時間戳，不再寫入
+        newly_completed = False
         if student.completed_at is None and project.completed_at is None:
             _assert_student_content_filled(project, student)
             student.completed_at = utc_now()
@@ -267,11 +288,19 @@ def complete_project_student(
             ):
                 project.completed_at = student.completed_at
             db.commit()
-        return {
+            newly_completed = True
+        result = {
             "ok": True,
             "completed_at": student.completed_at,
             "project_completed_at": project.completed_at,
         }
+    if newly_completed:
+        # 完成即定稿（內容鎖生效），立刻背景渲染，下載時不必現場等
+        completion_render_service.queue_background_student_renders(
+            project_id,
+            [student_id],
+        )
+    return result
 
 
 def reopen_project_student(

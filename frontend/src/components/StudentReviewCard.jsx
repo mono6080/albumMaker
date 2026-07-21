@@ -39,11 +39,11 @@ export default function StudentReviewCard({
   const isContentComplete = isStudentContentComplete(photoProgress, textProgress);
   // 三種下載互斥：任一進行中即整排鎖住，避免同時觸發多個大檔請求
   const isStudentBusy = isRendering || isImageRendering || isPhotosDownloading;
-  const hasRenderedOutput = Boolean(student.output_filename);
   // 有效完成 predicate（與後端一致）：該生 completed_at 或全班 completed_at 任一成立
   const isStudentMarkedCompleted = Boolean(student.completed_at);
   const isStudentEffectivelyCompleted = isStudentMarkedCompleted || isProjectCompleted;
-  const canStartDownload = isStudentEffectivelyCompleted && (canEditCurrentProject || hasRenderedOutput);
+  // 後端下載端點會就地補渲最新內容，任何可讀角色在完成後即可下載
+  const canStartDownload = isStudentEffectivelyCompleted;
   const studentSkippedPages = new Set(
     (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
   );
@@ -157,7 +157,7 @@ export default function StudentReviewCard({
               <Pencil className="h-4 w-4" />
             </Link>
           )}
-          {/* 完成後，唯讀角色可下載既有產物，但不能觸發需要 can_edit 的重新渲染。 */}
+          {/* 完成後任何可讀角色皆可下載；後端下載端點保證內容最新。 */}
           {canDownloadCurrentProject && (
             <>
               <IconButton
@@ -165,10 +165,8 @@ export default function StudentReviewCard({
                   !isStudentEffectivelyCompleted
                     ? "請先標記此學生完成，才能下載 PDF"
                     : isRendering
-                      ? "PDF 產生中"
-                      : canStartDownload
-                        ? "下載 PDF"
-                        : "尚未產生 PDF"
+                      ? "PDF 下載中"
+                      : "下載 PDF"
                 }
                 onClick={() => onDownloadPdf(student.id)}
                 disabled={isStudentBusy || !canStartDownload}
@@ -185,9 +183,7 @@ export default function StudentReviewCard({
                     ? "請先標記此學生完成，才能下載圖片"
                     : isImageShareReady
                       ? "開始分享圖片"
-                      : canStartDownload
-                        ? "下載圖片"
-                        : "尚未產生圖片"
+                      : "下載圖片"
                 }
                 onClick={() => onDownloadImages(student.id)}
                 disabled={isStudentBusy || !canStartDownload}
