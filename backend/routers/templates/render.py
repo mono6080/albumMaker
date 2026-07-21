@@ -5,7 +5,7 @@
 import io
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -29,11 +29,16 @@ PREVIEW_RESPONSE_HEADERS = {
 }
 
 
-def _png_response(image: Image.Image) -> StreamingResponse:
+def _png_response(image: Image.Image) -> Response:
     image_buffer = io.BytesIO()
     image.save(image_buffer, format="PNG")
-    image_buffer.seek(0)
-    return StreamingResponse(image_buffer, media_type="image/png", headers=PREVIEW_RESPONSE_HEADERS)
+    # 不可用 StreamingResponse(BytesIO):file-like 逐「行」迭代,二進位 PNG
+    # 被切成數千小塊各過一次 threadpool;bytes 已在記憶體,直接一次送出
+    return Response(
+        content=image_buffer.getvalue(),
+        media_type="image/png",
+        headers=PREVIEW_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/{template_id}/pages/{page_id}/preview")

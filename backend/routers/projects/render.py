@@ -379,8 +379,11 @@ def download_student_images_as_zip(
             raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
         zip_bytes = build_zip_of_student_images(project, student, effective_mode, image_entries)
 
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
+    # bytes 已整包在記憶體,直接 Response 一次送出。
+    # 不可用 StreamingResponse(io.BytesIO(...)):file-like 會被逐「行」迭代,
+    # 二進位 ZIP 變成數萬個小塊、每塊各過一次 threadpool,幾 MB 就拖數秒。
+    return Response(
+        content=zip_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )
