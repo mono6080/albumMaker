@@ -86,7 +86,7 @@ def test_preview_renderer_forwards_album_name(monkeypatch):
         return Image.new("RGB", (4, 4), "white")
 
     monkeypatch.setattr(preview_cache, "render_preview_page", fake_render_preview)
-    image_bytes = preview_cache.render_preview_png_bytes(
+    image_bytes = preview_cache.render_preview_jpeg_bytes(
         {"canvas_width": 4, "canvas_height": 4},
         "王大明",
         {},
@@ -95,7 +95,7 @@ def test_preview_renderer_forwards_album_name(monkeypatch):
         album_name="小王",
     )
 
-    assert image_bytes.startswith(b"\x89PNG")
+    assert image_bytes.startswith(b"\xff\xd8")
     assert captured["full_name"] == "王大明"
     assert captured["album_name"] == "小王"
 

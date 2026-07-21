@@ -18,6 +18,8 @@ services:
       # 排隊逾時需大於單一重任務時間，否則兩人同用時排隊者必 503（見 request_limiter.py）
       HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS: ${HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS:-10}
       PREVIEW_RENDER_CONCURRENCY: ${PREVIEW_RENDER_CONCURRENCY:-4}
+      # 相冊渲染併發 2:主機 15GB RAM 撐得住兩個並行 print 渲染,批次補渲快一倍
+      ALBUM_RENDER_CONCURRENCY: ${ALBUM_RENDER_CONCURRENCY:-2}
     networks:
       - nginx_net
     restart: unless-stopped

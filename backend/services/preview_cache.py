@@ -1,6 +1,6 @@
 # 預覽圖的內容定址快取（cache-aside）
 #
-# key = {prefix}/{payload 內容 hash}.png：layout 與 page_data 全文都在 hash 內，
+# key = {prefix}/{payload 內容 hash}.jpg：layout 與 page_data 全文都在 hash 內，
 # 任何實質變更都會換 key，因此不需要失效通知；無關的編輯（例如別的學生的照片）
 # 不會作廢既有快取。讀寫細節（cache-only 寫入、limiter 內二次查）都在這裡，
 # 路由層只負責權限檢查與組 Response。
@@ -22,8 +22,9 @@ from services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
-# v10：背景與貼圖在色彩轉換前先縮到 canonical 實際輸出框。
-PREVIEW_CACHE_VERSION = "project-preview-v10-bounded-assets"
+# v11：預覽輸出改 JPEG（照片內容 PNG 肥 3-5 倍;quality=80 介於 screen 72 與 print 95）。
+PREVIEW_CACHE_VERSION = "project-preview-v11-jpeg"
+PREVIEW_JPEG_QUALITY = 80
 
 
 def preview_scale_key(scale: float) -> str:
@@ -45,7 +46,7 @@ def _preview_payload_hash(payload: dict) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()[:24]
 
 
-def render_preview_png_bytes(
+def render_preview_jpeg_bytes(
     layout: dict,
     student_name: str,
     page_data: dict,
@@ -54,7 +55,7 @@ def render_preview_png_bytes(
     *,
     album_name: str | None = None,
 ) -> bytes:
-    """渲染單頁預覽並編成無損 PNG bytes。"""
+    """渲染單頁預覽並編成 JPEG bytes（手機分享直接以此檔分享給家長）。"""
     preview_image = render_preview_page(
         layout,
         student_name,
@@ -64,13 +65,15 @@ def render_preview_png_bytes(
         album_name=album_name,
     )
     image_buffer = io.BytesIO()
-    preview_image.save(image_buffer, format="PNG")
+    preview_image.convert("RGB").save(
+        image_buffer, format="JPEG", quality=PREVIEW_JPEG_QUALITY
+    )
     return image_buffer.getvalue()
 
 
 def preview_cache_key(cache_prefix: str, payload: dict) -> str:
     """內容定址 cache key：只靠 payload hash，不需讀 storage 即可算出。"""
-    return f"{cache_prefix}/{_preview_payload_hash(payload)}.png"
+    return f"{cache_prefix}/{_preview_payload_hash(payload)}.jpg"
 
 
 def _read_cached_preview_bytes(storage, cache_key: str):
@@ -97,9 +100,9 @@ async def get_or_render_preview(
     *,
     is_disconnected,
 ) -> tuple[bytes | None, bool]:
-    """取得（或渲染並回填）內容定址的預覽 PNG。
+    """取得（或渲染並回填）內容定址的預覽圖。
 
-    回傳 (png bytes 或 None, 是否命中快取)；None 表示 client 已斷線且尚未
+    回傳 (image bytes 或 None, 是否命中快取)；None 表示 client 已斷線且尚未
     渲染，呼叫端應直接放棄回應。render_bytes 是無參數的渲染 callback，
     只在 miss 且 client 仍在線時於 preview limiter 內執行。
     """

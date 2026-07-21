@@ -251,3 +251,8 @@ def test_class_zip_download_renders_fresh_without_prior_render(monkeypatch, tmp_
         assert download_all_images.content.startswith(b"PK")
         with ZipFile(BytesIO(download_all_images.content)) as image_zip:
             assert any(entry.endswith(".jpg") for entry in image_zip.namelist())
+
+        # 第二次下載:全班已 fresh,走並行只讀檢查路徑,內容不變
+        second_download_all = client.get(f"/api/projects/{project_id}/download/all")
+        assert_status(second_download_all, 200)
+        assert second_download_all.content.startswith(b"PK")

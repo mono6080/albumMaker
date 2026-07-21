@@ -40,7 +40,7 @@ from services.preview_cache import (
     get_or_render_preview,
     preview_cache_key,
     preview_scale_key,
-    render_preview_png_bytes,
+    render_preview_jpeg_bytes,
 )
 from services.request_limiter import album_render_limiter, zip_build_limiter
 from services.render_service import PREVIEW_RENDER_SCALE
@@ -113,7 +113,7 @@ async def _stored_preview_response(
         )
     return Response(
         content=image_bytes,
-        media_type="image/png",
+        media_type="image/jpeg",
         headers={**base_headers, "X-Preview-Cache": "HIT" if hit else "MISS"},
     )
 
@@ -128,7 +128,7 @@ async def preview_project_page(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 PNG。"""
+    """使用專案層級對應文字（label_texts）渲染頁面預覽，回傳 JPEG。"""
 
     # DB 讀取與 payload 組裝是 blocking 工作，整段丟 to_thread，
     # 讓 async 路由能在排隊/渲染前後檢查 client 是否已斷線
@@ -162,7 +162,7 @@ async def preview_project_page(
             "page_data": page_data,
         }
         def render_bytes():
-            return render_preview_png_bytes(
+            return render_preview_jpeg_bytes(
                 page_layout,
                 FULL_NAME_PREVIEW_PLACEHOLDER,
                 page_data,
@@ -188,7 +188,7 @@ async def preview_student_page(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """渲染學生個人頁面預覽，回傳 PNG。"""
+    """渲染學生個人頁面預覽，回傳 JPEG。"""
 
     def build_preview_plan():
         project = get_project_or_404(project_id, db)
@@ -235,7 +235,7 @@ async def preview_student_page(
         }
 
         def render_bytes():
-            return render_preview_png_bytes(
+            return render_preview_jpeg_bytes(
                 page_layout,
                 student_name,
                 current_page_data,

@@ -23,8 +23,9 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   下載權限見 [api.md 的角色權限矩陣](api.md#角色權限矩陣)
 - PDF 由 img2pdf 產生（`save_album_pdf()` 唯一進入點），避開 PIL 內建 PDF 的色域問題；
   print 頁面內嵌 **JPEG quality 95**（照片內容用 PNG 體積大 5-8 倍且壓縮極慢）
-- 模板單頁／跨頁與專案／學生互動預覽一律回傳無損 PNG；專案／學生預覽的內容定址
-  快取也使用 `.png`。正式 print／screen PDF 與單頁 JPEG 輸出不受影響
+- 模板單頁／跨頁預覽回傳無損 PNG；**專案／學生互動預覽回傳 JPEG**
+  （quality 80，照片內容 PNG 體積大 3-5 倍；手機分享直接以此檔分享給家長），
+  內容定址快取使用 `.jpg`。正式 print／screen PDF 與單頁 JPEG 輸出不受影響
 - 互動預覽先在 794×1123 canonical 像素完整渲染，再以 LANCZOS 縮成顯示尺寸；
   縮圖不另跑一套字級、行距或裁切公式
 - 專案／學生預覽回傳內容定址 ETag 與 `private, no-cache, must-revalidate`；
@@ -108,10 +109,12 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   由此涵蓋。已 fresh 只花指紋比對；`RENDER_RECONCILE_ON_STARTUP=0` 可停用
   （測試 conftest 預設關）
 - **下載一律最新**（保證）：單生 PDF／圖片 ZIP／單頁 JPG 下載端點在閘門後呼叫
-  `ensure_student_render_fresh()`；全班 PDF／圖片 ZIP 在串流前逐位
+  `ensure_student_render_fresh()`；全班 PDF／圖片 ZIP 在串流前
   `ensure_project_renders_fresh()`。先走**只讀快路**
-  （`student_render_outputs_fresh()`：指紋一致＋輸出齊全，不取渲染槽）—
-  背景渲染進行中時新鮮內容的下載不排渲染佇列；過期才取槽就地補渲。
+  （指紋一致＋輸出齊全，不取渲染槽）— 背景渲染進行中時新鮮內容的下載
+  不排渲染佇列；過期才取槽就地補渲。全班版的新鮮度檢查以 thread pool
+  **並行**（每執行緒獨立 session；慢的 R2 storage 往返並行、DB 快照由
+  project content lock 自然序列化），常態全 fresh 時 ZIP 幾乎立即開始。
   不分角色（含唯讀）拿到的都是當下內容，不再有「尚未產生」404
 - 前端班級總覽因此**不再於下載前逐位渲染**（`useProjectReviewDownloads`），
   下載按鈕直接觸發；測試中背景渲染由 `tests/conftest.py` autouse fixture 停用，

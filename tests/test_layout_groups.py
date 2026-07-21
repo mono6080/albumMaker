@@ -352,7 +352,7 @@ def test_group_traversal_participates_in_render_and_preview_cache_versions():
     source_names = {path.name for path in _RENDER_PIPELINE_FILES}
     assert "layout_group_validation.py" in source_names
     assert "layout_group_traversal.py" in source_names
-    assert PREVIEW_CACHE_VERSION == "project-preview-v10-bounded-assets"
+    assert PREVIEW_CACHE_VERSION == "project-preview-v11-jpeg"
 
 
 def test_unknown_contract_is_invalid_even_without_nonempty_groups():

@@ -576,15 +576,16 @@ def test_preview_endpoints_require_auth():
             assert spread_image.format == "PNG"
             assert spread_image.size == (1588, 1123)
 
+        # 專案/學生預覽輸出 JPEG（模板預覽維持 PNG）
         project_preview = client.get(f"/api/projects/{project_id}/preview/0")
         assert_status(project_preview, 200)
-        assert project_preview.headers["content-type"].startswith("image/png")
+        assert project_preview.headers["content-type"].startswith("image/jpeg")
         assert "private" in project_preview.headers["cache-control"]
         assert "no-cache" in project_preview.headers["cache-control"]
         assert project_preview.headers["etag"]
-        assert project_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+        assert project_preview.content.startswith(b"\xff\xd8")
         with Image.open(BytesIO(project_preview.content)) as preview_image:
-            assert preview_image.format == "PNG"
+            assert preview_image.format == "JPEG"
 
 
 def test_student_editor_endpoint_only_returns_current_student_pages(monkeypatch, tmp_path):
@@ -1124,8 +1125,8 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
 
         student_preview = client.get(f"/api/projects/{project_id}/students/{student_id}/preview/0")
         assert_status(student_preview, 200)
-        assert student_preview.headers["content-type"].startswith("image/png")
-        assert student_preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+        assert student_preview.headers["content-type"].startswith("image/jpeg")
+        assert student_preview.content.startswith(b"\xff\xd8")
         assert "private" in student_preview.headers["cache-control"]
         assert "no-cache" in student_preview.headers["cache-control"]
         assert student_preview.headers["etag"]
@@ -1149,10 +1150,10 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert project_blank_preview.headers["x-preview-cache"] == "MISS"
         assert project_blank_preview.headers["etag"]
         project_preview_key = project_blank_preview.headers["x-preview-cache-key"]
-        assert project_preview_key.endswith(".png")
+        assert project_preview_key.endswith(".jpg")
         assert (tmp_path / "uploads" / project_preview_key).exists()
         with Image.open(BytesIO(project_blank_preview.content)) as preview_image:
-            assert preview_image.format == "PNG"
+            assert preview_image.format == "JPEG"
             assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,
@@ -1181,10 +1182,10 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert student_blank_preview.headers["x-preview-cache"] == "MISS"
         assert student_blank_preview.headers["etag"]
         student_preview_key = student_blank_preview.headers["x-preview-cache-key"]
-        assert student_preview_key.endswith(".png")
+        assert student_preview_key.endswith(".jpg")
         assert (tmp_path / "uploads" / student_preview_key).exists()
         with Image.open(BytesIO(student_blank_preview.content)) as preview_image:
-            assert preview_image.format == "PNG"
+            assert preview_image.format == "JPEG"
             assert preview_image.size == (556, 786)
             assert count_non_whiteish_pixels(
                 preview_image,

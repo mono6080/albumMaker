@@ -73,7 +73,7 @@ APP_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build
 | `R2_LOCAL_CACHE_MAX_BYTES` | `1073741824` | 本機寫入快取容量；超過刪最舊；`0` 停用 |
 | `R2_LOCAL_MIRROR_DIR` | 未設定 | 本機唯讀鏡像目錄（僅本機測試建議） |
 | `PREVIEW_RENDER_CONCURRENCY` | `4` | 頁面預覽渲染併發槽（`request_limiter.py`） |
-| `ALBUM_RENDER_CONCURRENCY` | `1` | 相冊 PDF 渲染併發槽 |
+| `ALBUM_RENDER_CONCURRENCY` | `1`（compose 預設 `2`） | 相冊 PDF 渲染併發槽；docker-compose.yml 帶 `2`，本機開發啟動時自行設定 |
 | `ZIP_BUILD_CONCURRENCY` | `1` | ZIP 打包併發槽 |
 | `PHOTO_UPLOAD_CONCURRENCY` | `2` | 照片上傳處理併發槽 |
 | `HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS` | `10.0` | 重任務排隊逾時秒數，超時回 503（背景 job 走 `acquire_blocking` 不受此限） |

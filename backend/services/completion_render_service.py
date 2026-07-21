@@ -10,6 +10,7 @@
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from database import Project, SessionLocal, Student
 from services.output_keys import get_student_render_state_key
@@ -84,10 +85,50 @@ def ensure_student_render_fresh(db, project: Project, student: Student) -> None:
         render_and_save_student_album(project, student, project.id, db)
 
 
+# 全班新鮮度檢查的並行度:慢的部分是 storage 往返(R2 每位 ~4 次),
+# DB 快照有 project content lock 自然序列化,並行只加速 I/O 段
+_FRESHNESS_CHECK_WORKERS = 8
+
+
+def _student_fresh_with_own_session(project_id: int, student_id: int) -> bool:
+    """thread pool 工作項:每執行緒獨立 session 做只讀新鮮度檢查。
+
+    檢查失敗(含專案/學生狀態異常)一律當過期,交給渲染路徑處理或報錯。
+    """
+    check_db = SessionLocal()
+    try:
+        student = check_db.get(Student, student_id)
+        if student is None or not student.output_filename:
+            return False
+        return _student_render_outputs_fresh(project_id, student_id, check_db)
+    except Exception:
+        return False
+    finally:
+        check_db.close()
+
+
 def ensure_project_renders_fresh(db, project: Project) -> None:
-    """全班 ZIP 串流前逐位保證最新;任一位補渲失敗即中止,不交舊檔。"""
-    for student in list(project.students):
-        ensure_student_render_fresh(db, project, student)
+    """全班 ZIP 串流前保證最新;任一位補渲失敗即中止,不交舊檔。
+
+    兩階段:先並行只讀檢查全班(常態全 fresh,ZIP 幾乎立即開始),
+    只有過期的學生才逐位取渲染槽補渲。
+    """
+    students = list(project.students)
+    if not students:
+        return
+    project_id = project.id
+    with ThreadPoolExecutor(max_workers=_FRESHNESS_CHECK_WORKERS) as pool:
+        fresh_flags = list(
+            pool.map(
+                lambda student_id: _student_fresh_with_own_session(project_id, student_id),
+                [student.id for student in students],
+            )
+        )
+    for student, is_fresh in zip(students, fresh_flags):
+        if is_fresh:
+            continue
+        with album_render_limiter.acquire_blocking():
+            render_and_save_student_album(project, student, project_id, db)
 
 
 def _render_students_in_background(project_id: int, student_ids: list[int]) -> dict:
