@@ -52,5 +52,5 @@
 3. **前端元件測試（vitest / RTL）**：目前完全沒有
 4. **兩頁制新流程的 e2e 未全覆蓋**：「每人不同張」精靈（含關閉未上傳退回
    放照片 Modal）、共用照片裁切、PhotoManager 本頁/整本切換與跨頁上傳、
-   全班完成鎖定→退回——e2e 已覆蓋「全班同一張」直傳主線與依檔名整批匯入
-   （batch-wizard.spec.js）
+   全班完成鎖定→退回——e2e 已覆蓋「多人同一張」全班直傳與勾選部分學生
+   （project-flow.spec.js）與依檔名整批匯入（batch-wizard.spec.js）

@@ -2,6 +2,7 @@
 # These tests exercise the real app wiring, auth cookie flow, and core route
 # contracts against the tmp SQLite database configured in conftest.py.
 
+import json
 import mimetypes
 import threading
 from datetime import datetime, timedelta, timezone
@@ -906,6 +907,80 @@ def test_shared_project_photo_upload_applies_distinct_files(monkeypatch, tmp_pat
         assert_status(first_missing, 404)
         second_still_exists = client.get(f"/api/projects/{project_id}/students/{student_ids[1]}/pages/0/photos/1")
         assert_status(second_still_exists, 200)
+
+
+def test_shared_project_photo_upload_with_student_ids_targets_subset(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        template_id, _ = create_template_with_page(client)
+        project_id = create_project(
+            client,
+            template_id,
+            name=unique_name("partial_shared_photo"),
+            student_names=["Ava", "Ben", "Cid"],
+        )
+        detail = client.get(f"/api/projects/{project_id}")
+        assert_status(detail, 200)
+        student_ids = [student["id"] for student in detail.json()["students"]]
+        target_ids = student_ids[:2]
+
+        shared_upload = client.post(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/photos/shared/pages/0/slots/1"
+            ),
+            files={"file": ("group.jpg", jpeg_bytes((60, 130, 220)), "image/jpeg")},
+            data={"student_ids": json.dumps(target_ids)},
+        )
+        assert_status(shared_upload, 200)
+        assert shared_upload.json()["updated"] == 2
+
+        def slot_photo_record(student):
+            # 未被套用過照片的學生 pages_data 是空清單（惰性建立）
+            pages = student["pages_data"]
+            if not pages:
+                return None
+            return (pages[0].get("photos") or {}).get("1")
+
+        updated_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(updated_detail, 200)
+        photos_by_student = {
+            student["id"]: slot_photo_record(student)
+            for student in updated_detail.json()["students"]
+        }
+        assert all(photos_by_student[student_id] for student_id in target_ids)
+        assert photos_by_student[student_ids[2]] is None
+
+        # 不屬於此專案的學生 id → 422，且不得寫入任何學生
+        invalid_upload = client.post(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/photos/shared/pages/0/slots/1"
+            ),
+            files={"file": ("group2.jpg", jpeg_bytes((200, 90, 40)), "image/jpeg")},
+            data={"student_ids": json.dumps([student_ids[2], 999999])},
+        )
+        assert_status(invalid_upload, 422)
+        after_invalid = client.get(f"/api/projects/{project_id}")
+        assert_status(after_invalid, 200)
+        assert (
+            next(
+                slot_photo_record(student)
+                for student in after_invalid.json()["students"]
+                if student["id"] == student_ids[2]
+            )
+            is None
+        )
+
+        # 空陣列 → 400
+        empty_upload = client.post(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/photos/shared/pages/0/slots/1"
+            ),
+            files={"file": ("group3.jpg", jpeg_bytes((10, 180, 90)), "image/jpeg")},
+            data={"student_ids": "[]"},
+        )
+        assert_status(empty_upload, 400)
 
 
 def test_hidden_group_photo_slot_is_not_counted_or_writable(monkeypatch, tmp_path):

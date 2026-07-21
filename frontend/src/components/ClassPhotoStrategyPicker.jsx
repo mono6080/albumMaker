@@ -1,4 +1,4 @@
-// 「放照片」Modal 的步驟 1：選擇分配方式 — 純顯示選卡（每人不同張 / 全班同一張）
+// 「放照片」Modal 的步驟 1：選擇分配方式 — 純顯示選卡（每人不同張 / 多人同一張）
 // 純位移自 ClassEdit 的 slotPhotoModal；Modal 本體與上傳流程仍在頁面層
 
 import { Badge } from "./ui";
@@ -40,10 +40,10 @@ export default function ClassPhotoStrategyPicker({ value, onSelect }) {
           }`}
         >
           <div className="mb-1 flex items-center gap-2">
-            <h4 className="text-sm font-bold text-gray-900">全班同一張</h4>
+            <h4 className="text-sm font-bold text-gray-900">多人同一張</h4>
           </div>
           <p className="text-xs leading-relaxed text-gray-600">
-            團體照等共用照片，一張套用到全班這一格。
+            團體照或小組合照，一張套用到全班，也可只選部分學生。
           </p>
         </button>
       </div>

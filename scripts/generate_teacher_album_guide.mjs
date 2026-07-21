@@ -385,7 +385,7 @@ async function uploadStudentPhotos(context, browser, projectId, templateRevision
   }
 }
 
-// 用「全班同一張」端點把所有照片格補齊，讓班級總覽進到階段 2（可標記全班完成、出現交件下載）
+// 用「多人同一張」端點（不帶 student_ids＝套用全班）把所有照片格補齊，讓班級總覽進到階段 2（可標記全班完成、出現交件下載）
 async function fillAllSharedPhotos(context, browser, projectId, templateRevision) {
   const groupPhoto = await createPhotoImage(browser, "teacher-photo-group.png", "全班合照", "#fde68a");
   const buffer = await readFile(groupPhoto);
@@ -437,7 +437,7 @@ const GUIDE_MARKERS = {
     { n: 6, selector: '[data-guide="class-preview-panel"]', text: "頁面預覽。確認文字套上模板後的位置與內容，可按重新整理預覽。" },
   ],
   classPhotoModal: [
-    { n: 1, selector: '[data-guide="class-photo-strategies"]', text: "先選分配方式：「每人不同張」一次上傳多張、自動分給每位學生；「全班同一張」把團體照套用到全班同一格。" },
+    { n: 1, selector: '[data-guide="class-photo-strategies"]', text: "先選分配方式：「每人不同張」一次上傳多張、自動分給每位學生；「多人同一張」把團體照套用到全班同一格，也可只選部分學生。" },
     { n: 2, selector: '[data-guide="class-slot-photo-modal"]', text: "選好方式後，第二步就在下方選照片上傳。" },
   ],
   studentEdit: [
@@ -577,7 +577,7 @@ async function buildPdf(screenshots) {
     <p class="step-intro">從相本卡片或班級總覽的「繼續製作」進入編輯相本，預設是「全班」範圍：這裡做的事會套用到所有學生，最省力的做法是先把全班共用的內容一次做完。畫面分三欄：頁面預覽｜照片管理｜頁面文字，和個別編輯同一套版面。</p>
     <ol class="actions">
       <li>用頁碼導航切頁，三個面板會一起換頁。</li>
-      <li>點一個照片格，會開「放照片」視窗選分配方式：<strong>每人不同張</strong>（一次上傳多張、自動分給每位學生）或<strong>全班同一張</strong>（團體照套用到全班同一格）。</li>
+      <li>點一個照片格，會開「放照片」視窗選分配方式：<strong>每人不同張</strong>（一次上傳多張、自動分給每位學生）或<strong>多人同一張</strong>（團體照套用到全班同一格，也可只勾選部分學生）。</li>
       <li>行政已經照「姓名＋頁格」命名好的整批檔案，用照片面板右上的「依檔名整批匯入」。</li>
       <li>在全班文字填共用文案；<span class="kbd">{name}</span> 代入相本稱呼（未設定時沿用完整姓名），<span class="kbd">{full_name}</span> 固定代入完整姓名。</li>
       <li>清空欄位會輸出空白；按「恢復預設」可回到模板文字。</li>

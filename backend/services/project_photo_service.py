@@ -129,6 +129,26 @@ def _get_current_student_for_photo_upload(
     return student
 
 
+def _parse_shared_student_ids(raw_student_ids: str | None) -> set[int] | None:
+    """解析共用照片的目標學生 id 清單；None 表示套用全班。"""
+    if raw_student_ids is None:
+        return None
+    try:
+        student_ids = json.loads(raw_student_ids)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="student_ids 必須是合法 JSON")
+    if (
+        not isinstance(student_ids, list)
+        or not student_ids
+        or not all(
+            isinstance(student_id, int) and not isinstance(student_id, bool)
+            for student_id in student_ids
+        )
+    ):
+        raise HTTPException(status_code=400, detail="student_ids 必須是非空的學生 id 陣列")
+    return set(student_ids)
+
+
 def _parse_layout(raw_layout: str) -> dict:
     try:
         return json.loads(raw_layout)
@@ -286,22 +306,43 @@ async def upload_shared_project_photo(
     slot_id: int,
     expected_template_revision: int,
     file: UploadFile,
+    student_ids: str | None = None,
 ) -> SharedPhotoUploadOutcome:
-    """逐學生 commit 共用照片；任一非預期失敗維持既有的停止展開語意。"""
+    """逐學生 commit 共用照片；任一非預期失敗維持既有的停止展開語意。
+
+    student_ids（JSON 陣列字串）可選：只套用到指定學生；未給則套用全班。
+    """
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
+    target_student_ids = _parse_shared_student_ids(student_ids)
     processed_upload = await read_and_process_photo_upload(file)
     storage = get_storage()
     now = utc_now()
 
-    def fanout_to_all_students() -> int:
+    def fanout_to_target_students() -> int:
         with lock_project_template_revision(db, project, expected_template_revision):
             assert_project_content_writable(project, current_user)
             _assert_project_photo_slot_exists(project, page_index, slot_id)
+            # 目標學生清單在鎖內決定，確保與 pages_data 寫入看到同一份名冊
+            if target_student_ids is None:
+                target_students = list(project.students)
+            else:
+                known_ids = {student.id for student in project.students}
+                missing_ids = target_student_ids - known_ids
+                if missing_ids:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="student_ids 含不屬於此專案的學生",
+                    )
+                target_students = [
+                    student
+                    for student in project.students
+                    if student.id in target_student_ids
+                ]
             count = 0
             first_key: str | None = None
             project.updated_at = now
-            for student in project.students:
+            for student in target_students:
                 key = mutate_student_pages(
                     db,
                     student,
@@ -324,7 +365,7 @@ async def upload_shared_project_photo(
                 count += 1
             return count
 
-    updated = await run_in_threadpool(fanout_to_all_students)
+    updated = await run_in_threadpool(fanout_to_target_students)
     return SharedPhotoUploadOutcome(
         updated=updated,
         filename=processed_upload.filename,

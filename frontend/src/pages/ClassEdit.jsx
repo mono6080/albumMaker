@@ -75,6 +75,9 @@ export default function ClassEdit() {
   const [photoStrategy, setPhotoStrategy] = useState(null);
   // 共用照片的裁切編輯視窗
   const [isSharedCropOpen, setIsSharedCropOpen] = useState(false);
+  // 共用照片的套用對象：預設收合＝套用全班；展開後可勾選部分學生（小組合照）
+  const [isPartialShareOpen, setIsPartialShareOpen] = useState(false);
+  const [sharedTargetStudentIds, setSharedTargetStudentIds] = useState(() => new Set());
   // 批次分配精靈是否有實際上傳：沒上傳就關閉時要退回放照片 Modal（可回上一步）
   const batchWizardDidUploadRef = useRef(false);
   // 共用照片預覽 URL（objectURL，換檔或清除時釋放）
@@ -186,16 +189,28 @@ export default function ClassEdit() {
     if (sharedPhotoInputRef.current) sharedPhotoInputRef.current.value = "";
   };
 
-  // 點照片格 → 開 Modal（每次都從「選分配方式」開始，並清掉上次殘留的檔案）
+  // 點照片格 → 開 Modal（每次都從「選分配方式」開始，並清掉上次殘留的檔案與對象勾選）
   const openSlotPhotoModal = (slotId) => {
     setSelectedSharedPhotoSlotId(slotId);
     setPhotoStrategy(null);
     clearSharedPhotoFile();
+    setIsPartialShareOpen(false);
+    setSharedTargetStudentIds(new Set((project?.students ?? []).map(student => student.id)));
     setIsSlotPhotoModalOpen(true);
+  };
+
+  const toggleSharedTargetStudent = (studentId) => {
+    setSharedTargetStudentIds(previous => {
+      const next = new Set(previous);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
   };
 
   const handleUploadSharedPhoto = async () => {
     if (!sharedPhotoFile || selectedSharedPhotoSlotId == null || isSharedPhotoUploading) return;
+    if (isPartialShareOpen && sharedTargetStudentIds.size === 0) return;
 
     setIsSharedPhotoUploading(true);
     setSharedPhotoUploadStatus({ phase: "uploading", percent: 0 });
@@ -210,6 +225,8 @@ export default function ClassEdit() {
           phase: pct >= 100 ? "processing" : "uploading",
           percent: pct,
         }),
+        // 收合狀態＝套用全班，不帶名單走原本的全班路徑
+        isPartialShareOpen ? [...sharedTargetStudentIds] : undefined,
       );
       const updated = response.data?.updated ?? 0;
       toast.success(`已套用到 ${updated} 位學生`);
@@ -279,7 +296,7 @@ export default function ClassEdit() {
         {
           element: '[data-guide="class-photo-strategies"]',
           title: "選擇分配方式",
-          description: "「每人不同張」一次上傳多張、自動分給每位學生（最常用）；「全班同一張」把團體照套用到全班同一格。",
+          description: "「每人不同張」一次上傳多張、自動分給每位學生（最常用）；「多人同一張」把團體照套用到全班同一格，也可只選部分學生。",
           side: "bottom",
           align: "center",
           onBeforeStep: () => { openSlotPhotoModal(firstSlot.id); },
@@ -287,7 +304,7 @@ export default function ClassEdit() {
         {
           element: '[data-guide="class-slot-photo-upload"]',
           title: "上傳照片",
-          description: "選了方式後在這裡上傳：「每人不同張」會開批次分配精靈，可依檔名自動配對；「全班同一張」可先預覽、裁切再套用到全班。",
+          description: "選了方式後在這裡上傳：「每人不同張」會開批次分配精靈，可依檔名自動配對；「多人同一張」可先預覽、裁切再套用到全班或勾選的學生。",
           side: "top",
           align: "center",
           onBeforeStep: () => {
@@ -430,12 +447,12 @@ export default function ClassEdit() {
             <div className="mb-3 flex items-center gap-2">
               <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[11px] font-semibold text-white">2</span>
               <h3 className="text-sm font-semibold text-gray-800">
-                {photoStrategy === "shared" ? "選擇照片並套用到全班" : "上傳並分配照片"}
+                {photoStrategy === "shared" ? "選擇照片" : "上傳並分配照片"}
               </h3>
             </div>
 
             {photoStrategy === "shared" ? (
-              <div className="space-y-2">
+              <div className="space-y-4">
                 <input
                   ref={sharedPhotoInputRef}
                   type="file"
@@ -443,64 +460,166 @@ export default function ClassEdit() {
                   className="hidden"
                   onChange={event => setSharedPhotoFile(event.target.files?.[0] || null)}
                 />
-                <Button
-                  type="button"
-                  onClick={() => sharedPhotoInputRef.current?.click()}
-                  variant="neutral"
-                  fullWidth
-                >
-                  <Upload className="h-4 w-4" />
-                  選擇照片
-                </Button>
-                <div className="min-h-9 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                  {sharedPhotoFile ? (
+                {/* 未選檔：整塊可點可拖入的上傳區；已選檔：預覽＋檔名＋操作合成一張卡 */}
+                {!sharedPhotoFile ? (
+                  <button
+                    type="button"
+                    onClick={() => sharedPhotoInputRef.current?.click()}
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={event => {
+                      event.preventDefault();
+                      const droppedFile = event.dataTransfer.files?.[0];
+                      if (
+                        droppedFile
+                        && (droppedFile.type.startsWith("image/") || /\.(heic|heif|hif)$/i.test(droppedFile.name))
+                      ) {
+                        setSharedPhotoFile(droppedFile);
+                      }
+                    }}
+                    className="flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/60 px-4 py-7 text-center transition-colors hover:border-violet-300 hover:bg-violet-50/30"
+                  >
+                    <Upload className="h-6 w-6 text-gray-400" />
+                    <span className="text-sm font-medium text-gray-700">點擊選擇照片</span>
+                    <span className="text-xs text-gray-400">支援 JPG、PNG、WebP、HEIC，也可直接拖入</span>
+                  </button>
+                ) : (
+                  <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-2.5">
+                    {sharedPhotoPreviewUrl && selectedSlotItem && (
+                      <div
+                        className="relative mx-auto overflow-hidden rounded-lg border border-gray-200 bg-white"
+                        style={{
+                          // 以高度 280 反推寬度，超過容器寬再等比縮小（aspect-ratio 保比例）
+                          width: `calc(280px * ${Math.max(1, Math.round(selectedSlotCropBox?.width ?? selectedSlotItem.slotW))} / ${Math.max(1, Math.round(selectedSlotCropBox?.height ?? selectedSlotItem.slotH))})`,
+                          maxWidth: "100%",
+                          aspectRatio: `${Math.max(1, Math.round(selectedSlotCropBox?.width ?? selectedSlotItem.slotW))} / ${Math.max(1, Math.round(selectedSlotCropBox?.height ?? selectedSlotItem.slotH))}`,
+                        }}
+                      >
+                        <img
+                          src={sharedPhotoPreviewUrl}
+                          alt="共用照片預覽"
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      </div>
+                    )}
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate">{sharedPhotoFile.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-gray-600">{sharedPhotoFile.name}</span>
                       <IconButton label="清除照片檔案" onClick={clearSharedPhotoFile} size="xs">
                         <X className="h-3.5 w-3.5" />
                       </IconButton>
                     </div>
-                  ) : (
-                    <span className="text-gray-400">未選擇照片</span>
-                  )}
-                </div>
-                {/* 預覽（照片格比例）＋裁切編輯 */}
-                {sharedPhotoFile && sharedPhotoPreviewUrl && selectedSlotItem && (
-                  <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
-                    <div
-                      className="relative flex-shrink-0 overflow-hidden rounded-md border border-gray-200 bg-white"
-                      style={{
-                        width: 132,
-                        aspectRatio: `${Math.max(1, Math.round(selectedSlotCropBox?.width ?? selectedSlotItem.slotW))} / ${Math.max(1, Math.round(selectedSlotCropBox?.height ?? selectedSlotItem.slotH))}`,
-                      }}
-                    >
-                      <img
-                        src={sharedPhotoPreviewUrl}
-                        alt="共用照片預覽"
-                        className="absolute inset-0 h-full w-full object-cover"
-                      />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
                       <p className="text-xs leading-relaxed text-gray-500">
-                        預覽為照片格比例，超出範圍會置中裁切；要調整位置與縮放按下方編輯。
+                        預覽為照片格比例，超出範圍會置中裁切。
                       </p>
-                      <Button type="button" variant="neutral" size="sm" onClick={() => setIsSharedCropOpen(true)}>
-                        <Crop className="h-4 w-4" />
-                        編輯裁切
-                      </Button>
+                      <div className="flex flex-shrink-0 gap-1.5">
+                        <Button type="button" variant="neutral" size="sm" onClick={() => setIsSharedCropOpen(true)}>
+                          <Crop className="h-4 w-4" />
+                          編輯裁切
+                        </Button>
+                        <Button type="button" variant="neutral" size="sm" onClick={() => sharedPhotoInputRef.current?.click()}>
+                          <Upload className="h-4 w-4" />
+                          換一張
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}
+                {/* 步驟 3：選擇套用對象（全班／部分學生兩選一，部分學生展開名字 chip） */}
+                <div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[11px] font-semibold text-white">3</span>
+                    <h3 className="text-sm font-semibold text-gray-800">選擇套用對象</h3>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsPartialShareOpen(false)}
+                      aria-pressed={!isPartialShareOpen}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                        !isPartialShareOpen
+                          ? "border-violet-400 bg-violet-50/50 text-gray-900 ring-2 ring-violet-300"
+                          : "border-gray-200 bg-white text-gray-600 hover:border-violet-200 hover:bg-violet-50/30"
+                      }`}
+                    >
+                      全班（{project.students.length} 位）
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsPartialShareOpen(true)}
+                      aria-pressed={isPartialShareOpen}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                        isPartialShareOpen
+                          ? "border-violet-400 bg-violet-50/50 text-gray-900 ring-2 ring-violet-300"
+                          : "border-gray-200 bg-white text-gray-600 hover:border-violet-200 hover:bg-violet-50/30"
+                      }`}
+                    >
+                      部分學生
+                    </button>
+                  </div>
+                  {isPartialShareOpen && (
+                    <div className="mt-2 space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700">
+                          點名字選取，已選 {sharedTargetStudentIds.size}/{project.students.length} 位
+                        </span>
+                        <div className="flex flex-shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-xs text-violet-600 hover:underline"
+                            onClick={() => setSharedTargetStudentIds(new Set(project.students.map(student => student.id)))}
+                          >
+                            全選
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs text-violet-600 hover:underline"
+                            onClick={() => setSharedTargetStudentIds(new Set())}
+                          >
+                            清除
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                        {project.students.map(student => {
+                          const isSelected = sharedTargetStudentIds.has(student.id);
+                          return (
+                            <button
+                              key={student.id}
+                              type="button"
+                              onClick={() => toggleSharedTargetStudent(student.id)}
+                              aria-pressed={isSelected}
+                              className={`max-w-full truncate rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                                isSelected
+                                  ? "border-violet-500 bg-violet-500 font-medium text-white"
+                                  : "border-gray-300 bg-white text-gray-600 hover:border-violet-300 hover:bg-violet-50/40"
+                              }`}
+                            >
+                              {student.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <Button
                   type="button"
                   onClick={handleUploadSharedPhoto}
-                  disabled={!sharedPhotoFile || !selectedSharedPhotoSlot || isSharedPhotoUploading}
+                  disabled={
+                    !sharedPhotoFile
+                    || !selectedSharedPhotoSlot
+                    || isSharedPhotoUploading
+                    || (isPartialShareOpen && sharedTargetStudentIds.size === 0)
+                  }
                   variant="primary"
                   fullWidth
                 >
                   {isSharedPhotoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-                  套用到全班
+                  {isPartialShareOpen ? `套用到 ${sharedTargetStudentIds.size} 位學生` : `套用到全班（${project.students.length} 位）`}
                 </Button>
+                {!sharedPhotoFile && (
+                  <p className="text-center text-xs text-gray-400">請先選擇照片</p>
+                )}
                 {sharedPhotoUploadStatus !== null && (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-xs text-gray-500">

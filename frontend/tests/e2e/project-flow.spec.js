@@ -237,8 +237,8 @@ test("project shared photo upload applies one slot to every student", async ({ p
     .getByRole("button", { name: /格2/ })
     .click();
   await expect(page.locator('[data-guide="class-slot-photo-modal"]')).toBeVisible();
-  await page.getByRole("button", { name: /全班同一張/ }).click();
-  await expect(page.getByText("選擇照片並套用到全班")).toBeVisible();
+  await page.getByRole("button", { name: /多人同一張/ }).click();
+  await expect(page.getByRole("heading", { name: "選擇套用對象" })).toBeVisible();
 
   await page
     .locator('[data-guide="class-slot-photo-modal"] input[type="file"]')
@@ -247,7 +247,7 @@ test("project shared photo upload applies one slot to every student", async ({ p
   const uploadResponse = page.waitForResponse(
     response => response.url().includes("/photos/shared/pages/0/slots/2") && response.ok(),
   );
-  await page.getByRole("button", { name: "套用到全班", exact: true }).click();
+  await page.getByRole("button", { name: /^套用到全班/ }).click();
   await uploadResponse;
   await expect(page.getByText("已套用到 2 位學生")).toBeVisible();
 
@@ -273,6 +273,35 @@ test("project shared photo upload applies one slot to every student", async ({ p
       /\/photos\/2\/thumbnail\?v=.*group_[0-9a-f]{16}\.png/,
     );
   }
+
+  // 「多人同一張」勾選部分學生：只套用到第一位學生，另一位維持原檔
+  await page.goto(`/projects/${project.id}/edit`);
+  await expect(page.locator('[data-guide="class-photo-panel"]')).toBeVisible();
+  await page
+    .locator('[data-guide="class-shared-photo-slots"]')
+    .getByRole("button", { name: /格2/ })
+    .click();
+  await page.getByRole("button", { name: /多人同一張/ }).click();
+  await page.getByRole("button", { name: "部分學生", exact: true }).click();
+  // 姓名經名冊正規化會移除空白（Group Bob → GroupBob），用寬鬆比對；chip 點一下取消選取
+  await page.getByRole("button", { name: /Bob/ }).click();
+  await page
+    .locator('[data-guide="class-slot-photo-modal"] input[type="file"]')
+    .setInputFiles({ name: "partial.png", mimeType: "image/png", buffer: redPng });
+  const partialUploadResponse = page.waitForResponse(
+    response => response.url().includes("/photos/shared/pages/0/slots/2") && response.ok(),
+  );
+  await page.getByRole("button", { name: "套用到 1 位學生", exact: true }).click();
+  await partialUploadResponse;
+  await expect(page.getByText("已套用到 1 位學生")).toBeVisible();
+
+  let partialPaths = [];
+  await expect.poll(async () => {
+    const refreshed = await fetchProjectDetail(page, project.id);
+    partialPaths = refreshed.students.map(student => student.pages_data?.[0]?.photos?.["2"]?.path ?? null);
+    return partialPaths[0];
+  }, { timeout: 20_000 }).toMatch(/p0_slot2_partial_[0-9a-f]{16}\.png$/);
+  expect(partialPaths[1]).toBe(sharedPaths[1]);
 });
 
 

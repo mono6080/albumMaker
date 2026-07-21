@@ -206,7 +206,7 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 | PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `Student.album_name`；已歸班回 409，必須改園所名冊中央值 |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
-| POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全體 |
+| POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全班；`student_ids`（JSON 陣列 form 欄位）可選，只套用到指定學生 |
 | POST | `/{id}/photos/batch/pages/{page}/slots/{slot}` | 依 mapping 批次分配 |
 | GET | `…/photos/{slot}`、`…/photos/{slot}/thumbnail` | 照片原圖 / 縮圖 |
 | PUT | `/{id}/students/{sid}/photos/mapping` | 更新照片位移縮放對應 |

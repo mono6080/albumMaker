@@ -75,12 +75,13 @@ export const uploadPhoto = (
   );
 };
 
-/** 上傳專案共用照片，套用到所有學生同一頁同一照片格 */
+/** 上傳專案共用照片至同一頁同一照片格；studentIds 可選，未給套用全班 */
 export const uploadSharedProjectPhoto = (
-  projectId, expectedTemplateRevision, pageIndex, slotId, photoFile, onProgress,
+  projectId, expectedTemplateRevision, pageIndex, slotId, photoFile, onProgress, studentIds,
 ) => {
   const formData = new FormData();
   formData.append("file", photoFile);
+  if (studentIds?.length) formData.append("student_ids", JSON.stringify(studentIds));
   return apiClient.post(
     `/projects/${projectId}/photos/shared/pages/${pageIndex}/slots/${slotId}`,
     formData,

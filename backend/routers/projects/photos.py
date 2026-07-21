@@ -65,6 +65,7 @@ async def upload_shared_project_photo(
     page_index: int,
     slot_id: int,
     file: UploadFile = File(...),
+    student_ids: str | None = Form(None),
     expected_template_revision: int = Query(..., ge=1),
     _limit: None = Depends(require_photo_upload_slot),
     db: Session = Depends(get_db),
@@ -78,6 +79,7 @@ async def upload_shared_project_photo(
         slot_id,
         expected_template_revision,
         file,
+        student_ids=student_ids,
     )
     return {
         "ok": True,
