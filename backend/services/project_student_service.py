@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Student, User, utc_now
 from services.organization_lock import organization_acl_lock
-from services.project_access_service import assert_project_content_writable
+from services.project_access_service import (
+    assert_project_content_writable,
+    assert_student_content_writable,
+    student_effectively_completed,
+)
 from services.project_template_revision import lock_project_template_revision
 from services.storage_factory import get_storage
 from services.student_album_name_policy import assign_automatic_album_names
@@ -35,6 +39,15 @@ def _assert_legacy_album_name_mutable(project) -> None:
                 "message": "已歸班相本的稱呼請至園所設定修改。",
             },
         )
+
+
+def _auto_fill_eligible(project, student: Student, current_user: User) -> bool:
+    """批次 auto-fill 只處理稱呼空白且未（有效）完成的學生；admin 比照內容鎖可越過完成限制。"""
+    if student.album_name and student.album_name.strip():
+        return False
+    if current_user.role == "admin":
+        return True
+    return not student_effectively_completed(project, student)
 
 
 def _effective_album_name_for_collision(student: Student) -> str:
@@ -87,7 +100,7 @@ def auto_fill_student_album_names(
         eligible_student_ids = [
             student.id
             for student in project.students
-            if not student.album_name or not student.album_name.strip()
+            if _auto_fill_eligible(project, student, current_user)
         ]
         with lock_student_page_writes(eligible_student_ids):
             db.rollback()
@@ -98,7 +111,7 @@ def auto_fill_student_album_names(
             eligible_students = [
                 student
                 for student in project.students
-                if not student.album_name or not student.album_name.strip()
+                if _auto_fill_eligible(project, student, current_user)
             ]
             protected_effective_names = [
                 student.effective_album_name
@@ -191,6 +204,7 @@ def auto_fill_student_album_name(
             assert_project_content_writable(project, current_user)
             _assert_legacy_album_name_mutable(project)
             student = get_student_or_404(student_id, project_id, db)
+            assert_student_content_writable(project, student, current_user)
             if student.album_name and student.album_name.strip():
                 db.rollback()
                 return {"updated": 0, "unresolved": 0}
@@ -265,6 +279,7 @@ def update_student_album_name(
         assert_project_content_writable(project, current_user)
         _assert_legacy_album_name_mutable(project)
         student = get_student_or_404(student_id, project_id, db)
+        assert_student_content_writable(project, student, current_user)
         if student.album_name == normalized_album_name:
             result = _serialize_student_identity(student)
             db.rollback()
@@ -321,6 +336,7 @@ def set_page_skip(
     with lock_project_template_revision(db, project, expected_template_revision):
         assert_project_content_writable(project, current_user)
         student = get_student_or_404(student_id, project_id, db)
+        assert_student_content_writable(project, student, current_user)
 
         def _mutate(pages_data) -> None:
             ensure_page_entry(pages_data, page_index)["skip"] = skip

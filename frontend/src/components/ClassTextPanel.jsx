@@ -11,6 +11,7 @@ export default function ClassTextPanel({
   textLabels,
   saveStatus,
   disabled,
+  lockedHint,
   getLabelText,
   getLabelAlign,
   hasLabelTextOverride,
@@ -33,6 +34,12 @@ export default function ClassTextPanel({
             </span>
             <AutoSaveStatus status={saveStatus} className="ml-auto" />
           </div>
+          {/* 個別完成造成的全班文字硬鎖提示（需主管退回列出的學生） */}
+          {lockedHint && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              {lockedHint}
+            </div>
+          )}
           <div className="space-y-3">
             {textLabels.map(label => {
               const templateDefaultText = label.text ?? "";

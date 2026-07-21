@@ -302,6 +302,9 @@ export default function StudentEdit() {
   const isCurrentPageSkipped = skippedPages.has(activePage);
   // 專案已標記全班完成：內容鎖定（照片/文字/頁面），預覽照常
   const isProjectCompleted = Boolean(project.completed_at);
+  // 個別完成鎖：該生 completed_at 或全班 completed_at 任一成立即唯讀（與後端 predicate 一致）
+  const isStudentCompleted = Boolean(student.completed_at);
+  const isContentLocked = isProjectCompleted || isStudentCompleted;
   const students = project.students || [];
 
   // ── 主佈局渲染 ────────────────────────────────────────────────────────────
@@ -313,8 +316,13 @@ export default function StudentEdit() {
         badgeLabel="編輯學生"
         projectId={projectId}
         onStartGuide={startGuide}
-        isProjectCompleted={isProjectCompleted}
-        completedDescription="仍可預覽，下載請到班級總覽；需主管或管理員退回才能修改"
+        isProjectCompleted={isContentLocked}
+        completedTitle={isProjectCompleted
+          ? "此專案已標記全班完成，內容已鎖定"
+          : "這位學生已標記完成，內容已鎖定"}
+        completedDescription={isProjectCompleted
+          ? "仍可預覽，下載請到班級總覽；需主管或管理員退回才能修改"
+          : "仍可預覽，下載請到班級總覽；需主管退回才能修改"}
         students={students}
         currentStudentId={studentId}
         onScopeSwitch={handleScopeSwitch}
@@ -339,7 +347,7 @@ export default function StudentEdit() {
             isCurrentPageSkipped={isCurrentPageSkipped}
             onPageSkip={handlePageSkip}
             onRefresh={refreshPreview}
-            isLocked={isProjectCompleted}
+            isLocked={isContentLocked}
           />
         )}
         photoPanel={(
@@ -350,7 +358,7 @@ export default function StudentEdit() {
             pages={templatePages}
             student={student}
             skippedPages={skippedPages}
-            disabled={isProjectCompleted}
+            disabled={isContentLocked}
             activePage={activePage}
             onPageFocus={setActivePage}
             onSaveStateChange={setIsPhotoSaving}
@@ -377,7 +385,7 @@ export default function StudentEdit() {
               onRestoreDefault={restoreDefaultLabelText}
               onScheduleSave={() => { if (student) scheduleSave(); }}
               saveStatus={saveStatus}
-              isLocked={isProjectCompleted}
+              isLocked={isContentLocked}
             />
           </div>
         )}

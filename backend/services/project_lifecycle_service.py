@@ -1,22 +1,26 @@
 """專案建立、改名、封存、復原與完成狀態 use cases。"""
 
+import json
 import logging
 from datetime import timedelta
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from crud.project_crud import get_project_or_404
+from crud.project_crud import get_project_or_404, get_student_or_404
 from database import Project, Template, User, utc_now
 from services.organization_lock import organization_acl_lock
 from services.project_access_service import (
     assert_project_completion_revertible,
-    assert_project_content_writable,
     assert_project_writable,
 )
 from services.project_archive_service import purge_expired_archived_projects
 from services.storage_factory import get_storage
-from services.student_render_service import clear_student_render_outputs
+from services.student_progress import summarize_student_progress
+from services.student_render_service import (
+    clear_student_render_outputs,
+    get_template_page_layouts,
+)
 from services.template_sync_locks import lock_project_content_writes
 
 
@@ -96,14 +100,18 @@ def build_project_record(
 
 
 def rename_project(db: Session, current_user: User, project_id: int, name: str) -> dict:
-    """改名並在 commit 後、仍持有 P 鎖時 best-effort 清除舊輸出。"""
+    """改名並在 commit 後、仍持有 P 鎖時 best-effort 清除舊輸出。
+
+    改名不受任何完成狀態限制（get_project_or_404 已排除封存專案）：
+    名稱只進輸出檔名與渲染快取 token，不進相本內容。
+    """
     project = get_project_or_404(project_id, db)
-    assert_project_content_writable(project, current_user, db)
+    assert_project_writable(project, current_user, db)
     with organization_acl_lock, lock_project_content_writes([project_id]):
         db.rollback()
         db.expire_all()
         project = get_project_or_404(project_id, db)
-        assert_project_content_writable(project, current_user, db)
+        assert_project_writable(project, current_user, db)
         normalized_name = name.strip()
         if project.name == normalized_name:
             db.rollback()
@@ -198,7 +206,7 @@ def complete_project(db: Session, current_user: User, project_id: int) -> dict:
 
 
 def reopen_project(db: Session, current_user: User, project_id: int) -> dict:
-    """由主管或管理員退回完成狀態。"""
+    """由主管或管理員退回完成狀態；全班退回同時清除全部學生的個別完成。"""
     project = get_project_or_404(project_id, db)
     assert_project_completion_revertible(project, current_user, db)
     with organization_acl_lock, lock_project_content_writes([project_id]):
@@ -206,6 +214,83 @@ def reopen_project(db: Session, current_user: User, project_id: int) -> dict:
         db.expire_all()
         project = get_project_or_404(project_id, db)
         assert_project_completion_revertible(project, current_user, db)
+        project.completed_at = None
+        for student in project.students:
+            student.completed_at = None
+        db.commit()
+        return {"ok": True}
+
+
+def _assert_student_content_filled(project: Project, student) -> None:
+    """標記單生完成的前置條件：照片與可填文字全數填滿（與老師進度同一計算）。"""
+    photo_filled, photo_total, text_filled, text_total = summarize_student_progress(
+        json.loads(student.pages_data_json or "[]"),
+        get_template_page_layouts(project),
+        json.loads(project.label_texts_json or "{}"),
+    )
+    if photo_filled < photo_total or text_filled < text_total:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "student_content_incomplete",
+                "message": "這位學生的照片或文字尚未填完，補齊後才能標記完成",
+                "photo_filled": photo_filled,
+                "photo_total": photo_total,
+                "text_filled": text_filled,
+                "text_total": text_total,
+            },
+        )
+
+
+def complete_project_student(
+    db: Session,
+    current_user: User,
+    project_id: int,
+    student_id: int,
+) -> dict:
+    """標記單一學生完成；全班皆完成時在同一 transaction 自動成立全班完成。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_writable(project, current_user, db)
+    get_student_or_404(student_id, project_id, db)
+    with organization_acl_lock, lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_writable(project, current_user, db)
+        student = get_student_or_404(student_id, project_id, db)
+        # 已完成（含全班已完成）則冪等回傳既有時間戳，不再寫入
+        if student.completed_at is None and project.completed_at is None:
+            _assert_student_content_filled(project, student)
+            student.completed_at = utc_now()
+            if all(
+                sibling.completed_at is not None for sibling in project.students
+            ):
+                project.completed_at = student.completed_at
+            db.commit()
+        return {
+            "ok": True,
+            "completed_at": student.completed_at,
+            "project_completed_at": project.completed_at,
+        }
+
+
+def reopen_project_student(
+    db: Session,
+    current_user: User,
+    project_id: int,
+    student_id: int,
+) -> dict:
+    """由主管或管理員退回單一學生完成；全班完成已成立時一併解除，其他學生保留。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_completion_revertible(project, current_user, db)
+    get_student_or_404(student_id, project_id, db)
+    with organization_acl_lock, lock_project_content_writes([project_id]):
+        db.rollback()
+        db.expire_all()
+        project = get_project_or_404(project_id, db)
+        assert_project_completion_revertible(project, current_user, db)
+        student = get_student_or_404(student_id, project_id, db)
+        student.completed_at = None
         project.completed_at = None
         db.commit()
         return {"ok": True}

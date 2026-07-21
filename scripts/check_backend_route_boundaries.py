@@ -48,6 +48,16 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("post", "/{project_id}/reopen", "reopen_project"),
         (
             "post",
+            "/{project_id}/students/{student_id}/complete",
+            "complete_project_student",
+        ),
+        (
+            "post",
+            "/{project_id}/students/{student_id}/reopen",
+            "reopen_project_student",
+        ),
+        (
+            "post",
             "/{project_id}/students/album-names/auto-fill",
             "auto_fill_student_album_names",
         ),
@@ -142,6 +152,12 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ),
         ("get", "/{project_id}/download/all", "download_all_pdfs_as_zip"),
         ("get", "/{project_id}/download/all/images", "download_all_images_as_zip"),
+        ("get", "/{project_id}/photos/archive", "download_all_uploaded_photos_as_zip"),
+        (
+            "get",
+            "/{project_id}/students/{student_id}/photos/archive",
+            "download_student_uploaded_photos_as_zip",
+        ),
     ),
     "routers/templates/crud.py": _routes(
         ("get", "/", "list_templates"),

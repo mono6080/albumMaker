@@ -336,12 +336,14 @@ def test_structural_backup_keeps_exact_manual_rescue_payloads():
         completed_at=completed_at,
         label_texts_json=raw_labels_json,
     )
+    student_completed_at = datetime(2026, 7, 15, 9, 0, 0)
     student = Student(
         id=404,
         project_id=303,
         name="backup student",
         pages_data_json=raw_pages_json,
         output_filename="projects/proj303/students/stu404/album_screen.pdf",
+        completed_at=student_completed_at,
         updated_at=student_updated_at,
     )
     project_state = ProjectSyncState(
@@ -397,6 +399,7 @@ def test_structural_backup_keeps_exact_manual_rescue_payloads():
         "id": 404,
         "pages_data_json": raw_pages_json,
         "output_filename": "projects/proj303/students/stu404/album_screen.pdf",
+        "completed_at": student_completed_at.isoformat(),
         "updated_at": student_updated_at.isoformat(),
     }], ensure_ascii=False)
 

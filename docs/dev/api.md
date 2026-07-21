@@ -195,10 +195,12 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 |------|------|------|
 | GET | `/` | 依角色過濾的專案清單 |
 | GET | `/archive` | 30 天封存區 |
-| GET / PATCH / DELETE | `/{id}` | 詳情（含學生）/ 改名（失效舊輸出）/ 軟刪封存 |
+| GET / PATCH / DELETE | `/{id}` | 詳情（含學生，每生含 `completed_at`）/ 改名（失效舊輸出；不受任何完成狀態限制）/ 軟刪封存 |
 | POST | `/{id}/restore` | 復原封存 |
-| POST | `/{id}/complete` | 標記全班完成（admin／該班目前老師）；完成後非 admin 內容寫入鎖定 |
-| POST | `/{id}/reopen` | 退回全班完成（admin 或該校／部門 scope supervisor） |
+| POST | `/{id}/complete` | 標記全班完成（admin／該班目前老師）；完成後非 admin 內容寫入鎖定；不回填學生個別時間戳 |
+| POST | `/{id}/reopen` | 退回全班完成（admin 或該校／部門 scope supervisor）；同時清除全部學生的個別完成 |
+| POST | `/{id}/students/{sid}/complete` | 標記單一學生完成（同 `can_edit`）；前置條件：該生照片與可填文字全數填滿（與老師進度同一計算，`student_progress.summarize_student_progress`），未滿回 409 `student_content_incomplete` 附計數；冪等；全班皆完成時同 transaction 自動寫入 `project.completed_at` |
+| POST | `/{id}/students/{sid}/reopen` | 退回單一學生完成（僅 `can_reopen`）；全班完成已成立時一併清除 `project.completed_at`，其他學生保留 |
 | POST | `/{id}/assignment` | admin 把進度負責人轉給該班目前老師並寫 from/to/operator 快照與原因；owner 不授權 |
 | GET | `/{id}/assignment-history` | admin 查詢完整負責人轉交時間線 |
 | POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
@@ -220,10 +222,24 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 | GET | `/{id}/students/{sid}/pdf?mode=print\|screen` | 下載 PDF（非 admin 強制 screen） |
 | GET | `…/{sid}/images`、`…/{sid}/images/{page_number}` | 學生圖片 ZIP / 單張 |
 | GET | `/{id}/download/all`、`/{id}/download/all/images` | 全體 PDF / 圖片 ZIP |
+| GET | `/{id}/photos/archive`、`/{id}/students/{sid}/photos/archive` | 全班 / 單生上傳照片 ZIP（串流；無 `mode` 參數） |
 
-上述五個專案 PDF／圖片下載端點都先驗證 object read capability，再要求專案已有
-`completed_at`；尚未標記「全班完成」或退回修改後一律回 `409`。預覽與渲染端點不套用此
-下載 gate，讓老師完成後仍能先產生最新交件檔再下載。
+上述七個下載端點都先驗證 object read capability。其中五個渲染輸出端點再套用完成
+閘門（有效完成 predicate 集中在 `project_access_service`：`student.completed_at` 或
+`project.completed_at` 任一非 NULL）：三個單生下載端點只要求該生有效完成，未完成回
+409 `student_not_completed`；兩個 `download/all*` 全班 ZIP 只看 `project.completed_at`，
+部分完成回 409 `class_zip_requires_full_completion`（附已完成 n/N）。兩個
+`photos/archive` 上傳照片 ZIP 端點**不套完成閘門**（原始照片是素材、非交件），
+沒有任何上傳照片時回 404。預覽與渲染端點也不套用此下載 gate，讓老師完成後仍能
+先產生最新交件檔再下載。
+
+個別完成的寫入鎖（皆走同一 predicate，admin 比照全班內容鎖可越過）：逐學生寫入
+（照片上傳/刪除/搬移、學生單頁文字、跳頁、相本稱呼）目標學生已完成回 409
+`student_completed_locked`；全班文字 PUT 在任一學生完成時回 409
+`class_texts_locked_by_completed_students`（附 `completed_student_names`）；批次文字
+payload 含已完成學生整批 422；共用照片指定名單含已完成學生 422、套用全班時自動排除
+並在回應揭露 `skipped_completed_student_ids`；批次照片對已完成學生逐筆記入 `failed`
+（reason `student_completed_locked`）。
 
 通用 `POST /api/projects/` 與 `PUT /api/projects/{id}/editors` 不存在；所有新相本只從
 班級端點建立，協作權只由目前班級老師編制產生。舊 editor rows 僅由 startup migration

@@ -1,8 +1,13 @@
+// 班級總覽頂部:工作階段(製作→標記完成→交件)、全班進度、右欄下一步與下載區。
+// 詞彙約定(SSOT: utils/reviewCompletion.js):「填齊」指內容進度、「標記完成」指 completed_at 流程狀態。
+// 下載區分兩群:交件檔案(PDF/圖片,受全班標記完成閘門)與原始照片(不受閘門)。
+
 import { Link } from "react-router-dom";
 import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  FolderArchive,
   ImageDown,
   Loader2,
   MessageCircle,
@@ -66,38 +71,37 @@ function ProgressMetric({
 export default function ProjectReviewProgress({
   projectId,
   workStage,
+  isProjectCompleted,
   classPhotoFilled,
   classPhotoTotal,
   classTextFilled,
   classTextTotal,
-  incompleteStudentCount,
+  contentIncompleteStudentCount,
+  completedStudentCount,
+  studentTotal,
   commentsCount,
   canEditCurrentProject,
   canDownloadCurrentProject,
-  hasRenderedStudents,
   canReopenProject,
   canDownloadPrint,
-  isBatchRendering,
-  renderingAll,
-  renderingAllImages,
-  renderAllProgress,
-  renderAllImagesProgress,
-  isAllImagesShareReady,
+  // 顯示條件由 ProjectReview 統一計算(與教學導覽同源),此處只負責渲染
+  showDeliverableDownloads,
+  downloads,
   outputMode,
   onOutputModeChange,
   onFilterIncomplete,
   onCompleteProject,
   onReopenProject,
-  onDownloadAll,
-  onDownloadAllImages,
 }) {
+  // 交件 ZIP 未解鎖時的提示:附已標記完成 n/N(交件 ZIP 只看全班標記完成)
+  const deliverableLockedHint = `已標記完成 ${completedStudentCount}/${studentTotal} 位，交件 ZIP 需全班標記完成`;
   return (
     <Surface className="mb-4" data-guide="review-progress">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="flex flex-wrap items-center gap-1 text-[11px] font-medium lg:flex-shrink-0">
           {[
             { step: 1, label: "製作" },
-            { step: 2, label: "全班完成" },
+            { step: 2, label: "標記完成" },
             { step: 3, label: "交件" },
           ].map(({ step, label }, index) => (
             <span key={step} className="flex items-center gap-1">
@@ -135,14 +139,24 @@ export default function ProjectReviewProgress({
             ariaLabel="全班文字完成度"
           />
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            {incompleteStudentCount > 0 ? (
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-medium ${
+                completedStudentCount === studentTotal
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-gray-200 bg-gray-50 text-gray-600"
+              }`}
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              標記完成 {completedStudentCount}/{studentTotal} 位
+            </span>
+            {contentIncompleteStudentCount > 0 ? (
               <button
                 type="button"
                 onClick={onFilterIncomplete}
                 className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-700 transition-colors hover:bg-amber-100"
               >
                 <Clock className="h-3 w-3" />
-                尚未完成 {incompleteStudentCount} 位
+                未填齊 {contentIncompleteStudentCount} 位
               </button>
             ) : (
               <span className="inline-flex items-center gap-1 font-medium text-emerald-600">
@@ -168,23 +182,23 @@ export default function ProjectReviewProgress({
               <>
                 <Button as={Link} to={`/projects/${projectId}/edit`} variant="primary" fullWidth>
                   <Pencil className="h-4 w-4" />
-                  繼續製作（{incompleteStudentCount} 位未完成）
+                  繼續製作（{contentIncompleteStudentCount} 位未填齊）
                 </Button>
                 {(classPhotoFilled > 0 || classTextFilled > 0) && (
-                  <Button onClick={onCompleteProject} disabled={isBatchRendering} variant="successSoft" size="sm" fullWidth>
+                  <Button onClick={onCompleteProject} disabled={downloads.isBatchRendering} variant="successSoft" size="sm" fullWidth>
                     <CheckCircle2 className="h-4 w-4" />
                     直接標記全班完成
                   </Button>
                 )}
               </>
             ) : (
-              <p className="text-sm text-gray-500">製作中：還有 {incompleteStudentCount} 位學生未完成。</p>
+              <p className="text-sm text-gray-500">製作中：還有 {contentIncompleteStudentCount} 位學生未填齊。</p>
             )
           )}
           {workStage === 2 && (
             canEditCurrentProject ? (
               <>
-                <Button onClick={onCompleteProject} disabled={isBatchRendering} variant="success" fullWidth>
+                <Button onClick={onCompleteProject} disabled={downloads.isBatchRendering} variant="success" fullWidth>
                   <CheckCircle2 className="h-4 w-4" />
                   全班完成
                 </Button>
@@ -210,45 +224,49 @@ export default function ProjectReviewProgress({
             </>
           )}
 
-          {workStage >= 2 && canDownloadCurrentProject && (canEditCurrentProject || hasRenderedStudents) && (
+          {showDeliverableDownloads && (
             <div className="flex flex-col gap-2">
+              <p className="text-[11px] font-medium text-gray-400">交件檔案</p>
               <div className="flex gap-2">
                 <Button
-                  onClick={onDownloadAll}
-                  disabled={isBatchRendering || workStage !== 3}
-                  title={workStage === 3 ? undefined : "請先標記全班完成，才能下載 PDF"}
+                  onClick={downloads.handleDownloadAll}
+                  disabled={downloads.isBatchRendering || !isProjectCompleted}
+                  title={isProjectCompleted ? undefined : deliverableLockedHint}
                   data-guide="review-download-all"
-                  variant={workStage === 3 ? "success" : "neutral"}
+                  variant={isProjectCompleted ? "success" : "neutral"}
                   size="sm"
                   className="flex-1"
                 >
-                  {renderingAll ? (
+                  {downloads.renderingAll ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      {renderAllProgress ? `${renderAllProgress.current}/${renderAllProgress.total}` : "產生中..."}
+                      {downloads.renderAllProgress ? `${downloads.renderAllProgress.current}/${downloads.renderAllProgress.total}` : "產生中..."}
                     </>
                   ) : (
                     <><Package className="h-4 w-4" />PDF ZIP</>
                   )}
                 </Button>
                 <Button
-                  onClick={onDownloadAllImages}
-                  disabled={isBatchRendering || workStage !== 3}
-                  title={workStage === 3 ? undefined : "請先標記全班完成，才能下載圖片"}
-                  variant={workStage === 3 ? "info" : "neutral"}
+                  onClick={downloads.handleDownloadAllImages}
+                  disabled={downloads.isBatchRendering || !isProjectCompleted}
+                  title={isProjectCompleted ? undefined : deliverableLockedHint}
+                  variant={isProjectCompleted ? "info" : "neutral"}
                   size="sm"
                   className="flex-1"
                 >
-                  {renderingAllImages ? (
+                  {downloads.renderingAllImages ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      {renderAllImagesProgress ? `${renderAllImagesProgress.current}/${renderAllImagesProgress.total}` : "產生中..."}
+                      {downloads.renderAllImagesProgress ? `${downloads.renderAllImagesProgress.current}/${downloads.renderAllImagesProgress.total}` : "產生中..."}
                     </>
                   ) : (
-                    <><ImageDown className="h-4 w-4" />{isAllImagesShareReady ? "開始分享" : "全部圖片"}</>
+                    <><ImageDown className="h-4 w-4" />{downloads.isAllImagesShareReady ? "開始分享" : "全部圖片"}</>
                   )}
                 </Button>
               </div>
+              {!isProjectCompleted && (
+                <p className="text-xs text-gray-400">{deliverableLockedHint}</p>
+              )}
               {canDownloadPrint && (
                 <SegmentedControl
                   value={outputMode}
@@ -260,6 +278,24 @@ export default function ProjectReviewProgress({
                   ]}
                 />
               )}
+            </div>
+          )}
+
+          {/* 原始照片素材與交件無關,不受標記完成閘門,亦不需要已渲染產物 */}
+          {canDownloadCurrentProject && (
+            <div className="flex flex-col gap-1">
+              <Button
+                onClick={downloads.handleDownloadAllPhotos}
+                disabled={downloads.downloadingAllPhotos}
+                data-guide="review-download-photos"
+                variant="neutral"
+                size="sm"
+                fullWidth
+              >
+                <FolderArchive className="h-4 w-4" />
+                下載上傳照片
+              </Button>
+              <p className="text-[11px] text-gray-400">原始照片素材，不需標記完成即可下載</p>
             </div>
           )}
         </div>

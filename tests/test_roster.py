@@ -34,7 +34,7 @@ from services import semester_export_service, semester_render_service
 from services.output_keys import get_student_pdf_key
 from services.roster_identity_service import normalize_child_name
 from services.storage_factory import get_storage
-from services.teacher_overview_service import _summarize_student_progress
+from services.student_progress import summarize_student_progress
 
 
 def create_active_period(client: TestClient, department: str = "infant") -> dict:
@@ -1002,7 +1002,7 @@ def test_teacher_progress_ignores_hidden_group_photos_and_texts():
         ],
     }]
 
-    result = _summarize_student_progress(
+    result = summarize_student_progress(
         [{
             "page_index": 0,
             "photos": {"1": "visible.jpg", "2": "hidden.jpg"},
@@ -1036,17 +1036,17 @@ def test_teacher_progress_combines_class_and_individual_text_coverage():
         }
     }
 
-    first_student = _summarize_student_progress(
+    first_student = summarize_student_progress(
         [{"page_index": 0, "label_texts": {"12": "甲的個人文字"}}],
         [layout],
         project_label_texts,
     )
-    second_student = _summarize_student_progress(
+    second_student = summarize_student_progress(
         [{"page_index": 0, "label_texts": {"12": "乙的個人文字"}}],
         [layout],
         project_label_texts,
     )
-    missing_second_student = _summarize_student_progress(
+    missing_second_student = summarize_student_progress(
         [{"page_index": 0, "label_texts": {}}],
         [layout],
         project_label_texts,
@@ -1215,6 +1215,321 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
             json={"skip": True},
         )
         assert_status(skip_after_reopen, 200)
+
+
+def _project_students_by_id(client: TestClient, project_id: int) -> dict[int, dict]:
+    detail = client.get(f"/api/projects/{project_id}")
+    assert_status(detail, 200)
+    return {student["id"]: student for student in detail.json()["students"]}
+
+
+def test_student_completion_locks_downloads_and_reopen_levels(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+
+    with started_client() as client:
+        login(client)
+        supervisor, supervisor_password = create_user(client, "supervisor")
+        teacher, teacher_password = create_user(client, "teacher")
+        period = create_active_period(client)
+        template_id, _ = create_template_with_page(client, period_id=period["id"])
+        campus_id, classroom_id = create_scoped_classroom(client)
+        set_campus_supervisor_scope(client, campus_id, supervisor["id"])
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        name_a = unique_name("完成甲")
+        name_b = unique_name("進行乙")
+        add_classroom_members(client, classroom_id, [name_a, name_b])
+        project_id = create_classroom_project(client, classroom_id, template_id)
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        students = add_students(client, project_id, [name_a, name_b])
+        student_a = students[name_a]
+        student_b = students[name_b]
+
+        # 內容未填滿不可標記完成：409 附照片/文字計數
+        incomplete_a = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/complete"
+        )
+        assert_status(incomplete_a, 409)
+        incomplete_detail = incomplete_a.json()["detail"]
+        assert incomplete_detail["code"] == "student_content_incomplete"
+        assert incomplete_detail["photo_filled"] == 0
+        assert incomplete_detail["photo_total"] == 1
+        assert incomplete_detail["text_filled"] == 0
+        assert incomplete_detail["text_total"] == 1
+
+        # 以全班文字補滿文字格（計入已填）、補上 A 的照片後才可標記
+        class_fill = client.put(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/label_texts"
+            ),
+            json={"0": {"1": "完成前全班文字"}},
+        )
+        assert_status(class_fill, 200)
+        photo_only_incomplete = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/complete"
+        )
+        assert_status(photo_only_incomplete, 409)
+        assert (
+            photo_only_incomplete.json()["detail"]["photo_filled"] == 0
+        )
+        photo_fill_a = client.post(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            ),
+            files={"file": ("fill.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo_fill_a, 200)
+
+        # 標記單生完成：冪等回傳既有時間戳，全班未成立
+        complete_a = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/complete"
+        )
+        assert_status(complete_a, 200)
+        first_completed_at = complete_a.json()["completed_at"]
+        assert first_completed_at is not None
+        assert complete_a.json()["project_completed_at"] is None
+        complete_a_again = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/complete"
+        )
+        assert_status(complete_a_again, 200)
+        assert complete_a_again.json()["completed_at"] == first_completed_at
+
+        detail_students = _project_students_by_id(client, project_id)
+        assert detail_students[student_a]["completed_at"] is not None
+        assert detail_students[student_b]["completed_at"] is None
+
+        # A 的逐學生寫入全部 409；B 完全不受影響
+        photo_a = client.post(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_a}/pages/0/photos/1",
+            ),
+            files={"file": ("locked.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(photo_a, 409)
+        assert photo_a.json()["detail"]["code"] == "student_completed_locked"
+        texts_a = client.put(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_a}/pages/0/texts",
+            ),
+            json={"1": "甲的個人文字"},
+        )
+        assert_status(texts_a, 409)
+        assert texts_a.json()["detail"]["code"] == "student_completed_locked"
+        skip_a = client.patch(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_a}/pages/0/skip",
+            ),
+            json={"skip": True},
+        )
+        assert_status(skip_a, 409)
+        assert skip_a.json()["detail"]["code"] == "student_completed_locked"
+        texts_b = client.put(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_b}/pages/0/texts",
+            ),
+            json={"1": "乙的個人文字"},
+        )
+        assert_status(texts_b, 200)
+
+        # 任一學生完成後全班文字整份硬鎖
+        class_texts = client.put(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/label_texts"
+            ),
+            json={"0": {"1": "全班文字"}},
+        )
+        assert_status(class_texts, 409)
+        class_texts_detail = class_texts.json()["detail"]
+        assert class_texts_detail["code"] == "class_texts_locked_by_completed_students"
+        assert class_texts_detail["completed_student_names"] == [name_a]
+
+        # 批次文字含已完成學生 → 整批 422，B 也不寫入
+        batch_texts = client.put(
+            revisioned_project_url(
+                client, project_id, f"/api/projects/{project_id}/batch/texts"
+            ),
+            json={
+                "students": {
+                    str(student_a): {"0": {"1": "批次甲"}},
+                    str(student_b): {"0": {"1": "批次乙"}},
+                }
+            },
+        )
+        assert_status(batch_texts, 422)
+        assert (
+            batch_texts.json()["detail"]["code"]
+            == "batch_texts_contains_completed_students"
+        )
+        detail_students = _project_students_by_id(client, project_id)
+        assert (
+            detail_students[student_b]["pages_data"][0]["label_texts"]["1"]
+            == "乙的個人文字"
+        )
+
+        # 共用照片套用全班：自動排除已完成學生且回應揭露
+        detail_students = _project_students_by_id(client, project_id)
+        photo_a_before_shared = (
+            detail_students[student_a]["pages_data"][0]["photos"]["1"]
+        )
+        shared_all = client.post(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/photos/shared/pages/0/slots/1",
+            ),
+            files={"file": ("shared.jpg", jpeg_bytes(), "image/jpeg")},
+        )
+        assert_status(shared_all, 200)
+        assert shared_all.json()["updated"] == 1
+        assert shared_all.json()["skipped_completed_student_ids"] == [student_a]
+        detail_students = _project_students_by_id(client, project_id)
+        # A 已完成：既有照片不被共用上傳覆蓋
+        assert (
+            detail_students[student_a]["pages_data"][0]["photos"]["1"]
+            == photo_a_before_shared
+        )
+        photo_b_shared = detail_students[student_b]["pages_data"][0]["photos"]["1"]
+        assert photo_b_shared and photo_b_shared != photo_a_before_shared
+
+        # 共用照片指定名單含已完成學生 → 422
+        shared_targeted = client.post(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/photos/shared/pages/0/slots/1",
+            ),
+            files={"file": ("shared2.jpg", jpeg_bytes(), "image/jpeg")},
+            data={"student_ids": f"[{student_a}]"},
+        )
+        assert_status(shared_targeted, 422)
+        assert (
+            shared_targeted.json()["detail"]["code"]
+            == "shared_photo_targets_completed_students"
+        )
+
+        # 下載閘門：A 可下載、B 409、全班 ZIP 409 且附 n/N
+        render_a = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/render"
+        )
+        assert_status(render_a, 200)
+        download_a = client.get(
+            f"/api/projects/{project_id}/students/{student_a}/pdf"
+        )
+        assert_status(download_a, 200)
+        assert download_a.content.startswith(b"%PDF")
+        download_b = client.get(
+            f"/api/projects/{project_id}/students/{student_b}/pdf"
+        )
+        assert_status(download_b, 409)
+        assert download_b.json()["detail"]["code"] == "student_not_completed"
+        class_zip = client.get(f"/api/projects/{project_id}/download/all")
+        assert_status(class_zip, 409)
+        class_zip_detail = class_zip.json()["detail"]
+        assert class_zip_detail["code"] == "class_zip_requires_full_completion"
+        assert class_zip_detail["completed"] == 1
+        assert class_zip_detail["total"] == 2
+
+        # 老師退單生一律 403；主管退回後恢復可編輯
+        teacher_reopen_a = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/reopen"
+        )
+        assert_status(teacher_reopen_a, 403)
+        client.cookies.clear()
+        login(client, supervisor["username"], supervisor_password)
+        supervisor_reopen_a = client.post(
+            f"/api/projects/{project_id}/students/{student_a}/reopen"
+        )
+        assert_status(supervisor_reopen_a, 200)
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        skip_a_after_reopen = client.patch(
+            revisioned_project_url(
+                client,
+                project_id,
+                f"/api/projects/{project_id}/students/{student_a}/pages/0/skip",
+            ),
+            json={"skip": False},
+        )
+        assert_status(skip_a_after_reopen, 200)
+
+        # 最後一位學生完成 → 同 transaction 自動成立全班完成
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/{student_a}/complete"),
+            200,
+        )
+        complete_b = client.post(
+            f"/api/projects/{project_id}/students/{student_b}/complete"
+        )
+        assert_status(complete_b, 200)
+        assert complete_b.json()["project_completed_at"] is not None
+        full_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(full_detail, 200)
+        assert full_detail.json()["completed_at"] is not None
+
+        # 改名不受完成狀態限制：全部學生輸出清空、完成狀態不變
+        renamed_name = unique_name("完成後改名")
+        rename = client.patch(
+            f"/api/projects/{project_id}", data={"name": renamed_name}
+        )
+        assert_status(rename, 200)
+        renamed_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(renamed_detail, 200)
+        assert renamed_detail.json()["name"] == renamed_name
+        assert renamed_detail.json()["completed_at"] is not None
+        assert all(
+            student["output_filename"] is None
+            for student in renamed_detail.json()["students"]
+        )
+
+        # 全班完成成立後主管退單生：project.completed_at 一併清除，其他學生保留
+        client.cookies.clear()
+        login(client, supervisor["username"], supervisor_password)
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/{student_a}/reopen"),
+            200,
+        )
+        partial_detail = client.get(f"/api/projects/{project_id}")
+        assert_status(partial_detail, 200)
+        assert partial_detail.json()["completed_at"] is None
+        partial_students = {
+            student["id"]: student for student in partial_detail.json()["students"]
+        }
+        assert partial_students[student_a]["completed_at"] is None
+        assert partial_students[student_b]["completed_at"] is not None
+
+        # 全班退回：全部學生 completed_at 清空，無殘留個別鎖
+        assert_status(client.post(f"/api/projects/{project_id}/reopen"), 200)
+        reopened_students = _project_students_by_id(client, project_id)
+        assert all(
+            student["completed_at"] is None
+            for student in reopened_students.values()
+        )
+
+        # 手動全班完成不回填學生時間戳；單生下載閘門仍以 predicate 放行
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        assert_status(client.post(f"/api/projects/{project_id}/complete"), 200)
+        manual_students = _project_students_by_id(client, project_id)
+        assert all(
+            student["completed_at"] is None
+            for student in manual_students.values()
+        )
+        # 輸出已因改名清空：閘門放行後回 404（而非 409 完成鎖）
+        manual_download_a = client.get(
+            f"/api/projects/{project_id}/students/{student_a}/pdf"
+        )
+        assert_status(manual_download_a, 404)
 
 
 def test_render_missing_fills_absent_pdfs(monkeypatch, tmp_path):

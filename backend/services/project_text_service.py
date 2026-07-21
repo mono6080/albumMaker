@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from crud.project_crud import get_project_or_404, get_student_or_404
 from database import User, utc_now
 from services.label_texts import validate_page_label_texts
-from services.project_access_service import assert_project_content_writable
+from services.project_access_service import (
+    assert_class_label_texts_writable,
+    assert_project_content_writable,
+    assert_student_content_writable,
+    student_effectively_completed,
+)
 from services.project_template_revision import lock_project_template_revision
 from services.student_pages import (
     coerce_page_index_for_write,
@@ -58,6 +63,8 @@ def update_project_label_texts(
     assert_project_content_writable(project, current_user)
     with lock_project_template_revision(db, project, expected_template_revision):
         assert_project_content_writable(project, current_user)
+        # 任一學生已完成即整份硬鎖：全班文字會改動已完成學生的相本內容
+        assert_class_label_texts_writable(project, current_user)
         normalized_payload = _normalize_project_label_payload(
             payload,
             template_page_count=len(project.template.pages),
@@ -82,6 +89,7 @@ def update_student_label_texts(
     with lock_project_template_revision(db, project, expected_template_revision):
         assert_project_content_writable(project, current_user)
         student = get_student_or_404(student_id, project_id, db)
+        assert_student_content_writable(project, student, current_user)
         validate_page_label_texts(texts)
 
         def _mutate(pages_data) -> None:
@@ -138,6 +146,26 @@ def batch_update_texts(
                     path=f"students.{student_id_text}.{raw_page_index}",
                 )
             normalized_students_payload[student_id_text] = normalized_pages
+
+        # payload 含任何已完成學生 → 整批拒絕，不做部分寫入
+        if current_user.role != "admin":
+            completed_target_names = [
+                student.name
+                for student in project.students
+                if (
+                    str(student.id) in normalized_students_payload
+                    and student_effectively_completed(project, student)
+                )
+            ]
+            if completed_target_names:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "batch_texts_contains_completed_students",
+                        "message": "批次文字包含已完成學生，需主管先退回才能修改",
+                        "completed_student_names": completed_target_names,
+                    },
+                )
 
         now = utc_now()
         for student in project.students:

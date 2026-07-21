@@ -305,14 +305,17 @@ def test_project_acl_uses_classroom_staffing_and_organization_scope_only():
         assert_status(client.get(f"/api/projects/{academy_a_project_id}"), 403)
         assert_status(client.get(f"/api/projects/{unassigned_project_id}"), 403)
         assert_status(client.post(f"/api/projects/{infant_a_project_id}/complete"), 200)
-        blocked_rename = client.patch(
+        # 改名不受完成狀態限制（名稱只進輸出檔名），且不解除完成狀態
+        renamed_name = unique_name("完成後仍可改名")
+        allowed_rename = client.patch(
             f"/api/projects/{infant_a_project_id}",
-            data={"name": unique_name("完成後不可改名")},
+            data={"name": renamed_name},
         )
-        assert_status(blocked_rename, 403)
-        unchanged_detail = client.get(f"/api/projects/{infant_a_project_id}")
-        assert_status(unchanged_detail, 200)
-        assert unchanged_detail.json()["name"] == assigned_detail.json()["name"]
+        assert_status(allowed_rename, 200)
+        renamed_detail = client.get(f"/api/projects/{infant_a_project_id}")
+        assert_status(renamed_detail, 200)
+        assert renamed_detail.json()["name"] == renamed_name
+        assert renamed_detail.json()["completed_at"] is not None
 
         client.cookies.clear()
         login(client, owner_without_assignment["username"], owner_password)

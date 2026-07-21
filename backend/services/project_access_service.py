@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import false
 from sqlalchemy.orm import Session, object_session
 
-from database import ClassroomTeacherAssignment, Project, ProjectComment, User
+from database import ClassroomTeacherAssignment, Project, ProjectComment, Student, User
 from services.organization_scope_service import (
     OrganizationReadScope,
     apply_project_read_scope as apply_organization_project_read_scope,
@@ -146,13 +146,83 @@ def assert_project_readable(
     raise HTTPException(status_code=403, detail="無此專案的存取權限")
 
 
-def assert_project_downloadable(project: Project) -> None:
-    """確認專案已標記全班完成，才可下載交件檔。"""
-    if project.completed_at is not None:
+def student_effectively_completed(project: Project, student: Student) -> bool:
+    """有效完成 predicate（唯一判斷式）：學生自身或全班完成任一成立即視為完成。"""
+    return student.completed_at is not None or project.completed_at is not None
+
+
+def assert_student_content_writable(
+    project: Project,
+    student: Student,
+    current_user: User,
+) -> None:
+    """逐學生寫入鎖：目標學生已（有效）完成即擋；admin 比照全班內容鎖可越過。"""
+    if current_user.role == "admin":
+        return
+    if not student_effectively_completed(project, student):
         return
     raise HTTPException(
         status_code=409,
-        detail="請先標記全班完成，再下載 PDF 或圖片",
+        detail={
+            "code": "student_completed_locked",
+            "message": "此學生相本已標記完成，需主管退回才能修改",
+        },
+    )
+
+
+def assert_student_downloadable(project: Project, student: Student) -> None:
+    """單生下載閘門：該生有效完成即放行。"""
+    if student_effectively_completed(project, student):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "student_not_completed",
+            "message": "請先標記此學生完成，再下載 PDF 或圖片",
+        },
+    )
+
+
+def assert_class_downloadable(project: Project) -> None:
+    """全班 ZIP 閘門：只看 project.completed_at，部分完成一律擋下。"""
+    if project.completed_at is not None:
+        return
+    completed_count = sum(
+        student.completed_at is not None for student in project.students
+    )
+    total_count = len(project.students)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "class_zip_requires_full_completion",
+            "message": (
+                f"已完成 {completed_count}/{total_count} 位，"
+                "需全班完成才能下載全班 ZIP"
+            ),
+            "completed": completed_count,
+            "total": total_count,
+        },
+    )
+
+
+def assert_class_label_texts_writable(project: Project, current_user: User) -> None:
+    """全班文字硬鎖：任一學生已（有效）完成即整份擋下；admin 比照內容鎖可越過。"""
+    if current_user.role == "admin":
+        return
+    completed_student_names = [
+        student.name
+        for student in project.students
+        if student_effectively_completed(project, student)
+    ]
+    if not completed_student_names:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "class_texts_locked_by_completed_students",
+            "message": "已有學生標記完成，全班文字已鎖定；需主管先退回這些學生才能修改",
+            "completed_student_names": completed_student_names,
+        },
     )
 
 

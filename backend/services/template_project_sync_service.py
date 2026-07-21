@@ -643,6 +643,12 @@ def _backup_structural_change(
                 "id": student_state.student.id,
                 "pages_data_json": student_state.raw_pages_json,
                 "output_filename": student_state.student.output_filename,
+                # 個別完成時間也入備份：同步退回後仍可人工復原對照
+                "completed_at": (
+                    student_state.student.completed_at.isoformat()
+                    if isinstance(student_state.student.completed_at, datetime)
+                    else None
+                ),
                 "updated_at": (
                     student_state.student.updated_at.isoformat()
                     if isinstance(student_state.student.updated_at, datetime)
@@ -719,6 +725,9 @@ def apply_template_project_sync(
 
         for student_state in state.student_states:
             student = student_state.student
+            # 新照片格對每一本都是缺格：學生個別完成與全班完成一併退回
+            if plan.impact.added_photo_slot_count > 0:
+                student.completed_at = None
             if plan.structural_change:
                 entries = student_state.entries_by_page_id
                 old_indices = student_state.old_indices

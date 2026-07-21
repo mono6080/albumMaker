@@ -244,13 +244,23 @@ def test_structural_sync_requires_bound_hash_then_remaps_by_template_page_id():
     with started_client() as client:
         login(client)
         seeded = _seed_linked_template()
-        assert_status(client.post(f"/api/projects/{seeded['project_id']}/complete"), 200)
+        # 逐生標記完成：唯一一位學生完成後，全班完成同 transaction 自動成立
+        student_complete = client.post(
+            f"/api/projects/{seeded['project_id']}/students/{seeded['student_id']}/complete"
+        )
+        assert_status(student_complete, 200)
+        assert student_complete.json()["completed_at"] is not None
+        assert student_complete.json()["project_completed_at"] is not None
         completed_db = SessionLocal()
         try:
             original_completed_at = completed_db.get(
                 Project,
                 seeded["project_id"],
             ).completed_at
+            assert completed_db.get(
+                Student,
+                seeded["student_id"],
+            ).completed_at is not None
         finally:
             completed_db.close()
         assert original_completed_at is not None
@@ -329,6 +339,8 @@ def test_structural_sync_requires_bound_hash_then_remaps_by_template_page_id():
             student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
             assert template.revision == project.template_revision == 2
             assert project.completed_at is None
+            # 新增照片格：學生個別完成與全班完成同時退回
+            assert student.completed_at is None
             assert confirmed_payload["sync"]["reopened_project_count"] == 1
             assert json.loads(project.label_texts_json) == {
                 "0": seeded["project_labels"]["2"],

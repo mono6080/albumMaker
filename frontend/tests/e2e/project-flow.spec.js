@@ -329,8 +329,8 @@ test("class completion locks content while scope switching stays usable", async 
 
   // 照片與文字備齊（階段 2）→ 標記全班完成
   await page.goto(`/projects/${project.id}/review`);
-  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載 PDF" }).first()).toBeDisabled();
-  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載圖片" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記此學生完成，才能下載 PDF" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記此學生完成，才能下載圖片" }).first()).toBeDisabled();
   await expect(page.getByRole("button", { name: "PDF ZIP", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "全部圖片", exact: true })).toBeDisabled();
 
@@ -358,8 +358,8 @@ test("class completion locks content while scope switching stays usable", async 
   await page.getByRole("button", { name: "退回修改" }).click();
   await page.getByRole("dialog", { name: "退回修改" }).getByRole("button", { name: "退回修改" }).click();
   await expect(page.getByRole("button", { name: "全班完成", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載 PDF" }).first()).toBeDisabled();
-  await expect(page.getByRole("button", { name: "請先標記全班完成，才能下載圖片" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記此學生完成，才能下載 PDF" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "請先標記此學生完成，才能下載圖片" }).first()).toBeDisabled();
   await expect(page.getByRole("button", { name: "PDF ZIP", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "全部圖片", exact: true })).toBeDisabled();
 });
@@ -407,7 +407,7 @@ test("class text progress combines eleven class fields with each student's last 
   const textProgress = page.getByRole("progressbar", { name: "全班文字完成度" });
   await expect(textProgress).toHaveAttribute("aria-valuemax", "24");
   await expect(textProgress).toHaveAttribute("aria-valuenow", "23");
-  await expect(page.getByText("尚未完成 1 位", { exact: true })).toBeVisible();
+  await expect(page.getByText("未填齊 1 位", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "全班完成", exact: true })).toHaveCount(0);
 
   await updateStudentLabelTexts(

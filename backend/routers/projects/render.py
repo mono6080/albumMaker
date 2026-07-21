@@ -25,6 +25,8 @@ from services.project_export_service import (
     get_student_image_entries,
     open_all_student_images_zip_stream,
     open_all_student_pdfs_zip_stream,
+    open_all_student_uploaded_photos_zip_stream,
+    open_student_uploaded_photos_zip_stream,
 )
 from services.student_render_service import (
     get_template_page_layouts,
@@ -45,9 +47,10 @@ from services.text_variables import (
 
 from ._helpers import (
     _parse_json_field,
-    assert_project_downloadable,
+    assert_class_downloadable,
     assert_project_readable,
     assert_project_writable,
+    assert_student_downloadable,
 )
 from .schemas import RenderAllResult, RenderStudentResult
 
@@ -328,8 +331,8 @@ def download_student_pdf(
     """下載學生個人相冊 PDF。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
+    assert_student_downloadable(project, student)
 
     pdf_bytes, download_filename = get_student_pdf_download(
         project,
@@ -356,8 +359,8 @@ def download_student_images_as_zip(
     """下載學生個人相冊的單頁 JPG 圖片 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
+    assert_student_downloadable(project, student)
 
 
     if not student.output_filename:
@@ -392,8 +395,8 @@ def download_student_image(
     """下載學生個人相冊的單頁 JPG。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    assert_project_downloadable(project)
     student = get_student_or_404(student_id, project_id, db)
+    assert_student_downloadable(project, student)
 
 
     if not student.output_filename:
@@ -425,7 +428,7 @@ def download_all_pdfs_as_zip(
     """將所有已渲染的學生 PDF 打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    assert_project_downloadable(project)
+    assert_class_downloadable(project)
 
 
     zip_filename = f"{project.name}.zip"
@@ -449,7 +452,7 @@ def download_all_images_as_zip(
     """將所有已渲染學生的單頁 JPG 圖片打包為 ZIP。非 admin 使用者強制使用螢幕畫質。"""
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
-    assert_project_downloadable(project)
+    assert_class_downloadable(project)
 
 
     screen_suffix = "_screen" if effective_mode == "screen" else ""
@@ -459,6 +462,45 @@ def download_all_images_as_zip(
     # 邊壓邊送：下載立即開始、峰值記憶體只有單頁 JPG（zip 併發槽在產生器內取放）
     return StreamingResponse(
         open_all_student_images_zip_stream(project, effective_mode),
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
+@router.get("/{project_id}/photos/archive")
+def download_all_uploaded_photos_as_zip(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """下載全班上傳照片 ZIP。原始照片屬素材，不套完成閘門。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+    zip_stream = open_all_student_uploaded_photos_zip_stream(project)
+    content_disposition = build_content_disposition_header(f"{project.name}_上傳照片.zip")
+    return StreamingResponse(
+        zip_stream,
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
+@router.get("/{project_id}/students/{student_id}/photos/archive")
+def download_student_uploaded_photos_as_zip(
+    project_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """下載單生上傳照片 ZIP。原始照片屬素材，不套完成閘門。"""
+    project = get_project_or_404(project_id, db)
+    assert_project_readable(project, current_user, db)
+    student = get_student_or_404(student_id, project_id, db)
+    zip_stream = open_student_uploaded_photos_zip_stream(student)
+    combined_stem = build_combined_stem(project.name, student.name)
+    content_disposition = build_content_disposition_header(f"{combined_stem}_上傳照片.zip")
+    return StreamingResponse(
+        zip_stream,
         media_type="application/zip",
         headers={"Content-Disposition": content_disposition},
     )

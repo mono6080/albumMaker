@@ -26,6 +26,8 @@ from services.layout_group_traversal import iter_layout_render_elements
 from services.project_access_service import (
     assert_project_content_writable,
     assert_project_readable,
+    assert_student_content_writable,
+    student_effectively_completed,
 )
 from services.project_template_revision import lock_project_template_revision
 from services.request_limiter import photo_upload_limiter
@@ -78,6 +80,8 @@ class SharedPhotoUploadOutcome:
     updated: int
     filename: str
     compressed: bool
+    # 套用全班時被自動排除的已完成學生 id（回應必須揭露，不得靜默少套）
+    skipped_completed_student_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,6 +262,7 @@ async def upload_student_photo(
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     student = get_student_or_404(student_id, project_id, db)
+    assert_student_content_writable(project, student, current_user)
     student_identity = _capture_student_photo_upload_identity(student)
     del student
     processed_upload = await read_and_process_photo_upload(file)
@@ -271,6 +276,7 @@ async def upload_student_photo(
                 db,
                 student_identity,
             )
+            assert_student_content_writable(project, current_student, current_user)
             _assert_project_photo_slot_exists(project, page_index, slot_id)
 
             def mutate(pages_data) -> str:
@@ -319,13 +325,26 @@ async def upload_shared_project_photo(
     storage = get_storage()
     now = utc_now()
 
-    def fanout_to_target_students() -> int:
+    def fanout_to_target_students() -> tuple[int, tuple[int, ...]]:
         with lock_project_template_revision(db, project, expected_template_revision):
             assert_project_content_writable(project, current_user)
             _assert_project_photo_slot_exists(project, page_index, slot_id)
             # 目標學生清單在鎖內決定，確保與 pages_data 寫入看到同一份名冊
+            skipped_completed_student_ids: tuple[int, ...] = ()
             if target_student_ids is None:
                 target_students = list(project.students)
+                # 套用全班：鎖內自動排除已完成學生，並在回應揭露
+                if current_user.role != "admin":
+                    skipped_completed_student_ids = tuple(
+                        student.id
+                        for student in target_students
+                        if student_effectively_completed(project, student)
+                    )
+                    target_students = [
+                        student
+                        for student in target_students
+                        if not student_effectively_completed(project, student)
+                    ]
             else:
                 known_ids = {student.id for student in project.students}
                 missing_ids = target_student_ids - known_ids
@@ -339,6 +358,22 @@ async def upload_shared_project_photo(
                     for student in project.students
                     if student.id in target_student_ids
                 ]
+                # 指定名單含已完成學生 → 整批拒絕
+                if current_user.role != "admin":
+                    completed_target_names = [
+                        student.name
+                        for student in target_students
+                        if student_effectively_completed(project, student)
+                    ]
+                    if completed_target_names:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "shared_photo_targets_completed_students",
+                                "message": "指定名單包含已完成學生，需主管先退回才能套用",
+                                "completed_student_names": completed_target_names,
+                            },
+                        )
             count = 0
             first_key: str | None = None
             project.updated_at = now
@@ -363,13 +398,16 @@ async def upload_shared_project_photo(
                 if first_key is None:
                     first_key = key
                 count += 1
-            return count
+            return count, skipped_completed_student_ids
 
-    updated = await run_in_threadpool(fanout_to_target_students)
+    updated, skipped_completed_student_ids = await run_in_threadpool(
+        fanout_to_target_students
+    )
     return SharedPhotoUploadOutcome(
         updated=updated,
         filename=processed_upload.filename,
         compressed=processed_upload.compressed,
+        skipped_completed_student_ids=skipped_completed_student_ids,
     )
 
 
@@ -473,6 +511,18 @@ async def batch_upload_project_photos(
             _assert_project_photo_slot_exists(project, page_index, slot_id)
             for student_identity, filename, processed_upload in prepared_assignments:
                 student = current_students_by_id[student_identity.student_id]
+                # 已完成學生不接受批次照片，維持逐學生 partial-success 契約
+                if current_user.role != "admin" and student_effectively_completed(
+                    project, student
+                ):
+                    failed.append(
+                        {
+                            "student_id": student.id,
+                            "filename": filename,
+                            "reason": "student_completed_locked",
+                        }
+                    )
+                    continue
 
                 def mutate(pages_data) -> str | None:
                     if not overwrite_existing and page_has_photo(
@@ -547,6 +597,7 @@ def update_student_photo_mapping(
     with lock_project_template_revision(db, project, expected_template_revision):
         assert_project_content_writable(project, current_user)
         student = get_student_or_404(student_id, project_id, db)
+        assert_student_content_writable(project, student, current_user)
         storage = get_storage()
 
         def mutate(pages_data) -> None:

@@ -171,6 +171,9 @@ export default function ClassEdit() {
 
   // 專案已標記全班完成：照片/文字鎖定（主管或 admin 退回後恢復）
   const isProjectCompleted = Boolean(project?.completed_at);
+  // 個別完成的學生：全班文字硬鎖、共用照片不可套用（需主管退回）
+  const completedStudents = (project?.students ?? []).filter(student => student.completed_at);
+  const isClassTextLocked = isProjectCompleted || completedStudents.length > 0;
 
   useEffect(() => {
     if (!template) return;
@@ -195,7 +198,10 @@ export default function ClassEdit() {
     setPhotoStrategy(null);
     clearSharedPhotoFile();
     setIsPartialShareOpen(false);
-    setSharedTargetStudentIds(new Set((project?.students ?? []).map(student => student.id)));
+    // 已完成學生不可套用共用照片，預設勾選只含未完成學生
+    setSharedTargetStudentIds(new Set(
+      (project?.students ?? []).filter(student => !student.completed_at).map(student => student.id),
+    ));
     setIsSlotPhotoModalOpen(true);
   };
 
@@ -229,7 +235,16 @@ export default function ClassEdit() {
         isPartialShareOpen ? [...sharedTargetStudentIds] : undefined,
       );
       const updated = response.data?.updated ?? 0;
-      toast.success(`已套用到 ${updated} 位學生`);
+      // 套用全班時後端會自動跳過已完成學生，回應揭露被跳過者，提示不得靜默
+      const skippedStudentIds = response.data?.skipped_completed_student_ids ?? [];
+      if (skippedStudentIds.length > 0) {
+        const skippedNames = project.students
+          .filter(student => skippedStudentIds.includes(student.id))
+          .map(student => student.name);
+        toast.success(`已套用到 ${updated} 位學生；已完成學生自動跳過：${skippedNames.join("、")}`);
+      } else {
+        toast.success(`已套用到 ${updated} 位學生`);
+      }
       clearSharedPhotoFile();
       setIsSlotPhotoModalOpen(false);
       setPreviewTimestamp(Date.now());
@@ -428,6 +443,11 @@ export default function ClassEdit() {
   // 預覽與裁切都用「照片內容框」而非外框：外框含邊框寬，
   // 比例不同時後端會再做一次 cover 裁切導致構圖偏移
   const selectedSlotCropBox = selectedSlotItem ? getPhotoCropBox(selectedSlotItem) : null;
+  // 共用照片實際套用人數：全班＝自動跳過已完成後的人數；部分＝勾選人數
+  const uncompletedStudentCount = project.students.length - completedStudents.length;
+  const sharedApplyTargetCount = isPartialShareOpen
+    ? sharedTargetStudentIds.size
+    : uncompletedStudentCount;
   const slotPhotoModal = (
     <FormModal
       isOpen={isSlotPhotoModalOpen}
@@ -541,7 +561,7 @@ export default function ClassEdit() {
                           : "border-gray-200 bg-white text-gray-600 hover:border-violet-200 hover:bg-violet-50/30"
                       }`}
                     >
-                      全班（{project.students.length} 位）
+                      全班（{uncompletedStudentCount} 位）
                     </button>
                     <button
                       type="button"
@@ -556,17 +576,26 @@ export default function ClassEdit() {
                       部分學生
                     </button>
                   </div>
+                  {/* 套用全班時預先揭露將跳過的已完成學生 */}
+                  {!isPartialShareOpen && completedStudents.length > 0 && (
+                    <p className="mt-2 text-xs leading-relaxed text-amber-600">
+                      已完成學生將自動跳過：{completedStudents.map(student => student.name).join("、")}
+                    </p>
+                  )}
                   {isPartialShareOpen && (
                     <div className="mt-2 space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-2.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-700">
-                          點名字選取，已選 {sharedTargetStudentIds.size}/{project.students.length} 位
+                          點名字選取，已選 {sharedTargetStudentIds.size}/{uncompletedStudentCount} 位
                         </span>
                         <div className="flex flex-shrink-0 items-center gap-2">
                           <button
                             type="button"
                             className="text-xs text-violet-600 hover:underline"
-                            onClick={() => setSharedTargetStudentIds(new Set(project.students.map(student => student.id)))}
+                            // 全選只含未完成學生（已完成學生不可套用）
+                            onClick={() => setSharedTargetStudentIds(new Set(
+                              project.students.filter(student => !student.completed_at).map(student => student.id),
+                            ))}
                           >
                             全選
                           </button>
@@ -582,19 +611,25 @@ export default function ClassEdit() {
                       <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
                         {project.students.map(student => {
                           const isSelected = sharedTargetStudentIds.has(student.id);
+                          // 已完成學生不可勾選：需主管退回才能再套用共用照片
+                          const isStudentCompleted = Boolean(student.completed_at);
                           return (
                             <button
                               key={student.id}
                               type="button"
                               onClick={() => toggleSharedTargetStudent(student.id)}
                               aria-pressed={isSelected}
+                              disabled={isStudentCompleted}
+                              title={isStudentCompleted ? "已標記完成，需主管退回才能修改" : undefined}
                               className={`max-w-full truncate rounded-full border px-3 py-1.5 text-sm transition-colors ${
-                                isSelected
-                                  ? "border-violet-500 bg-violet-500 font-medium text-white"
-                                  : "border-gray-300 bg-white text-gray-600 hover:border-violet-300 hover:bg-violet-50/40"
+                                isStudentCompleted
+                                  ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
+                                  : isSelected
+                                    ? "border-violet-500 bg-violet-500 font-medium text-white"
+                                    : "border-gray-300 bg-white text-gray-600 hover:border-violet-300 hover:bg-violet-50/40"
                               }`}
                             >
-                              {student.name}
+                              {student.name}{isStudentCompleted && "（已完成）"}
                             </button>
                           );
                         })}
@@ -609,13 +644,13 @@ export default function ClassEdit() {
                     !sharedPhotoFile
                     || !selectedSharedPhotoSlot
                     || isSharedPhotoUploading
-                    || (isPartialShareOpen && sharedTargetStudentIds.size === 0)
+                    || sharedApplyTargetCount === 0
                   }
                   variant="primary"
                   fullWidth
                 >
                   {isSharedPhotoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-                  {isPartialShareOpen ? `套用到 ${sharedTargetStudentIds.size} 位學生` : `套用到全班（${project.students.length} 位）`}
+                  {isPartialShareOpen ? `套用到 ${sharedTargetStudentIds.size} 位學生` : `套用到全班（${uncompletedStudentCount} 位）`}
                 </Button>
                 {!sharedPhotoFile && (
                   <p className="text-center text-xs text-gray-400">請先選擇照片</p>
@@ -670,7 +705,11 @@ export default function ClassEdit() {
       activePage={activePage}
       textLabels={activePageTextLabels}
       saveStatus={saveStatus}
-      disabled={isProjectCompleted}
+      disabled={isClassTextLocked}
+      // 全班完成有整頁 banner；個別完成造成的硬鎖在面板內提示要先退回誰
+      lockedHint={!isProjectCompleted && completedStudents.length > 0
+        ? `全班文字已鎖定：${completedStudents.map(student => student.name).join("、")} 已標記完成，需主管先退回這些學生才能修改`
+        : null}
       getLabelText={getLabelText}
       getLabelAlign={getLabelAlign}
       hasLabelTextOverride={hasLabelTextOverride}
@@ -744,6 +783,7 @@ export default function ClassEdit() {
         projectId={projectId}
         onStartGuide={startGuide}
         isProjectCompleted={isProjectCompleted}
+        completedTitle="此專案已標記全班完成，內容已鎖定"
         completedDescription="仍可預覽；需主管或管理員退回才能修改"
         students={project.students || []}
         currentStudentId={null}

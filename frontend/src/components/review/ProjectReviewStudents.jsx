@@ -1,3 +1,7 @@
+// 班級總覽的學生區:搜尋、內容填齊篩選與學生卡格線。
+// 篩選的「未填齊/已填齊」指內容進度,與 completed_at 標記完成是兩回事(詞彙 SSOT: utils/reviewCompletion.js)。
+// 下載相關狀態整包收 downloads(useProjectReviewDownloads 的回傳),在 map 時拆給卡片。
+
 import { CheckCircle2, Clock, Search, Users } from "lucide-react";
 
 import StudentReviewCard from "../StudentReviewCard";
@@ -5,8 +9,8 @@ import { Badge, SegmentedControl, fieldControlClass } from "../ui";
 
 const REVIEW_STATUS_FILTER_OPTIONS = [
   { value: "all", label: "全部", icon: Users, guideId: "review-filter-all" },
-  { value: "incomplete", label: "未完成", icon: Clock, guideId: "review-filter-pending" },
-  { value: "complete", label: "已完成", icon: CheckCircle2, guideId: "review-filter-done" },
+  { value: "incomplete", label: "未填齊", icon: Clock, guideId: "review-filter-pending" },
+  { value: "complete", label: "已填齊", icon: CheckCircle2, guideId: "review-filter-done" },
 ];
 
 export default function ProjectReviewStudents({
@@ -18,21 +22,20 @@ export default function ProjectReviewStudents({
   templateRevision,
   canEditCurrentProject,
   canDownloadCurrentProject,
+  canReopenProject,
   isProjectCompleted,
   photoProgressByStudentId,
   textProgressByStudentId,
-  rendering,
-  renderingImages,
+  downloads,
   studentSearch,
   onStudentSearchChange,
   studentStatusFilter,
   onStudentStatusFilterChange,
   emptyFilteredStudentMessage,
   getVisiblePageIndexes,
-  isImageShareReady,
   onPreview,
-  onDownloadPdf,
-  onDownloadImages,
+  onCompleteStudent,
+  onReopenStudent,
 }) {
   return (
     <>
@@ -86,16 +89,21 @@ export default function ProjectReviewStudents({
               templateRevision={templateRevision}
               canEditCurrentProject={canEditCurrentProject}
               canDownloadCurrentProject={canDownloadCurrentProject}
+              canReopenProject={canReopenProject}
               isProjectCompleted={isProjectCompleted}
               photoProgress={photoProgressByStudentId.get(student.id)}
               textProgress={textProgressByStudentId.get(student.id)}
-              isRendering={rendering[student.id]}
-              isImageRendering={renderingImages[student.id]}
-              isImageShareReady={isImageShareReady(student.id)}
+              isRendering={downloads.rendering[student.id]}
+              isImageRendering={downloads.renderingImages[student.id]}
+              isImageShareReady={downloads.isImageShareReady(student.id)}
+              isPhotosDownloading={downloads.downloadingPhotos[student.id]}
               getVisiblePageIndexes={getVisiblePageIndexes}
               onPreview={onPreview}
-              onDownloadPdf={onDownloadPdf}
-              onDownloadImages={onDownloadImages}
+              onDownloadPdf={downloads.handleDownloadOne}
+              onDownloadImages={downloads.handleDownloadOneImages}
+              onDownloadPhotos={downloads.handleDownloadOnePhotos}
+              onCompleteStudent={onCompleteStudent}
+              onReopenStudent={onReopenStudent}
             />
           ))}
         </div>

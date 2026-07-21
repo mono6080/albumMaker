@@ -1,9 +1,20 @@
+// 班級總覽頁:載入 project/template、完成/退回動作、教學導覽,並把派生狀態與
+// 下載動作(整包 downloads)分發給進度區與學生區。
+// 進度統計/篩選/工作階段的推導集中在 useProjectReviewDerivedState;
+// 下載按鈕的顯示條件在此統一計算,教學導覽步驟過濾與畫面用同一組旗標。
+
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ChevronRight, CircleHelp, Pencil, Users } from "lucide-react";
 
-import { completeProject, fetchProject as getProject, reopenProject } from "../api/projectApi";
+import {
+  completeProject,
+  completeStudent,
+  fetchProject as getProject,
+  reopenProject,
+  reopenStudent,
+} from "../api/projectApi";
 import { fetchProjectTemplatePair } from "../api/templateApi";
 import ConfirmModal from "../components/ConfirmModal";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
@@ -17,16 +28,16 @@ import { useAuth } from "../context/AuthContext";
 import useDialogA11y from "../hooks/useDialogA11y";
 import { usePermissions } from "../hooks/usePermissions";
 import useProjectReviewComments from "../hooks/useProjectReviewComments";
+import useProjectReviewDerivedState from "../hooks/useProjectReviewDerivedState";
 import useProjectReviewDownloads from "../hooks/useProjectReviewDownloads";
-import { computeStudentPhotoProgress } from "../utils/photoProgress";
+import { handleApiError } from "../utils/apiError";
 import { startProductGuide } from "../utils/productGuide";
-import { computeStudentTextProgress } from "../utils/textProgress";
 
 const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-progress"]',
     title: "班級進度與下一步",
-    description: "一條看完班級進度：照片與文字進度、未完成人數（點它會篩選出誰還缺），右側依階段建議下一步：製作 → 全班完成 → 交件。",
+    description: "一條看完班級進度：照片與文字進度、未填齊人數（點它會篩選出誰還缺），右側依階段建議下一步：製作 → 標記完成 → 交件。",
     side: "bottom",
     align: "start",
   },
@@ -54,7 +65,7 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
   {
     element: '[data-guide="review-download-student"]',
     title: "下載單一學生",
-    description: "標記全班完成後，可只產出並下載這位學生的 PDF；圖片按鈕在電腦下載 ZIP，手機會開啟系統分享。",
+    description: "標記這位學生完成（或全班完成）後，可只產出並下載他的 PDF；圖片按鈕在電腦下載 ZIP，手機會開啟系統分享。",
     side: "bottom",
     align: "end",
   },
@@ -62,6 +73,13 @@ const PROJECT_REVIEW_GUIDE_STEPS = [
     element: '[data-guide="review-download-all"]',
     title: "交件下載",
     description: "標記全班完成後，可批次產生並下載全班 PDF ZIP；全部圖片在電腦下載 ZIP，手機會準備圖片後開啟分享。",
+    side: "left",
+    align: "center",
+  },
+  {
+    element: '[data-guide="review-download-photos"]',
+    title: "下載上傳照片",
+    description: "把上傳過的原始照片打包成 ZIP 取回，依學生分資料夾；這是素材備份，不需標記完成、隨時可下載。",
     side: "left",
     align: "center",
   },
@@ -144,8 +162,13 @@ export default function ProjectReview() {
   const canEditCurrentProject = project ? canEditProject(project) : false;
   const canDownloadCurrentProject = project ? canDownloadProject(project) : false;
   const canCommentCurrentProject = project ? canCommentProject(project) : false;
-  const hasRenderedStudents = project?.students.some(student => student.output_filename) ?? false;
   const effectiveMode = canDownloadPrint ? outputMode : "screen";
+  const derived = useProjectReviewDerivedState({
+    project,
+    template,
+    studentStatusFilter,
+    studentSearch,
+  });
   const downloadState = useProjectReviewDownloads({
     projectId,
     project,
@@ -190,17 +213,44 @@ export default function ProjectReview() {
     });
   };
 
-  const handleStartGuide = () => {
-    const unavailableGuideElements = new Set();
-    if (!canEditCurrentProject) unavailableGuideElements.add('[data-guide="review-roster-button"]');
-    if (!isProjectCompleted || !canDownloadCurrentProject || (!canEditCurrentProject && !hasRenderedStudents)) {
-      unavailableGuideElements.add('[data-guide="review-download-student"]');
-      unavailableGuideElements.add('[data-guide="review-download-all"]');
-    }
-    const guideSteps = PROJECT_REVIEW_GUIDE_STEPS.filter(
-      step => !unavailableGuideElements.has(step.element),
-    );
-    startProductGuide(guideSteps);
+  // 標記單一學生完成：該生內容鎖定並開放單人下載；最後一位完成時全班完成自動成立
+  const handleCompleteStudent = (student) => {
+    setConfirmModal({
+      message: `確定標記「${student.name}」完成？完成後該生照片與文字將鎖定，並開放單人 PDF／圖片下載；需主管或管理員退回才能再修改。`,
+      confirmLabel: "標記完成",
+      confirmVariant: "success",
+      onConfirm: async () => {
+        try {
+          const response = await completeStudent(projectId, student.id);
+          if (response.data?.project_completed_at) {
+            toast.success(`已標記 ${student.name} 完成；全班學生皆已完成，「全班完成」自動成立`);
+          } else {
+            toast.success(`已標記 ${student.name} 完成`);
+          }
+          await loadProject();
+        } catch (error) {
+          handleApiError(error, "標記完成失敗");
+        }
+      },
+    });
+  };
+
+  // 退回單一學生完成（僅主管/admin）：全班完成已成立時一併解除
+  const handleReopenStudent = (student) => {
+    setConfirmModal({
+      message: `退回後「${student.name}」的完成標記將解除、恢復可編輯；若「全班完成」已成立也會一併解除。確定退回？`,
+      confirmLabel: "退回修改",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        try {
+          await reopenStudent(projectId, student.id);
+          toast.success(`已退回 ${student.name}，恢復可編輯`);
+          await loadProject();
+        } catch (error) {
+          handleApiError(error, "退回失敗");
+        }
+      },
+    });
   };
 
   if (loadError) {
@@ -212,73 +262,38 @@ export default function ProjectReview() {
     );
   }
 
-  if (!project || !template) {
+  if (!project || !template || !derived) {
     return <div className="flex items-center justify-center h-64 text-gray-400">載入中...</div>;
   }
 
   const pageCount = template.pages.length;
-  const isProjectCompleted = Boolean(project.completed_at);
-  const canReopenProject = project ? canReopenProjectByCapability(project) : false;
-  const photoProgressByStudentId = new Map(
-    project.students.map(student => [
-      student.id,
-      computeStudentPhotoProgress(student.pages_data, template.pages),
-    ]),
-  );
-  const classPhotoFilled = [...photoProgressByStudentId.values()]
-    .reduce((sum, progress) => sum + progress.filled, 0);
-  const classPhotoTotal = [...photoProgressByStudentId.values()]
-    .reduce((sum, progress) => sum + progress.total, 0);
-  const textProgressByStudentId = new Map(
-    project.students.map(student => [
-      student.id,
-      computeStudentTextProgress(
-        student.pages_data,
-        template.pages,
-        project.label_texts,
-      ),
-    ]),
-  );
-  const classTextFilled = [...textProgressByStudentId.values()]
-    .reduce((sum, progress) => sum + progress.filled, 0);
-  const classTextTotal = [...textProgressByStudentId.values()]
-    .reduce((sum, progress) => sum + progress.total, 0);
-  const incompleteStudents = project.students.filter(student => {
-    const photoProgress = photoProgressByStudentId.get(student.id);
-    const textProgress = textProgressByStudentId.get(student.id);
-    const isPhotoComplete = photoProgress.total === 0
-      || photoProgress.filled === photoProgress.total;
-    const isTextComplete = textProgress.total === 0
-      || textProgress.filled === textProgress.total;
-    return !isPhotoComplete || !isTextComplete;
-  });
-  const workStage = isProjectCompleted
-    ? 3
-    : incompleteStudents.length === 0
-      ? 2
-      : 1;
+  const canReopenProject = canReopenProjectByCapability(project);
 
-  const trimmedStudentSearch = studentSearch.trim().toLowerCase();
-  const visibleStudents = project.students.filter(student => {
-    const photoProgress = photoProgressByStudentId.get(student.id);
-    const textProgress = textProgressByStudentId.get(student.id);
-    const isPhotoComplete = photoProgress.total === 0
-      || photoProgress.filled === photoProgress.total;
-    const isTextComplete = textProgress.total === 0
-      || textProgress.filled === textProgress.total;
-    const isContentComplete = isPhotoComplete && isTextComplete;
-    const matchesStatus =
-      studentStatusFilter === "all" ||
-      (studentStatusFilter === "incomplete" && !isContentComplete) ||
-      (studentStatusFilter === "complete" && isContentComplete);
-    const matchesSearch =
-      !trimmedStudentSearch ||
-      (student.name ?? "").toLowerCase().includes(trimmedStudentSearch);
-    return matchesStatus && matchesSearch;
-  });
-  const emptyFilteredStudentMessage = trimmedStudentSearch
-    ? `沒有符合「${studentSearch.trim()}」的學生`
-    : "目前篩選沒有學生";
+  // 下載相關顯示旗標:畫面與教學導覽的唯一來源
+  const canOperateDownloads =
+    canDownloadCurrentProject && (canEditCurrentProject || derived.hasRenderedStudents);
+  const showDeliverableDownloads = derived.workStage >= 2 && canOperateDownloads;
+  const hasAnyStudentDeliverableUnlocked =
+    derived.isProjectCompleted || project.students.some(student => student.completed_at);
+
+  const handleStartGuide = () => {
+    const unavailableGuideElements = new Set();
+    if (!canEditCurrentProject) unavailableGuideElements.add('[data-guide="review-roster-button"]');
+    // 單人下載步驟：任一學生標記完成（或全班完成）即出現；交件下載步驟只看全班完成
+    if (!hasAnyStudentDeliverableUnlocked || !canOperateDownloads) {
+      unavailableGuideElements.add('[data-guide="review-download-student"]');
+    }
+    if (!derived.isProjectCompleted || !canOperateDownloads) {
+      unavailableGuideElements.add('[data-guide="review-download-all"]');
+    }
+    if (!canDownloadCurrentProject) {
+      unavailableGuideElements.add('[data-guide="review-download-photos"]');
+    }
+    const guideSteps = PROJECT_REVIEW_GUIDE_STEPS.filter(
+      step => !unavailableGuideElements.has(step.element),
+    );
+    startProductGuide(guideSteps);
+  };
 
   return (
     <div className="w-full">
@@ -287,7 +302,7 @@ export default function ProjectReview() {
         badge={(
           <>
             <Badge tone="review">班級總覽</Badge>
-            {isProjectCompleted && (
+            {derived.isProjectCompleted && (
               <Badge tone="success" title={`完成於 ${new Date(project.completed_at).toLocaleString("zh-TW")}`}>
                 ✓ 全班完成
               </Badge>
@@ -348,24 +363,22 @@ export default function ProjectReview() {
       {project.students.length > 0 && (
         <ProjectReviewProgress
           projectId={projectId}
-          workStage={workStage}
-          classPhotoFilled={classPhotoFilled}
-          classPhotoTotal={classPhotoTotal}
-          classTextFilled={classTextFilled}
-          classTextTotal={classTextTotal}
-          incompleteStudentCount={incompleteStudents.length}
+          workStage={derived.workStage}
+          isProjectCompleted={derived.isProjectCompleted}
+          classPhotoFilled={derived.classPhotoFilled}
+          classPhotoTotal={derived.classPhotoTotal}
+          classTextFilled={derived.classTextFilled}
+          classTextTotal={derived.classTextTotal}
+          contentIncompleteStudentCount={derived.contentIncompleteStudentCount}
+          completedStudentCount={derived.completedStudentCount}
+          studentTotal={project.students.length}
           commentsCount={comments.length}
           canEditCurrentProject={canEditCurrentProject}
           canDownloadCurrentProject={canDownloadCurrentProject}
-          hasRenderedStudents={hasRenderedStudents}
           canReopenProject={canReopenProject}
           canDownloadPrint={canDownloadPrint}
-          isBatchRendering={downloadState.isBatchRendering}
-          renderingAll={downloadState.renderingAll}
-          renderingAllImages={downloadState.renderingAllImages}
-          renderAllProgress={downloadState.renderAllProgress}
-          renderAllImagesProgress={downloadState.renderAllImagesProgress}
-          isAllImagesShareReady={downloadState.isAllImagesShareReady}
+          showDeliverableDownloads={showDeliverableDownloads}
+          downloads={downloadState}
           outputMode={outputMode}
           onOutputModeChange={setOutputMode}
           onFilterIncomplete={() => {
@@ -374,8 +387,6 @@ export default function ProjectReview() {
           }}
           onCompleteProject={handleCompleteProject}
           onReopenProject={handleReopenProject}
-          onDownloadAll={downloadState.handleDownloadAll}
-          onDownloadAllImages={downloadState.handleDownloadAllImages}
         />
       )}
 
@@ -393,28 +404,27 @@ export default function ProjectReview() {
 
       <ProjectReviewStudents
         students={project.students}
-        visibleStudents={visibleStudents}
+        visibleStudents={derived.visibleStudents}
         projectId={projectId}
         pageCount={pageCount}
         previewTimestamp={previewTimestamp}
         templateRevision={project.template_revision}
         canEditCurrentProject={canEditCurrentProject}
         canDownloadCurrentProject={canDownloadCurrentProject}
-        isProjectCompleted={isProjectCompleted}
-        photoProgressByStudentId={photoProgressByStudentId}
-        textProgressByStudentId={textProgressByStudentId}
-        rendering={downloadState.rendering}
-        renderingImages={downloadState.renderingImages}
+        canReopenProject={canReopenProject}
+        isProjectCompleted={derived.isProjectCompleted}
+        photoProgressByStudentId={derived.photoProgressByStudentId}
+        textProgressByStudentId={derived.textProgressByStudentId}
+        downloads={downloadState}
         studentSearch={studentSearch}
         onStudentSearchChange={setStudentSearch}
         studentStatusFilter={studentStatusFilter}
         onStudentStatusFilterChange={setStudentStatusFilter}
-        emptyFilteredStudentMessage={emptyFilteredStudentMessage}
+        emptyFilteredStudentMessage={derived.emptyFilteredStudentMessage}
         getVisiblePageIndexes={getVisiblePageIndexes}
-        isImageShareReady={downloadState.isImageShareReady}
         onPreview={(studentId, pageIndex) => setPreview({ studentId, pageIndex })}
-        onDownloadPdf={downloadState.handleDownloadOne}
-        onDownloadImages={downloadState.handleDownloadOneImages}
+        onCompleteStudent={handleCompleteStudent}
+        onReopenStudent={handleReopenStudent}
       />
 
       {canDownloadCurrentProject && (
@@ -447,7 +457,7 @@ export default function ProjectReview() {
         isOpen={isRosterOpen}
         onClose={() => setIsRosterOpen(false)}
         students={project.students}
-        photoProgressByStudentId={photoProgressByStudentId}
+        photoProgressByStudentId={derived.photoProgressByStudentId}
       />
     </div>
   );

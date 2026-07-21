@@ -1,6 +1,6 @@
 // 班級總覽的老師可填文字進度。
-// 後端鏡像：backend/services/teacher_overview_service.py 的
-// _summarize_student_progress；契約由前端 text-progress 與後端 roster 測試釘住。
+// 後端鏡像：backend/services/student_progress.py 的
+// summarize_student_progress；契約由前端 text-progress 與後端 roster 測試釘住。
 
 import {
   getLabelEntryTextOverride,

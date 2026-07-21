@@ -1,4 +1,5 @@
 import io
+import re
 import zipfile
 from collections import Counter
 from pathlib import PurePosixPath
@@ -8,10 +9,12 @@ from fastapi import HTTPException
 from database import Project, Student
 from services.output_keys import (
     build_combined_stem,
+    make_safe_filename,
     student_output_prefix_from_pdf_key,
     student_pdf_key_for_mode,
 )
 from services.storage_factory import get_storage
+from services.student_pages import parse_pages_data, photo_record_key
 from services.zip_stream import open_zip_stream
 
 
@@ -199,3 +202,82 @@ def open_all_student_images_zip_stream(project: Project, output_mode: str):
             yield
 
     return open_zip_stream(write_entries, "ZIP 正在產生中，請稍後再試")
+
+
+# ── 上傳照片 ZIP（原始素材，不套完成閘門）─────────────────────────────────────
+
+# photo key 尾段格式：p{page_index}_slot{slot_id}_{stem}_{content-hash16}{ext}
+_UPLOADED_PHOTO_KEY_PREFIX_PATTERN = re.compile(r"^p\d+_slot\d+_")
+_UPLOADED_PHOTO_CONTENT_HASH_PATTERN = re.compile(r"_[0-9a-f]{16}(?=\.[^.]*$)")
+
+
+def iter_student_uploaded_photo_entries(student: Student) -> list[tuple[int, int, str]]:
+    """列舉學生所有已放照片的 (page_index, slot_id, photo_key)。"""
+    entries: list[tuple[int, int, str]] = []
+    for page_index, page in enumerate(parse_pages_data(student.pages_data_json)):
+        for slot_id, record in (page.get("photos") or {}).items():
+            photo_key = photo_record_key(record)
+            if photo_key:
+                entries.append((page_index, int(slot_id), photo_key))
+    return entries
+
+
+def _approximate_original_photo_filename(photo_key: str) -> str:
+    """從 photo key 尾段剝除頁格前綴與 content-hash，還原近似原檔名。"""
+    basename = PurePosixPath(photo_key).name
+    basename = _UPLOADED_PHOTO_KEY_PREFIX_PATTERN.sub("", basename)
+    return _UPLOADED_PHOTO_CONTENT_HASH_PATTERN.sub("", basename)
+
+
+def _plan_student_uploaded_photo_entries(student: Student) -> list[tuple[str, str]]:
+    """組出單生上傳照片的 (ZIP 內檔名, photo_key)；同生撞名附 -2/-3 序號。"""
+    planned: list[tuple[str, str]] = []
+    used_names: set[str] = set()
+    for page_index, slot_id, photo_key in iter_student_uploaded_photo_entries(student):
+        original_name = _approximate_original_photo_filename(photo_key)
+        archive_name = make_safe_filename(f"p{page_index + 1}_格{slot_id}_{original_name}")
+        candidate = archive_name
+        sequence = 2
+        while candidate in used_names:
+            name_path = PurePosixPath(archive_name)
+            candidate = f"{name_path.stem}-{sequence}{name_path.suffix}"
+            sequence += 1
+        used_names.add(candidate)
+        planned.append((candidate, photo_key))
+    return planned
+
+
+def _open_planned_photos_zip_stream(planned_entries: list[tuple[str, str]]):
+    storage = get_storage()
+
+    def write_entries(zip_archive):
+        for archive_path, photo_key in planned_entries:
+            try:
+                photo_bytes = storage.get_bytes(photo_key)
+            except FileNotFoundError:
+                continue
+            zip_archive.writestr(archive_path, photo_bytes)
+            yield
+
+    return open_zip_stream(write_entries, "ZIP 正在產生中，請稍後再試")
+
+
+def open_student_uploaded_photos_zip_stream(student: Student):
+    """單生上傳照片 ZIP 串流；尚無照片時回 404（在串流開始前判斷）。"""
+    planned_entries = _plan_student_uploaded_photo_entries(student)
+    if not planned_entries:
+        raise HTTPException(status_code=404, detail="此學生尚無上傳照片")
+    return _open_planned_photos_zip_stream(planned_entries)
+
+
+def open_all_student_uploaded_photos_zip_stream(project: Project):
+    """全班上傳照片 ZIP 串流，每生一個資料夾；尚無照片時回 404。"""
+    download_stems = _unique_student_download_stems(project)
+    planned_entries = [
+        (f"{download_stems[student.id]}/{archive_name}", photo_key)
+        for student in project.students
+        for archive_name, photo_key in _plan_student_uploaded_photo_entries(student)
+    ]
+    if not planned_entries:
+        raise HTTPException(status_code=404, detail="此專案尚無上傳照片")
+    return _open_planned_photos_zip_stream(planned_entries)

@@ -17,8 +17,10 @@ from services.project_access_service import (
 from services.project_lifecycle_service import (
     archive_project as archive_project_use_case,
     complete_project as complete_project_use_case,
+    complete_project_student as complete_project_student_use_case,
     rename_project as rename_project_use_case,
     reopen_project as reopen_project_use_case,
+    reopen_project_student as reopen_project_student_use_case,
     restore_project as restore_project_use_case,
 )
 from services.project_student_service import (
@@ -143,6 +145,7 @@ def get_project(
                 "order_index": student.order_index,
                 "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
                 "output_filename": student.output_filename,
+                "completed_at": student.completed_at,
                 "updated_at": student.updated_at,
             }
             for student in project.students
@@ -200,6 +203,7 @@ def get_student_editor_detail(
             "order_index": student.order_index,
             "pages_data": _parse_json_field(student.pages_data_json, "pages_data_json"),
             "output_filename": student.output_filename,
+            "completed_at": student.completed_at,
             "updated_at": student.updated_at,
         },
     }
@@ -254,6 +258,28 @@ def reopen_project(
 ):
     """退回「全班完成」標記，恢復可編輯（限管轄該老師的主管或 admin）。"""
     return reopen_project_use_case(db, current_user, project_id)
+
+
+@router.post("/{project_id}/students/{student_id}/complete")
+def complete_project_student(
+    project_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """標記單一學生相本完成；全班皆完成時同 transaction 自動成立全班完成。"""
+    return complete_project_student_use_case(db, current_user, project_id, student_id)
+
+
+@router.post("/{project_id}/students/{student_id}/reopen")
+def reopen_project_student(
+    project_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """退回單一學生完成（僅主管或 admin）；全班完成已成立時一併解除。"""
+    return reopen_project_student_use_case(db, current_user, project_id, student_id)
 
 
 def _visible_projects_query(

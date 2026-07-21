@@ -36,6 +36,10 @@
 - **PWA SW 與 SPA catch-all 的同名 race**：目前「先實體檔案、後 index.html」
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
+- **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`RosterChild.album_name`)
+  修改會影響已標記完成(全班或個別)相本的輸出檔名與稱呼顯示,但名冊寫入
+  不經過專案內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
+  明確不在該階段處理
 - **權限矩陣的隱藏假設**：若未來引入「主管可代老師編輯專案」，
   `assert_project_writable` 要展開（現況見
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）

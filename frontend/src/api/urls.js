@@ -83,3 +83,11 @@ export const buildDownloadAllZipUrl = (projectId, outputMode = "print") =>
 /** 整個專案所有單頁圖片打包下載 URL */
 export const buildDownloadAllImagesZipUrl = (projectId, outputMode = "print") =>
   `${API_BASE}/projects/${projectId}/download/all/images?mode=${outputMode}`;
+
+/** 全班上傳照片 ZIP 下載 URL（原始上傳素材，無畫質之分） */
+export const buildDownloadAllPhotosArchiveUrl = (projectId) =>
+  `${API_BASE}/projects/${projectId}/photos/archive`;
+
+/** 學生個人上傳照片 ZIP 下載 URL（原始上傳素材，無畫質之分） */
+export const buildDownloadStudentPhotosArchiveUrl = (projectId, studentId) =>
+  `${API_BASE}/projects/${projectId}/students/${studentId}/photos/archive`;

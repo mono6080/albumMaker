@@ -1217,17 +1217,26 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert rerender_response.json()["pdf"] == render_payload["pdf"]
         assert rerender_response.json()["pages"] == 1
 
-        download_paths = [
+        student_download_paths = [
             f"/api/projects/{project_id}/students/{student_id}/pdf?mode=print",
             f"/api/projects/{project_id}/students/{student_id}/images",
             f"/api/projects/{project_id}/students/{student_id}/images/1",
+        ]
+        for download_path in student_download_paths:
+            download_before_completion = client.get(download_path)
+            assert_status(download_before_completion, 409)
+            assert download_before_completion.json()["detail"]["code"] == "student_not_completed"
+        class_download_paths = [
             f"/api/projects/{project_id}/download/all?mode=screen",
             f"/api/projects/{project_id}/download/all/images?mode=screen",
         ]
-        for download_path in download_paths:
+        for download_path in class_download_paths:
             download_before_completion = client.get(download_path)
             assert_status(download_before_completion, 409)
-            assert download_before_completion.json()["detail"] == "請先標記全班完成，再下載 PDF 或圖片"
+            class_gate_detail = download_before_completion.json()["detail"]
+            assert class_gate_detail["code"] == "class_zip_requires_full_completion"
+            assert class_gate_detail["completed"] == 0
+            assert class_gate_detail["total"] == 1
 
         complete = client.post(f"/api/projects/{project_id}/complete")
         assert_status(complete, 200)
@@ -1305,7 +1314,7 @@ def test_photo_render_and_download_contracts(monkeypatch, tmp_path):
         assert_status(reopen, 200)
         download_after_reopen = client.get(f"/api/projects/{project_id}/students/{student_id}/pdf")
         assert_status(download_after_reopen, 409)
-        assert download_after_reopen.json()["detail"] == "請先標記全班完成，再下載 PDF 或圖片"
+        assert download_after_reopen.json()["detail"]["code"] == "student_not_completed"
 
         mapping_response = client.put(
             revisioned_project_url(

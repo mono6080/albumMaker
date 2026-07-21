@@ -19,6 +19,7 @@ export default function AlbumEditorLayout({
   projectId,
   onStartGuide,
   isProjectCompleted,
+  completedTitle,
   completedDescription,
   students,
   currentStudentId,
@@ -80,7 +81,7 @@ export default function AlbumEditorLayout({
 
       {isProjectCompleted && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <span className="font-medium">此專案已標記全班完成，內容已鎖定</span>
+          <span className="font-medium">{completedTitle}</span>
           <span className="text-emerald-600">{completedDescription}</span>
         </div>
       )}

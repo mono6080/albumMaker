@@ -1,13 +1,15 @@
 // 班級總覽的學生卡片：縮圖列（點縮圖預覽）＋ 姓名與內容進度 ＋ 單人下載動作。
 // 可編輯者主要區是進編輯頁的 Link；唯讀角色改為開啟預覽的 button。
+// 完成判斷式一律走 utils/reviewCompletion（與 hook 閘門同一來源）。
 
 import { Link } from "react-router-dom";
-import { Download, ImageDown, Loader2, Pencil } from "lucide-react";
+import { CheckCircle2, Download, FolderArchive, ImageDown, Loader2, Pencil, RotateCcw } from "lucide-react";
 import {
   appendPreviewCacheVersion,
   buildStudentPagePreviewUrl as previewUrl,
 } from "../api/urls";
-import { IconButton, Surface } from "./ui";
+import { isStudentContentComplete } from "../utils/reviewCompletion";
+import { Button, IconButton, Surface } from "./ui";
 import ReviewPreviewImage from "./ReviewPreviewImage";
 
 export default function StudentReviewCard({
@@ -18,23 +20,30 @@ export default function StudentReviewCard({
   templateRevision,
   canEditCurrentProject,
   canDownloadCurrentProject,
+  canReopenProject,
   isProjectCompleted,
   photoProgress,
   textProgress,
   isRendering,
   isImageRendering,
   isImageShareReady,
+  isPhotosDownloading,
   getVisiblePageIndexes,
   onPreview,
   onDownloadPdf,
   onDownloadImages,
+  onDownloadPhotos,
+  onCompleteStudent,
+  onReopenStudent,
 }) {
-  const isStudentPhotoComplete = photoProgress.total === 0 || photoProgress.filled === photoProgress.total;
-  const isStudentTextComplete = textProgress.total === 0 || textProgress.filled === textProgress.total;
-  const isStudentContentComplete = isStudentPhotoComplete && isStudentTextComplete;
-  const isStudentBusy = isRendering || isImageRendering;
+  const isContentComplete = isStudentContentComplete(photoProgress, textProgress);
+  // 三種下載互斥：任一進行中即整排鎖住，避免同時觸發多個大檔請求
+  const isStudentBusy = isRendering || isImageRendering || isPhotosDownloading;
   const hasRenderedOutput = Boolean(student.output_filename);
-  const canStartDownload = isProjectCompleted && (canEditCurrentProject || hasRenderedOutput);
+  // 有效完成 predicate（與後端一致）：該生 completed_at 或全班 completed_at 任一成立
+  const isStudentMarkedCompleted = Boolean(student.completed_at);
+  const isStudentEffectivelyCompleted = isStudentMarkedCompleted || isProjectCompleted;
+  const canStartDownload = isStudentEffectivelyCompleted && (canEditCurrentProject || hasRenderedOutput);
   const studentSkippedPages = new Set(
     (student.pages_data || []).filter(p => p.skip).map(p => p.page_index)
   );
@@ -42,6 +51,17 @@ export default function StudentReviewCard({
   // 內容進度 badge：可編輯（Link）與唯讀（button）兩個分支共用同一份 JSX
   const contentProgressBadges = (
     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+      {isStudentEffectivelyCompleted && (
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 font-medium text-white"
+          title={isStudentMarkedCompleted
+            ? `標記完成於 ${new Date(student.completed_at).toLocaleString("zh-TW")}`
+            : "由全班完成標記涵蓋"}
+        >
+          <CheckCircle2 className="h-3 w-3" />
+          {isStudentMarkedCompleted ? "已標記完成" : "全班完成"}
+        </span>
+      )}
       {photoProgress.total > 0 && (
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
           photoProgress.filled === photoProgress.total
@@ -73,7 +93,7 @@ export default function StudentReviewCard({
       style={{ contentVisibility: "auto", containIntrinsicSize: "0 420px" }}
       padding="none"
       className={`overflow-hidden transition-all hover:shadow-md ${
-        isStudentContentComplete ? "border-emerald-100" : "border-gray-200"
+        isContentComplete ? "border-emerald-100" : "border-gray-200"
       }`}
     >
       {/* Thumbnail strip — 跳過已刪除的頁面；點縮圖即預覽 */}
@@ -142,8 +162,8 @@ export default function StudentReviewCard({
             <>
               <IconButton
                 label={
-                  !isProjectCompleted
-                    ? "請先標記全班完成，才能下載 PDF"
+                  !isStudentEffectivelyCompleted
+                    ? "請先標記此學生完成，才能下載 PDF"
                     : isRendering
                       ? "PDF 產生中"
                       : canStartDownload
@@ -161,8 +181,8 @@ export default function StudentReviewCard({
               </IconButton>
               <IconButton
                 label={
-                  !isProjectCompleted
-                    ? "請先標記全班完成，才能下載圖片"
+                  !isStudentEffectivelyCompleted
+                    ? "請先標記此學生完成，才能下載圖片"
                     : isImageShareReady
                       ? "開始分享圖片"
                       : canStartDownload
@@ -177,10 +197,57 @@ export default function StudentReviewCard({
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : <ImageDown className="h-4 w-4" />}
               </IconButton>
+              {/* 上傳照片 ZIP 是原始素材、與交件無關，不受標記完成閘門限制 */}
+              <IconButton
+                label="下載上傳照片"
+                onClick={() => onDownloadPhotos(student.id)}
+                disabled={isStudentBusy}
+                variant="neutral"
+              >
+                {isPhotosDownloading
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <FolderArchive className="h-4 w-4" />}
+              </IconButton>
             </>
           )}
         </div>
       </div>
+
+      {/* 個別完成動作列：老師標記完成；退回僅主管/admin（與全班退回同權限來源） */}
+      {((canEditCurrentProject && !isStudentEffectivelyCompleted)
+        || (canReopenProject && isStudentMarkedCompleted)) && (
+        <div className="border-t border-gray-100 px-4 py-2.5">
+          {canEditCurrentProject && !isStudentEffectivelyCompleted && (
+            <Button
+              type="button"
+              onClick={() => onCompleteStudent(student)}
+              // 前置條件與後端一致：照片與文字都填滿才能標記完成
+              disabled={!isContentComplete}
+              title={isContentComplete
+                ? undefined
+                : `照片或文字尚未填齊（照片 ${photoProgress.filled}/${photoProgress.total}、文字 ${textProgress.filled}/${textProgress.total}），補齊後才能標記完成`}
+              variant="successSoft"
+              size="sm"
+              fullWidth
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {isContentComplete ? "標記完成" : "內容未填齊，暫不能標記完成"}
+            </Button>
+          )}
+          {canReopenProject && isStudentMarkedCompleted && (
+            <Button
+              type="button"
+              onClick={() => onReopenStudent(student)}
+              variant="neutral"
+              size="sm"
+              fullWidth
+            >
+              <RotateCcw className="h-4 w-4" />
+              退回此學生
+            </Button>
+          )}
+        </div>
+      )}
     </Surface>
   );
 }

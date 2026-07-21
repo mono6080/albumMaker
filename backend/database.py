@@ -980,6 +980,8 @@ class Student(Base):
     output_filename = Column(String, nullable=True)
     # 未歸班舊專案可為 NULL／暫定證據；歸班後由 DB trigger 凍結正式身分。
     roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=True)
+    # 單一學生相本完成時間：有效完成判斷一律走 project_access_service 的 predicate
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     project = relationship("Project", back_populates="students")

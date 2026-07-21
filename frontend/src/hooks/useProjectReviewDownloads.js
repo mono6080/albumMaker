@@ -1,26 +1,31 @@
-import { useLayoutEffect, useState } from "react";
+// 班級總覽的下載動作:單生/全班的 PDF、頁面圖片與上傳照片 ZIP。
+// 渲染前置(帶班老師先補渲)與下載觸發在此;手機圖片分享拆在 useMobileImageShare。
+// 交件閘門判斷一律走 utils/reviewCompletion,與按鈕 disabled 同一來源。
+
+import { useState } from "react";
 import toast from "react-hot-toast";
 
 import { renderStudent } from "../api/projectApi";
 import { renderClient } from "../api/authApi";
 import {
-  appendPreviewCacheVersion,
   buildDownloadAllImagesZipUrl,
+  buildDownloadAllPhotosArchiveUrl,
   buildDownloadAllZipUrl,
   buildDownloadImagesZipUrl,
   buildDownloadPdfUrl,
-  buildStudentPagePreviewUrl,
+  buildDownloadStudentPhotosArchiveUrl,
 } from "../api/urls";
 import {
-  createFileFromBlob,
   downloadApiBlob,
-  fetchApiBlob,
-  getShareFailureMessage,
   isMobileDevice,
-  shareFiles,
   triggerNativeDownload,
 } from "../utils/browserFiles";
+import {
+  isProjectDeliverableUnlocked,
+  isStudentDeliverableUnlocked,
+} from "../utils/reviewCompletion";
 import { showRetryToast } from "../utils/retryToast";
+import useMobileImageShare from "./useMobileImageShare";
 
 export default function useProjectReviewDownloads({
   projectId,
@@ -37,50 +42,36 @@ export default function useProjectReviewDownloads({
   const [renderingAllImages, setRenderingAllImages] = useState(false);
   const [renderAllProgress, setRenderAllProgress] = useState(null);
   const [renderAllImagesProgress, setRenderAllImagesProgress] = useState(null);
-  const [imageShareDrafts, setImageShareDrafts] = useState({});
-  const [allImagesShareDraft, setAllImagesShareDraft] = useState(null);
+  // 上傳照片 ZIP 的防連點狀態(後端串流打包,無進度可回報)
+  const [downloadingPhotos, setDownloadingPhotos] = useState({});
+  const [downloadingAllPhotos, setDownloadingAllPhotos] = useState(false);
 
-  // 專案內容更新後，先前準備的手機分享檔已過期。
-  useLayoutEffect(() => {
-    setImageShareDrafts({});
-    setAllImagesShareDraft(null);
-  }, [projectLoadSequence]);
+  const mobileShare = useMobileImageShare({
+    projectId,
+    project,
+    getVisiblePageIndexes,
+    projectLoadSequence,
+  });
 
-  const ensureProjectCompleted = () => {
-    if (project?.completed_at) return true;
-    toast.error("請先標記全班完成，再下載 PDF 或圖片");
+  // 單生交件閘門:與卡片按鈕 disabled 同一 predicate,此處是 UI 被繞過時的最後防線
+  const ensureStudentCompleted = (studentId) => {
+    const studentRecord = project?.students.find(student => student.id === studentId);
+    if (isStudentDeliverableUnlocked(project, studentRecord)) return true;
+    toast.error("請先標記此學生完成，再下載 PDF 或圖片");
     return false;
   };
 
-  const buildShareImageFiles = async (students, requestTimestamp, onProgress) => {
-    const files = [];
-    for (let studentIndex = 0; studentIndex < students.length; studentIndex++) {
-      const studentRecord = students[studentIndex];
-      onProgress?.(studentIndex + 1, students.length);
-
-      const visiblePageIndexes = getVisiblePageIndexes(studentRecord);
-      for (const [visibleIndex, pageIndex] of visiblePageIndexes.entries()) {
-        const { blob } = await fetchApiBlob(
-          renderClient,
-          appendPreviewCacheVersion(
-            buildStudentPagePreviewUrl(projectId, studentRecord.id, pageIndex),
-            requestTimestamp,
-            project.template_revision,
-          ),
-        );
-        const file = createFileFromBlob(
-          blob,
-          `${studentRecord.name}_page${visibleIndex + 1}.jpg`,
-          "image/jpeg",
-        );
-        if (file) files.push(file);
-      }
-    }
-    return files;
+  // 全班交件閘門:只看全班標記完成;未達時提示已標記 n/N
+  const ensureProjectCompleted = () => {
+    if (isProjectDeliverableUnlocked(project)) return true;
+    const completedStudentCount = project?.students.filter(student => student.completed_at).length ?? 0;
+    const studentTotal = project?.students.length ?? 0;
+    toast.error(`已標記完成 ${completedStudentCount}/${studentTotal} 位，交件 ZIP 需全班標記完成`);
+    return false;
   };
 
   const handleDownloadOne = async (studentId) => {
-    if (!ensureProjectCompleted()) return;
+    if (!ensureStudentCompleted(studentId)) return;
     setRendering(previous => ({ ...previous, [studentId]: true }));
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
@@ -105,7 +96,7 @@ export default function useProjectReviewDownloads({
   };
 
   const handleDownloadOneImages = async (studentId) => {
-    if (!ensureProjectCompleted()) return;
+    if (!ensureStudentCompleted(studentId)) return;
     setRenderingImages(previous => ({ ...previous, [studentId]: true }));
     try {
       const studentRecord = project.students.find(student => student.id === studentId);
@@ -116,33 +107,7 @@ export default function useProjectReviewDownloads({
       }
 
       if (isMobileDevice()) {
-        const preparedShare = imageShareDrafts[studentId];
-        if (preparedShare?.files?.length) {
-          const shareResult = await shareFiles(preparedShare.files, preparedShare.title);
-          if (shareResult === "shared") {
-            setImageShareDrafts(previous => {
-              const next = { ...previous };
-              delete next[studentId];
-              return next;
-            });
-            toast.success("已開啟分享");
-          } else if (shareResult !== "cancelled") {
-            toast.error(getShareFailureMessage(shareResult));
-          }
-          return;
-        }
-
-        const files = await buildShareImageFiles([studentRecord], Date.now());
-        if (!files.length) {
-          toast.error("沒有可分享的頁面");
-          return;
-        }
-
-        setImageShareDrafts(previous => ({
-          ...previous,
-          [studentId]: { files, title: `${studentRecord.name} 相冊圖片` },
-        }));
-        toast.success("圖片已準備好，請再按一次開始分享");
+        await mobileShare.shareStudentImages(studentRecord);
         return;
       }
 
@@ -162,7 +127,7 @@ export default function useProjectReviewDownloads({
     }
   };
 
-  // 逐位渲染；單人失敗不中斷整批，失敗者再自動補渲一輪。
+  // 逐位渲染;單人失敗不中斷整批,失敗者再自動補渲一輪。
   const renderAllStudentsWithRetry = async (students, onProgress) => {
     const failedStudents = [];
     for (let studentIndex = 0; studentIndex < students.length; studentIndex++) {
@@ -236,29 +201,10 @@ export default function useProjectReviewDownloads({
         return;
       }
       if (isMobileDevice()) {
-        if (allImagesShareDraft?.files?.length) {
-          const shareResult = await shareFiles(allImagesShareDraft.files, allImagesShareDraft.title);
-          if (shareResult === "shared") {
-            setAllImagesShareDraft(null);
-            toast.success("已開啟分享");
-          } else if (shareResult !== "cancelled") {
-            toast.error(getShareFailureMessage(shareResult));
-          }
-          return;
-        }
-
-        const files = await buildShareImageFiles(
+        await mobileShare.shareAllImages(
           downloadableStudents,
-          Date.now(),
           (current, total) => setRenderAllImagesProgress({ current, total }),
         );
-        if (!files.length) {
-          toast.error("沒有可分享的頁面");
-          return;
-        }
-
-        setAllImagesShareDraft({ files, title: `${project.name} 全部圖片` });
-        toast.success("圖片已準備好，請再按一次開始分享");
         return;
       }
 
@@ -285,6 +231,26 @@ export default function useProjectReviewDownloads({
     }
   };
 
+  // 上傳照片 ZIP:不套交件閘門、無需渲染前置,直接原生下載(手機同樣走原生下載)。
+  // 原生下載無完成事件可等,busy 狀態以短暫延遲解除,僅防連點。
+  const handleDownloadOnePhotos = (studentId) => {
+    if (downloadingPhotos[studentId]) return;
+    setDownloadingPhotos(previous => ({ ...previous, [studentId]: true }));
+    triggerNativeDownload(buildDownloadStudentPhotosArchiveUrl(projectId, studentId));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => {
+      setDownloadingPhotos(previous => ({ ...previous, [studentId]: false }));
+    }, 3000);
+  };
+
+  const handleDownloadAllPhotos = () => {
+    if (downloadingAllPhotos) return;
+    setDownloadingAllPhotos(true);
+    triggerNativeDownload(buildDownloadAllPhotosArchiveUrl(projectId));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => setDownloadingAllPhotos(false), 3000);
+  };
+
   return {
     rendering,
     renderingImages,
@@ -293,11 +259,15 @@ export default function useProjectReviewDownloads({
     renderAllProgress,
     renderAllImagesProgress,
     isBatchRendering: renderingAll || renderingAllImages,
-    isAllImagesShareReady: isMobileDevice() && allImagesShareDraft?.files?.length > 0,
-    isImageShareReady: studentId => isMobileDevice() && imageShareDrafts[studentId]?.files?.length > 0,
+    isAllImagesShareReady: mobileShare.isAllImagesShareReady,
+    isImageShareReady: mobileShare.isImageShareReady,
+    downloadingPhotos,
+    downloadingAllPhotos,
     handleDownloadOne,
     handleDownloadOneImages,
     handleDownloadAll,
     handleDownloadAllImages,
+    handleDownloadOnePhotos,
+    handleDownloadAllPhotos,
   };
 }

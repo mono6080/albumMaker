@@ -43,6 +43,14 @@ export const completeProject = (projectId) =>
 export const reopenProject = (projectId) =>
   apiClient.post(`/projects/${projectId}/reopen`);
 
+/** 標記單一學生完成（該生內容鎖定並開放單人下載；全員完成時全班完成自動成立） */
+export const completeStudent = (projectId, studentId) =>
+  apiClient.post(`/projects/${projectId}/students/${studentId}/complete`);
+
+/** 退回單一學生完成標記（限管轄主管或 admin；全班完成已成立時一併解除） */
+export const reopenStudent = (projectId, studentId) =>
+  apiClient.post(`/projects/${projectId}/students/${studentId}/reopen`);
+
 // ── 本期學生快照 ──────────────────────────────────────────────────────────────
 
 /** 設定或取消學生某頁的跳過旗標 */

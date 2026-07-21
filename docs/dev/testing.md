@@ -13,7 +13,7 @@ python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
-python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；96 routes、零債務）
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；98 routes、零債務）
 
 # 前端
 cd frontend
@@ -32,7 +32,8 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     `test_storage.py`（含 traversal shared-prefix regression）、
     `test_project_service.py`、`test_roster.py`（園所目前名單的穩定孩子身分、未歸班 provisional
     identity 不進學期匯出、匯出只讀契約與 ZIP、
-    專案全班完成鎖定/退回與空專案不可完成）
+    專案全班完成鎖定/退回與空專案不可完成、學生個別完成的寫入鎖/下載閘門/
+    退回層級與自動全班完成）
   - `test_api_smoke.py`：TestClient 覆蓋 health、login/logout cookie roundtrip、
     模板／專案 CRUD、學生快照／相本稱呼、對應文字、留言角色、照片上傳/mapping、預覽、渲染、
     PDF / ZIP 下載；每個 TestClient context 會 reset slowapi limiter state

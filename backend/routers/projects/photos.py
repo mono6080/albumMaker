@@ -88,6 +88,7 @@ async def upload_shared_project_photo(
         "page_index": page_index,
         "slot_id": slot_id,
         "compressed": outcome.compressed,
+        "skipped_completed_student_ids": list(outcome.skipped_completed_student_ids),
     }
 
 

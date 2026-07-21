@@ -68,6 +68,7 @@ def run_migrations():
         _add_academic_term_reporting_schema(connection)
         _add_roster_child_album_name_column(connection)
         _migrate_assigned_album_names_to_roster_authority(connection)
+        _add_student_completed_at_column(connection)
 
 
 def _add_academic_term_reporting_schema(connection):
@@ -1902,6 +1903,17 @@ def _add_project_completed_at_column(connection):
     }
     if "completed_at" not in existing_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN completed_at DATETIME"))
+        connection.commit()
+
+
+def _add_student_completed_at_column(connection):
+    """新增學生「個別完成」時間戳；既有已全班完成的專案不回填學生時間戳。"""
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(students)"))
+    }
+    if "completed_at" not in existing_columns:
+        connection.execute(text("ALTER TABLE students ADD COLUMN completed_at DATETIME"))
         connection.commit()
 
 

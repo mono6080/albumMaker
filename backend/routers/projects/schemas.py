@@ -52,6 +52,8 @@ class StudentInProject(BaseModel):
     order_index: int
     pages_data: Any  # JSON 結構，不強制型別
     output_filename: Optional[str] = None
+    # 單一學生相本完成時間：非 NULL 代表該生內容鎖定（有效完成另看 project.completed_at）
+    completed_at: Optional[datetime] = None
     # 前端預覽 URL 的版本戳（瀏覽器快取 busting 用）
     updated_at: Optional[datetime] = None
 
@@ -224,6 +226,8 @@ class SharedPhotoUploadResult(BaseModel):
     page_index: int
     slot_id: int
     compressed: bool = False
+    # 套用全班時被自動跳過的已完成學生（不得靜默少套）
+    skipped_completed_student_ids: list[int] = []
 
 
 class BatchPhotoUploadItem(BaseModel):

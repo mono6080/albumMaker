@@ -1,5 +1,5 @@
 // 學生照片填滿進度（前端版）
-// 與後端 roster_service._summarize_student_progress 同一規則：
+// 與後端 student_progress.summarize_student_progress 同一規則：
 // 略過 skip 頁；一格有照片紀錄即算已填
 
 import { getVisibleLayoutElements } from "./layoutLayerState.js";
