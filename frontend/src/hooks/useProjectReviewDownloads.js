@@ -1,12 +1,12 @@
 // 班級總覽的下載動作:單生/全班的 PDF、頁面圖片與上傳照片 ZIP。
 // 後端在標記完成時背景渲染、下載端點又以內容指紋保證最新,
-// 前端不再於下載前逐位渲染;手機圖片分享拆在 useMobileImageShare。
+// 前端不再於下載前逐位渲染;桌機下載一律走原生下載(下載列立即出現、
+// 邊收邊存,不經 axios blob 佔記憶體);手機圖片分享拆在 useMobileImageShare。
 // 交件閘門判斷一律走 utils/reviewCompletion,與按鈕 disabled 同一來源。
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
-import { renderClient } from "../api/authApi";
 import {
   buildDownloadAllImagesZipUrl,
   buildDownloadAllPhotosArchiveUrl,
@@ -16,7 +16,6 @@ import {
   buildDownloadStudentPhotosArchiveUrl,
 } from "../api/urls";
 import {
-  downloadApiBlob,
   isMobileDevice,
   triggerNativeDownload,
 } from "../utils/browserFiles";
@@ -77,44 +76,41 @@ export default function useProjectReviewDownloads({
     return false;
   };
 
-  const handleDownloadOne = async (studentId) => {
+  const handleDownloadOne = (studentId) => {
     if (!ensureStudentCompleted(studentId)) return;
+    if (rendering[studentId]) return;
     setRendering(previous => ({ ...previous, [studentId]: true }));
-    try {
-      await downloadApiBlob(
-        renderClient,
-        buildDownloadPdfUrl(projectId, studentId, effectiveMode),
-        "album.pdf",
-      );
-    } catch {
-      showRetryToast("下載失敗", () => handleDownloadOne(studentId));
-    } finally {
+    triggerNativeDownload(buildDownloadPdfUrl(projectId, studentId, effectiveMode));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => {
       setRendering(previous => ({ ...previous, [studentId]: false }));
-    }
+    }, 3000);
   };
 
   const handleDownloadOneImages = async (studentId) => {
     if (!ensureStudentCompleted(studentId)) return;
-    setRenderingImages(previous => ({ ...previous, [studentId]: true }));
-    try {
+    if (renderingImages[studentId]) return;
+
+    if (isMobileDevice()) {
       const studentRecord = project.students.find(student => student.id === studentId);
       if (!studentRecord) return;
-
-      if (isMobileDevice()) {
+      setRenderingImages(previous => ({ ...previous, [studentId]: true }));
+      try {
         await mobileShare.shareStudentImages(studentRecord);
-        return;
+      } catch {
+        showRetryToast("分享圖片失敗", () => handleDownloadOneImages(studentId));
+      } finally {
+        setRenderingImages(previous => ({ ...previous, [studentId]: false }));
       }
-
-      await downloadApiBlob(
-        renderClient,
-        buildDownloadImagesZipUrl(projectId, studentId, effectiveMode),
-        "album-images.zip",
-      );
-    } catch {
-      showRetryToast("下載圖片失敗", () => handleDownloadOneImages(studentId));
-    } finally {
-      setRenderingImages(previous => ({ ...previous, [studentId]: false }));
+      return;
     }
+
+    setRenderingImages(previous => ({ ...previous, [studentId]: true }));
+    triggerNativeDownload(buildDownloadImagesZipUrl(projectId, studentId, effectiveMode));
+    toast.success("已開始下載，請留意瀏覽器的下載列");
+    setTimeout(() => {
+      setRenderingImages(previous => ({ ...previous, [studentId]: false }));
+    }, 3000);
   };
 
   const handleDownloadAll = () => {
