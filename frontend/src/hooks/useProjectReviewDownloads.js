@@ -2,7 +2,7 @@
 // 渲染前置(帶班老師先補渲)與下載觸發在此;手機圖片分享拆在 useMobileImageShare。
 // 交件閘門判斷一律走 utils/reviewCompletion,與按鈕 disabled 同一來源。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 import { renderStudent } from "../api/projectApi";
@@ -52,6 +52,17 @@ export default function useProjectReviewDownloads({
     getVisiblePageIndexes,
     projectLoadSequence,
   });
+
+  // 手機且交件閘門解鎖後,背景預抓全班分享檔,讓「全部圖片」一按即開分享面板
+  const { prefetchAllImagesShare } = mobileShare;
+  useEffect(() => {
+    if (!project || !isMobileDevice() || !isProjectDeliverableUnlocked(project)) return;
+    const downloadableStudents = canRender
+      ? project.students
+      : project.students.filter(student => student.output_filename);
+    prefetchAllImagesShare(downloadableStudents);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, canRender, projectLoadSequence]);
 
   // 單生交件閘門:與卡片按鈕 disabled 同一 predicate,此處是 UI 被繞過時的最後防線
   const ensureStudentCompleted = (studentId) => {
