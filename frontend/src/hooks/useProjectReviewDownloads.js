@@ -47,17 +47,19 @@ export default function useProjectReviewDownloads({
   const mobileShare = useMobileImageShare({
     projectId,
     project,
+    effectiveMode,
     getVisiblePageIndexes,
     projectLoadSequence,
   });
 
   // 手機且交件閘門解鎖後,背景預抓全班分享檔,讓「全部圖片」一按即開分享面板
+  // (畫質切換會作廢草稿,依新畫質重抓)
   const { prefetchAllImagesShare } = mobileShare;
   useEffect(() => {
     if (!project || !isMobileDevice() || !isProjectDeliverableUnlocked(project)) return;
     prefetchAllImagesShare(project.students);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, projectLoadSequence]);
+  }, [project, projectLoadSequence, effectiveMode]);
 
   // 單生交件閘門:與卡片按鈕 disabled 同一 predicate,此處是 UI 被繞過時的最後防線
   const ensureStudentCompleted = (studentId) => {

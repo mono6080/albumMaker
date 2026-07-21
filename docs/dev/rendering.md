@@ -24,8 +24,10 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
 - PDF 由 img2pdf 產生（`save_album_pdf()` 唯一進入點），避開 PIL 內建 PDF 的色域問題；
   print 頁面內嵌 **JPEG quality 95**（照片內容用 PNG 體積大 5-8 倍且壓縮極慢）
 - 模板單頁／跨頁預覽回傳無損 PNG；**專案／學生互動預覽回傳 JPEG**
-  （quality 80，照片內容 PNG 體積大 3-5 倍；手機分享直接以此檔分享給家長），
-  內容定址快取使用 `.jpg`。正式 print／screen PDF 與單頁 JPEG 輸出不受影響
+  （quality 80，照片內容 PNG 體積大 3-5 倍），內容定址快取使用 `.jpg`。
+  正式 print／screen PDF 與單頁 JPEG 輸出不受影響。**手機圖片分享**逐頁抓
+  正式輸出的單頁 JPG 端點（`…/images/{page_number}?mode=`）——內容與交件
+  一致並跟隨畫質切換，不走預覽管線；該端點只讀目標頁、不整批載入
 - 互動預覽先在 794×1123 canonical 像素完整渲染，再以 LANCZOS 縮成顯示尺寸；
   縮圖不另跑一套字級、行距或裁切公式
 - 專案／學生預覽回傳內容定址 ETag 與 `private, no-cache, must-revalidate`；

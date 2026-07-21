@@ -116,6 +116,39 @@ def _read_first_existing(storage, candidate_keys: list[str]) -> bytes | None:
     return None
 
 
+def get_student_image_entry(
+    project: Project,
+    student: Student,
+    output_mode: str,
+    page_number: int,
+) -> tuple[str, bytes] | None:
+    """讀取第 page_number 張既存單頁圖(1-based),只抓目標頁的 bytes。
+
+    以 exists 走訪計數既存頁(缺頁跳過,與 get_student_image_entries 同序),
+    不像整批版把所有頁的 bytes 都讀出來。找不到回 None。
+    """
+    storage = get_storage()
+    existing_count = 0
+    for archive_name, candidate_keys in _plan_student_image_keys(
+        project,
+        student,
+        output_mode,
+    ):
+        existing_key = next(
+            (key for key in candidate_keys if storage.exists(key)),
+            None,
+        )
+        if existing_key is None:
+            continue
+        existing_count += 1
+        if existing_count == page_number:
+            try:
+                return archive_name, storage.get_bytes(existing_key)
+            except FileNotFoundError:
+                return None
+    return None
+
+
 def get_student_image_entries(
     project: Project,
     student: Student,

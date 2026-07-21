@@ -55,7 +55,7 @@ def render_preview_jpeg_bytes(
     *,
     album_name: str | None = None,
 ) -> bytes:
-    """渲染單頁預覽並編成 JPEG bytes（手機分享直接以此檔分享給家長）。"""
+    """渲染單頁預覽並編成 JPEG bytes（互動預覽用；手機分享走正式單頁輸出）。"""
     preview_image = render_preview_page(
         layout,
         student_name,

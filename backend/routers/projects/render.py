@@ -27,6 +27,7 @@ from services.project_export_service import (
     build_zip_of_student_images,
     get_student_pdf_download,
     get_student_image_entries,
+    get_student_image_entry,
     open_all_student_images_zip_stream,
     open_all_student_pdfs_zip_stream,
     open_all_student_uploaded_photos_zip_stream,
@@ -398,20 +399,21 @@ def download_student_image(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """下載學生個人相冊的單頁 JPG。非 admin 使用者強制使用螢幕畫質。"""
+    """下載學生個人相冊的單頁 JPG。非 admin 使用者強制使用螢幕畫質。
+
+    手機圖片分享逐頁抓這個端點,只讀目標頁、不整批載入。
+    """
     project = get_project_or_404(project_id, db)
     assert_project_readable(project, current_user, db)
     student = get_student_or_404(student_id, project_id, db)
     assert_student_downloadable(project, student)
     ensure_student_render_fresh(db, project, student)
 
-    image_entries = get_student_image_entries(project, student, effective_mode)
-    if not image_entries:
-        raise HTTPException(status_code=404, detail="圖片檔案不存在，請重新渲染")
-    if page_number > len(image_entries):
+    image_entry = get_student_image_entry(project, student, effective_mode, page_number)
+    if image_entry is None:
         raise HTTPException(status_code=404, detail="圖片頁碼超出範圍")
 
-    filename, image_bytes = image_entries[page_number - 1]
+    filename, image_bytes = image_entry
     content_disposition = build_content_disposition_header(filename)
 
     return Response(
