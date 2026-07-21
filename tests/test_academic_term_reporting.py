@@ -4,6 +4,7 @@ from io import BytesIO
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from pypdf import PdfReader
 
 from database import (
     AcademicTerm,
@@ -693,6 +694,73 @@ def test_semester_zip_uses_term_student_final_classroom_for_transferred_child(
                 db.commit()
             finally:
                 db.close()
+
+
+def test_semester_zip_appends_merged_pdf_for_multi_period_child(
+    monkeypatch,
+    tmp_path,
+):
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        teacher, _ = create_user(client, "teacher")
+        period_a = create_active_period(client)
+        period_b = create_active_period(client)
+        template_a_id, _ = create_template_with_page(client, period_id=period_a["id"])
+        template_b_id, _ = create_template_with_page(client, period_id=period_b["id"])
+        _, classroom_id = create_scoped_classroom(client)
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        child_name = unique_name("merged_child")
+        add_classroom_members(client, classroom_id, [child_name])
+        for template_id in (template_a_id, template_b_id):
+            project_id = create_classroom_project(client, classroom_id, template_id)
+            student_id = add_students(client, project_id, [child_name])[child_name]
+            rendered = client.post(
+                f"/api/projects/{project_id}/students/{student_id}/render"
+            )
+            assert_status(rendered, 200)
+        academic_term_id = reporting_term_id(
+            client,
+            [period_a["id"], period_b["id"]],
+        )
+
+        download = client.get(
+            "/api/roster/semester-export/download",
+            params={
+                "academic_term_id": academic_term_id,
+                "period_ids": [period_a["id"], period_b["id"]],
+                "mode": "print",
+            },
+        )
+        assert_status(download, 200)
+        with ZipFile(BytesIO(download.content)) as zip_archive:
+            pdf_paths = [
+                name for name in zip_archive.namelist() if name.endswith(".pdf")
+            ]
+            merged_paths = [
+                name for name in pdf_paths if "/全期合併_" in name
+            ]
+            assert len(pdf_paths) == 3
+            assert merged_paths == [
+                next(
+                    name.rsplit("/", 1)[0]
+                    for name in pdf_paths
+                    if "/全期合併_" not in name
+                ) + f"/全期合併_{child_name}.pdf"
+            ]
+            period_page_total = sum(
+                len(PdfReader(BytesIO(zip_archive.read(name))).pages)
+                for name in pdf_paths
+                if name not in merged_paths
+            )
+            merged_reader = PdfReader(BytesIO(zip_archive.read(merged_paths[0])))
+            assert period_page_total >= 2
+            assert len(merged_reader.pages) == (period_page_total + 1) // 2
+            for merged_page in merged_reader.pages:
+                assert round(float(merged_page.mediabox.width)) == 1191
+                assert round(float(merged_page.mediabox.height)) == 842
+            manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
+        assert "全期合併" in manifest
 
 
 def test_current_supervisor_reads_historical_snapshot_after_classroom_move():

@@ -188,7 +188,9 @@ Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別�
 
 預覽按 term 及 period subset 查詢，entry 必含校別、班級、部門 snapshot。
 分組與 ZIP 路徑使用 `校別/班級/孩子/期別_孩子.pdf`，不得使用 Project name
-代表班級。
+代表班級。同一孩子在這次匯出有兩期以上 PDF 時，孩子資料夾內另附
+`全期合併_孩子.pdf`：以 pypdf 依期別順序把 A4 頁兩頁併成一張 A3 橫式
+（頁序跨期連續，奇數頁時最後一張右半留白）；僅一期時不附。
 
 每個孩子每期 cell 由後端回：
 
@@ -212,6 +214,9 @@ filter signature、AbortController 與 sequence，舊回應不得覆蓋目前畫
   照片／文字、交件鎖定與負責人，不顯示 PDF 狀態。
 - 學期匯出：依校別／班級 accordion 顯示孩子×期別；明確顯示未入園、離園、
   無相本、重複、未產生與已產生。
+- 下載時若選取孩子含未產生 PDF，先自動啟動補渲染（同一 singleton job，
+  範圍限這些孩子），job 結束非 failed 即自動開始下載；部分失敗照樣下載，
+  缺漏由 ZIP 匯出說明列出。
 - 換 term/scope/period 必須重設 selection；主管不可補渲染或下載。
 
 ## Acceptance Smoke

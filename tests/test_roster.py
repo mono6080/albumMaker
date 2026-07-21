@@ -1386,11 +1386,12 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         with ZipFile(BytesIO(download.content)) as zip_archive:
             entry_names = zip_archive.namelist()
             manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
-        # 結構：校別/班級/孩子/期別_孩子.pdf
+        # 結構：校別/班級/孩子/期別_孩子.pdf；兩期以上另附全期合併
         ming_entries = {name for name in entry_names if "/王小明/" in name}
         assert {name.rsplit("/", 1)[-1] for name in ming_entries} == {
             f"{period_a['name']}_王小明.pdf",
             f"{period_b['name']}_王小明.pdf",
+            "全期合併_王小明.pdf",
         }
         # 未渲染的李小華不進 ZIP，但列在匯出說明；班級對照含兩位孩子
         assert not any("/李小華/" in name for name in entry_names)
@@ -1522,22 +1523,36 @@ def test_semester_export_zip_paths_cannot_escape_with_database_names(monkeypatch
         },
     )
 
-    zip_entries, _ = semester_export_service._plan_semester_export_zip(
+    child_plans, _ = semester_export_service._plan_semester_export_zip(
         None,
         7,
         [1],
         "print",
     )
 
-    assert zip_entries == [
-        ("unnamed/_根目錄/unnamed/C__期別_上學期_unnamed.pdf", first_pdf_key),
-        (
-            "unnamed/__server_share/unnamed/C__期別_上學期_unnamed.pdf",
-            second_pdf_key,
-        ),
+    assert child_plans == [
+        {
+            "files": [
+                ("unnamed/_根目錄/unnamed/C__期別_上學期_unnamed.pdf", first_pdf_key),
+            ],
+            "merged_path": None,
+        },
+        {
+            "files": [
+                (
+                    "unnamed/__server_share/unnamed/C__期別_上學期_unnamed.pdf",
+                    second_pdf_key,
+                ),
+            ],
+            "merged_path": None,
+        },
     ]
-    for archive_path, _ in zip_entries:
-        assert not archive_path.startswith(("/", "\\"))
-        assert ":" not in archive_path
-        assert "\\" not in archive_path
-        assert all(segment not in {".", ".."} for segment in archive_path.split("/"))
+    for plan in child_plans:
+        for archive_path, _ in plan["files"]:
+            assert not archive_path.startswith(("/", "\\"))
+            assert ":" not in archive_path
+            assert "\\" not in archive_path
+            assert all(
+                segment not in {".", ".."}
+                for segment in archive_path.split("/")
+            )

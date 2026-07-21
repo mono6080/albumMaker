@@ -428,7 +428,7 @@ export default function SemesterExport() {
     });
   };
 
-  const pollRenderJob = async (jobId, renderSequence, filterSignature, abortController) => {
+  const pollRenderJob = async (jobId, renderSequence, filterSignature, abortController, onFinished) => {
     for (;;) {
       await waitForPollInterval(abortController.signal);
       if (abortController.signal.aborted) return;
@@ -445,6 +445,8 @@ export default function SemesterExport() {
       }
       setRenderJobErrors(response.data.errors ?? []);
       setRenderJob(null);
+      // 部分失敗仍繼續下載：缺漏會列在 ZIP 的匯出說明；整個 job 失敗才中止
+      if (response.data.status !== "failed") onFinished?.();
       if (activeScopeSignature.current === filterSignature) {
         await loadPreview(
           { academicTermId, periodIds: selectedPeriodIds },
@@ -452,6 +454,37 @@ export default function SemesterExport() {
         );
       }
       return;
+    }
+  };
+
+  const startRenderMissingJob = async (requestedChildIds, filterSignature, onFinished) => {
+    try {
+      const response = await renderMissingSemesterAlbums({
+        academicTermId,
+        periodIds: selectedPeriodIds,
+        rosterChildIds: requestedChildIds,
+      });
+      renderAbortController.current?.abort();
+      const abortController = new AbortController();
+      renderAbortController.current = abortController;
+      const renderSequence = renderRequestSequence.current + 1;
+      renderRequestSequence.current = renderSequence;
+      setRenderJob(response.data);
+      void pollRenderJob(
+        response.data.job_id,
+        renderSequence,
+        filterSignature,
+        abortController,
+        onFinished,
+      ).catch(() => {
+        if (!abortController.signal.aborted) {
+          setRenderJob(null);
+          toast.error("查詢補產生進度失敗");
+        }
+      });
+    } catch (error) {
+      if (error.response?.status === 503) toast.error("已有補產生工作進行中，請稍後再試");
+      else toast.error("啟動補產生失敗");
     }
   };
 
@@ -467,38 +500,12 @@ export default function SemesterExport() {
           toast.error("篩選範圍已變更，請重新確認");
           return;
         }
-        try {
-          const response = await renderMissingSemesterAlbums({
-            academicTermId,
-            periodIds: selectedPeriodIds,
-            rosterChildIds: requestedChildIds,
-          });
-          renderAbortController.current?.abort();
-          const abortController = new AbortController();
-          renderAbortController.current = abortController;
-          const renderSequence = renderRequestSequence.current + 1;
-          renderRequestSequence.current = renderSequence;
-          setRenderJob(response.data);
-          void pollRenderJob(
-            response.data.job_id,
-            renderSequence,
-            filterSignature,
-            abortController,
-          ).catch(() => {
-            if (!abortController.signal.aborted) {
-              setRenderJob(null);
-              toast.error("查詢補產生進度失敗");
-            }
-          });
-        } catch (error) {
-          if (error.response?.status === 503) toast.error("已有補產生工作進行中，請稍後再試");
-          else toast.error("啟動補產生失敗");
-        }
+        await startRenderMissingJob(requestedChildIds, filterSignature);
       },
     });
   };
 
-  const handleDownload = () => {
+  const startDownload = () => {
     const isAllScopeSelected = allPreviewChildIds.length === selectedChildIds.size
       && allPreviewChildIds.every(childId => selectedChildIds.has(childId));
     const canOmitChildIds = !campusId && !selectedClassroomId && isAllScopeSelected;
@@ -508,6 +515,39 @@ export default function SemesterExport() {
       canOmitChildIds ? null : [...selectedChildIds],
     ));
     toast.success("已開始產生並下載，請留意瀏覽器的下載列");
+  };
+
+  const handleDownload = () => {
+    const selectedMissingChildIds = [];
+    let missingCellCount = 0;
+    for (const group of scopeGroups) {
+      for (const child of group.children ?? []) {
+        if (!selectedChildIds.has(child.roster_child_id)) continue;
+        const missingCells = (child.cells ?? [])
+          .filter(cell => cell.status === "not_rendered").length;
+        if (missingCells > 0) {
+          selectedMissingChildIds.push(child.roster_child_id);
+          missingCellCount += missingCells;
+        }
+      }
+    }
+    if (selectedMissingChildIds.length === 0) {
+      startDownload();
+      return;
+    }
+    const filterSignature = selectionScopeSignature;
+    setConfirmModal({
+      message: `選取的孩子中有 ${missingCellCount} 本相本尚未產生 PDF，將先在背景補產生，完成後自動開始下載。重複相本與無相本工作格會略過，完成前會鎖定學期與校班篩選。`,
+      confirmLabel: "補產生並下載",
+      confirmVariant: "primary",
+      onConfirm: async () => {
+        if (activeScopeSignature.current !== filterSignature) {
+          toast.error("篩選範圍已變更，請重新確認");
+          return;
+        }
+        await startRenderMissingJob(selectedMissingChildIds, filterSignature, startDownload);
+      },
+    });
   };
 
   const keepOnlyDisplayedSelected = () => {

@@ -3,6 +3,7 @@
 import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -32,6 +33,7 @@ from services.storage_factory import get_storage
 from services.zip_stream import open_zip_stream
 
 
+MERGED_PDF_LABEL = "全期合併"
 MISSING_ROSTER_CHILD = "missing_roster_child"
 INVALID_ROSTER_CHILD = "invalid_roster_child"
 DUPLICATE_PROJECT_ROSTER_CHILD = "duplicate_project_roster_child"
@@ -516,7 +518,7 @@ def _plan_semester_export_zip(
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
-) -> tuple[list[tuple[str, str]], str]:
+) -> tuple[list[dict], str]:
     preview = build_semester_export_preview(db, academic_term_id, period_ids)
     manifest_preview = _filter_preview_for_manifest(preview, roster_child_ids)
     projects = load_export_projects(db, academic_term_id, period_ids)
@@ -531,10 +533,11 @@ def _plan_semester_export_zip(
         for period in preview["periods"]
     }
 
-    zip_entries = []
+    child_plans = []
     missing_notes = []
     used_paths: set[str] = set()
     for child in _selected_preview_children(preview, roster_child_ids):
+        child_files: list[tuple[str, str]] = []
         for cell in child["cells"]:
             if cell["status"] == "duplicate":
                 project_ids = sorted({entry["project_id"] for entry in cell["entries"]})
@@ -591,7 +594,25 @@ def _plan_semester_export_zip(
                     f"{file_name[:-4]}_{entry['student_id']}.pdf",
                 )
             used_paths.add(archive_path)
-            zip_entries.append((archive_path, pdf_key))
+            child_files.append((archive_path, pdf_key))
+
+        # cells 依 selected_periods 的 position 排序，合併頁序即期別順序
+        merged_path = None
+        if len(child_files) >= 2:
+            child_dir = child_files[0][0].rsplit("/", 1)[0]
+            merged_name = make_safe_filename(child["name"])
+            merged_path = f"{child_dir}/{MERGED_PDF_LABEL}_{merged_name}.pdf"
+            if merged_path in used_paths:
+                merged_path = (
+                    f"{child_dir}/{MERGED_PDF_LABEL}_{merged_name}"
+                    f"（{child['roster_child_id']}）.pdf"
+                )
+            used_paths.add(merged_path)
+        if child_files:
+            child_plans.append({
+                "files": child_files,
+                "merged_path": merged_path,
+            })
 
     for entry in manifest_preview["unlinked"]:
         missing_notes.append(
@@ -599,7 +620,44 @@ def _plan_semester_export_zip(
             f"（{entry['campus_name']}／{entry['classroom_name']}／"
             f"{entry['project_name']}），未納入"
         )
-    return zip_entries, _build_export_manifest(manifest_preview, missing_notes)
+    return child_plans, _build_export_manifest(manifest_preview, missing_notes)
+
+
+A3_LANDSCAPE_WIDTH_PT = 1190.55
+A3_LANDSCAPE_HEIGHT_PT = 841.89
+
+
+def _merge_pdf_bytes(pdf_bytes_list: list[bytes]) -> bytes:
+    """依期別順序把 A4 頁兩頁併成一張 A3 橫式；奇數頁時最後一張右半留白。"""
+    from pypdf import PdfReader, PdfWriter, Transformation
+
+    readers = [PdfReader(BytesIO(pdf_bytes)) for pdf_bytes in pdf_bytes_list]
+    source_pages = [page for reader in readers for page in reader.pages]
+    writer = PdfWriter()
+    for pair_start in range(0, len(source_pages), 2):
+        a3_page = writer.add_blank_page(
+            width=A3_LANDSCAPE_WIDTH_PT,
+            height=A3_LANDSCAPE_HEIGHT_PT,
+        )
+        for slot, page in enumerate(source_pages[pair_start:pair_start + 2]):
+            src_width = float(page.mediabox.width)
+            src_height = float(page.mediabox.height)
+            scale = min(
+                A3_LANDSCAPE_WIDTH_PT / 2 / src_width,
+                A3_LANDSCAPE_HEIGHT_PT / src_height,
+            )
+            offset_x = (
+                slot * A3_LANDSCAPE_WIDTH_PT / 2
+                + (A3_LANDSCAPE_WIDTH_PT / 2 - src_width * scale) / 2
+            )
+            offset_y = (A3_LANDSCAPE_HEIGHT_PT - src_height * scale) / 2
+            a3_page.merge_transformed_page(
+                page,
+                Transformation().scale(scale).translate(offset_x, offset_y),
+            )
+    merged_buffer = BytesIO()
+    writer.write(merged_buffer)
+    return merged_buffer.getvalue()
 
 
 def open_semester_export_zip_stream(
@@ -609,7 +667,7 @@ def open_semester_export_zip_stream(
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ):
-    zip_entries, manifest_text = _plan_semester_export_zip(
+    child_plans, manifest_text = _plan_semester_export_zip(
         db,
         academic_term_id,
         period_ids,
@@ -619,9 +677,21 @@ def open_semester_export_zip_stream(
     storage = get_storage()
 
     def write_entries(zip_archive):
-        for archive_path, pdf_key in zip_entries:
-            zip_archive.writestr(archive_path, storage.get_bytes(pdf_key))
-            yield
+        # 每個孩子的 bytes 只從 storage 抓一次，合併時重用；峰值記憶體為單一孩子全期
+        for plan in child_plans:
+            merged_sources = []
+            for archive_path, pdf_key in plan["files"]:
+                pdf_bytes = storage.get_bytes(pdf_key)
+                zip_archive.writestr(archive_path, pdf_bytes)
+                if plan["merged_path"] is not None:
+                    merged_sources.append(pdf_bytes)
+                yield
+            if plan["merged_path"] is not None:
+                zip_archive.writestr(
+                    plan["merged_path"],
+                    _merge_pdf_bytes(merged_sources),
+                )
+                yield
         zip_archive.writestr("匯出說明.txt", manifest_text)
 
     return open_zip_stream(write_entries, "學期匯出 ZIP 正在產生中，請稍後再試")
@@ -631,6 +701,8 @@ def _build_export_manifest(preview: dict, missing_notes: list[str]) -> str:
     lines = [
         "【分類方式】",
         "檔案依「校別／班級／孩子／期別_孩子.pdf」分類。",
+        "同一孩子有兩期以上 PDF 時，另附「全期合併_孩子.pdf」：",
+        "依期別順序兩頁併成一張 A3 橫式（左右各一頁 A4），奇數頁時最後一張右半留白。",
         "校別與班級使用相本建立當下的正式快照，不使用相本名稱代替班級。",
         "",
         "【班級對照】",
