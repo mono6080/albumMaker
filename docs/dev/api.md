@@ -199,6 +199,7 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 | POST | `/{id}/restore` | 復原封存 |
 | POST | `/{id}/complete` | 標記全班完成（admin／該班目前老師）；完成後非 admin 內容寫入鎖定；不回填學生個別時間戳 |
 | POST | `/{id}/reopen` | 退回全班完成（admin 或該校／部門 scope supervisor）；同時清除全部學生的個別完成 |
+| POST | `/{id}/students/transfer` | 把學生搬到同一個班級期別的另一本相本（同 `can_edit`，來源與目標都要）；body 帶 `target_project_id` 與 `student_ids`。照片實體搬到新命名空間、頁面資料（個人文字與跳過設定）跟著走、來源的該生輸出清除、個別完成清空、`started_at` 不動。限制：同一 `class_period_work_slot_id`、同 `template_id`、兩本都未完成、孩子仍在班級目前名單、不可把來源搬空；違反依序回 422/409 附 code |
 | POST | `/{id}/students/{sid}/complete` | 標記單一學生完成（同 `can_edit`）；前置條件：該生照片與可填文字全數填滿（與老師進度同一計算，`student_progress.summarize_student_progress`），未滿回 409 `student_content_incomplete` 附計數；冪等；全班皆完成時同 transaction 自動寫入 `project.completed_at` |
 | POST | `/{id}/students/{sid}/reopen` | 退回單一學生完成（僅 `can_reopen`）；全班完成已成立時一併清除 `project.completed_at`，其他學生保留 |
 | POST | `/{id}/assignment` | admin 把進度負責人轉給該班目前老師並寫 from/to/operator 快照與原因；owner 不授權 |

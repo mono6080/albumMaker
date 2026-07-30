@@ -1574,13 +1574,42 @@ def _add_legacy_project_identity_migration_schema(connection):
             END
         """))
 
+    # 舊版一律禁止改 project_id；「一格多本」之後多出一個合法情境：同一個班級期別
+    # 的兩本相本之間搬學生（同班、同期、同模板，孩子的身分與期別歸屬都沒變，期末
+    # 匯出仍只出現一次）。姓名與 child link 維持完全凍結，只在這個窄口放行 project_id。
+    #
+    # 窄口條件引用 projects.class_period_work_slot_id，但 legacy 升級途中 projects
+    # 會被重建、該欄位一度不存在；SQLite 在任何 schema 變更時都會驗證全部 trigger，
+    # 引用不存在的欄位會讓整個升級中斷。所以欄位還沒出現時先建不含窄口的版本，
+    # 之後的升級輪次會把它換成完整版。
+    project_columns_for_trigger = {
+        row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
+    }
+    if "class_period_work_slot_id" in project_columns_for_trigger:
+        project_id_change_guard = """
+                NEW.project_id IS NOT OLD.project_id
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM projects AS source_project
+                    JOIN projects AS target_project
+                      ON target_project.id = NEW.project_id
+                    WHERE source_project.id = OLD.project_id
+                      AND source_project.class_period_work_slot_id IS NOT NULL
+                      AND source_project.class_period_work_slot_id
+                          = target_project.class_period_work_slot_id
+                      AND source_project.template_id = target_project.template_id
+                )
+        """
+    else:
+        project_id_change_guard = "NEW.project_id IS NOT OLD.project_id"
+    connection.execute(text("DROP TRIGGER IF EXISTS trg_students_freeze_class_backed_identity"))
     connection.execute(text(f"""
-        CREATE TRIGGER IF NOT EXISTS trg_students_freeze_class_backed_identity
+        CREATE TRIGGER trg_students_freeze_class_backed_identity
         BEFORE UPDATE OF name, roster_child_id, project_id ON students
         WHEN (
             NEW.name IS NOT OLD.name
             OR NEW.roster_child_id IS NOT OLD.roster_child_id
-            OR NEW.project_id IS NOT OLD.project_id
+            OR ({project_id_change_guard})
         ) AND (
             EXISTS (
                 SELECT 1 FROM projects

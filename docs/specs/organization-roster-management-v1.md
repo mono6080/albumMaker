@@ -126,6 +126,15 @@ migration 一次補齊快照；未歸班資料在管理員執行歸班時寫入�
 未設定時回退該本 `Student.name` 快照。園所修改中央稱呼會失效所有相關既有輸出，但不改
 成員、完整姓名或 child link。`Student.album_name` 只保留給未歸班 legacy Project。
 
+同一個班級期別現在可以有多本相本（見
+[學期報表 spec](academic-term-reporting-v1.md)）。凍結因此開一個窄口：**同一個
+`class_period_work_slot_id`、同一個 `template_id` 的兩本之間可以搬移 Student**
+（`POST /projects/{id}/students/transfer`）。這不踩到凍結要防的三件事——孩子仍在同班
+同期、身分與姓名完全沒動、期末彙整仍只出現一次。DB trigger
+`trg_students_freeze_class_backed_identity` 只在這個條件下放行 `project_id`，
+`name` 與 `roster_child_id` 維持完全不可變。搬移會一併搬照片實體與頁面資料、清除
+來源的該生輸出與個別完成狀態；來源不可被搬空，兩本都必須未完成。
+
 ### RosterChild identity
 
 園所設定是目前名冊的唯一 authority。管理員新增一位新入園學生時，同步建立新的

@@ -29,6 +29,7 @@ from services.project_student_service import (
     set_page_skip as set_page_skip_use_case,
     update_student_album_name as update_student_album_name_use_case,
 )
+from services.student_transfer_service import transfer_students_between_projects
 from template_periods import department_label
 
 from ._helpers import (
@@ -43,6 +44,7 @@ from .schemas import (
     ProjectSummary,
     StudentEditorDetail,
     StudentAlbumNameUpdate,
+    StudentTransferPayload,
     StudentIdentityResult,
 )
 
@@ -111,6 +113,31 @@ def get_project(
     organization_scope = build_project_access_scope(db, current_user)
     assert_project_readable(project, current_user, db, organization_scope)
     campus_name, classroom_name = _project_organization_names(project)
+    # 同一個班級期別的其他相本才是合法的搬移去處：模板要一致（版面對得上），
+    # 且尚未完成（完成的要先退回）。
+    transfer_targets = []
+    if project.class_period_work_slot_id is not None and project.classroom_id is not None:
+        transfer_targets = [
+            {"id": target_id, "name": target_name, "student_count": student_count}
+            for target_id, target_name, student_count in (
+                db.query(
+                    Project.id,
+                    Project.name,
+                    func.count(Student.id),
+                )
+                .outerjoin(Student, Student.project_id == Project.id)
+                .filter(
+                    Project.class_period_work_slot_id == project.class_period_work_slot_id,
+                    Project.template_id == project.template_id,
+                    Project.id != project.id,
+                    Project.deleted_at.is_(None),
+                    Project.completed_at.is_(None),
+                )
+                .group_by(Project.id, Project.name)
+                .order_by(Project.created_at)
+                .all()
+            )
+        ]
     return {
         "id": project.id,
         "name": project.name,
@@ -136,6 +163,7 @@ def get_project(
         "permissions": get_project_permissions(
             project, current_user, db, organization_scope
         ),
+        "transfer_targets": transfer_targets,
         "students": [
             {
                 "id": student.id,
@@ -258,6 +286,23 @@ def reopen_project(
 ):
     """退回「全班完成」標記，恢復可編輯（限管轄該老師的主管或 admin）。"""
     return reopen_project_use_case(db, current_user, project_id)
+
+
+@router.post("/{project_id}/students/transfer")
+def transfer_project_students(
+    project_id: int,
+    payload: StudentTransferPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """把學生搬到同一個班級期別的另一本相本，照片與個人文字一起帶走。"""
+    return transfer_students_between_projects(
+        db,
+        current_user,
+        source_project_id=project_id,
+        target_project_id=payload.target_project_id,
+        student_ids=payload.student_ids,
+    )
 
 
 @router.post("/{project_id}/students/{student_id}/complete")
