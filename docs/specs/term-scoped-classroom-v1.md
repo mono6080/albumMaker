@@ -202,6 +202,14 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
 8. **報表／匯出**：老師進度、學期彙整匯出改走學期班級。
 9. **前端**：班級相關頁面的 id 語意改動與文案。
 
+## Risks And Test Plan
+
+風險登錄、緩解決定、測試計畫與上線前檢查在
+[term-scoped-classroom-v1-risks.md](term-scoped-classroom-v1-risks.md)。
+
+其中一項是本重構的**執行順序前提**：`fix/roster-name-correction` 的兩支名冊腳本寫死
+舊表名，必須先推上正式站跑完，再開始改名。
+
 ## Acceptance Smoke
 
 - 老師調班後：舊學期相本可讀不可改、新學期相本可讀可改、`my-classrooms` 只列目前班。
