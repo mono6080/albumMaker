@@ -141,7 +141,6 @@ AcademicTerm（學期）
   三個 trigger 與歸班 API 一併退場；legacy ledger 表維持 append-only 只供稽核。
 - `trg_projects_freeze_classroom_snapshots`、`trg_projects_freeze_work_slot`：改以
   `class_period_work_slot_id IS NOT NULL` 作為 class-backed 判斷。
-
 - `trg_students_freeze_class_backed_identity`：已只依賴 `class_period_work_slot_id`，
   不需改動。
 
