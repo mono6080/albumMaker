@@ -122,7 +122,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
 | PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
-| POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
+| POST | `/classrooms/{id}/projects` | admin／當班 lead 依目前名單建立相本；body 必帶屬目前學期／該班／模板期別的 `work_slot_id`（同一格可多本，例如同排版兩套對應文字），可選 `roster_child_ids` 指定收錄的孩子（省略即收該格尚未編入相本者），owner 須為目前老師（省略採 lead） |
 | GET | `/projects/{project_id}/classroom-migration-preview?classroom_id=…` | admin 讀取固定 Student 快照、目標班狀態、established identity options 與 `source_fingerprint`；零寫入且不按姓名預選 decision |
 | PUT | `/projects/{project_id}/classroom` | admin 以完整 `student_identity_decisions` 顯式解析每位 Student 並歸班；可在空班以 `seed_current_roster` 全量建立目前名單 |
 | POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm |

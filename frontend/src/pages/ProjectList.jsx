@@ -356,13 +356,15 @@ export default function ProjectList() {
     if (!name || !classProjectDraft.workSlotId || !classProjectDraft.templateId || !leadTeacher) return;
     setIsCreatingClassProject(true);
     try {
-      await createClassroomProject(classProjectDraft.classroom.id, {
+      // 不指定收錄對象時，後端會收這個期別還沒編入相本的孩子——第一本是全班，
+      // 之後每一本接手剩下的（要挑人請到園所設定的建立相本流程）。
+      const response = await createClassroomProject(classProjectDraft.classroom.id, {
         name,
         template_id: Number(classProjectDraft.templateId),
         owner_id: leadTeacher.teacher_id,
         work_slot_id: Number(classProjectDraft.workSlotId),
       });
-      toast.success("已依班級目前名單建立新一期相本");
+      toast.success(`已建立新一期相本，收錄 ${response.data.students?.length ?? 0} 位學生`);
       setClassProjectDraft(null);
       const [, classroomResponse] = await Promise.all([
         loadProjectLists(),

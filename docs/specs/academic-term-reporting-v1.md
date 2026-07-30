@@ -86,9 +86,11 @@ Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表
 - `term_classroom_id`, `term_period_id`, `started_at`
 - 同一學期班級與學期期別唯一。
 
-`projects.class_period_work_slot_id` 指向工作格。舊資料可有多個 Project
-指向同一格；新建立流程只允許空工作格建立一次。`started_at` 一旦寫入不因
-Project 封存或 purge 清空，避免同一格被靜默重做。
+`projects.class_period_work_slot_id` 指向工作格。同一格可以有多個 Project——
+同一班同一期常見「同一套排版、兩套對應文字」，各本收錄不同孩子。跨本的
+invariant 是**同一個孩子只能被同格其中一本收錄**，否則期末彙整會把他算兩次。
+`started_at` 記錄該格第一次開工，之後同格再加本不更新，也不因 Project 封存或
+purge 清空，避免同一格被靜默重做。
 
 Project 新增不可變 `campus_id_snapshot`。班級歸入或建立時，必須與
 `campus_name_snapshot`、`classroom_name_snapshot`、`department` 同次寫入；
@@ -143,11 +145,14 @@ organization/template lock 與 transaction 中驗證：
 
 - slot 屬於 URL 班級、active term，且期別等於 template.period。
 - template、班級、slot 的 department 一致。
-- slot 尚未 started，且目前班級至少一位學生。
+- 目前班級至少一位學生；slot 已 started 不阻擋建立（同格可多本）。
 - owner 是該班目前有效老師；無 owner 時用主教。
+- 可選 `roster_child_ids` 指定這本收錄哪些孩子：必須都在該班目前名單，且都還沒被
+  同格其他相本收錄。省略時收錄該格尚未編入相本的孩子（第一本即全班）；若已無人
+  可收，回 409 `slot_roster_fully_assigned`，不建立空相本。
 
-建立 Project、凍結學生名冊、寫 Project snapshots 與 slot.started_at 必須同次
-commit。空班、同格重複與錯配一律回 409/422，不建立部分資料。
+建立 Project、凍結學生名冊、寫 Project snapshots 與 slot.started_at（僅第一次）
+必須同次 commit。空班、孩子重複收錄與錯配一律回 409/422，不建立部分資料。
 
 ## Read And Permission Contracts
 

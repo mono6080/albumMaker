@@ -147,6 +147,9 @@ class ClassroomProjectCreateBody(BaseModel):
     template_id: int
     work_slot_id: int
     owner_id: int | None = None
+    # 同一個班級期別可以有多本相本（例如同一套排版、兩套對應文字）。不指定時
+    # 收錄該班尚未被同格其他相本收錄的孩子；指定時只收這些孩子。
+    roster_child_ids: list[int] | None = None
 
 
 class ClassroomTeacherInput(BaseModel):
