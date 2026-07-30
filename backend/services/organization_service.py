@@ -2897,45 +2897,54 @@ def create_classroom_project(
             else:
                 requested_ids = list(dict.fromkeys(roster_child_ids))
                 if not requested_ids:
-                    raise HTTPException(
-                        status_code=422,
-                        detail={
-                            "code": "empty_roster_selection",
-                            "message": "請至少選擇一位孩子",
-                        },
+                    # 這格已經有相本時允許明確建立一本空的：全班都收在第一本、之後
+                    # 才決定要分兩本時，得先有第二本當搬移目標，否則會卡成死結
+                    # （建第二本說沒人可收、搬移又說沒有目標）。
+                    slot_has_album = any(
+                        existing.deleted_at is None for existing in work_slot.projects
                     )
-                member_by_child_id = {
-                    int(member.roster_child_id): member for member in active_members
-                }
-                missing_ids = [
-                    child_id for child_id in requested_ids
-                    if child_id not in member_by_child_id
-                ]
-                if missing_ids:
-                    raise HTTPException(
-                        status_code=422,
-                        detail={
-                            "code": "roster_child_not_in_classroom",
-                            "roster_child_ids": missing_ids,
-                            "message": "選到的孩子不在這個班級的目前名單",
-                        },
-                    )
-                conflicting_ids = [
-                    child_id for child_id in requested_ids
-                    if child_id in slot_taken_child_ids
-                ]
-                if conflicting_ids:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "roster_child_already_in_slot",
-                            "roster_child_ids": conflicting_ids,
-                            "message": "選到的孩子已經編入這個班級期別的其他相本",
-                        },
-                    )
-                selected_members = [
-                    member_by_child_id[child_id] for child_id in requested_ids
-                ]
+                    if not slot_has_album:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "empty_roster_selection",
+                                "message": "請至少選擇一位孩子",
+                            },
+                        )
+                    selected_members = []
+                else:
+                    member_by_child_id = {
+                        int(member.roster_child_id): member for member in active_members
+                    }
+                    missing_ids = [
+                        child_id for child_id in requested_ids
+                        if child_id not in member_by_child_id
+                    ]
+                    if missing_ids:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "roster_child_not_in_classroom",
+                                "roster_child_ids": missing_ids,
+                                "message": "選到的孩子不在這個班級的目前名單",
+                            },
+                        )
+                    conflicting_ids = [
+                        child_id for child_id in requested_ids
+                        if child_id in slot_taken_child_ids
+                    ]
+                    if conflicting_ids:
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "roster_child_already_in_slot",
+                                "roster_child_ids": conflicting_ids,
+                                "message": "選到的孩子已經編入這個班級期別的其他相本",
+                            },
+                        )
+                    selected_members = [
+                        member_by_child_id[child_id] for child_id in requested_ids
+                    ]
             active_members = selected_members
             assert_project_student_capacity(0, len(active_members))
             student_names = [member.roster_child.name for member in active_members]

@@ -359,7 +359,16 @@ export default function ProjectList() {
       teacher => teacher.duty === "lead",
     );
     if (!name || !classProjectDraft.workSlotId || !classProjectDraft.templateId || !leadTeacher) return;
-    if ((classProjectDraft.selectedChildIds ?? []).length === 0) {
+    const selectedChildIds = classProjectDraft.selectedChildIds ?? [];
+    const hasAssignableChild = (classProjectDraft.classroom.members ?? []).some(member => (
+      !new Set(
+        getCreatableWorkSlots(classProjectDraft.classroom)
+          .find(item => String(item.id) === classProjectDraft.workSlotId)
+          ?.assigned_roster_child_ids ?? [],
+      ).has(member.roster_child_id)
+    ));
+    // 還有人沒編入卻一個都沒勾，多半是漏選；全部都編入時才是刻意要建空相本
+    if (selectedChildIds.length === 0 && hasAssignableChild) {
       toast.error("請至少勾選一位孩子");
       return;
     }
@@ -612,6 +621,12 @@ export default function ProjectList() {
                     <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
                       這個期別已經有 {existingAlbumCount} 本相本。想用同一套排版但不同的對應文字時，
                       可以再建一本，收錄還沒編入的孩子。
+                    </p>
+                  )}
+                  {selectableCount === 0 && (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                      這個期別的孩子都已編入相本。仍可建立一本空的，之後在班級總覽用
+                      「搬移學生」把要分開做的孩子移過來。
                     </p>
                   )}
                   <FormField

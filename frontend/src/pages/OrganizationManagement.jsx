@@ -622,7 +622,8 @@ export default function OrganizationManagement() {
     const name = formModal.name.trim();
     if (!name || !formModal.workSlotId || !formModal.templateId || !formModal.ownerId) return;
     const selectedChildIds = formModal.selectedChildIds ?? [];
-    if (selectedChildIds.length === 0) {
+    // 還有人沒編入卻一個都沒勾，多半是漏選；全部都編入時才是刻意要建空相本
+    if (selectedChildIds.length === 0 && selectableMembers.length > 0) {
       toast.error("請至少勾選一位孩子");
       return;
     }
@@ -1267,6 +1268,12 @@ export default function OrganizationManagement() {
             {currentTeachers.length > 1 && (
               <p className="rounded-lg bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
                 所有目前當班老師都可依班級編制存取；所選負責人只決定主要進度歸戶。
+              </p>
+            )}
+            {selectableMembers.length === 0 && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                這個期別的孩子都已編入相本。仍可建立一本空的，之後在班級總覽用
+                「搬移學生」把要分開做的孩子移過來。
               </p>
             )}
             <FormField label={`收錄的孩子（${formModal.selectedChildIds?.length ?? 0}／${selectableMembers.length}）`}>

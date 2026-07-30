@@ -247,6 +247,45 @@ def test_lead_teacher_can_split_own_class_into_two_albums():
         )
 
 
+def test_can_create_empty_second_album_to_receive_transfers():
+    """全班都收在第一本、之後才要分兩本時，得建得出空的第二本當搬移目標。
+
+    否則會卡死：建第二本說沒人可收、搬移又說沒有目標可搬。
+    """
+    with started_client() as client:
+        login(client)
+        setup = _setup_classroom(client, [unique_name("deadlock_a")])
+
+        assert_status(_create_album(client, setup, name=unique_name("album_all")), 201)
+        # 省略收錄對象仍然擋下，避免誤建空相本
+        assert_status(_create_album(client, setup, name=unique_name("album_auto")), 409)
+
+        # 明確要求空相本則放行，之後用搬移把學生移進來
+        empty_album = _create_album(
+            client, setup, name=unique_name("album_empty"), roster_child_ids=[]
+        )
+        assert_status(empty_album, 201)
+        assert empty_album.json()["students"] == []
+
+        work_slot = next(
+            slot for slot in client.get("/api/organization/overview").json()["work_slots"]
+            if slot["id"] == setup["work_slot_id"]
+        )
+        assert len(work_slot["project_ids"]) == 2
+
+
+def test_empty_album_rejected_when_slot_has_no_album_yet():
+    """第一本不能是空的：那只是漏選學生，不是要準備搬移目標。"""
+    with started_client() as client:
+        login(client)
+        setup = _setup_classroom(client, [unique_name("first_empty")])
+        response = _create_album(
+            client, setup, name=unique_name("album_first_empty"), roster_child_ids=[]
+        )
+        assert_status(response, 422)
+        assert response.json()["detail"]["code"] == "empty_roster_selection"
+
+
 def test_started_at_keeps_first_album_time():
     """started_at 是開工水位，加第二本不該讓進度看起來變晚。"""
     with started_client() as client:
