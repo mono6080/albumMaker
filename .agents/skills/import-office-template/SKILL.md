@@ -59,8 +59,11 @@ trigger: /import-office-template
 - **模板預設文字一律用** `{name}的文字標題的文字標題的文字標題的文字標題`
   ——不要把 docm 或 PDF 裡量到的實際文案當範本預設值，那是特定一次匯出的
   內容，不是模板該有的通用預留字。
-- **字級固定 `TEXT_FONT_SIZE_PT`（18），不從 PDF 量到的原始字級換算**：屬性面板
-  的「字級（pt）」直接綁 layout 的 `font_size`，所以這個常數就是老師看到的數字。
+- **字級固定 18，不從 PDF 量到的原始字級換算**：屬性面板的「字級（pt）」直接綁
+  layout 的 `font_size`，所以這個數字就是老師看到的。字級、行高與下面兩個補救
+  上限都可以用命令列覆寫（`--font-size` / `--line-height` / `--max-rotation` /
+  `--max-growth`），預設值定義在 `ImportOptions`。**不需要為了調數字改程式碼**；
+  改預設值才動 `TEXT_FONT_SIZE_PT` 那幾個常數。
 - **文字底下有素材框時，框交給後端素材分析器決定，並建立素材文字連結**：走
   `backend/services/material_text_box.py` 的 `analyze_material_text_box()` ＋
   `project_normalized_box_to_sticker()`——跟編輯器「重新分析並重設」是同一支，

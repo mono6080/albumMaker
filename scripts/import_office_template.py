@@ -26,6 +26,13 @@
     python scripts/import_office_template.py "..." --name "..." --period-id 5 \
         --force-page image16.png=2
 
+    版面微調（都有預設值，一般不需要給）：
+        --font-size 20      文字框字級，就是編輯器屬性面板顯示的數字
+        --line-height 1.4   行高倍率
+        --max-rotation 0    文字放不下時不要旋轉底圖（只用放大）
+        --max-growth 1.0    文字放不下時不要放大底圖（只用旋轉）
+    兩個上限都關閉時，放不下就維持原樣、由人工調整。
+
 需求（僅此腳本，不是 app 執行期依賴，不用加進 backend/requirements.txt）：
     pip install pymupdf lxml
     docm/doc 輸入需要 Windows + 已安裝 Microsoft Word（透過 COM 自動化轉存 PDF，
@@ -42,6 +49,7 @@ import re
 import sqlite3
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +74,7 @@ PX_PER_EMU = 1 / 9525  # 96dpi 畫布下，1px = 9525 EMU
 # 匯入的文字一律用這個字級：屬性面板的「字級（pt）」直接綁 layout 的 font_size，
 # 所以這裡填的就是老師在編輯器看到的數字，不再依 PDF 量到的原始字級換算。
 TEXT_FONT_SIZE_PT = 18
+TEXT_LINE_HEIGHT = 1.3
 
 # 素材文字捷徑（見 docs/specs/illustrator-style-nested-groups-v2.md）：
 # link 存在 layout 頂層，有非空 links 就必須帶 contract。
@@ -79,6 +88,28 @@ MATERIAL_ROTATION_STEP = 2.0
 MATERIAL_ROTATION_LIMIT = 20.0
 MATERIAL_GROWTH_STEP = 0.02
 MATERIAL_GROWTH_LIMIT = 1.60
+
+
+@dataclass(frozen=True)
+class ImportOptions:
+    """一次匯入的可調參數；預設值就是上面的常數，命令列可覆寫。"""
+
+    font_size_pt: float = TEXT_FONT_SIZE_PT
+    line_height: float = TEXT_LINE_HEIGHT
+    rotation_limit: float = MATERIAL_ROTATION_LIMIT
+    growth_limit: float = MATERIAL_GROWTH_LIMIT
+    rotation_step: float = MATERIAL_ROTATION_STEP
+    growth_step: float = MATERIAL_GROWTH_STEP
+
+    def __post_init__(self) -> None:
+        if not 8 <= self.font_size_pt <= 72:
+            raise SystemExit("--font-size 必須介於 8 與 72 之間")
+        if not 1.0 <= self.line_height <= 3.0:
+            raise SystemExit("--line-height 必須介於 1.0 與 3.0 之間")
+        if not 0 <= self.rotation_limit <= 45:
+            raise SystemExit("--max-rotation 必須介於 0 與 45 度之間（0 代表不旋轉）")
+        if not 1.0 <= self.growth_limit <= 3.0:
+            raise SystemExit("--max-growth 必須介於 1.0 與 3.0 之間（1.0 代表不放大）")
 
 DOCX_NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -483,7 +514,13 @@ def detect_caption_regions(page, scale: float, stickers: list[dict],
     return regions
 
 
-def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: float) -> dict:
+def build_page_layout(
+    pdf_doc,
+    page_no: int,
+    photo_boxes_px: list[dict],
+    scale: float,
+    options: ImportOptions,
+) -> dict:
     page = pdf_doc[page_no]
     bg_xref = detect_background_xref(page)
 
@@ -605,8 +642,8 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
                 best_ratio, best = ratio, s
         return best if best_ratio > 0.3 else None
 
-    font_size = TEXT_FONT_SIZE_PT
-    line_height = 1.3
+    font_size = options.font_size_pt
+    line_height = options.line_height
     line_height_px = font_size * line_height
 
     def analyzed_box_for(sticker):
@@ -665,15 +702,15 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
         # 旋轉的是素材圖本身（存旋轉後的圖），文字框仍水平——底圖轉、文字不轉。
         def cost_of(degree, factor):
             return (
-                abs(degree) / MATERIAL_ROTATION_LIMIT
-                + (factor - 1) / (MATERIAL_GROWTH_LIMIT - 1)
+                abs(degree) / max(options.rotation_limit, 1e-9)
+                + (factor - 1) / max(options.growth_limit - 1, 1e-9)
             )
 
         degrees = [0.0]
-        step = MATERIAL_ROTATION_STEP
-        while step <= MATERIAL_ROTATION_LIMIT:
+        step = options.rotation_step
+        while step <= options.rotation_limit:
             degrees.extend((step, -step))
-            step = round(step + MATERIAL_ROTATION_STEP, 4)
+            step = round(step + options.rotation_step, 4)
 
         best = None
         for degree in degrees:
@@ -696,7 +733,7 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
                 candidate_box = normalized_box
 
             factor = 1.0
-            while factor <= MATERIAL_GROWTH_LIMIT:
+            while factor <= options.growth_limit:
                 if best is not None and cost_of(degree, factor) >= best[0]:
                     break
                 try:
@@ -706,7 +743,7 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
                 if need <= box["height"]:
                     best = (cost_of(degree, factor), degree, factor, image, geom, box)
                     break
-                factor = round(factor + MATERIAL_GROWTH_STEP, 4)
+                factor = round(factor + options.growth_step, 4)
 
         if best is None:
             # 轉到底、放大到頂都塞不下：維持原樣，交由人工調整（不硬撐破版）
@@ -900,7 +937,39 @@ def main():
     parser.add_argument("--force-page", action="append", default=[],
                          help="手動指定某個媒體檔案屬於哪一頁，格式 filename=page_index，可重複給")
     parser.add_argument("--commit", action="store_true", help="真正寫入資料庫；不加這個參數只做 dry-run 預覽")
+    tuning = parser.add_argument_group(
+        "版面微調",
+        "不給就用預設值；預設值是這批模板實測出來的，沒有特別理由不需要動。",
+    )
+    tuning.add_argument(
+        "--font-size", type=float, default=TEXT_FONT_SIZE_PT, metavar="PT",
+        help=f"文字框字級，就是編輯器屬性面板顯示的數字（預設 {TEXT_FONT_SIZE_PT}）",
+    )
+    tuning.add_argument(
+        "--line-height", type=float, default=TEXT_LINE_HEIGHT, metavar="倍",
+        help=f"行高倍率（預設 {TEXT_LINE_HEIGHT}）",
+    )
+    tuning.add_argument(
+        "--max-rotation", type=float, default=MATERIAL_ROTATION_LIMIT, metavar="度",
+        help=(
+            "文字放不下時，底圖最多轉幾度（0 = 不用旋轉這個手段，"
+            f"預設 {MATERIAL_ROTATION_LIMIT:.0f}）"
+        ),
+    )
+    tuning.add_argument(
+        "--max-growth", type=float, default=MATERIAL_GROWTH_LIMIT, metavar="倍",
+        help=(
+            "文字放不下時，底圖最多放大幾倍（1.0 = 不用放大這個手段，"
+            f"預設 {MATERIAL_GROWTH_LIMIT}）"
+        ),
+    )
     args = parser.parse_args()
+    options = ImportOptions(
+        font_size_pt=args.font_size,
+        line_height=args.line_height,
+        rotation_limit=args.max_rotation,
+        growth_limit=args.max_growth,
+    )
 
     import fitz
 
@@ -932,7 +1001,7 @@ def main():
     layouts, bg_assets, sticker_assets = {}, {}, {}
     for page_no in range(n_pages):
         boxes = photo_boxes_by_page.get(page_no, [])
-        layout, bg, stk = build_page_layout(pdf_doc, page_no, boxes, scale)
+        layout, bg, stk = build_page_layout(pdf_doc, page_no, boxes, scale, options)
         layouts[page_no] = layout
         bg_assets[page_no] = bg
         sticker_assets[page_no] = stk
