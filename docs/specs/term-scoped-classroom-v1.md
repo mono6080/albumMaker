@@ -149,17 +149,58 @@ NULL，`archive_expires_at` 落在 2026-08-01～08-17，屆期由既有 purge �
 `class_period_work_slot_id IS NOT NULL` 判斷後，它們仍然是 admin-only，行為不變；
 migration 不特別處理，也不得因為它們而中止。
 
+## Naming
+
+Decision：與行政系統（未來 MDM）同概念的實體，命名要能一眼對上。本次一併改名：
+
+| 現在 | 改成 | 對到行政系統 |
+|------|------|--------------|
+| `AcademicTermClassroom` | `Classroom`（舊 `classrooms` 刪除後名字空出來）| `school.Clas` |
+| `ClassRosterMember` | `ClassroomMember` | `student.ClasLog` |
+| `ClassroomTeacherAssignment` | `ClassroomTeacher` | `personnel.PostLog` |
+| `AcademicTerm` | `Semester` | `school.Semester` |
+| `AcademicTermPeriod` | `SemesterPeriod` | —（相冊獨有）|
+| `Student` | `ProjectStudent`（本來就是「相本裡的一份」，不是學生）| —（相冊獨有）|
+| `RosterChild` | `Student` | `student.Student` |
+
+`User` 不改為 `Staff`：行政系統的 `Staff` 是員工（457 人，含非相冊使用者），相冊的
+`User` 是登入帳號（69 個），本來就不是同一個集合。
+
+表名跟著類別名改（`students` → `project_students`、`roster_children` → `students` 等）。
+API 路徑同步改名，前端跟著改。
+
+### 表名改動的 migration 策略
+
+`migrations.py` 裡的歷史 migration 直接寫死舊表名（僅 `students` 就有 82 處）。全新資料
+庫由 `init_db()` 以新名建表，歷史 migration 會找不到舊表而失敗。
+
+策略是**改名 migration 排在最前面**，其餘歷史 migration 一律改寫成新表名：
+
+- 舊資料庫：先改名，後續歷史 migration 對著新表名跑，行為不變。
+- 全新資料庫：改名是 no-op（舊表名不存在），歷史 migration 對著 `init_db()` 建好的新表
+  跑，與今天完全相同。
+
+改名順序必須是先 `students` → `project_students`，再 `roster_children` → `students`；
+SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內的參照，依序執行才會
+落在正確的目標上。
+
+逐一加「表存在才執行」守衛的做法明確不採用：18 個函式各有建表／改表的差異，守衛條件
+不一致，比全面改寫表名更容易出錯。
+
 ## Implementation Slices
 
 1. **schema／migration**：前提驗證、欄位搬遷、trigger 改寫、drop 舊表；migration 冪等，
    重跑為 0 筆。
-2. **scope／權限**：`OrganizationReadScope` 改為持有 term_classroom id 集合；讀寫分離
-   改走 term_classroom；移除 `teacher_past_classroom_ids`。
-3. **園所設定／my-classrooms**：班級 CRUD 改為在目前正式學期底下操作。
-4. **編班**：計畫由「搬遷」改為「建立新學期班級並放人」；新生可直接放進計畫（不再受
+2. **改名 A**：`Classroom`／`ClassroomMember`／`ClassroomTeacher`（含表名與 API）。
+3. **改名 B**：`Semester`／`SemesterPeriod`。
+4. **改名 C**：`ProjectStudent`／`Student`，含 17 條 `/students/` API 路徑與前端。
+5. **scope／權限**：`OrganizationReadScope` 改為持有 classroom id 集合；讀寫分離改走
+   學期班級；移除 `teacher_past_classroom_ids`。
+6. **園所設定／my-classrooms**：班級 CRUD 改為在目前正式學期底下操作。
+7. **編班**：計畫由「搬遷」改為「建立新學期班級並放人」；新生可直接放進計畫（不再受
    `source_membership_id NOT NULL` 限制）。
-5. **報表／匯出**：老師進度、學期彙整匯出改走 term_classroom。
-6. **前端**：班級相關頁面的 id 語意改動與文案。
+8. **報表／匯出**：老師進度、學期彙整匯出改走學期班級。
+9. **前端**：班級相關頁面的 id 語意改動與文案。
 
 ## Acceptance Smoke
 
