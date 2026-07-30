@@ -38,7 +38,8 @@
 | 學期進度檢視 | 全部 | — | 校／部門 scope（唯讀） | 校／部門 scope（唯讀） | — |
 | 使用者管理 | ✓ | — | — | — | — |
 | 園所設定／編班／相本遷移與轉交 | ✓ | — | — | — | — |
-| 自己範圍的目前班級（唯讀） | ✓ | — | 任教班級 ∪ 主管 scope | 任教班級 ∪ 主管 scope | — |
+| 自己範圍的班級相本（唯讀） | ✓ | — | 目前 ∪ 曾任教班級 ∪ 主管 scope | 目前 ∪ 曾任教班級 ∪ 主管 scope | — |
+| 班級相本製作（`can_edit`） | ✓ | — | 只有目前任教班級 | 只有目前任教班級 | — |
 | 登入 | ✓ | ✓ | ✓ | ✓ | 拒絕 |
 
 - 前端旗標集中在 `hooks/usePermissions.js`（`canManageTemplates` /
@@ -129,7 +130,10 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子切換目前編制、產生學期快照／工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
-相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本讀寫權。
+相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**；
+**讀取**另外涵蓋曾任教班級（見
+[organization-roster-management-v1](../specs/organization-roster-management-v1.md)），
+所以學期轉換不會讓老師看不到自己去年做的相本。
 未歸班 Project 保持 admin-only，管理員在 overview 逐本選班，
 系統不從 owner、名稱、舊主管關係或 provisional child link 推測。歸班 request shape 為：
 

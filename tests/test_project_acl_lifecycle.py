@@ -419,6 +419,116 @@ def test_project_acl_uses_classroom_staffing_and_organization_scope_only():
         assert_status(editor_role_change, 200)
 
 
+def test_former_teacher_keeps_read_on_past_classroom_but_loses_write():
+    """調班後仍讀得到自己帶過班級的相本，但製作權只跟著目前編制走。"""
+    with started_client() as client:
+        admin = login(client)
+        moving_teacher, moving_teacher_password = create_user(client, "teacher")
+        template_id, _ = create_template_with_page(client)
+
+        db = SessionLocal()
+        try:
+            campus = Campus(name=unique_name("升階分校"))
+            db.add(campus)
+            db.flush()
+            previous_classroom = Classroom(
+                campus_id=campus.id,
+                department="infant",
+                name=unique_name("八階A"),
+            )
+            next_classroom = Classroom(
+                campus_id=campus.id,
+                department="infant",
+                name=unique_name("九階A"),
+            )
+            db.add_all([previous_classroom, next_classroom])
+            db.flush()
+            previous_assignment = ClassroomTeacherAssignment(
+                classroom_id=previous_classroom.id,
+                teacher_id=moving_teacher["id"],
+                teacher_name_snapshot=moving_teacher["display_name"],
+                duty="lead",
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            )
+            db.add(previous_assignment)
+            previous_project_id = _seed_project(
+                db,
+                template_id=template_id,
+                owner_id=moving_teacher["id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("八階A相本"),
+                classroom=previous_classroom,
+                with_student=True,
+            )
+            next_project_id = _seed_project(
+                db,
+                template_id=template_id,
+                owner_id=admin["user_id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("九階A相本"),
+                classroom=next_classroom,
+            )
+            db.commit()
+            previous_assignment_id = previous_assignment.id
+            next_classroom_id = next_classroom.id
+        finally:
+            db.close()
+
+        client.cookies.clear()
+        login(client, moving_teacher["username"], moving_teacher_password)
+        assert _listed_project_ids(client) == {previous_project_id}
+        assert client.get(
+            f"/api/projects/{previous_project_id}"
+        ).json()["permissions"]["can_edit"] is True
+
+        # 學期轉換：結束舊班編制，改編到新班
+        db = SessionLocal()
+        try:
+            db.get(ClassroomTeacherAssignment, previous_assignment_id).ended_at = (
+                utc_now()
+            )
+            db.add(ClassroomTeacherAssignment(
+                classroom_id=next_classroom_id,
+                teacher_id=moving_teacher["id"],
+                teacher_name_snapshot=moving_teacher["display_name"],
+                duty="lead",
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        assert _listed_project_ids(client) == {previous_project_id, next_project_id}
+        previous_permissions = client.get(
+            f"/api/projects/{previous_project_id}"
+        ).json()["permissions"]
+        assert previous_permissions["can_read"] is True
+        assert previous_permissions["can_edit"] is False
+        next_permissions = client.get(
+            f"/api/projects/{next_project_id}"
+        ).json()["permissions"]
+        assert next_permissions["can_read"] is True
+        assert next_permissions["can_edit"] is True
+
+        # 舊班相本只剩唯讀：內容寫入必須被擋
+        rename_previous = client.patch(
+            f"/api/projects/{previous_project_id}",
+            data={"name": "舊班不得再改名"},
+        )
+        assert_status(rename_previous, 403)
+
+        # 「我的班級」仍只列目前編制，不因為讀得到舊相本而回頭長出舊班
+        my_classrooms = client.get("/api/organization/my-classrooms")
+        assert_status(my_classrooms, 200)
+        assert [
+            item["id"] for item in my_classrooms.json()["classrooms"]
+        ] == [next_classroom_id]
+
+
 def test_operational_user_combines_teacher_and_supervisor_assignment_permissions():
     with started_client() as client:
         admin = login(client)

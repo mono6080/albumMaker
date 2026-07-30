@@ -294,11 +294,12 @@ export default function ProjectList() {
     });
   }, [availableTemplateById, getCreatableWorkSlots]);
   const hasTeacherWorkflow = isTeacher || teacherAssignedClassrooms.length > 0;
-  const supervisorOnlyProjects = useMemo(
+  // 目前班級以外仍讀得到的相本：曾任教班級與主管範圍都落在這裡，一律唯讀
+  const readOnlyProjects = useMemo(
     () => getProjectsOutsideClassrooms(projects, teacherAssignedClassrooms),
     [projects, teacherAssignedClassrooms],
   );
-  const visibleSupervisorOnlyProjects = useMemo(
+  const visibleReadOnlyProjects = useMemo(
     () => getProjectsOutsideClassrooms(filteredProjects, teacherAssignedClassrooms),
     [filteredProjects, teacherAssignedClassrooms],
   );
@@ -862,17 +863,20 @@ export default function ProjectList() {
             );
           })}
 
-          {canViewReports && supervisorOnlyProjects.length > 0 && (
+          {readOnlyProjects.length > 0 && (
             <section className="space-y-3">
               <div>
-                <h2 className="font-semibold text-gray-800">主管檢視範圍</h2>
+                <h2 className="font-semibold text-gray-800">
+                  {canViewReports ? "帶過的班級與主管檢視範圍" : "我帶過的班級"}
+                </h2>
                 <p className="mt-0.5 text-xs text-gray-500">
-                  以下相本來自你的校／部門主管範圍；只有同時列入該班老師編制的相本可以製作。
+                  以下相本來自你曾任教的班級{canViewReports ? "與校／部門主管範圍" : ""}，
+                  可以查看與下載；只有目前列入該班老師編制的相本可以製作。
                 </p>
               </div>
-              {visibleSupervisorOnlyProjects.length > 0 ? (
+              {visibleReadOnlyProjects.length > 0 ? (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {visibleSupervisorOnlyProjects.map(project => (
+                  {visibleReadOnlyProjects.map(project => (
                     <ProjectCard
                       key={project.id}
                       project={project}
@@ -891,7 +895,7 @@ export default function ProjectList() {
                 </div>
               ) : (
                 <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-4 py-7 text-center text-sm text-gray-400">
-                  沒有符合目前搜尋的主管範圍相本
+                  沒有符合目前搜尋的相本
                 </div>
               )}
             </section>

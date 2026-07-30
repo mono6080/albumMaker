@@ -37,6 +37,8 @@ class OrganizationReadScope:
     viewer_role: str
     classroom_ids: tuple[int, ...]
     teacher_classroom_ids: tuple[int, ...] = ()
+    # 曾任教但編制已結束的班級：只給讀，不進 classroom_ids（「我的班級」仍只列目前）
+    teacher_past_classroom_ids: tuple[int, ...] = ()
     supervisor_classroom_ids: tuple[int, ...] = ()
     has_supervisor_assignment: bool = False
     supervisor_scope_keys: tuple[SupervisorScopeKey, ...] = ()
@@ -135,6 +137,31 @@ def _load_teacher_classroom_ids(db: Session, teacher_id: int) -> tuple[int, ...]
     return tuple(sorted(row[0] for row in rows))
 
 
+def _load_teacher_past_classroom_ids(
+    db: Session,
+    teacher_id: int,
+    current_classroom_ids: tuple[int, ...],
+) -> tuple[int, ...]:
+    """曾任教班級：老師調班後仍讀得到自己做過的相本。
+
+    不篩 `Classroom.is_active`——班級停用是園所的組織異動，不該讓老師失去自己
+    做過的相本；能不能改仍由目前編制決定。
+    """
+    rows = (
+        db.query(ClassroomTeacherAssignment.classroom_id)
+        .filter(
+            ClassroomTeacherAssignment.teacher_id == teacher_id,
+            ClassroomTeacherAssignment.ended_at.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    current = set(current_classroom_ids)
+    return tuple(sorted(
+        {row[0] for row in rows} - current
+    ))
+
+
 def has_active_organization_supervisor_assignment(
     db: Session,
     user_id: int,
@@ -162,6 +189,9 @@ def build_organization_read_scope(
         )
     if current_user.role in {"teacher", "supervisor"}:
         teacher_classroom_ids = _load_teacher_classroom_ids(db, current_user.id)
+        teacher_past_classroom_ids = _load_teacher_past_classroom_ids(
+            db, current_user.id, teacher_classroom_ids
+        )
         supervisor_scope_keys = _load_supervisor_scope_keys(db, current_user.id)
         supervisor_classroom_ids = _load_supervisor_classroom_ids(
             db, supervisor_scope_keys
@@ -174,6 +204,7 @@ def build_organization_read_scope(
             current_user.role,
             classroom_ids,
             teacher_classroom_ids,
+            teacher_past_classroom_ids,
             supervisor_classroom_ids,
             has_supervisor_assignment,
             supervisor_scope_keys,
@@ -229,9 +260,12 @@ def apply_project_read_scope(query: Query, scope: OrganizationReadScope) -> Quer
     """套用 Project object policy：老師看目前班級，主管看歷史快照 scope。"""
     if scope.is_admin:
         return query
+    readable_classroom_ids = (
+        set(scope.teacher_classroom_ids) | set(scope.teacher_past_classroom_ids)
+    )
     teacher_condition = (
-        Project.classroom_id.in_(scope.teacher_classroom_ids)
-        if scope.teacher_classroom_ids
+        Project.classroom_id.in_(sorted(readable_classroom_ids))
+        if readable_classroom_ids
         else false()
     )
     supervisor_condition = and_(
@@ -316,17 +350,29 @@ def project_in_read_scope(project: Project, scope: OrganizationReadScope) -> boo
     """單筆 object policy 使用的同一套 scope 判斷。"""
     if scope.is_admin:
         return True
-    return project_in_teacher_scope(project, scope) or project_in_supervisor_scope(
-        project,
-        scope,
+    return (
+        project_in_teacher_scope(project, scope)
+        or project_in_past_teacher_scope(project, scope)
+        or project_in_supervisor_scope(project, scope)
     )
 
 
 def project_in_teacher_scope(project: Project, scope: OrganizationReadScope) -> bool:
-    """判斷專案是否屬於使用者目前任教班級。"""
+    """判斷專案是否屬於使用者目前任教班級（製作權的唯一來源）。"""
     return (
         project.classroom_id is not None
         and project.classroom_id in scope.teacher_classroom_ids
+    )
+
+
+def project_in_past_teacher_scope(
+    project: Project,
+    scope: OrganizationReadScope,
+) -> bool:
+    """判斷專案是否屬於使用者曾任教班級：只讀得到，不取得製作權。"""
+    return (
+        project.classroom_id is not None
+        and project.classroom_id in scope.teacher_past_classroom_ids
     )
 
 
