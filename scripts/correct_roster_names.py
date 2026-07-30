@@ -42,9 +42,12 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = ROOT_DIR / "backend" / "album_maker.db"
+BACKEND_DIR = ROOT_DIR / "backend"
+DEFAULT_DB_PATH = BACKEND_DIR / "album_maker.db"
 
-sys.path.insert(0, str(ROOT_DIR / "backend"))
+# 容器內 backend/ 的內容被攤平到 /app，開發樹則在 repo/backend；兩邊都要能 import
+IMPORT_ROOT = BACKEND_DIR if (BACKEND_DIR / "database.py").is_file() else ROOT_DIR
+sys.path.insert(0, str(IMPORT_ROOT))
 from services.roster_identity_service import normalize_child_name  # noqa: E402
 from services.student_input_policy import normalize_student_name  # noqa: E402
 

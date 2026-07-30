@@ -23,7 +23,10 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = ROOT_DIR / "backend" / "album_maker.db"
+BACKEND_DIR = ROOT_DIR / "backend"
+DEFAULT_DB_PATH = BACKEND_DIR / "album_maker.db"
+# 容器內 backend/ 的內容被攤平到 /app，開發樹則在 repo/backend；兩邊都要能 import
+IMPORT_ROOT = BACKEND_DIR if (BACKEND_DIR / "database.py").is_file() else ROOT_DIR
 
 
 def main() -> None:
@@ -35,7 +38,7 @@ def main() -> None:
     # database.py 的預設連線是相對路徑，在 repo 根目錄執行會連到別的檔案
     # （甚至建出一個空的），所以一律明確指定
     os.environ["DATABASE_URL"] = f"sqlite:///{args.db.as_posix()}"
-    sys.path.insert(0, str(ROOT_DIR / "backend"))
+    sys.path.insert(0, str(IMPORT_ROOT))
 
     from database import SessionLocal  # noqa: E402  必須在設好 DATABASE_URL 之後
     from services.organization_service import (  # noqa: E402
