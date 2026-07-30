@@ -53,11 +53,16 @@ Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，
 ### AcademicTermClassroom（班級本體）
 
 ```
-AcademicTerm ─┬─ AcademicTermPeriod ──┐
-              └─ AcademicTermClassroom ┴─ ClassPeriodWorkSlot ── Project
-                   ├─ ClassRosterMember      (RosterChild × 區間)
-                   └─ ClassroomTeacherAssignment (User × duty × 區間)
+AcademicTerm（學期）
+ ├─ AcademicTermPeriod（期別）
+ └─ AcademicTermClassroom（班級本體：campus_id + department + name）
+      ├─ ClassRosterMember           RosterChild × 區間
+      ├─ ClassroomTeacherAssignment  User × duty × 區間
+      └─ ClassPeriodWorkSlot         × AcademicTermPeriod
+           └─ Project
 ```
+
+跨學期存在的只有 `Campus`、`RosterChild`、`User` 三個實體；班級不跨學期。
 
 欄位由快照改為本體：
 
@@ -137,12 +142,13 @@ AcademicTerm ─┬─ AcademicTermPeriod ──┐
 - `trg_projects_freeze_classroom_snapshots`、`trg_projects_freeze_work_slot`：改以
   `class_period_work_slot_id IS NOT NULL` 作為 class-backed 判斷。
 
+- `trg_students_freeze_class_backed_identity`：已只依賴 `class_period_work_slot_id`，
+  不需改動。
+
 另有 57 本**已封存**的未歸班舊相本（`classroom_id`、`class_period_work_slot_id` 皆為
 NULL，`archive_expires_at` 落在 2026-08-01～08-17，屆期由既有 purge 迴圈清除）。改用
 `class_period_work_slot_id IS NOT NULL` 判斷後，它們仍然是 admin-only，行為不變；
 migration 不特別處理，也不得因為它們而中止。
-- `trg_students_freeze_class_backed_identity`：已只依賴 `class_period_work_slot_id`，
-  不需改動。
 
 ## Implementation Slices
 
