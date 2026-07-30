@@ -5,10 +5,12 @@
 """
 
 from tests.helpers import (
+    USER_PASSWORD,
     _create_classroom_with_lead,
     _find_classroom_work_slot_id,
     assert_status,
     create_template_with_page,
+    create_user,
     login,
     started_client,
     unique_name,
@@ -187,6 +189,62 @@ def test_slot_with_every_child_assigned_reports_fully_assigned():
         response = _create_album(client, setup, name=unique_name("album_none"))
         assert_status(response, 409)
         assert response.json()["detail"]["code"] == "slot_roster_fully_assigned"
+
+
+def test_lead_teacher_can_split_own_class_into_two_albums():
+    """分兩本的人是帶班老師，不是管理員——老師要能自己挑孩子建第二本。"""
+    with started_client() as client:
+        login(client)
+        lead_teacher, _ = create_user(client, "teacher")
+        template_id = _create_active_template(client)
+        names = [unique_name("teacher_a"), unique_name("teacher_b")]
+        classroom_id, _, _ = _create_classroom_with_lead(
+            client, template_id, lead_teacher["id"], names
+        )
+        work_slot_id = _find_classroom_work_slot_id(client, classroom_id, template_id)
+
+        # 換老師登入，之後都以老師身分操作
+        login(client, lead_teacher["username"], USER_PASSWORD)
+        my_classrooms = client.get("/api/organization/my-classrooms")
+        assert_status(my_classrooms, 200)
+        classroom = next(
+            item for item in my_classrooms.json()["classrooms"]
+            if item["id"] == classroom_id
+        )
+        child_id_by_name = {
+            member["name"]: member["roster_child_id"] for member in classroom["members"]
+        }
+
+        def create(name, child_ids):
+            return client.post(
+                f"/api/organization/classrooms/{classroom_id}/projects",
+                json={
+                    "name": name,
+                    "template_id": template_id,
+                    "work_slot_id": work_slot_id,
+                    "owner_id": lead_teacher["id"],
+                    "roster_child_ids": child_ids,
+                },
+            )
+
+        first = create(unique_name("teacher_album_1"), [child_id_by_name[names[0]]])
+        assert_status(first, 201)
+        second = create(unique_name("teacher_album_2"), [child_id_by_name[names[1]]])
+        assert_status(second, 201)
+        assert _student_names(first) == [names[0]]
+        assert _student_names(second) == [names[1]]
+
+        # 老師自己的班級檢視也要看得到「已編入」狀態，前端才能預選剩下的孩子
+        after = client.get("/api/organization/my-classrooms")
+        assert_status(after, 200)
+        work_slot = next(
+            slot
+            for item in after.json()["classrooms"] if item["id"] == classroom_id
+            for slot in item["work_slots"] if slot["id"] == work_slot_id
+        )
+        assert sorted(work_slot["assigned_roster_child_ids"]) == sorted(
+            child_id_by_name.values()
+        )
 
 
 def test_started_at_keeps_first_album_time():

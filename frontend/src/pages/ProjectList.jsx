@@ -286,11 +286,16 @@ export default function ProjectList() {
     const firstTemplateId = firstWorkSlot?.template_ids.find(templateId => (
       availableTemplateById.has(templateId)
     ));
+    // 預設收錄這個期別還沒編入相本的孩子：第一本是全班，之後每一本接手剩下的。
+    const assignedChildIds = new Set(firstWorkSlot?.assigned_roster_child_ids ?? []);
     setClassProjectDraft({
       classroom,
       name: "",
       workSlotId: firstWorkSlot ? String(firstWorkSlot.id) : "",
       templateId: firstTemplateId ? String(firstTemplateId) : "",
+      selectedChildIds: (classroom.members ?? [])
+        .filter(member => !assignedChildIds.has(member.roster_child_id))
+        .map(member => member.roster_child_id),
     });
   }, [availableTemplateById, getCreatableWorkSlots]);
   const hasTeacherWorkflow = isTeacher || teacherAssignedClassrooms.length > 0;
@@ -354,15 +359,18 @@ export default function ProjectList() {
       teacher => teacher.duty === "lead",
     );
     if (!name || !classProjectDraft.workSlotId || !classProjectDraft.templateId || !leadTeacher) return;
+    if ((classProjectDraft.selectedChildIds ?? []).length === 0) {
+      toast.error("請至少勾選一位孩子");
+      return;
+    }
     setIsCreatingClassProject(true);
     try {
-      // 不指定收錄對象時，後端會收這個期別還沒編入相本的孩子——第一本是全班，
-      // 之後每一本接手剩下的（要挑人請到園所設定的建立相本流程）。
       const response = await createClassroomProject(classProjectDraft.classroom.id, {
         name,
         template_id: Number(classProjectDraft.templateId),
         owner_id: leadTeacher.teacher_id,
         work_slot_id: Number(classProjectDraft.workSlotId),
+        roster_child_ids: classProjectDraft.selectedChildIds,
       });
       toast.success(`已建立新一期相本，收錄 ${response.data.students?.length ?? 0} 位學生`);
       setClassProjectDraft(null);
@@ -522,7 +530,7 @@ export default function ProjectList() {
         {classProjectDraft && (
           <form className="space-y-4" onSubmit={handleCreateClassProject} data-guide="project-create-form">
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-              會以目前 {classProjectDraft.classroom.members.length} 位學生形成成員與完整姓名快照；相本稱呼會持續跟隨園所設定。主教是進度負責人，所有目前當班老師都可直接製作本班相本。
+              會以勾選學生形成成員與完整姓名快照；相本稱呼會持續跟隨園所設定。主教是進度負責人，所有目前當班老師都可直接製作本班相本。
             </p>
             <FormField label="相本名稱">
               <input
@@ -547,10 +555,15 @@ export default function ProjectList() {
                   const firstTemplateId = workSlot?.template_ids.find(templateId => (
                     availableTemplateById.has(templateId)
                   ));
+                  // 換期別要重算預選：每個期別已編入相本的孩子不一樣
+                  const assignedChildIds = new Set(workSlot?.assigned_roster_child_ids ?? []);
                   setClassProjectDraft(current => ({
                     ...current,
                     workSlotId,
                     templateId: firstTemplateId ? String(firstTemplateId) : "",
+                    selectedChildIds: (current.classroom.members ?? [])
+                      .filter(member => !assignedChildIds.has(member.roster_child_id))
+                      .map(member => member.roster_child_id),
                   }));
                 }}
               >
@@ -584,6 +597,91 @@ export default function ProjectList() {
                   ))}
               </select>
             </FormField>
+            {(() => {
+              const currentWorkSlot = getCreatableWorkSlots(classProjectDraft.classroom)
+                .find(item => String(item.id) === classProjectDraft.workSlotId);
+              const assignedChildIds = new Set(currentWorkSlot?.assigned_roster_child_ids ?? []);
+              const members = classProjectDraft.classroom.members ?? [];
+              const selectableCount = members.filter(member => (
+                !assignedChildIds.has(member.roster_child_id)
+              )).length;
+              const existingAlbumCount = currentWorkSlot?.project_ids?.length ?? 0;
+              return (
+                <>
+                  {existingAlbumCount > 0 && (
+                    <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                      這個期別已經有 {existingAlbumCount} 本相本。想用同一套排版但不同的對應文字時，
+                      可以再建一本，收錄還沒編入的孩子。
+                    </p>
+                  )}
+                  <FormField
+                    label={`收錄的孩子（${classProjectDraft.selectedChildIds?.length ?? 0}／${selectableCount}）`}
+                  >
+                    <div className="rounded-lg border border-gray-200">
+                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                        <span className="text-xs text-gray-500">同一班要做兩套文字時，這裡分組</span>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            onClick={() => setClassProjectDraft(current => ({
+                              ...current,
+                              selectedChildIds: members
+                                .filter(member => !assignedChildIds.has(member.roster_child_id))
+                                .map(member => member.roster_child_id),
+                            }))}
+                          >
+                            全選
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => setClassProjectDraft(current => ({
+                              ...current,
+                              selectedChildIds: [],
+                            }))}
+                          >
+                            全不選
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-56 divide-y divide-gray-100 overflow-y-auto">
+                        {members.map(member => {
+                          const isAssignedElsewhere = assignedChildIds.has(member.roster_child_id);
+                          const isChecked = (classProjectDraft.selectedChildIds ?? [])
+                            .includes(member.roster_child_id);
+                          return (
+                            <label
+                              key={member.roster_child_id}
+                              className={`flex min-h-11 items-center gap-2 px-3 py-2 text-sm ${
+                                isAssignedElsewhere ? "text-gray-400" : "text-gray-800 hover:bg-gray-50"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                disabled={isAssignedElsewhere}
+                                onChange={event => setClassProjectDraft(current => {
+                                  const currentIds = current.selectedChildIds ?? [];
+                                  return {
+                                    ...current,
+                                    selectedChildIds: event.target.checked
+                                      ? [...currentIds, member.roster_child_id]
+                                      : currentIds.filter(childId => childId !== member.roster_child_id),
+                                  };
+                                })}
+                              />
+                              <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                              {isAssignedElsewhere && (
+                                <span className="flex-shrink-0 text-xs">已編入這期其他相本</span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </FormField>
+                </>
+              );
+            })()}
             <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
               主要負責：{classProjectDraft.classroom.current_teachers.find(teacher => teacher.duty === "lead")?.teacher_name}
             </div>
