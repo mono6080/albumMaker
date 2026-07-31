@@ -215,14 +215,13 @@ export async function fetchStudentPreview(page, projectId, studentId, cacheBuste
     `/api/projects/${projectId}/students/${studentId}/preview/0?t=${cacheBuster}`,
   );
   expect(previewResponse.ok()).toBeTruthy();
-  expect(previewResponse.headers()["content-type"]).toContain("image/png");
+  expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
   expect(previewResponse.headers()["cache-control"]).toBe(
     "private, no-cache, must-revalidate",
   );
   const body = await previewResponse.body();
-  expect(body.subarray(0, 8)).toEqual(Buffer.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  ]));
+  // JPEG SOI + APP marker：預覽早已改輸出 JPEG，這裡原本還在驗 PNG magic bytes
+  expect(body.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
   return previewResponse;
 }
 

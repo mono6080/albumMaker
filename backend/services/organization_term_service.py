@@ -1136,17 +1136,27 @@ def apply_term_reclassification_plan(
                 "目前名單已變更，請重建編班草稿",
             )
 
-        source_classroom_ids = sorted({
-            placement.source_classroom_id_snapshot for placement in placements
-        })
+        # 老師編制要結束的是「即將關閉的學期的所有班」，不能只取有學生的班：
+        # 空班的老師會留在已結束的學期裡，下一次編班就會被
+        # inactive_organization_has_active_roster_or_teachers 擋住。
+        closing_classroom_ids = [
+            classroom_id
+            for (classroom_id,) in db.query(Classroom.id)
+            .join(Semester, Semester.id == Classroom.semester_id)
+            .filter(
+                Semester.status.in_(CURRENT_SEMESTER_STATUSES),
+                Semester.id != target_term.id,
+            )
+            .all()
+        ]
         current_assignments = (
             db.query(ClassroomTeacher)
             .filter(
-                ClassroomTeacher.classroom_id.in_(source_classroom_ids),
+                ClassroomTeacher.classroom_id.in_(closing_classroom_ids),
                 ClassroomTeacher.ended_at.is_(None),
             )
             .all()
-            if source_classroom_ids
+            if closing_classroom_ids
             else []
         )
 

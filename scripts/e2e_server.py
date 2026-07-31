@@ -36,8 +36,10 @@ def configure_environment() -> None:
 def reset_admin_password() -> None:
     from auth import hash_password
     from database import SessionLocal, User, init_db
-    from migrations import run_migrations
+    from migrations import rename_tables_to_model_names, run_migrations
 
+    # 與 main.py 的 lifespan 同一個順序：改名必須先於 init_db()
+    rename_tables_to_model_names()
     init_db()
     run_migrations()
 

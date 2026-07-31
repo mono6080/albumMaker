@@ -11,7 +11,7 @@ E2E_DB_FILE = REPO_ROOT / ".tmp" / "e2e" / "e2e.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{E2E_DB_FILE.as_posix()}"
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
-from database import Project, RosterChild, SessionLocal, Student, Template, User  # noqa: E402
+from database import Project, ProjectStudent, SessionLocal, Student, Template, User  # noqa: E402
 
 
 def main() -> None:
@@ -33,10 +33,10 @@ def main() -> None:
         db.add(project)
         db.flush()
         for order_index, student_name in enumerate(payload["student_names"]):
-            roster_child = RosterChild(name=student_name)
+            roster_child = Student(name=student_name)
             db.add(roster_child)
             db.flush()
-            db.add(Student(
+            db.add(ProjectStudent(
                 project_id=project.id,
                 name=student_name,
                 order_index=order_index,

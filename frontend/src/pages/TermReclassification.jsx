@@ -46,9 +46,21 @@ const DUTY_LABELS = {
 
 const getDiffCount = (value) => Array.isArray(value) ? value.length : Number(value ?? 0);
 
+// 來源班與目標班分屬不同學期，id 直接比不出有沒有換班。後端標記哪些是「留在原班」，
+// 載入時把那個目標記成 stay_classroom_id，之後使用者改動就能以它為基準判斷。
+const withStayClassroomId = plan => (plan === null || plan === undefined ? plan : {
+  ...plan,
+  student_placements: (plan.student_placements ?? []).map(placement => ({
+    ...placement,
+    stay_classroom_id: placement.keeps_source_classroom
+      ? placement.target_classroom_id
+      : null,
+  })),
+});
+
 const isStudentPlacementChanged = placement => (
   placement.outcome === "departed"
-  || placement.target_classroom_id !== placement.source_classroom_id
+  || placement.target_classroom_id !== placement.stay_classroom_id
 );
 
 const normalizeSearchText = value => value.replace(/[\s\u3000]+/g, "").toLocaleLowerCase("zh-TW");
@@ -114,7 +126,7 @@ export default function TermReclassification() {
       setOverview(nextOverview);
       if (nextOverview.draft_term_plan_id) {
         const planResponse = await fetchTermReclassificationPlan(nextOverview.draft_term_plan_id);
-        setPlan(planResponse.data);
+        setPlan(withStayClassroomId(planResponse.data));
       } else {
         setPlan(null);
       }
@@ -336,7 +348,7 @@ export default function TermReclassification() {
         })),
       })),
     );
-    setPlan(response.data);
+    setPlan(withStayClassroomId(response.data));
     setIsDirty(false);
     if (showToast) toast.success("編班草稿已儲存");
     return response.data;
@@ -352,7 +364,7 @@ export default function TermReclassification() {
         startsOn,
         endsOn,
       });
-      setPlan(response.data);
+      setPlan(withStayClassroomId(response.data));
       setIsDirty(false);
       toast.success("已從目前名單建立新學期草稿");
     } catch (error) {
@@ -394,7 +406,7 @@ export default function TermReclassification() {
     try {
       const savedPlan = await saveDraft({ showToast: false });
       const response = await validateTermReclassificationPlan(savedPlan.id);
-      setPlan(response.data);
+      setPlan(withStayClassroomId(response.data));
       setIsDirty(false);
       if (response.data.validation?.is_valid) {
         toast.success("驗證通過，可以套用新學期編班");
@@ -412,7 +424,7 @@ export default function TermReclassification() {
     setIsSubmitting(true);
     try {
       const response = await applyTermReclassificationPlan(plan.id, plan.revision);
-      setPlan(response.data);
+      setPlan(withStayClassroomId(response.data));
       setIsDirty(false);
       setConfirmAction(null);
       toast.success("新學期名單與老師編制已一次套用");

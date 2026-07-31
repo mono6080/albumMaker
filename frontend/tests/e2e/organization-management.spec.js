@@ -685,6 +685,16 @@ test("class staffing and new-term reclassification preserve old project content 
   const draftPlan = await readJsonResponse(await createPlanResponsePromise, "建立新學期編班草稿");
   await expect(page.getByRole("heading", { name: planLabel, exact: true })).toBeVisible();
 
+  // 計畫裡的班一律是目標學期新建的班；舊班 id 只出現在來源欄位
+  const nextSemesterClassroomId = name => {
+    const match = draftPlan.target_classrooms.find(row => row.name === name);
+    expect(match, `目標學期缺少班級 ${name}`).toBeTruthy();
+    return match.classroom_id;
+  };
+  const nextSourceClassroomId = nextSemesterClassroomId(sourceClassName);
+  const nextTargetClassroomId = nextSemesterClassroomId(targetClassName);
+  expect(nextSourceClassroomId).not.toBe(sourceClassroom.id);
+
   const targetPeriod = await readJsonResponse(
     await page.request.post("/api/templates/periods", {
       form: {
@@ -712,8 +722,8 @@ test("class staffing and new-term reclassification preserve old project content 
   await sourceStudentGroupButton.click();
   await expect(sourceStudentGroupButton).toHaveAttribute("aria-expanded", "true");
   const stayTarget = page.getByLabel(`${stayStudentName} 的目標班級`);
-  await expect(stayTarget).toHaveValue(String(sourceClassroom.id));
-  await page.getByLabel(`${moveStudentName} 的目標班級`).selectOption(String(targetClassroom.id));
+  await expect(stayTarget).toHaveValue(String(nextSourceClassroomId));
+  await page.getByLabel(`${moveStudentName} 的目標班級`).selectOption(String(nextTargetClassroomId));
   await page.getByLabel(`${departedStudentName} 的目標班級`).selectOption("departed");
   const changedStudentsOnly = page.getByLabel("僅顯示有變更", { exact: true });
   await changedStudentsOnly.check();
@@ -806,31 +816,31 @@ test("class staffing and new-term reclassification preserve old project content 
   expect(validatedPlan.diff.students.departed.map(row => row.student_name)).toContain(departedStudentName);
   expect(validatedPlan.diff.students.classroom_counts).toEqual(expect.arrayContaining([
     {
-      classroom_id: sourceClassroom.id,
+      classroom_id: nextSourceClassroomId,
       before: 3,
       after: 1,
       change: -2,
     },
     {
-      classroom_id: targetClassroom.id,
+      classroom_id: nextTargetClassroomId,
       before: 0,
       after: 1,
       change: 1,
     },
   ]));
   expect(validatedPlan.diff.teachers.remove).toEqual(expect.arrayContaining([
-    expect.objectContaining({ classroom_id: sourceClassroom.id, teacher_id: initialLead.id }),
+    expect.objectContaining({ classroom_id: nextSourceClassroomId, teacher_id: initialLead.id }),
   ]));
   expect(validatedPlan.diff.teachers.duty_change).toEqual(expect.arrayContaining([
     expect.objectContaining({
-      classroom_id: sourceClassroom.id,
+      classroom_id: nextSourceClassroomId,
       teacher_id: initialCoTeacher.id,
       from_duty: "co_teacher",
       to_duty: "lead",
     }),
   ]));
   expect(validatedPlan.diff.teachers.add).toEqual(expect.arrayContaining([
-    expect.objectContaining({ classroom_id: targetClassroom.id, teacher_id: targetLead.id }),
+    expect.objectContaining({ classroom_id: nextTargetClassroomId, teacher_id: targetLead.id }),
   ]));
   await expect(page.getByText("驗證通過", { exact: true })).toBeVisible();
 
@@ -907,35 +917,29 @@ test("class staffing and new-term reclassification preserve old project content 
     await page.request.get("/api/organization/overview"),
     "取得套用後園所狀態",
   );
-  const sourceAfterApply = findClassroom(overviewAfterApply, sourceClassroom.id);
-  const targetAfterApply = findClassroom(overviewAfterApply, targetClassroom.id);
+  // 套用後目前學期換成新學期，園所設定只列新學期的班；舊學期那些以
+  // term_reassignment／term_departed 結束的區間由 pytest 的
+  // test_term_plan_applies_students_and_teachers_without_rewriting_old_project 守。
+  expect(findClassroom(overviewAfterApply, sourceClassroom.id)).toBeUndefined();
+  const sourceAfterApply = findClassroom(overviewAfterApply, nextSourceClassroomId);
+  const targetAfterApply = findClassroom(overviewAfterApply, nextTargetClassroomId);
   expect(sourceAfterApply.members.filter(member => member.status === "active").map(member => member.name)).toEqual([
     stayStudentName,
   ]);
   expect(targetAfterApply.members.filter(member => member.status === "active").map(member => member.name)).toEqual([
     moveStudentName,
   ]);
-  const movedHistory = sourceAfterApply.members.find(member => member.name === moveStudentName && member.status === "ended");
-  const departedHistory = sourceAfterApply.members.find(member => member.name === departedStudentName && member.status === "ended");
-  expect(movedHistory.end_reason).toBe("term_reassignment");
-  expect(departedHistory.end_reason).toBe("term_departed");
   expect(sourceAfterApply.current_teachers).toEqual([
     expect.objectContaining({ teacher_id: initialCoTeacher.id, duty: "lead" }),
   ]);
   expect(targetAfterApply.current_teachers).toEqual([
     expect.objectContaining({ teacher_id: targetLead.id, duty: "lead" }),
   ]);
-  const previousLeadHistory = sourceAfterApply.teacher_history.find(teacher => teacher.teacher_id === initialLead.id);
-  const previousCoTeacherHistory = sourceAfterApply.teacher_history.find(teacher => (
-    teacher.teacher_id === initialCoTeacher.id && teacher.duty === "co_teacher"
-  ));
   const movedMembership = targetAfterApply.members.find(member => member.name === moveStudentName && member.status === "active");
+  const stayMembership = sourceAfterApply.members.find(member => member.name === stayStudentName && member.status === "active");
   expect(new Set([
-    movedHistory.ended_at,
-    departedHistory.ended_at,
     movedMembership.started_at,
-    previousLeadHistory.ended_at,
-    previousCoTeacherHistory.ended_at,
+    stayMembership.started_at,
     sourceAfterApply.current_teachers[0].started_at,
     targetAfterApply.current_teachers[0].started_at,
   ]).size).toBe(1);
@@ -955,8 +959,12 @@ test("class staffing and new-term reclassification preserve old project content 
   await expect(page.getByText("主教", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "建立新一期相本" })).toBeVisible();
   await expect(page.getByRole("button", { name: "新建專案" })).toHaveCount(0);
+  // 舊相本屬於已結束學期的班：那個班的指派已 ended，所以可讀不可製作。
+  // 它會落在「我帶過的班級」唯讀區，而不是可編輯的班級卡片裡。
+  const pastClassroomSection = page.getByRole("heading", { name: "我帶過的班級" }).locator("..");
+  await expect(pastClassroomSection).toBeVisible();
   await expect(page.getByText(projectName, { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "編輯相本" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "編輯相本" })).toHaveCount(0);
   const forbiddenGenericCreate = await page.request.post("/api/projects/", {
     form: {
       name: `不可繞過班級建立 ${suffix}`,

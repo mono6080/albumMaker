@@ -1022,3 +1022,60 @@ def test_overview_lists_only_current_semester_classrooms_while_draft_exists():
         assert [row["name"] for row in after_draft] == [classroom_name]
         assert [row["id"] for row in after_draft] == [classroom_id]
         assert all(row["is_current"] for row in after_draft)
+
+
+def test_apply_ends_teachers_of_classrooms_without_students():
+    """空班的老師編制也要隨學期結束。
+
+    只結束「有學生的班」的話，空班的老師會留在已結束的學期裡；下一次建草稿就會被
+    inactive_organization_has_active_roster_or_teachers 擋住，而且訊息指向一個
+    使用者根本沒動過的班。
+    """
+    with started_client() as client:
+        login(client)
+        teacher, _ = _create_teacher(client, None)
+        empty_class_teacher, _ = _create_teacher(client, None)
+        campus_id = _create_campus(client)
+        staffed_classroom_id = _create_classroom(client, campus_id, unique_name("有學生的班"))
+        empty_classroom_id = _create_classroom(client, campus_id, unique_name("沒有學生的班"))
+        _replace_teachers(
+            client,
+            staffed_classroom_id,
+            [{"teacher_id": teacher["id"], "duty": "lead"}],
+        )
+        _replace_teachers(
+            client,
+            empty_classroom_id,
+            [{"teacher_id": empty_class_teacher["id"], "duty": "lead"}],
+        )
+        _add_members(client, staffed_classroom_id, [unique_name("唯一的學生")])
+
+        plan = _create_plan(client)
+        apply_response = client.post(
+            f"/api/organization/term-reclassification-plans/{plan['id']}/apply",
+            json={"expected_revision": plan["revision"]},
+        )
+        assert_status(apply_response, 200)
+
+        db = SessionLocal()
+        try:
+            lingering = (
+                db.query(ClassroomTeacher)
+                .filter(
+                    ClassroomTeacher.classroom_id.in_(
+                        [staffed_classroom_id, empty_classroom_id]
+                    ),
+                    ClassroomTeacher.ended_at.is_(None),
+                )
+                .all()
+            )
+            assert lingering == []
+        finally:
+            db.close()
+
+        # 舊學期沒有殘留的在職編制，才建得起下一份草稿
+        next_plan = client.post(
+            "/api/organization/term-reclassification-plans",
+            json={"label": unique_name("再下一個學期")},
+        )
+        assert_status(next_plan, 201)
