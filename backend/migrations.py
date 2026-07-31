@@ -454,6 +454,26 @@ def _is_term_scoped_classroom_schema(connection) -> bool:
     return bool(classroom_columns) and "semester_id" in classroom_columns
 
 
+def _cancel_draft_term_plans(connection):
+    """作廢既有編班草稿，連同它持有的目標學期。
+
+    草稿的 source fingerprint 以舊結構算出，套用時必然判定為已變更。目標學期要
+    一起取消——留著會變成孤兒 draft 學期，之後建立期別時系統會要求「指定學期」，
+    而那個選項是一份已經作廢的草稿。
+    """
+    connection.execute(text(
+        "UPDATE semesters SET status = 'cancelled' "
+        "WHERE status = 'draft' AND id IN ("
+        "    SELECT target_semester_id FROM term_reclassification_plans "
+        "    WHERE status = 'draft' AND target_semester_id IS NOT NULL"
+        ")"
+    ))
+    connection.execute(text(
+        "UPDATE term_reclassification_plans SET status = 'cancelled' "
+        "WHERE status = 'draft'"
+    ))
+
+
 def _migrate_classrooms_to_term_scope(connection):
     """把長期班級併入學期班級，讓一個班只活一個學期。
 
@@ -586,11 +606,7 @@ def _migrate_classrooms_to_term_scope(connection):
             "ON classrooms(semester_id, campus_id, department)"
         ))
 
-        # 既有編班草稿的來源 fingerprint 以舊結構算出，套用時必然判定為已變更
-        connection.execute(text(
-            "UPDATE term_reclassification_plans SET status = 'cancelled' "
-            "WHERE status = 'draft'"
-        ))
+        _cancel_draft_term_plans(connection)
         connection.commit()
     finally:
         connection.execute(text("PRAGMA foreign_keys=ON"))

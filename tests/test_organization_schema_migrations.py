@@ -1176,3 +1176,60 @@ def test_active_project_editors_are_retired_as_historical_rows(tmp_path):
             assert historical == ("2025-06-30", "manual", "舊管理員")
     finally:
         migration_engine.dispose()
+
+
+def test_term_scope_migration_cancels_orphan_draft_semester(tmp_path):
+    """取消既有編班草稿時，草稿持有的目標學期要一起取消。
+
+    留著會變成孤兒 draft 學期：使用者之後建立期別時系統會要求「指定學期」，
+    而那個選項是一份已經作廢的草稿。
+    """
+    import migrations
+
+    database_path = tmp_path / "orphan-draft-semester.db"
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(text("""
+                CREATE TABLE semesters (
+                    id INTEGER PRIMARY KEY,
+                    label VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL
+                )
+            """))
+            connection.execute(text("""
+                CREATE TABLE term_reclassification_plans (
+                    id INTEGER PRIMARY KEY,
+                    status VARCHAR NOT NULL,
+                    target_semester_id INTEGER REFERENCES semesters(id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO semesters (id, label, status) VALUES
+                    (1, '目前學期', 'imported'),
+                    (2, '草稿學期', 'draft'),
+                    (3, '沒有草稿指向它', 'draft')
+            """))
+            connection.execute(text("""
+                INSERT INTO term_reclassification_plans
+                    (id, status, target_semester_id)
+                VALUES (1, 'draft', 2)
+            """))
+
+        with migration_engine.connect() as connection:
+            migrations._cancel_draft_term_plans(connection)
+            migrations._cancel_draft_term_plans(connection)
+            statuses = dict(connection.execute(text(
+                "SELECT id, status FROM semesters ORDER BY id"
+            )).all())
+            plan_status = connection.execute(text(
+                "SELECT status FROM term_reclassification_plans WHERE id = 1"
+            )).scalar_one()
+
+        assert plan_status == "cancelled"
+        assert statuses[2] == "cancelled"
+        assert statuses[1] == "imported"
+        # 沒有草稿指向的學期不該被順手動到
+        assert statuses[3] == "draft"
+    finally:
+        migration_engine.dispose()

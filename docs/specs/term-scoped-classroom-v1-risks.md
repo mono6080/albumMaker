@@ -267,6 +267,10 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 2. 正式站備份已建立並 verify 通過
 3. 在正式資料快照上跑過完整 migration，且重跑第二次為 0 筆 ✅ 2026-07-31
 4. 在正式資料快照上跑過完整 pytest
+4b. 在正式資料副本上跑過 `scripts/dry_run_term_reclassification.py`（實際套用一次
+   編班：關閉舊學期、結束全部名冊與編制、建立新學期的班與工作格）
+   ✅ 2026-07-31：38 班 / 465 位在籍學生 / 52 筆編制全數轉移，145 本相本的快照與
+   學生名單完全未變，老師對舊相本可讀不可製作
 5. `verify_render_output_unchanged.py` 比對通過 ✅ 2026-07-31（指紋變、位元相同，見 R1）
 6. 容器內 SQLite 版本 ≥ 3.25（migration 會自行斷言，但先確認避免部署中途失敗）
 7. 收斂重渲染已排程在離峰時段，且已知會跑約 468 份
