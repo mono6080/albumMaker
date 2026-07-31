@@ -25,6 +25,7 @@ from services import user_service
 from services.organization_service import _ensure_current_term_classroom_grid
 from services.project_access_service import assert_project_content_writable
 from tests.helpers import (
+    current_academic_term_id,
     USER_PASSWORD,
     assert_status,
     create_template_with_page,
@@ -50,9 +51,9 @@ def _seed_project(
     assert template is not None
     work_slot = None
     if classroom is not None:
-        term_classroom = _ensure_current_term_classroom_grid(db, classroom)
+        classroom = _ensure_current_term_classroom_grid(db, classroom)
         db.flush()
-        assert term_classroom is not None
+        assert classroom is not None
         work_slot = (
             db.query(ClassPeriodWorkSlot)
             .join(
@@ -60,7 +61,7 @@ def _seed_project(
                 AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
             )
             .filter(
-                ClassPeriodWorkSlot.term_classroom_id == term_classroom.id,
+                ClassPeriodWorkSlot.classroom_id == classroom.id,
                 AcademicTermPeriod.template_period_id == template.period_id,
             )
             .one()
@@ -200,16 +201,19 @@ def test_project_acl_uses_classroom_staffing_and_organization_scope_only():
             db.add_all([campus_a, campus_b])
             db.flush()
             infant_a = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus_a.id,
                 department="infant",
                 name=unique_name("A幼幼班"),
             )
             academy_a = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus_a.id,
                 department="academy",
                 name=unique_name("A幼兒班"),
             )
             infant_b = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus_b.id,
                 department="infant",
                 name=unique_name("B幼幼班"),
@@ -432,11 +436,13 @@ def test_former_teacher_keeps_read_on_past_classroom_but_loses_write():
             db.add(campus)
             db.flush()
             previous_classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("八階A"),
             )
             next_classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("九階A"),
@@ -555,16 +561,19 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
             ])
             db.flush()
             teaching_classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=teaching_campus.id,
                 department=department,
                 name=unique_name("雙身分任教班"),
             )
             supervised_classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=supervising_campus.id,
                 department=department,
                 name=unique_name("雙身分主管班"),
             )
             supervisor_teacher_classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=supervisor_teacher_campus.id,
                 department=department,
                 name=unique_name("主管任教班"),
@@ -754,6 +763,7 @@ def test_role_none_is_atomic_emergency_disable_and_invalidates_old_cookie(
             db.add(campus)
             db.flush()
             classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("停權班級"),
@@ -1011,6 +1021,7 @@ def test_role_none_commit_failure_rolls_back_owner_transfer(monkeypatch):
             db.add(campus)
             db.flush()
             classroom = Classroom(
+                academic_term_id=current_academic_term_id(db),
                 campus_id=campus.id,
                 department=template.period.department,
                 name=unique_name("停權回滾班級"),

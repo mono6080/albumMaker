@@ -6,15 +6,14 @@ from collections import Counter, defaultdict
 from datetime import date, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from crud.organization_crud import get_term_reclassification_plan_or_404
 from database import (
+    CURRENT_ACADEMIC_TERM_STATUSES,
     AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomStudent,
-    AcademicTermClassroomTeacher,
+    Classroom,
     AcademicTermPeriod,
     Campus,
     ClassPeriodWorkSlot,
@@ -249,7 +248,7 @@ def compute_organization_source_fingerprint(db: Session) -> str:
     classrooms = (
         db.query(Classroom)
         .join(Campus, Campus.id == Classroom.campus_id)
-        .filter(Classroom.is_active.is_(True), Campus.is_active.is_(True))
+        .filter(Classroom.academic_term_id.in_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))), Campus.is_active.is_(True))
         .order_by(Classroom.id)
         .all()
     )
@@ -336,7 +335,7 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
             .filter(
                 ClassRosterMember.ended_at.is_(None),
                 or_(
-                    Classroom.is_active.is_(False),
+                    Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
                     Campus.is_active.is_(False),
                 ),
             )
@@ -356,7 +355,7 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
             .filter(
                 ClassroomTeacherAssignment.ended_at.is_(None),
                 or_(
-                    Classroom.is_active.is_(False),
+                    Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
                     Campus.is_active.is_(False),
                 ),
             )
@@ -527,7 +526,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
                 "target_classroom_id": placement.target_classroom_id,
             })
             continue
-        if not classroom.is_active or not classroom.campus.is_active:
+        if not classroom.is_current or not classroom.campus.is_active:
             errors.append({
                 "code": "inactive_target_classroom",
                 "source_member_id": placement.source_membership_id,
@@ -572,7 +571,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
                 "code": "target_classroom_not_found",
                 "classroom_id": classroom_plan.classroom_id,
             })
-        elif not classroom.is_active or not classroom.campus.is_active:
+        elif not classroom.is_current or not classroom.campus.is_active:
             errors.append({
                 "code": "inactive_teacher_classroom",
                 "classroom_id": classroom_plan.classroom_id,
@@ -725,17 +724,47 @@ def create_term_reclassification_plan(
         db.add(plan)
         db.flush()
 
+        classrooms = (
+            db.query(Classroom)
+            .join(Campus, Campus.id == Classroom.campus_id)
+            .join(AcademicTerm, AcademicTerm.id == Classroom.academic_term_id)
+            .filter(
+                AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES),
+                Campus.is_active.is_(True),
+            )
+            .order_by(Classroom.id)
+            .all()
+        )
+        classroom_ids = [classroom.id for classroom in classrooms]
+        # 目標學期的班在建立草稿時就長出來（預設沿用目前的分校／部門／班名），
+        # 之後可在草稿裡增刪改；計畫的目標一律指向這些新班。
+        target_classroom_by_source_id = {}
+        for classroom in classrooms:
+            target_classroom = Classroom(
+                academic_term_id=target_term.id,
+                campus_id=classroom.campus_id,
+                department=classroom.department,
+                name=classroom.name,
+            )
+            db.add(target_classroom)
+            target_classroom_by_source_id[classroom.id] = target_classroom
+        db.flush()
+
         memberships = (
             db.query(ClassRosterMember)
             .options(
                 joinedload(ClassRosterMember.roster_child),
                 joinedload(ClassRosterMember.classroom).joinedload(Classroom.campus),
             )
-            .filter(ClassRosterMember.ended_at.is_(None))
+            .filter(
+                ClassRosterMember.ended_at.is_(None),
+                ClassRosterMember.classroom_id.in_(classroom_ids),
+            )
             .order_by(ClassRosterMember.id)
             .all()
         )
         for membership in memberships:
+            target_classroom = target_classroom_by_source_id[membership.classroom_id]
             plan.student_placements.append(TermStudentPlacement(
                 source_membership_id=membership.id,
                 roster_child_id_snapshot=membership.roster_child_id,
@@ -745,17 +774,8 @@ def create_term_reclassification_plan(
                 source_classroom_id_snapshot=membership.classroom_id,
                 source_classroom_name_snapshot=membership.classroom.name,
                 outcome="classroom",
-                target_classroom_id=membership.classroom_id,
+                target_classroom_id=target_classroom.id,
             ))
-
-        classrooms = (
-            db.query(Classroom)
-            .join(Campus, Campus.id == Classroom.campus_id)
-            .filter(Classroom.is_active.is_(True), Campus.is_active.is_(True))
-            .order_by(Classroom.id)
-            .all()
-        )
-        classroom_ids = [classroom.id for classroom in classrooms]
         assignments = (
             db.query(ClassroomTeacherAssignment)
             .filter(
@@ -773,7 +793,9 @@ def create_term_reclassification_plan(
         for assignment in assignments:
             assignments_by_classroom[assignment.classroom_id].append(assignment)
         for classroom in classrooms:
-            classroom_plan = TermClassroomPlan(classroom_id=classroom.id)
+            classroom_plan = TermClassroomPlan(
+                classroom_id=target_classroom_by_source_id[classroom.id].id,
+            )
             for assignment in assignments_by_classroom[classroom.id]:
                 classroom_plan.teacher_targets.append(TermClassroomTeacherTarget(
                     teacher_id=assignment.teacher_id,
@@ -934,102 +956,25 @@ def _raise_invalid_target_state(errors: list[dict]) -> None:
     )
 
 
-def _materialize_target_term_grid(
+def _create_target_term_work_slots(
     db: Session,
     plan: TermReclassificationPlan,
     target_term: AcademicTerm,
 ) -> None:
-    """以套用後的班級與老師狀態建立不可變學期快照及完整工作格。"""
-    if target_term.classrooms:
+    """替目標學期的每個班補上與其部門相符的期別工作格。"""
+    if any(classroom.work_slots for classroom in target_term.classrooms):
         raise _coded_error(
             409,
             "academic_term_grid_already_created",
             "目標學期工作格已建立",
         )
-    classroom_ids = [
-        classroom_plan.classroom_id for classroom_plan in plan.classroom_plans
-    ]
-    classrooms = (
-        db.query(Classroom)
-        .options(joinedload(Classroom.campus))
-        .filter(Classroom.id.in_(classroom_ids))
-        .order_by(Classroom.id)
-        .all()
-        if classroom_ids
-        else []
-    )
-    classroom_by_id = {classroom.id: classroom for classroom in classrooms}
-    if set(classroom_by_id) != set(classroom_ids):
-        raise _coded_error(
-            409,
-            "stale_reclassification_plan",
-            "目標班級已變更，請重建編班草稿",
-        )
-
-    term_classroom_by_classroom_id: dict[int, AcademicTermClassroom] = {}
-    for classroom_id in classroom_ids:
-        classroom = classroom_by_id[classroom_id]
-        term_classroom = AcademicTermClassroom(
-            academic_term_id=target_term.id,
-            classroom_id=classroom.id,
-            campus_id_snapshot=classroom.campus_id,
-            campus_name_snapshot=classroom.campus.name,
-            classroom_name_snapshot=classroom.name,
-            department=classroom.department,
-        )
-        db.add(term_classroom)
-        term_classroom_by_classroom_id[classroom.id] = term_classroom
-    db.flush()
-
-    assignments = (
-        db.query(ClassroomTeacherAssignment)
-        .filter(
-            ClassroomTeacherAssignment.classroom_id.in_(classroom_ids),
-            ClassroomTeacherAssignment.ended_at.is_(None),
-        )
-        .order_by(ClassroomTeacherAssignment.id)
-        .all()
-        if classroom_ids
-        else []
-    )
-    for assignment in assignments:
-        term_classroom = term_classroom_by_classroom_id[assignment.classroom_id]
-        db.add(AcademicTermClassroomTeacher(
-            term_classroom_id=term_classroom.id,
-            source_assignment_id=assignment.id,
-            teacher_id=assignment.teacher_id,
-            teacher_name_snapshot=assignment.teacher_name_snapshot,
-            duty=assignment.duty,
-        ))
-
-    memberships = (
-        db.query(ClassRosterMember)
-        .options(joinedload(ClassRosterMember.roster_child))
-        .filter(
-            ClassRosterMember.classroom_id.in_(classroom_ids),
-            ClassRosterMember.ended_at.is_(None),
-        )
-        .order_by(ClassRosterMember.id)
-        .all()
-        if classroom_ids
-        else []
-    )
-    for membership in memberships:
-        term_classroom = term_classroom_by_classroom_id[membership.classroom_id]
-        db.add(AcademicTermClassroomStudent(
-            academic_term_id=target_term.id,
-            term_classroom_id=term_classroom.id,
-            source_membership_id=membership.id,
-            roster_child_id_snapshot=membership.roster_child_id,
-            student_name_snapshot=membership.roster_child.name,
-        ))
-
-    for term_classroom in term_classroom_by_classroom_id.values():
+    for classroom_plan in plan.classroom_plans:
+        classroom = db.get(Classroom, classroom_plan.classroom_id)
         for term_period in target_term.periods:
-            if term_period.department != term_classroom.department:
+            if term_period.department != classroom.department:
                 continue
             db.add(ClassPeriodWorkSlot(
-                term_classroom_id=term_classroom.id,
+                classroom_id=classroom.id,
                 term_period_id=term_period.id,
             ))
     db.flush()
@@ -1074,64 +1019,50 @@ def apply_term_reclassification_plan(
                 "目前名單已變更，請重建編班草稿",
             )
 
-        classroom_ids = [classroom_plan.classroom_id for classroom_plan in plan.classroom_plans]
+        source_classroom_ids = sorted({
+            placement.source_classroom_id_snapshot for placement in placements
+        })
         current_assignments = (
             db.query(ClassroomTeacherAssignment)
             .filter(
-                ClassroomTeacherAssignment.classroom_id.in_(classroom_ids),
+                ClassroomTeacherAssignment.classroom_id.in_(source_classroom_ids),
                 ClassroomTeacherAssignment.ended_at.is_(None),
             )
             .all()
-            if classroom_ids
+            if source_classroom_ids
             else []
         )
-        assignment_by_key = {
-            (assignment.classroom_id, assignment.teacher_id): assignment
-            for assignment in current_assignments
-        }
-        target_by_key = {
-            (classroom_plan.classroom_id, target.teacher_id): target
-            for classroom_plan in plan.classroom_plans
-            for target in classroom_plan.teacher_targets
-        }
 
+        # 舊學期的班隨學期一起結束，所以全部成員與編制一律結束，
+        # 不再有「留在原班就不動」的分支——原班在新學期是另一筆班級。
         for placement in placements:
             member = source_member_by_id[placement.source_membership_id]
-            if (
-                placement.outcome == "departed"
-                or placement.target_classroom_id != member.classroom_id
-            ):
-                member.ended_at = applied_at
-                member.end_reason = (
-                    "term_departed"
-                    if placement.outcome == "departed"
-                    else "term_reassignment"
-                )
-        for key, assignment in assignment_by_key.items():
-            target = target_by_key.get(key)
-            if target is None or target.duty != assignment.duty:
-                assignment.ended_at = applied_at
-                assignment.end_reason = "term_reassignment"
-                assignment.ended_by_id = current_admin.id
-                assignment.ended_by_name_snapshot = current_admin.display_name
+            member.ended_at = applied_at
+            member.end_reason = (
+                "term_departed"
+                if placement.outcome == "departed"
+                else "term_reassignment"
+            )
+        for assignment in current_assignments:
+            assignment.ended_at = applied_at
+            assignment.end_reason = "term_reassignment"
+            assignment.ended_by_id = current_admin.id
+            assignment.ended_by_name_snapshot = current_admin.display_name
         db.flush()
 
         for placement in placements:
+            if placement.outcome != "classroom":
+                continue
             member = source_member_by_id[placement.source_membership_id]
-            if (
-                placement.outcome == "classroom"
-                and placement.target_classroom_id != placement.source_classroom_id_snapshot
-            ):
-                db.add(ClassRosterMember(
-                    classroom_id=placement.target_classroom_id,
-                    roster_child_id=member.roster_child_id,
-                    started_at=applied_at,
-                ))
-        for key, target in target_by_key.items():
-            assignment = assignment_by_key.get(key)
-            if assignment is None or assignment.duty != target.duty:
+            db.add(ClassRosterMember(
+                classroom_id=placement.target_classroom_id,
+                roster_child_id=member.roster_child_id,
+                started_at=applied_at,
+            ))
+        for classroom_plan in plan.classroom_plans:
+            for target in classroom_plan.teacher_targets:
                 db.add(ClassroomTeacherAssignment(
-                    classroom_id=key[0],
+                    classroom_id=classroom_plan.classroom_id,
                     teacher_id=target.teacher_id,
                     teacher_name_snapshot=target.teacher_name_snapshot,
                     duty=target.duty,
@@ -1141,7 +1072,7 @@ def apply_term_reclassification_plan(
                 ))
         db.flush()
 
-        _materialize_target_term_grid(db, plan, target_term)
+        _create_target_term_work_slots(db, plan, target_term)
         current_terms = db.query(AcademicTerm).filter(
             AcademicTerm.id != target_term.id,
             AcademicTerm.status.in_(("imported", "active")),

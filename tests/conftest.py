@@ -3,6 +3,7 @@
 # DATABASE_URL 並建立 engine，conftest 是唯一保證早於測試模組 import 的時機。
 
 import os
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ _TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
 _TEST_TMP_DIR = _TEST_TMP_ROOT / f"album_maker_tests_{uuid4().hex}"
 _TEST_TMP_DIR.mkdir(parents=True, exist_ok=False)
 _TEST_DB_FILE = _TEST_TMP_DIR / "test.db"
+_PRISTINE_DB_FILE = _TEST_TMP_DIR / "pristine.db"
 
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_FILE.as_posix()}")
 os.environ.setdefault("SECRET_KEY", "test-secret-do-not-use")
@@ -25,6 +27,46 @@ os.environ.setdefault("SECRET_KEY", "test-secret-do-not-use")
 os.environ.setdefault("RENDER_RECONCILE_ON_STARTUP", "0")
 
 import pytest  # noqa: E402
+
+
+def _database_files(base: Path) -> list[Path]:
+    """WAL 模式下 -wal／-shm 與主檔是一組，複製與清除都要一起處理。"""
+    return [base, base.with_name(base.name + "-wal"), base.with_name(base.name + "-shm")]
+
+
+def _copy_database(source_base: Path, target_base: Path) -> None:
+    for source in _database_files(source_base):
+        target = target_base.with_name(
+            source.name.replace(source_base.name, target_base.name, 1)
+        )
+        target.unlink(missing_ok=True)
+        if source.exists():
+            shutil.copy2(source, target)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_database():
+    """每個測試都從同一份乾淨的已遷移資料庫開始。
+
+    班級改成學期範圍實體之後，套用編班會關閉目前學期、開新學期——先前建立的班級
+    就永久屬於歷史學期。那是模型的正確行為，但共用同一個 DB 檔會讓編班測試污染
+    其後的所有測試。每個測試重跑 migration 太慢，所以只建一次 pristine 檔再逐測試複製。
+    """
+    from database import engine
+
+    if not _PRISTINE_DB_FILE.exists():
+        from database import init_db
+        from migrations import run_migrations
+
+        init_db()
+        run_migrations()
+        engine.dispose()
+        _copy_database(_TEST_DB_FILE, _PRISTINE_DB_FILE)
+    else:
+        engine.dispose()
+        _copy_database(_PRISTINE_DB_FILE, _TEST_DB_FILE)
+    yield
+    engine.dispose()
 
 
 @pytest.fixture(autouse=True)

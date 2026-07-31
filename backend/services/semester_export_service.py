@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import (
     AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomStudent,
+    Classroom,
+    ClassRosterMember,
     AcademicTermPeriod,
     ClassPeriodWorkSlot,
     Project,
@@ -81,8 +81,8 @@ def load_export_periods(
     )
     if organization_scope is not None and not organization_scope.is_admin:
         scoped_department_rows = apply_term_classroom_report_scope(
-            db.query(AcademicTermClassroom.department).filter(
-                AcademicTermClassroom.academic_term_id == academic_term_id,
+            db.query(Classroom.department).filter(
+                Classroom.academic_term_id == academic_term_id,
             ),
             organization_scope,
         ).distinct().all()
@@ -126,8 +126,8 @@ def load_export_projects(
             ClassPeriodWorkSlot.id == Project.class_period_work_slot_id,
         )
         .join(
-            AcademicTermClassroom,
-            AcademicTermClassroom.id == ClassPeriodWorkSlot.term_classroom_id,
+            Classroom,
+            Classroom.id == ClassPeriodWorkSlot.classroom_id,
         )
         .join(
             AcademicTermPeriod,
@@ -137,14 +137,14 @@ def load_export_projects(
             joinedload(Project.students).joinedload(Student.roster_child),
             joinedload(Project.owner),
             joinedload(Project.class_period_work_slot).joinedload(
-                ClassPeriodWorkSlot.term_classroom
+                ClassPeriodWorkSlot.classroom
             ),
             joinedload(Project.class_period_work_slot).joinedload(
                 ClassPeriodWorkSlot.term_period
             ),
         )
         .filter(
-            AcademicTermClassroom.academic_term_id == academic_term_id,
+            Classroom.academic_term_id == academic_term_id,
             Project.deleted_at.is_(None),
             Project.classroom_id.isnot(None),
         )
@@ -218,21 +218,21 @@ def _load_scoped_term_classrooms(
     academic_term_id: int,
     organization_scope: OrganizationReadScope | None,
     departments: set[str],
-) -> list[AcademicTermClassroom]:
-    query = db.query(AcademicTermClassroom).options(
-        selectinload(AcademicTermClassroom.students).selectinload(
-            AcademicTermClassroomStudent.source_membership
+) -> list[Classroom]:
+    query = db.query(Classroom).options(
+        selectinload(Classroom.roster_members).selectinload(
+            ClassRosterMember.roster_child
         )
     ).filter(
-        AcademicTermClassroom.academic_term_id == academic_term_id,
-        AcademicTermClassroom.department.in_(departments),
+        Classroom.academic_term_id == academic_term_id,
+        Classroom.department.in_(departments),
     )
     if organization_scope is not None:
         query = apply_term_classroom_report_scope(query, organization_scope)
     return query.order_by(
-        AcademicTermClassroom.campus_name_snapshot,
-        AcademicTermClassroom.classroom_name_snapshot,
-        AcademicTermClassroom.id,
+        Classroom.campus_id,
+        Classroom.name,
+        Classroom.id,
     ).all()
 
 
@@ -243,7 +243,7 @@ def _serialize_entry(
 ) -> dict:
     slot = project.class_period_work_slot
     term_period = slot.term_period
-    term_classroom = slot.term_classroom
+    classroom = slot.classroom
     print_pdf_key = student_pdf_key(student, "print")
     return {
         "term_period_id": term_period.id,
@@ -259,7 +259,7 @@ def _serialize_entry(
         "campus_id": project.campus_id_snapshot,
         "campus_name": project.campus_name_snapshot,
         "classroom_id": project.classroom_id,
-        "term_classroom_id": term_classroom.id,
+        "classroom_id": classroom.id,
         "classroom_name": project.classroom_name_snapshot,
         "department": project.department,
         "has_pdf": bool(print_pdf_key and print_pdf_key in existing_output_keys),
@@ -336,13 +336,13 @@ def build_semester_export_preview(
         for period in all_periods
         if period.department in selected_departments
     ]
-    term_classrooms = _load_scoped_term_classrooms(
+    classrooms = _load_scoped_term_classrooms(
         db,
         academic_term_id,
         organization_scope,
         selected_departments,
     )
-    term_classroom_by_id = {row.id: row for row in term_classrooms}
+    term_classroom_by_id = {row.id: row for row in classrooms}
     projects = load_export_projects(
         db,
         academic_term_id,
@@ -352,13 +352,13 @@ def build_semester_export_preview(
     output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
 
     children_by_id: dict[int, dict] = {}
-    for term_classroom in term_classrooms:
-        for student_snapshot in term_classroom.students:
-            children_by_id[student_snapshot.roster_child_id_snapshot] = {
-                "roster_child_id": student_snapshot.roster_child_id_snapshot,
-                "name": student_snapshot.student_name_snapshot,
-                "term_classroom_id": term_classroom.id,
-                "source_membership": student_snapshot.source_membership,
+    for classroom in classrooms:
+        for member in classroom.roster_members:
+            children_by_id[member.roster_child_id] = {
+                "roster_child_id": member.roster_child_id,
+                "name": member.roster_child.name,
+                "classroom_id": classroom.id,
+                "source_membership": member,
                 "entries": [],
             }
 
@@ -384,16 +384,16 @@ def build_semester_export_preview(
                 continue
             child["entries"].append(entry)
     classroom_groups_by_id = {
-        term_classroom.id: {
-            "term_classroom_id": term_classroom.id,
-            "campus_id": term_classroom.campus_id_snapshot,
-            "campus_name": term_classroom.campus_name_snapshot,
-            "classroom_id": term_classroom.classroom_id,
-            "classroom_name": term_classroom.classroom_name_snapshot,
-            "department": term_classroom.department,
+        classroom.id: {
+            "classroom_id": classroom.id,
+            "campus_id": classroom.campus_id,
+            "campus_name": classroom.campus.name,
+            "classroom_id": classroom.id,
+            "classroom_name": classroom.name,
+            "department": classroom.department,
             "children": [],
         }
-        for term_classroom in term_classrooms
+        for classroom in classrooms
     }
     period_position_by_id = {
         period.id: period.position for period in all_periods
@@ -428,20 +428,20 @@ def build_semester_export_preview(
                 "entries": cell_entries,
             })
 
-        latest_term_classroom_id = child["term_classroom_id"]
+        latest_term_classroom_id = child["classroom_id"]
         if latest_term_classroom_id not in classroom_groups_by_id:
             continue
-        term_classroom = term_classroom_by_id[latest_term_classroom_id]
+        classroom = term_classroom_by_id[latest_term_classroom_id]
         child_payload = {
             "roster_child_id": child["roster_child_id"],
             "name": child["name"],
             "latest_classroom": {
-                "term_classroom_id": term_classroom.id,
-                "campus_id": term_classroom.campus_id_snapshot,
-                "campus_name": term_classroom.campus_name_snapshot,
-                "classroom_id": term_classroom.classroom_id,
-                "classroom_name": term_classroom.classroom_name_snapshot,
-                "department": term_classroom.department,
+                "classroom_id": classroom.id,
+                "campus_id": classroom.campus_id,
+                "campus_name": classroom.campus.name,
+                "classroom_id": classroom.id,
+                "classroom_name": classroom.name,
+                "department": classroom.department,
             },
             "cells": cells,
         }

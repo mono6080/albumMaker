@@ -8,8 +8,7 @@ from sqlalchemy import create_engine, text
 
 from database import (
     AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomTeacher,
+    Classroom,
     Campus,
     Classroom,
     ClassroomTeacherAssignment,
@@ -189,88 +188,6 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
         assert project["department"] == "infant"
         assert project["campus_id"] != target_campus_id
         assert project["classroom_name"] != moved_classroom_name
-
-
-def test_active_term_new_classroom_teacher_snapshot_is_filled_once():
-    db = SessionLocal()
-    try:
-        current_term = db.query(AcademicTerm).filter(
-            AcademicTerm.status.in_(("imported", "active"))
-        ).one()
-        current_term.status = "active"
-        first_teacher = User(
-            username=unique_name("active-term-teacher"),
-            display_name="正式學期第一位老師",
-            hashed_password="unused",
-            role="teacher",
-        )
-        second_teacher = User(
-            username=unique_name("active-term-teacher"),
-            display_name="正式學期後續老師",
-            hashed_password="unused",
-            role="teacher",
-        )
-        campus = Campus(name=unique_name("active-term-campus"))
-        db.add_all([first_teacher, second_teacher, campus])
-        db.flush()
-        classroom = Classroom(
-            campus_id=campus.id,
-            department="infant",
-            name=unique_name("active-term-classroom"),
-        )
-        db.add(classroom)
-        db.flush()
-        term_classroom = AcademicTermClassroom(
-            academic_term_id=current_term.id,
-            classroom_id=classroom.id,
-            campus_id_snapshot=campus.id,
-            campus_name_snapshot=campus.name,
-            classroom_name_snapshot=classroom.name,
-            department=classroom.department,
-        )
-        db.add(term_classroom)
-        db.flush()
-        first_assignment = ClassroomTeacherAssignment(
-            classroom_id=classroom.id,
-            teacher_id=first_teacher.id,
-            teacher_name_snapshot=first_teacher.display_name,
-            duty="lead",
-            started_by_name_snapshot="測試管理員",
-        )
-        db.add(first_assignment)
-        db.flush()
-
-        organization_service._refresh_current_term_teacher_snapshot(
-            db,
-            classroom.id,
-        )
-        db.flush()
-        snapshot = db.query(AcademicTermClassroomTeacher).filter(
-            AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-        ).one()
-        assert snapshot.teacher_id == first_teacher.id
-
-        first_assignment.ended_at = first_assignment.started_at
-        db.add(ClassroomTeacherAssignment(
-            classroom_id=classroom.id,
-            teacher_id=second_teacher.id,
-            teacher_name_snapshot=second_teacher.display_name,
-            duty="lead",
-            started_by_name_snapshot="測試管理員",
-        ))
-        db.flush()
-        organization_service._refresh_current_term_teacher_snapshot(
-            db,
-            classroom.id,
-        )
-        db.flush()
-        snapshots = db.query(AcademicTermClassroomTeacher).filter(
-            AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-        ).all()
-        assert [row.teacher_id for row in snapshots] == [first_teacher.id]
-    finally:
-        db.rollback()
-        db.close()
 
 
 def test_class_roster_changes_only_affect_future_project_snapshots():

@@ -238,16 +238,6 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "/campuses/{campus_id}/supervisors",
             "replace_campus_supervisors",
         ),
-        (
-            "put",
-            "/projects/{project_id}/classroom",
-            "assign_project_to_classroom",
-        ),
-        (
-            "get",
-            "/projects/{project_id}/classroom-migration-preview",
-            "get_project_classroom_migration_preview",
-        ),
         ("post", "/classrooms", "create_classroom"),
         ("patch", "/classrooms/{classroom_id}", "update_classroom"),
         (

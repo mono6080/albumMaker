@@ -11,6 +11,7 @@ from services.organization_scope_service import (
     build_organization_read_scope,
     project_in_read_scope,
     project_in_supervisor_scope,
+    project_in_readable_teacher_scope,
     project_in_teacher_scope,
 )
 

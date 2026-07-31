@@ -7,8 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import (
     AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomStudent,
+    Classroom,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
@@ -363,20 +362,14 @@ def test_active_term_student_snapshot_tracks_final_roster_and_closed_freezes():
 
         db = SessionLocal()
         try:
-            snapshots = db.query(AcademicTermClassroomStudent).filter(
-                AcademicTermClassroomStudent.academic_term_id == term_id,
-                AcademicTermClassroomStudent.roster_child_id_snapshot
-                == member["roster_child_id"],
+            active = db.query(ClassRosterMember).filter(
+                ClassRosterMember.roster_child_id == member["roster_child_id"],
+                ClassRosterMember.ended_at.is_(None),
             ).all()
-            assert len(snapshots) == 1
-            snapshot = snapshots[0]
-            term_classroom = db.get(
-                AcademicTermClassroom,
-                snapshot.term_classroom_id,
-            )
-            assert term_classroom.classroom_id == classroom_b_id
-            assert snapshot.source_membership_id == transferred_member["id"]
-            assert snapshot.student_name_snapshot == "快照新名"
+            assert len(active) == 1
+            assert active[0].classroom_id == classroom_b_id
+            assert active[0].id == transferred_member["id"]
+            assert active[0].roster_child.name == "快照新名"
         finally:
             db.close()
 
@@ -389,16 +382,11 @@ def test_active_term_student_snapshot_tracks_final_roster_and_closed_freezes():
 
         db = SessionLocal()
         try:
-            snapshot = db.query(AcademicTermClassroomStudent).filter(
-                AcademicTermClassroomStudent.academic_term_id == term_id,
-                AcademicTermClassroomStudent.roster_child_id_snapshot
-                == member["roster_child_id"],
-            ).one()
-            term_classroom = db.get(
-                AcademicTermClassroom,
-                snapshot.term_classroom_id,
-            )
-            assert term_classroom.classroom_id == classroom_b_id
+            ended = db.query(ClassRosterMember).filter(
+                ClassRosterMember.roster_child_id == member["roster_child_id"],
+            ).order_by(ClassRosterMember.id.desc()).first()
+            classroom = db.get(Classroom, ended.classroom_id)
+            assert classroom.classroom_id == classroom_b_id
             assert snapshot.source_membership_id == transferred_member["id"]
 
             current_term = db.get(AcademicTerm, term_id)
@@ -675,26 +663,18 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 "編班李小華": classroom_b_id,
             }
             target_term_id = applied_plan["target_academic_term_id"]
-            target_student_snapshots = (
-                db.query(AcademicTermClassroomStudent)
-                .join(
-                    AcademicTermClassroom,
-                    AcademicTermClassroom.id
-                    == AcademicTermClassroomStudent.term_classroom_id,
+            target_members = (
+                db.query(ClassRosterMember)
+                .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
+                .filter(
+                    Classroom.academic_term_id == target_term_id,
+                    ClassRosterMember.ended_at.is_(None),
                 )
-                    .filter(
-                        AcademicTermClassroomStudent.academic_term_id
-                        == target_term_id,
-                        AcademicTermClassroom.classroom_id.in_([
-                            classroom_a_id,
-                            classroom_b_id,
-                        ]),
-                    )
                 .all()
             )
             assert {
-                snapshot.student_name_snapshot: snapshot.term_classroom.classroom_id
-                for snapshot in target_student_snapshots
+                member.roster_child.name: member.classroom.name
+                for member in target_members
             } == {
                 "編班王小明": classroom_a_id,
                 "編班李小華": classroom_b_id,
@@ -706,12 +686,12 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                     ClassPeriodWorkSlot.id == Project.class_period_work_slot_id,
                 )
                 .join(
-                    AcademicTermClassroom,
-                    AcademicTermClassroom.id
-                    == ClassPeriodWorkSlot.term_classroom_id,
+                    Classroom,
+                    Classroom.id
+                    == ClassPeriodWorkSlot.classroom_id,
                 )
                 .filter(
-                    AcademicTermClassroom.academic_term_id == target_term_id
+                    Classroom.academic_term_id == target_term_id
                 )
                 .count()
             ) == 0

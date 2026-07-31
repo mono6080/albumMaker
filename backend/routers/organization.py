@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from database import User, get_db
 from services.organization_service import (
-    assign_project_to_classroom as assign_project_to_classroom_use_case,
     auto_fill_classroom_member_album_names as auto_fill_classroom_album_names_use_case,
     auto_fill_roster_child_album_name as auto_fill_roster_album_name_use_case,
     batch_add_classroom_members as batch_add_classroom_members_use_case,
@@ -19,7 +18,6 @@ from services.organization_service import (
     create_classroom_project as create_classroom_project_use_case,
     get_my_classrooms as get_my_classrooms_use_case,
     get_organization_overview as get_organization_overview_use_case,
-    get_project_classroom_migration_preview as get_project_migration_preview_use_case,
     replace_campus_supervisors as replace_campus_supervisors_use_case,
     replace_classroom_teachers as replace_classroom_teachers_use_case,
     update_campus as update_campus_use_case,
@@ -232,41 +230,6 @@ def replace_campus_supervisors(
     return replace_campus_supervisors_use_case(
         db, current_admin, campus_id,
         body.campus_supervisor_ids, department_supervisors,
-    )
-
-
-@router.get("/projects/{project_id}/classroom-migration-preview")
-def get_project_classroom_migration_preview(
-    project_id: int,
-    classroom_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_role("admin")),
-):
-    return get_project_migration_preview_use_case(
-        db,
-        project_id,
-        classroom_id,
-    )
-
-
-@router.put("/projects/{project_id}/classroom")
-def assign_project_to_classroom(
-    project_id: int,
-    body: ProjectClassroomAssignmentBody,
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(require_role("admin")),
-):
-    return assign_project_to_classroom_use_case(
-        db,
-        current_admin,
-        project_id,
-        classroom_id=body.classroom_id,
-        source_fingerprint=body.source_fingerprint,
-        seed_current_roster=body.seed_current_roster,
-        student_identity_decisions=[
-            decision.model_dump()
-            for decision in body.student_identity_decisions
-        ],
     )
 
 

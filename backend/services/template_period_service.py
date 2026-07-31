@@ -53,16 +53,16 @@ def _ensure_current_term_period_slots(
         or term_period.template_period.status != "active"
     ):
         return
-    for term_classroom in term_period.academic_term.classrooms:
-        if term_classroom.department != term_period.department:
+    for classroom in term_period.academic_term.classrooms:
+        if classroom.department != term_period.department:
             continue
         existing_slot = db.query(ClassPeriodWorkSlot.id).filter(
-            ClassPeriodWorkSlot.term_classroom_id == term_classroom.id,
+            ClassPeriodWorkSlot.classroom_id == classroom.id,
             ClassPeriodWorkSlot.term_period_id == term_period.id,
         ).first()
         if existing_slot is None:
             db.add(ClassPeriodWorkSlot(
-                term_classroom_id=term_classroom.id,
+                classroom_id=classroom.id,
                 term_period_id=term_period.id,
             ))
 

@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from database import (
     AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomTeacher,
+    Classroom,
+    ClassroomTeacherAssignment,
     AcademicTermPeriod,
     ClassPeriodWorkSlot,
     Project,
@@ -62,8 +62,8 @@ def list_reporting_terms(
     if not organization_scope.is_admin:
         scoped_department_rows = apply_term_classroom_report_scope(
             db.query(
-                AcademicTermClassroom.academic_term_id,
-                AcademicTermClassroom.department,
+                Classroom.academic_term_id,
+                Classroom.department,
             ),
             organization_scope,
         ).distinct().all()
@@ -111,10 +111,10 @@ def _load_report_classrooms(
     department: str | None = None,
     campus_id: int | None = None,
     classroom_id: int | None = None,
-) -> list[AcademicTermClassroom]:
-    slot_loader = selectinload(AcademicTermClassroom.work_slots)
-    query = db.query(AcademicTermClassroom).options(
-        selectinload(AcademicTermClassroom.teachers),
+) -> list[Classroom]:
+    slot_loader = selectinload(Classroom.work_slots)
+    query = db.query(Classroom).options(
+        selectinload(Classroom.teacher_assignments),
         slot_loader.selectinload(ClassPeriodWorkSlot.term_period),
         slot_loader.selectinload(ClassPeriodWorkSlot.projects).selectinload(
             Project.students
@@ -125,18 +125,18 @@ def _load_report_classrooms(
         slot_loader.selectinload(ClassPeriodWorkSlot.projects).selectinload(
             Project.template
         ),
-    ).filter(AcademicTermClassroom.academic_term_id == academic_term_id)
+    ).filter(Classroom.academic_term_id == academic_term_id)
     query = apply_term_classroom_report_scope(query, organization_scope)
     if department is not None:
-        query = query.filter(AcademicTermClassroom.department == department)
+        query = query.filter(Classroom.department == department)
     if campus_id is not None:
-        query = query.filter(AcademicTermClassroom.campus_id_snapshot == campus_id)
+        query = query.filter(Classroom.campus_id == campus_id)
     if classroom_id is not None:
-        query = query.filter(AcademicTermClassroom.classroom_id == classroom_id)
+        query = query.filter(Classroom.id == classroom_id)
     return query.order_by(
-        AcademicTermClassroom.campus_name_snapshot,
-        AcademicTermClassroom.classroom_name_snapshot,
-        AcademicTermClassroom.id,
+        Classroom.campus_id,
+        Classroom.name,
+        Classroom.id,
     ).all()
 
 
@@ -232,7 +232,7 @@ def _serialize_project_progress(
     }
 
 
-def _serialize_teacher(teacher: AcademicTermClassroomTeacher) -> dict:
+def _serialize_teacher(teacher: ClassroomTeacherAssignment) -> dict:
     return {
         "user_id": teacher.teacher_id,
         "display_name": teacher.teacher_name_snapshot,
@@ -255,7 +255,7 @@ def build_teacher_progress_overview(
         academic_term_id,
         organization_scope,
     )
-    term_classrooms = _load_report_classrooms(
+    classrooms = _load_report_classrooms(
         db,
         academic_term_id,
         organization_scope,
@@ -273,7 +273,7 @@ def build_teacher_progress_overview(
 
     classrooms_payload = []
     summary = {
-        "classroom_count": len(term_classrooms),
+        "classroom_count": len(classrooms),
         "slot_count": 0,
         "not_created_slot_count": 0,
         "archived_slot_count": 0,
@@ -284,10 +284,10 @@ def build_teacher_progress_overview(
         "submitted_project_count": 0,
         "attention_project_count": 0,
     }
-    for term_classroom in term_classrooms:
+    for classroom in classrooms:
         slots_payload = []
         for slot in sorted(
-            term_classroom.work_slots,
+            classroom.work_slots,
             key=lambda row: (row.term_period.position, row.id),
         ):
             if slot.term_period_id not in allowed_term_period_ids:
@@ -338,16 +338,16 @@ def build_teacher_progress_overview(
                 "projects": projects_payload,
             })
         classrooms_payload.append({
-            "term_classroom_id": term_classroom.id,
-            "classroom_id": term_classroom.classroom_id,
-            "campus_id": term_classroom.campus_id_snapshot,
-            "campus_name": term_classroom.campus_name_snapshot,
-            "classroom_name": term_classroom.classroom_name_snapshot,
-            "department": term_classroom.department,
+            "classroom_id": classroom.id,
+            "classroom_id": classroom.id,
+            "campus_id": classroom.campus_id,
+            "campus_name": classroom.campus.name,
+            "classroom_name": classroom.name,
+            "department": classroom.department,
             "teachers": [
                 _serialize_teacher(teacher)
                 for teacher in sorted(
-                    term_classroom.teachers,
+                    classroom.teacher_assignments,
                     key=lambda row: (row.duty != "lead", row.id),
                 )
             ],

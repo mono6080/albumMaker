@@ -69,10 +69,139 @@ def run_migrations():
         _add_roster_child_album_name_column(connection)
         _migrate_assigned_album_names_to_roster_authority(connection)
         _add_student_completed_at_column(connection)
+        _migrate_classrooms_to_term_scope(connection)
+
+
+def _is_term_scoped_classroom_schema(connection) -> bool:
+    """資料庫是否已是學期範圍班級結構。
+
+    只適用於舊「長期班級 + 學期快照」結構的歷史 migration 一律以此提前返回：
+    全新資料庫由 init_db() 直接建出新結構，那些步驟無事可做，硬跑會把已移除的
+    快照表重建回來。
+    """
+    classroom_columns = {
+        row[1] for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    return bool(classroom_columns) and "academic_term_id" in classroom_columns
+
+
+def _migrate_classrooms_to_term_scope(connection):
+    """把長期班級併入學期班級，讓一個班只活一個學期。
+
+    現況是 classrooms 與 academic_term_classrooms 一對一且欄位完全一致（見
+    docs/specs/term-scoped-classroom-v1.md 的前提驗證），所以 classrooms.id 原封
+    保留、只補上 academic_term_id；引用班級的 classroom_id 欄位一律不動。
+
+    兩張學期快照表（學生／老師）隨之移除：班本身就只活一個學期，成員與編制的
+    live 表就是那個學期的紀錄。
+    """
+    classroom_columns = {
+        row[1] for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    if not classroom_columns or "academic_term_id" in classroom_columns:
+        return
+
+    term_classroom_rows = list(connection.execute(text(
+        "SELECT id, academic_term_id, classroom_id FROM academic_term_classrooms"
+    )))
+    classroom_ids = [row[0] for row in connection.execute(text(
+        "SELECT id FROM classrooms"
+    ))]
+    term_by_classroom = {row[2]: row[1] for row in term_classroom_rows}
+    missing = sorted(set(classroom_ids) - set(term_by_classroom))
+    if missing:
+        raise RuntimeError(
+            f"班級 {missing} 沒有對應的學期班級，無法併入學期範圍；"
+            "請先確認每個班都屬於某個正式學期"
+        )
+    duplicated = len(term_classroom_rows) != len(term_by_classroom)
+    if duplicated:
+        raise RuntimeError("同一個班對應到多個學期，無法一對一併入")
+
+    # 工作格改指 classrooms.id（原本指 academic_term_classrooms.id）
+    work_slot_target = {row[0]: row[2] for row in term_classroom_rows}
+
+    connection.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        connection.execute(text(
+            "ALTER TABLE classrooms ADD COLUMN academic_term_id INTEGER "
+            "REFERENCES academic_terms(id)"
+        ))
+        for classroom_id, academic_term_id in term_by_classroom.items():
+            connection.execute(
+                text(
+                    "UPDATE classrooms SET academic_term_id = :term "
+                    "WHERE id = :classroom"
+                ),
+                {"term": academic_term_id, "classroom": classroom_id},
+            )
+        for term_classroom_id, classroom_id in work_slot_target.items():
+            connection.execute(
+                text(
+                    "UPDATE class_period_work_slots SET term_classroom_id = :classroom "
+                    "WHERE term_classroom_id = :term_classroom"
+                ),
+                {"classroom": classroom_id, "term_classroom": term_classroom_id},
+            )
+
+        # 依賴被移除欄位／表的 trigger 必須先卸下，SQLite 不允許帶著它們改結構
+        for trigger_name in (
+            "trg_projects_reject_empty_identity_migration",
+            "trg_projects_require_identity_migration_ledger",
+            "trg_projects_freeze_assigned_classroom",
+            "trg_academic_term_students_match_term_insert",
+            "trg_academic_term_students_match_term_update",
+            "trg_academic_term_students_freeze_insert",
+            "trg_academic_term_students_freeze_update",
+            "trg_academic_term_students_freeze_delete",
+        ):
+            connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+
+        for index_name in (
+            "ux_classrooms_scope_name",
+            "ux_academic_term_classrooms_term_classroom",
+            "idx_academic_term_classrooms_scope",
+        ):
+            connection.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_students"))
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_teachers"))
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classrooms"))
+
+        connection.execute(text("ALTER TABLE classrooms DROP COLUMN is_active"))
+        connection.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_term_scope_name "
+            "ON classrooms(academic_term_id, campus_id, department, name)"
+        ))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
+            "ON classrooms(academic_term_id, campus_id, department)"
+        ))
+
+        # 既有編班草稿的來源 fingerprint 以舊結構算出，套用時必然判定為已變更
+        connection.execute(text(
+            "UPDATE term_reclassification_plans SET status = 'cancelled' "
+            "WHERE status = 'draft'"
+        ))
+        connection.commit()
+    finally:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+    violations = list(connection.execute(text("PRAGMA foreign_key_check")))
+    if violations:
+        raise RuntimeError(f"學期範圍班級遷移後外鍵不一致：{violations[:5]}")
 
 
 def _add_academic_term_reporting_schema(connection):
-    """加入正式學期、班級期別工作格，並遷移仍有效的已歸班相本。"""
+    """加入正式學期、班級期別工作格，並遷移仍有效的已歸班相本。
+
+    學期範圍班級的資料庫只跑得到「建立正式學期」那一段；已移除的學期快照表
+    相關 DDL 與回填一律跳過。
+    """
+    legacy_schema = not _is_term_scoped_classroom_schema(connection)
+    if not legacy_schema:
+        _backfill_imported_academic_term(connection)
+        return
     connection.execute(text("""
         CREATE TABLE IF NOT EXISTS academic_terms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -445,6 +574,10 @@ def _backfill_imported_academic_term(connection):
         )
         next_position += 1
 
+    # 班級與工作格的回填只適用於舊結構；學期範圍班級由編班流程建立
+    if _is_term_scoped_classroom_schema(connection):
+        connection.commit()
+        return
     connection.execute(
         text("""
             INSERT OR IGNORE INTO academic_term_classrooms (
@@ -794,6 +927,8 @@ def _sync_imported_academic_term_student_snapshots(
 
 def _add_academic_term_reporting_freeze_triggers(connection):
     """凍結已歸班 Project 快照、工作格 identity 與已開始時間。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     for trigger_name in (
         "trg_academic_term_students_match_term_insert",
         "trg_academic_term_students_match_term_update",
@@ -931,6 +1066,8 @@ def _add_academic_term_reporting_freeze_triggers(connection):
 
 def _add_organization_structure(connection):
     """加入分校、班級目前名單與可追溯的專案負責人轉交資料。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     connection.execute(text("""
         CREATE TABLE IF NOT EXISTS campuses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1052,6 +1189,8 @@ def _add_organization_structure(connection):
 
 def _add_organization_access_and_reclassification_schema(connection):
     """加入班級老師、專案協作者、名稱快照與新學期編班草稿 schema。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     project_columns = {
         row[1]
         for row in connection.execute(text("PRAGMA table_info(projects)"))

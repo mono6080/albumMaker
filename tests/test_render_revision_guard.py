@@ -39,7 +39,7 @@ from services.output_keys import (
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
-from tests.helpers import login, started_client, unique_name
+from tests.helpers import current_academic_term_id, login, started_client, unique_name
 
 
 _SCHEMA_READY = False
@@ -233,6 +233,7 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         db.add_all([admin, teacher, campus])
         db.flush()
         classroom = Classroom(
+            academic_term_id=current_academic_term_id(db),
             campus_id=campus.id,
             department="infant",
             name=unique_name("render_classroom"),

@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from database import (
     AcademicTerm,
-    AcademicTermClassroom,
+    Classroom,
     Classroom,
     Project,
     RosterChild,
@@ -368,7 +368,7 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
             db.add_all([closed_term, cancelled_term])
             db.flush()
             db.add_all([
-                AcademicTermClassroom(
+                Classroom(
                     academic_term_id=closed_term.id,
                     classroom_id=outside_classroom.id,
                     campus_id_snapshot=outside_classroom.campus_id,
@@ -376,7 +376,7 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
                     classroom_name_snapshot=outside_classroom.name,
                     department=outside_classroom.department,
                 ),
-                AcademicTermClassroom(
+                Classroom(
                     academic_term_id=cancelled_term.id,
                     classroom_id=outside_classroom.id,
                     campus_id_snapshot=outside_classroom.campus_id,

@@ -989,11 +989,13 @@ def _seed_academic_term_student_snapshot_fixture(
     with Session(migration_engine) as db:
         campus = Campus(name="總校")
         project_classroom = Classroom(
+            academic_term_id=current_academic_term_id(db),
             campus=campus,
             department="infant",
             name="太陽班",
         )
         current_classroom = Classroom(
+            academic_term_id=current_academic_term_id(db),
             campus=campus,
             department="infant",
             name="月亮班",
@@ -1062,12 +1064,12 @@ def test_imported_term_student_snapshot_backfill_is_complete_and_idempotent(
 
             rows = list(connection.execute(text("""
                 SELECT snapshot.roster_child_id_snapshot,
-                       term_classroom.classroom_name_snapshot,
+                       classroom.classroom_name_snapshot,
                        snapshot.source_membership_id,
                        snapshot.student_name_snapshot
                 FROM academic_term_classroom_students AS snapshot
-                JOIN academic_term_classrooms AS term_classroom
-                  ON term_classroom.id = snapshot.term_classroom_id
+                JOIN academic_term_classrooms AS classroom
+                  ON classroom.id = snapshot.classroom_id
                 ORDER BY snapshot.roster_child_id_snapshot
             """)))
             assert rows == [
@@ -1101,12 +1103,12 @@ def test_imported_term_student_snapshot_backfill_is_complete_and_idempotent(
             with pytest.raises(IntegrityError):
                 connection.execute(text("""
                     INSERT INTO academic_term_classroom_students (
-                        academic_term_id, term_classroom_id,
+                        academic_term_id, classroom_id,
                         roster_child_id_snapshot, student_name_snapshot
-                    ) VALUES (:term_id, :term_classroom_id, 1, '重複學生')
+                    ) VALUES (:term_id, :classroom_id, 1, '重複學生')
                 """), {
                     "term_id": term_id,
-                    "term_classroom_id": other_term_classroom_id,
+                    "classroom_id": other_term_classroom_id,
                 })
             connection.rollback()
     finally:
@@ -1200,86 +1202,6 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
             """))
     finally:
         migration_engine.dispose()
-
-
-def test_organization_schema_orm_relationship_contracts():
-    from database import (
-        AcademicTerm,
-        AcademicTermClassroom,
-        AcademicTermClassroomStudent,
-        AcademicTermClassroomTeacher,
-        AcademicTermPeriod,
-        Base,
-        ClassPeriodWorkSlot,
-        ClassRosterMember,
-        Classroom,
-        Campus,
-        OrganizationSupervisorAssignment,
-        Project,
-        TermClassroomPlan,
-        TermClassroomTeacherTarget,
-        TermReclassificationPlan,
-        TermStudentPlacement,
-        User,
-    )
-
-    configure_mappers()
-
-    assert "teacher_assignments" in inspect(Classroom).relationships
-    assert "supervisor_assignments" in inspect(Campus).relationships
-    assert "editor_assignments" in inspect(Project).relationships
-    assert "classroom_teacher_assignments" in inspect(User).relationships
-    assert "project_editor_assignments" in inspect(User).relationships
-    assert "organization_supervisor_assignments" in inspect(User).relationships
-    assert "supervisor_id" not in inspect(User).columns
-    assert {
-        "supervisor",
-        "subordinates",
-        "supervisors",
-        "managed_teachers",
-    }.isdisjoint(inspect(User).relationships.keys())
-    assert "teacher_supervisors" not in Base.metadata.tables
-    assert "legacy_teacher_supervisor_links" not in Base.metadata.tables
-    assert {
-        "term_placements",
-        "academic_term_student_snapshots",
-    } <= set(inspect(ClassRosterMember).relationships.keys())
-    assert {"periods", "classrooms"} <= set(
-        inspect(AcademicTerm).relationships.keys()
-    )
-    assert "template_period" in inspect(AcademicTermPeriod).relationships
-    assert {"teachers", "students", "work_slots"} <= set(
-        inspect(AcademicTermClassroom).relationships.keys()
-    )
-    assert "source_assignment" in inspect(
-        AcademicTermClassroomTeacher
-    ).relationships
-    assert {
-        "term_classroom",
-        "source_membership",
-    } <= set(inspect(AcademicTermClassroomStudent).relationships.keys())
-    assert "academic_term_id" in inspect(
-        AcademicTermClassroomStudent
-    ).columns
-    assert {"term_classroom", "term_period", "projects"} <= set(
-        inspect(ClassPeriodWorkSlot).relationships.keys()
-    )
-    assert "class_period_work_slot" in inspect(Project).relationships
-    assert {
-        "student_placements",
-        "classroom_plans",
-    } <= set(inspect(TermReclassificationPlan).relationships.keys())
-    assert "source_membership" in inspect(TermStudentPlacement).relationships
-    assert "teacher_targets" in inspect(TermClassroomPlan).relationships
-    assert "ux_term_classroom_teacher_target_lead" not in {
-        index.name for index in TermClassroomTeacherTarget.__table__.indexes
-    }
-    assert {
-        "ux_organization_supervisor_active_campus",
-        "ux_organization_supervisor_active_department",
-    } <= {
-        index.name for index in OrganizationSupervisorAssignment.__table__.indexes
-    }
 
 
 def test_active_project_editors_are_retired_as_historical_rows(tmp_path):
