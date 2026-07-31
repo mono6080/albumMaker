@@ -197,11 +197,7 @@ test("admin manages current roster while period snapshots and owner history stay
     }),
     "建立目前老師編制",
   );
-  const legacyProject = seedLegacyProject(
-    template.id,
-    legacyProjectName,
-    [legacyStudentName],
-  );
+  seedLegacyProject(template.id, legacyProjectName, [legacyStudentName]);
   await page.goto("/admin/organization");
   await expect(page.getByRole("heading", { name: "園所設定" })).toBeVisible();
   await page.getByRole("button", { name: campusName, exact: true }).click();
@@ -256,37 +252,11 @@ test("admin manages current roster while period snapshots and owner history stay
     { exact: true },
   )).toBeVisible();
 
-  await expect(page.getByRole("heading", { name: /本舊相本待歸班/ })).toBeVisible();
+  // 舊相本歸班流程已隨學期範圍班級退場，未歸班相本只剩唯讀清單
+  await expect(page.getByRole("heading", { name: /本未歸班舊相本/ })).toBeVisible();
   const legacyProjectGroup = page.getByRole("group", { name: `未歸班相本 ${legacyProjectName}` });
-  await legacyProjectGroup.getByRole("button", { name: "歸入班級" }).click();
-  const migrationDialog = page.getByRole("dialog", { name: `舊相本歸班：${legacyProjectName}` });
-  const migrationPreviewResponsePromise = page.waitForResponse(response => (
-    response.request().method() === "GET"
-    && new URL(response.url()).pathname
-      === `/api/organization/projects/${legacyProject.id}/classroom-migration-preview`
-  ));
-  await migrationDialog.getByLabel("歸入班級").selectOption(String(targetClassroom.id));
-  expect((await migrationPreviewResponsePromise).ok()).toBeTruthy();
-  await migrationDialog.getByLabel("以相本全部學生建立目前名單").check();
-  await migrationDialog.getByRole("button", { name: "下一步：核對學生身分" }).click();
-  await migrationDialog.getByRole("button", { name: "全部未決定設為建立新身分" }).click();
-  await migrationDialog.getByRole("button", { name: "下一步：確認遷移" }).click();
-  await migrationDialog.getByText("我已逐筆核對全部學生；同名不代表同一人").click();
-  const migrateProjectResponsePromise = page.waitForResponse(response => (
-    response.request().method() === "PUT"
-    && new URL(response.url()).pathname === `/api/organization/projects/${legacyProject.id}/classroom`
-  ));
-  await migrationDialog.getByRole("button", { name: "確認遷移 1 位學生" }).click();
-  const migratedProject = await readJsonResponse(
-    await migrateProjectResponsePromise,
-    "將舊相本歸班並建立目前名單",
-  );
-  expect(migratedProject.project.classroom_id).toBe(targetClassroom.id);
-  expect(migratedProject.seeded_members).toEqual([
-    expect.objectContaining({ name: legacyStudentName, status: "active" }),
-  ]);
-  await expect(page.getByRole("heading", { name: "舊相本歸班完成" })).toBeVisible();
-  await expect(legacyProjectGroup).toHaveCount(0);
+  await expect(legacyProjectGroup.getByRole("button", { name: "歸入班級" })).toHaveCount(0);
+  await expect(legacyProjectGroup.getByRole("link", { name: "查看相本" })).toBeVisible();
 
   await page.getByRole("button", { name: campusName, exact: true }).click();
   await page.getByRole("button", { name: new RegExp(`^${sourceClassName}`) }).click();

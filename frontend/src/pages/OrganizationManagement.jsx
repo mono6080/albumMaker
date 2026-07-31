@@ -1393,18 +1393,13 @@ export default function OrganizationManagement() {
                 <h2 className={`font-semibold ${hasAssignedIdentityAnomalies ? "text-red-900" : "text-amber-900"}`}>
                   {hasAssignedIdentityAnomalies
                     ? `已有 ${migrationStatus.assigned_identity_anomaly_count} 位已歸班學生身分異常`
-                    : `尚有 ${migrationStatus.unassigned_project_count} 本舊相本待歸班`}
+                    : `尚有 ${migrationStatus.unassigned_project_count} 本未歸班舊相本`}
                 </h2>
                 <p className={`mt-1 text-sm leading-6 ${hasAssignedIdentityAnomalies ? "text-red-700" : "text-amber-700"}`}>
                   {hasAssignedIdentityAnomalies
                     ? "已歸班相本仍有缺少或重複的學生身分，遷移尚未完成，請先停止學期彙整並檢查資料。"
-                    : "請逐本選擇班級並核對學生身分；完成前，未歸班相本只供管理員處理。"}
+                    : "班級改為學期範圍實體後歸班流程已退場；這些相本只供管理員唯讀查看，屆封存期由既有清理流程移除。"}
                 </p>
-                {migrationStatus.pending_identity_student_count > 0 && (
-                  <p className={`mt-2 text-sm font-medium ${hasAssignedIdentityAnomalies ? "text-red-800" : "text-amber-800"}`}>
-                    共 {migrationStatus.pending_identity_student_count} 位學生待逐筆核對身分。
-                  </p>
-                )}
                 {migrationStatus.archived_teacher_supervisor_link_count > 0 && (
                   <p className="mt-2 text-xs leading-5 text-slate-600">
                     舊逐人主管關係已封存、未自動轉權限，請依校／部門設定
@@ -1420,7 +1415,7 @@ export default function OrganizationManagement() {
             </div>
             {unassignedProjects.length > 0 && (
               <Button as="a" href="#unassigned-projects" size="sm" variant="primary" className="flex-shrink-0">
-                查看待歸班相本
+                查看未歸班相本
               </Button>
             )}
           </div>
