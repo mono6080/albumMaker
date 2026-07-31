@@ -1362,3 +1362,75 @@ def test_draft_semester_accepts_new_classroom_and_removal_of_empty_ones():
         assert current_removal.json()["detail"]["code"] == (
             "classroom_not_in_draft_semester"
         )
+
+
+def test_draft_classroom_addition_does_not_invalidate_the_plan():
+    """在草稿學期多開一個班，不該讓草稿變成 stale。
+
+    source fingerprint 是「目前學期的狀態」的快照；草稿學期的班不屬於它。
+    這條沒守住的話，新增班級的功能等於不能用——加完就套用不了。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        classroom_id = _create_classroom(client, campus_id, unique_name("既有班"))
+        _add_members(client, classroom_id, [unique_name("既有學生")])
+
+        plan = _create_plan(client)
+        added = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("草稿多開的班"),
+                "semester_id": plan["target_semester_id"],
+            },
+        )
+        assert_status(added, 201)
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan['id']}"
+        ).json()
+        assert refreshed["validation"]["is_valid"] is True
+        applied = client.post(
+            f"/api/organization/term-reclassification-plans/{plan['id']}/apply",
+            json={"expected_revision": refreshed["revision"]},
+        )
+        assert_status(applied, 200)
+
+
+def test_current_semester_classroom_addition_marks_the_plan_stale():
+    """反過來：目前學期多了一個班，草稿就是過期的，即使那個班是空的。
+
+    fingerprint 涵蓋目前學期的班級清單，這是刻意的保守——草稿是整園狀態的快照，
+    狀態變了就重建，不去猜哪些變動「其實不影響」。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        classroom_id = _create_classroom(client, campus_id, unique_name("既有班"))
+        _add_members(client, classroom_id, [unique_name("既有學生")])
+
+        plan = _create_plan(client)
+        unrelated = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("目前學期新開的空班"),
+            },
+        )
+        assert_status(unrelated, 201)
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan['id']}"
+        ).json()
+        assert [
+            error["code"] for error in refreshed["validation"]["errors"]
+        ] == ["stale_reclassification_plan"]
+        applied = client.post(
+            f"/api/organization/term-reclassification-plans/{plan['id']}/apply",
+            json={"expected_revision": refreshed["revision"]},
+        )
+        assert_status(applied, 409)
+        assert applied.json()["detail"]["code"] == "stale_reclassification_plan"

@@ -268,6 +268,12 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
 
 - `roster_children.student_serial`（行政系統學號）要在本次一併加入，還是等結構穩定後
   獨立一刀？兩者互不相依，但同步腳本需要 serial 才能自動化。
-- 編班計畫的 `source_fingerprint` 在班級改為每學期新建後要重新定義比對範圍。
+- 編班計畫的 `source_fingerprint` 比對範圍：班級部分已限定為目前學期的班，草稿學期
+  多開的班不會讓草稿過期（`test_draft_classroom_addition_does_not_invalidate_the_plan`）。
+  待決的是**保守程度**——目前學期多一個空班就會判定 stale 要求重建，即使它與草稿的
+  placements 無關。要不要放寬到「只有影響到 placements 的變動才算」仍未定；放寬等於
+  要逐項比對而不是整體雜湊。
+  另外 `memberships` 與 `teacher_assignments` 沒有學期過濾，目前無害只是因為已結束
+  學期的班拒絕加人，靠的是別處的檢查而不是 fingerprint 自己的定義。
 - 班級改為學期範圍後，跨學期查詢「同一個班名的歷史」需不需要提供入口，或一律以
   孩子（`Student`，原 `RosterChild`）為軸。
