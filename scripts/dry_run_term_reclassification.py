@@ -13,7 +13,6 @@
 以及沒有殘留的在職編制擋住下一次編班。
 """
 import json
-import os
 import pathlib
 import sys
 
@@ -27,7 +26,6 @@ from database import (  # noqa: E402
     ClassroomMember,
     ClassroomTeacher,
     Project,
-    ProjectStudent,
     SessionLocal,
     Semester,
     User,

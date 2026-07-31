@@ -2441,7 +2441,7 @@ def _add_template_revision_tracking(connection):
                 new_page_ids_json TEXT NOT NULL,
                 project_completed_at DATETIME,
                 project_label_texts_json TEXT,
-                project_students_json TEXT,
+                students_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """))

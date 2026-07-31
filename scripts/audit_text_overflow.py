@@ -301,9 +301,9 @@ def collect_project_instances(
                           ELSE student.album_name
                       END AS album_name,
                       student.pages_data_json
-               FROM students AS student
+               FROM project_students AS student
                JOIN projects AS project ON project.id = student.project_id
-               LEFT JOIN roster_children AS child
+               LEFT JOIN students AS child
                    ON child.id = student.roster_child_id
                WHERE student.project_id = ?
                ORDER BY student.id""",
