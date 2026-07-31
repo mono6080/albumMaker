@@ -15,6 +15,7 @@ from services.organization_service import (
     batch_add_classroom_members as batch_add_classroom_members_use_case,
     create_campus as create_campus_use_case,
     create_classroom as create_classroom_use_case,
+    delete_classroom as delete_classroom_use_case,
     create_classroom_project as create_classroom_project_use_case,
     get_my_classrooms as get_my_classrooms_use_case,
     get_organization_overview as get_organization_overview_use_case,
@@ -99,6 +100,8 @@ class ClassroomCreateBody(BaseModel):
     department: Literal["infant", "academy"]
     name: str = Field(..., min_length=1, max_length=100)
     is_active: bool = True
+    # 省略時建在目前學期；編班草稿要多開班時指定草稿的目標學期
+    semester_id: int | None = None
 
 
 class ClassroomUpdateBody(BaseModel):
@@ -240,6 +243,15 @@ def create_classroom(
     _: User = Depends(require_role("admin")),
 ):
     return create_classroom_use_case(db, **body.model_dump())
+
+
+@router.delete("/classrooms/{classroom_id}")
+def delete_classroom(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return delete_classroom_use_case(db, classroom_id)
 
 
 @router.patch("/classrooms/{classroom_id}")

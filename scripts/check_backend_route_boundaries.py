@@ -240,6 +240,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ),
         ("post", "/classrooms", "create_classroom"),
         ("patch", "/classrooms/{classroom_id}", "update_classroom"),
+        ("delete", "/classrooms/{classroom_id}", "delete_classroom"),
         (
             "post",
             "/classrooms/{classroom_id}/members/batch",

@@ -1275,3 +1275,90 @@ def test_draft_classroom_rename_scopes_uniqueness_to_its_own_semester():
         )
         assert_status(conflict, 409)
         assert conflict.json()["detail"] == "同分校與部門已有同名班級"
+
+
+def test_draft_semester_accepts_new_classroom_and_removal_of_empty_ones():
+    """編班草稿要能多開一個班，也要能把多開錯的班移除。
+
+    草稿只會照目前的班一對一複製；新學期真的要多開一個班時，這是唯一的入口。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        source_classroom_id = _create_classroom(client, campus_id, unique_name("既有班"))
+        _add_members(client, source_classroom_id, [unique_name("既有班學生")])
+
+        plan = _create_plan(client)
+        target_semester_id = plan["target_semester_id"]
+        assert len(plan["target_classrooms"]) == 1
+
+        added = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("新學期多開的班"),
+                "semester_id": target_semester_id,
+            },
+        )
+        assert_status(added, 201)
+        added_classroom_id = added.json()["id"]
+        assert added.json()["semester_id"] == target_semester_id
+        assert added.json()["is_current"] is False
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan['id']}"
+        )
+        assert_status(refreshed, 200)
+        assert added_classroom_id in {
+            row["classroom_id"] for row in refreshed.json()["target_classrooms"]
+        }
+
+        # 學生可以被編進這個新班
+        placement = refreshed.json()["student_placements"][0]
+        moved = client.put(
+            f"/api/organization/term-reclassification-plans/{plan['id']}",
+            json=_plan_update_body(
+                refreshed.json(),
+                expected_revision=refreshed.json()["revision"],
+                placement_overrides={
+                    placement["source_member_id"]: {
+                        "outcome": "classroom",
+                        "target_classroom_id": added_classroom_id,
+                    },
+                },
+            ),
+        )
+        assert_status(moved, 200)
+        assert [row["student_name"] for row in moved.json()["diff"]["students"]["move"]] == [
+            placement["student_name"]
+        ]
+
+        # 已被指到的班不可移除
+        occupied = client.delete(f"/api/organization/classrooms/{added_classroom_id}")
+        assert_status(occupied, 409)
+        assert occupied.json()["detail"]["code"] == "classroom_not_empty"
+
+        spare = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("多開錯的班"),
+                "semester_id": target_semester_id,
+            },
+        )
+        assert_status(spare, 201)
+        removed = client.delete(
+            f"/api/organization/classrooms/{spare.json()['id']}"
+        )
+        assert_status(removed, 200)
+
+        # 目前學期的班不可移除——那是歷史的一部分
+        current_removal = client.delete(
+            f"/api/organization/classrooms/{source_classroom_id}"
+        )
+        assert_status(current_removal, 409)
+        assert current_removal.json()["detail"]["code"] == (
+            "classroom_not_in_draft_semester"
+        )

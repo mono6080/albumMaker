@@ -24,6 +24,10 @@ export const createClassroom = (params) =>
 export const updateClassroom = (classroomId, params) =>
   apiClient.patch(`/organization/classrooms/${classroomId}`, params);
 
+/** 移除編班草稿學期裡尚未使用的班級。 */
+export const deleteClassroom = (classroomId) =>
+  apiClient.delete(`/organization/classrooms/${classroomId}`);
+
 /** 以完整清單更新班級目前老師編制；未列入者結束本次任教區間。 */
 export const updateClassroomTeachers = (classroomId, teachers) =>
   apiClient.put(`/organization/classrooms/${classroomId}/teachers`, { teachers });

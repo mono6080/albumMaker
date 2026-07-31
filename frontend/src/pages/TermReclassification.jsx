@@ -20,7 +20,9 @@ import {
 import {
   applyTermReclassificationPlan,
   cancelTermReclassificationPlan,
+  createClassroom,
   createTermReclassificationPlan,
+  deleteClassroom,
   fetchOrganizationOverview,
   fetchTermReclassificationPlan,
   updateTermReclassificationPlan,
@@ -106,6 +108,7 @@ export default function TermReclassification() {
   const [expandedStudentClassroomId, setExpandedStudentClassroomId] = useState(null);
   const [teacherEditor, setTeacherEditor] = useState(null);
   const [pendingValidationTargetId, setPendingValidationTargetId] = useState(null);
+  const [classroomDraft, setClassroomDraft] = useState(null);
 
   const loadWorkspace = useCallback(async () => {
     setIsLoading(true);
@@ -164,6 +167,22 @@ export default function TermReclassification() {
   const teacherOptions = useMemo(
     () => overview?.teacher_options ?? [],
     [overview?.teacher_options],
+  );
+  const currentClassrooms = useMemo(
+    () => (overview?.campuses ?? []).flatMap(campus => (
+      campus.classrooms.map(classroom => ({
+        id: classroom.id,
+        name: classroom.name,
+        campusName: campus.name,
+      }))
+    )),
+    [overview?.campuses],
+  );
+  const campusOptions = useMemo(
+    () => (overview?.campuses ?? [])
+      .filter(campus => campus.is_active)
+      .map(campus => ({ id: campus.id, name: campus.name })),
+    [overview?.campuses],
   );
   const classroomById = useMemo(
     () => new Map(targetClassrooms.map(classroom => [classroom.id, classroom])),
@@ -264,6 +283,41 @@ export default function TermReclassification() {
         };
       }),
     }));
+  };
+
+  const handleAddTargetClassroom = async (event) => {
+    event.preventDefault();
+    const name = classroomDraft.name.trim();
+    if (!name) return;
+    setIsSubmitting(true);
+    try {
+      await createClassroom({
+        campus_id: Number(classroomDraft.campusId),
+        department: classroomDraft.department,
+        name,
+        semester_id: plan.target_semester_id,
+      });
+      setClassroomDraft(null);
+      await loadWorkspace();
+      toast.success("已新增新學期班級");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "新增班級失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRemoveTargetClassroom = async (classroomId) => {
+    setIsSubmitting(true);
+    try {
+      await deleteClassroom(classroomId);
+      await loadWorkspace();
+      toast.success("已移除新學期班級");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "移除班級失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleOpenTeacherEditor = (classroomId) => {
@@ -692,17 +746,21 @@ export default function TermReclassification() {
           <Surface>
             <div className="mb-3 flex items-center gap-2">
               <School className="h-4 w-4 text-indigo-500" />
-              <h2 className="font-semibold text-gray-900">可編入的目標班級</h2>
+              <h2 className="font-semibold text-gray-900">會被複製到新學期的班級</h2>
             </div>
-            <p className="mb-3 text-xs leading-5 text-gray-500">建立草稿時已照目前的分校／部門／班名長出新學期的班。</p>
+            <p className="mb-3 text-xs leading-5 text-gray-500">
+              建立草稿時會照目前的分校／部門／班名，在新學期長出對應的班；之後可以在草稿裡增減。
+            </p>
             <div className="space-y-2">
-              {targetClassrooms.map(classroom => (
+              {currentClassrooms.map(classroom => (
                 <div key={classroom.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
                   <div className="font-medium text-gray-800">{classroom.name}</div>
                   <div className="text-xs text-gray-400">{classroom.campusName}</div>
                 </div>
               ))}
-              {targetClassrooms.length === 0 && <p className="text-sm text-amber-700">這份草稿還沒有任何新學期班級。</p>}
+              {currentClassrooms.length === 0 && (
+                <p className="text-sm text-amber-700">目前學期還沒有班級。</p>
+              )}
             </div>
           </Surface>
 
@@ -877,6 +935,97 @@ export default function TermReclassification() {
               )}
             </Surface>
           )}
+
+          <Surface>
+            <div className="mb-3 flex items-center gap-2">
+              <School className="h-4 w-4 text-indigo-500" />
+              <h2 className="font-semibold text-gray-900">可編入的目標班級</h2>
+            </div>
+            <p className="mb-3 text-xs leading-5 text-gray-500">
+              建立草稿時已照目前的分校／部門／班名長出新學期的班。新學期要多開班級就在這裡新增；
+              還沒有人編進去的班可以移除。
+            </p>
+            <div className="space-y-2">
+              {targetClassrooms.map(classroom => (
+                <div
+                  key={classroom.id}
+                  className="flex items-start justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-800">{classroom.name}</div>
+                    <div className="text-xs text-gray-400">{classroom.campusName}</div>
+                  </div>
+                  <Button
+                    size="xs"
+                    aria-label={`移除新學期班級 ${classroom.name}`}
+                    disabled={isSubmitting}
+                    onClick={() => void handleRemoveTargetClassroom(classroom.id)}
+                  >
+                    移除
+                  </Button>
+                </div>
+              ))}
+              {targetClassrooms.length === 0 && <p className="text-sm text-amber-700">這份草稿還沒有任何新學期班級。</p>}
+            </div>
+            {classroomDraft === null ? (
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="secondary"
+                disabled={campusOptions.length === 0}
+                onClick={() => setClassroomDraft({
+                  campusId: String(campusOptions[0]?.id ?? ""),
+                  department: "infant",
+                  name: "",
+                })}
+              >
+                新增新學期班級
+              </Button>
+            ) : (
+              <form className="mt-3 space-y-2" onSubmit={handleAddTargetClassroom}>
+                <FormField label="所屬分校">
+                  <select
+                    required
+                    value={classroomDraft.campusId}
+                    onChange={event => setClassroomDraft(current => ({ ...current, campusId: event.target.value }))}
+                    className={fieldControlClass}
+                  >
+                    {campusOptions.map(campus => (
+                      <option key={campus.id} value={campus.id}>{campus.name}</option>
+                    ))}
+                  </select>
+                </FormField>
+                <FormField label="部門">
+                  <select
+                    required
+                    value={classroomDraft.department}
+                    onChange={event => setClassroomDraft(current => ({ ...current, department: event.target.value }))}
+                    className={fieldControlClass}
+                  >
+                    <option value="infant">嬰幼部</option>
+                    <option value="academy">學院部</option>
+                  </select>
+                </FormField>
+                <FormField label="班級名稱">
+                  <input
+                    autoFocus
+                    required
+                    value={classroomDraft.name}
+                    onChange={event => setClassroomDraft(current => ({ ...current, name: event.target.value }))}
+                    className={fieldControlClass}
+                  />
+                </FormField>
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" onClick={() => setClassroomDraft(null)} disabled={isSubmitting}>
+                    取消
+                  </Button>
+                  <Button size="sm" type="submit" variant="primary" disabled={isSubmitting}>
+                    {isSubmitting ? "新增中..." : "新增"}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </Surface>
 
           <Surface>
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
