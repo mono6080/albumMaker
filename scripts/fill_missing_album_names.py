@@ -1,3 +1,7 @@
+# 已退場：2026-08-01 已在正式站執行完畢（補上 11 位，留空 0）。
+# 且本腳本寫死 `roster_children`／`class_roster_members`／`students` 舊表名，班級改為
+# 學期範圍實體後表已改名，對現行資料庫執行只會找不到表。保留僅供稽核，不可執行。
+# 執行紀錄見 docs/specs/term-scoped-classroom-v1-risks.md 的「第 1 步的執行紀錄」。
 """替沒有相本稱呼、但仍會顯示在相本上的孩子補稱呼。
 
 用系統既有的安全推導（`suggest_automatic_album_name` ＋ organization_service 的
