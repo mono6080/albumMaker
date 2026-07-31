@@ -711,6 +711,12 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
         })
     student_diff = _student_diff(plan, db)
     stay_member_ids = {row["source_member_id"] for row in student_diff["stay"]}
+    # 來源班在目標學期的對應班：這是穩定事實，與使用者目前選了什麼無關。
+    # 前端要靠它判斷「改回原班」，不能只看目前是不是 stay。
+    target_by_source = {
+        source_id: target_id
+        for target_id, source_id in _source_classroom_id_by_target(plan, db).items()
+    }
     return {
         "id": plan.id,
         "label": plan.label,
@@ -741,6 +747,9 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
                 # 來源班與目標班分屬不同學期，id 比不出「有沒有換班」
                 "keeps_source_classroom": (
                     placement.source_membership_id in stay_member_ids
+                ),
+                "stay_classroom_id": target_by_source.get(
+                    placement.source_classroom_id_snapshot
                 ),
             }
             for placement in plan.student_placements

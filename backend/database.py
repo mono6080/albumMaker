@@ -560,7 +560,11 @@ class Project(Base):
     archive_expires_at = Column(DateTime, nullable=True)
     # 全班完成時間：非 NULL 代表老師已確認完成，內容鎖定（主管/admin 可退回）
     completed_at = Column(DateTime, nullable=True)
-    label_texts_json = Column(Text, nullable=False, default="{}")
+    # server_default 讓 create_all 產生的 DDL 與升級上來的資料庫一致；
+    # 值與 Python default 相同，寫入行為不變
+    label_texts_json = Column(
+        Text, nullable=False, default="{}", server_default=text("'{}'")
+    )
     template = relationship("Template", back_populates="projects")
     template_period = relationship("TemplatePeriod", back_populates="projects")
     students = relationship("ProjectStudent", back_populates="project", cascade="all, delete-orphan", order_by="ProjectStudent.order_index")

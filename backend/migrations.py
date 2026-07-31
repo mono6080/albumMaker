@@ -210,6 +210,7 @@ def run_migrations():
         _add_student_completed_at_column(connection)
         _migrate_classrooms_to_term_scope(connection)
         _retire_legacy_project_classroom_triggers(connection)
+        _rebuild_term_plan_classroom_foreign_keys(connection)
         _add_term_scoped_classroom_indexes(connection)
         _add_term_scoped_classroom_freeze_triggers(connection)
 
@@ -226,6 +227,90 @@ def _retire_legacy_project_classroom_triggers(connection):
     ):
         connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
     connection.commit()
+
+
+def _rebuild_term_plan_classroom_foreign_keys(connection):
+    """把編班計畫兩張子表的 classroom FK 補上 ON DELETE CASCADE。
+
+    舊 DDL 建的是 NO ACTION，與 ORM 不同：刪掉學期會連帶刪班，計畫列卻擋在那裡
+    或留成孤兒。SQLite 不能改 FK，只能整張重建。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    rebuilds = (
+        (
+            "term_classroom_plans",
+            """
+            CREATE TABLE term_classroom_plans_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL
+                    REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
+                classroom_id INTEGER NOT NULL
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                CONSTRAINT ux_term_classroom_plans_plan_classroom
+                    UNIQUE (plan_id, classroom_id)
+            )
+            """,
+            "id, plan_id, classroom_id",
+        ),
+        (
+            "term_student_placements",
+            """
+            CREATE TABLE term_student_placements_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL
+                    REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
+                source_membership_id INTEGER NOT NULL
+                    REFERENCES classroom_members(id),
+                roster_child_id_snapshot INTEGER NOT NULL,
+                student_name_snapshot VARCHAR NOT NULL,
+                source_campus_id_snapshot INTEGER NOT NULL,
+                source_campus_name_snapshot VARCHAR NOT NULL,
+                source_classroom_id_snapshot INTEGER NOT NULL,
+                source_classroom_name_snapshot VARCHAR NOT NULL,
+                outcome VARCHAR NOT NULL,
+                target_classroom_id INTEGER
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                CONSTRAINT ck_term_student_placements_outcome
+                    CHECK (outcome IN ('classroom', 'departed')),
+                CONSTRAINT ck_term_student_placements_target
+                    CHECK (
+                        (outcome = 'classroom' AND target_classroom_id IS NOT NULL)
+                        OR (outcome = 'departed' AND target_classroom_id IS NULL)
+                    ),
+                CONSTRAINT ux_term_student_placements_plan_member
+                    UNIQUE (plan_id, source_membership_id)
+            )
+            """,
+            "id, plan_id, source_membership_id, roster_child_id_snapshot, "
+            "student_name_snapshot, source_campus_id_snapshot, "
+            "source_campus_name_snapshot, source_classroom_id_snapshot, "
+            "source_classroom_name_snapshot, outcome, target_classroom_id",
+        ),
+    )
+    pending = [
+        (table, create_sql, columns)
+        for table, create_sql, columns in rebuilds
+        if any(
+            row[2] == "classrooms" and row[6] != "CASCADE"
+            for row in connection.execute(text(f"PRAGMA foreign_key_list({table})"))
+        )
+    ]
+    if not pending:
+        return
+    connection.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        for table, create_sql, columns in pending:
+            connection.execute(text(f"DROP TABLE IF EXISTS {table}_new"))
+            connection.execute(text(create_sql))
+            connection.execute(text(
+                f"INSERT INTO {table}_new ({columns}) SELECT {columns} FROM {table}"
+            ))
+            connection.execute(text(f"DROP TABLE {table}"))
+            connection.execute(text(f"ALTER TABLE {table}_new RENAME TO {table}"))
+        connection.commit()
+    finally:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _add_term_scoped_classroom_indexes(connection):
@@ -336,6 +421,11 @@ def _add_term_scoped_classroom_indexes(connection):
         "CREATE INDEX IF NOT EXISTS ix_class_period_work_slots_id "
         "ON class_period_work_slots(id)",
         "CREATE INDEX IF NOT EXISTS ix_projects_id ON projects(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classrooms_id ON classrooms(id)",
+        "CREATE INDEX IF NOT EXISTS ix_term_classroom_plans_id "
+        "ON term_classroom_plans(id)",
+        "CREATE INDEX IF NOT EXISTS ix_term_student_placements_id "
+        "ON term_student_placements(id)",
         "CREATE INDEX IF NOT EXISTS ix_classroom_members_id ON classroom_members(id)",
         "CREATE INDEX IF NOT EXISTS ix_classroom_teachers_id ON classroom_teachers(id)",
         "CREATE INDEX IF NOT EXISTS ix_semesters_id ON semesters(id)",
@@ -417,23 +507,36 @@ def _add_term_scoped_classroom_freeze_triggers(connection):
             "teacher assignments",
         ),
     ):
-        for operation, row_alias in (
-            ("INSERT", "NEW"),
-            ("UPDATE", "OLD"),
-            ("DELETE", "OLD"),
+        # 先卸下舊定義：早期版本的 UPDATE trigger 只檢查 OLD，
+        # CREATE TRIGGER IF NOT EXISTS 不會把它換掉。
+        for operation in ("insert", "update", "delete"):
+            connection.execute(text(
+                f"DROP TRIGGER IF EXISTS "
+                f"{trigger_prefix}_freeze_closed_term_{operation}"
+            ))
+        # UPDATE 兩邊都要看：只檢查 OLD 的話，active 班的成員可以被「更新」到
+        # 已結束學期的班，等於繞過凍結把資料塞進歷史。
+        for operation, row_aliases in (
+            ("INSERT", ("NEW",)),
+            ("UPDATE", ("OLD", "NEW")),
+            ("DELETE", ("OLD",)),
         ):
-            connection.execute(text(f"""
-                CREATE TRIGGER IF NOT EXISTS
-                {trigger_prefix}_freeze_closed_term_{operation.lower()}
-                BEFORE {operation} ON {table}
-                WHEN EXISTS (
+            guard = " OR ".join(
+                f"""EXISTS (
                     SELECT 1
                     FROM classrooms
                     JOIN semesters AS term
                       ON term.id = classrooms.semester_id
                     WHERE classrooms.id = {row_alias}.classroom_id
                       AND term.status = 'closed'
-                )
+                )"""
+                for row_alias in row_aliases
+            )
+            connection.execute(text(f"""
+                CREATE TRIGGER IF NOT EXISTS
+                {trigger_prefix}_freeze_closed_term_{operation.lower()}
+                BEFORE {operation} ON {table}
+                WHEN {guard}
                 BEGIN
                     SELECT RAISE(ABORT, 'closed term {subject} are immutable');
                 END
@@ -509,18 +612,42 @@ def _migrate_classrooms_to_term_scope(connection):
 
     connection.execute(text("PRAGMA foreign_keys=OFF"))
     try:
-        connection.execute(text(
-            "ALTER TABLE classrooms ADD COLUMN semester_id INTEGER "
-            "REFERENCES semesters(id)"
-        ))
+        # 整張重建而不是 ADD COLUMN：`ALTER TABLE ADD COLUMN` 只能建出 nullable、
+        # 沒有 ON DELETE 的欄位，與 ORM 要求的 NOT NULL / CASCADE 不同——升級上來的
+        # 資料庫會因此允許沒有學期的班級，唯一鍵也擋不住它。順帶把 is_active 與
+        # 時間戳欄位一次去掉，不必事後 DROP COLUMN。
+        connection.execute(text("DROP TABLE IF EXISTS classrooms_new"))
+        connection.execute(text("""
+            CREATE TABLE classrooms_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                semester_id INTEGER NOT NULL
+                    REFERENCES semesters(id) ON DELETE CASCADE,
+                campus_id INTEGER NOT NULL REFERENCES campuses(id),
+                name VARCHAR NOT NULL,
+                department VARCHAR NOT NULL,
+                CONSTRAINT ux_classrooms_term_scope_name
+                    UNIQUE (semester_id, campus_id, department, name)
+            )
+        """))
         for classroom_id, semester_id in term_by_classroom.items():
             connection.execute(
                 text(
-                    "UPDATE classrooms SET semester_id = :term "
-                    "WHERE id = :classroom"
+                    "INSERT INTO classrooms_new "
+                    "(id, semester_id, campus_id, name, department) "
+                    "SELECT id, :term, campus_id, name, department "
+                    "FROM classrooms WHERE id = :classroom"
                 ),
                 {"term": semester_id, "classroom": classroom_id},
             )
+        moved = connection.execute(text(
+            "SELECT COUNT(*) FROM classrooms_new"
+        )).scalar_one()
+        if moved != len(classroom_ids):
+            raise RuntimeError(
+                f"班級搬遷筆數不符：{moved} / {len(classroom_ids)}"
+            )
+        connection.execute(text("DROP TABLE classrooms"))
+        connection.execute(text("ALTER TABLE classrooms_new RENAME TO classrooms"))
 
         # 工作格改指 classrooms.id（原本指 academic_term_classrooms.id）。
         # 兩張表的 id 值域重疊，逐筆 UPDATE 會把前一輪改好的列再改一次，
@@ -592,15 +719,7 @@ def _migrate_classrooms_to_term_scope(connection):
         connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_teachers"))
         connection.execute(text("DROP TABLE IF EXISTS academic_term_classrooms"))
 
-        # 班級的啟用與時間戳都由所屬學期承擔，欄位一併移除
-        for dropped_column in ("is_active", "created_at", "updated_at"):
-            connection.execute(text(
-                f"ALTER TABLE classrooms DROP COLUMN {dropped_column}"
-            ))
-        connection.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_term_scope_name "
-            "ON classrooms(semester_id, campus_id, department, name)"
-        ))
+        # 唯一鍵已隨重建的表一起建立；這裡只補查詢用的複合索引
         connection.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
             "ON classrooms(semester_id, campus_id, department)"

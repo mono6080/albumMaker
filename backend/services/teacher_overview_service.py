@@ -462,17 +462,19 @@ def build_teacher_overview_workbook(
         "工作流",
     ])
 
+    def teacher_names(classroom: dict, duty: str) -> list[str]:
+        """學期中途換過人時，離任者要標出來，不能和現任並列成同時在職。"""
+        return [
+            teacher["display_name"]
+            if teacher["ended_at"] is None
+            else f"{teacher['display_name']}（已離班）"
+            for teacher in classroom["teachers"]
+            if teacher["duty"] == duty
+        ]
+
     for classroom in overview["classrooms"]:
-        lead_names = [
-            teacher["display_name"]
-            for teacher in classroom["teachers"]
-            if teacher["duty"] == "lead"
-        ]
-        co_teacher_names = [
-            teacher["display_name"]
-            for teacher in classroom["teachers"]
-            if teacher["duty"] == "co_teacher"
-        ]
+        lead_names = teacher_names(classroom, "lead")
+        co_teacher_names = teacher_names(classroom, "co_teacher")
         for slot in classroom["slots"]:
             projects = slot["projects"]
             append_safe(slot_sheet, [

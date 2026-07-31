@@ -1078,3 +1078,159 @@ def test_apply_ends_teachers_of_classrooms_without_students():
             json={"label": unique_name("再下一個學期")},
         )
         assert_status(next_plan, 201)
+
+
+def test_closed_term_freeze_blocks_moving_active_rows_into_history():
+    """不能把在籍成員或在職編制「更新」到已結束學期的班。
+
+    UPDATE trigger 只檢查 OLD 的話，來源是 active 班就一路放行，等於繞過凍結
+    把資料塞進歷史。
+    """
+    with started_client() as client:
+        login(client)
+        teacher, _ = _create_teacher(client, None)
+        campus_id = _create_campus(client)
+        active_classroom_id = _create_classroom(client, campus_id, unique_name("在籍班"))
+        _replace_teachers(
+            client,
+            active_classroom_id,
+            [{"teacher_id": teacher["id"], "duty": "lead"}],
+        )
+        _add_members(client, active_classroom_id, [unique_name("在籍學生")])
+
+        db = SessionLocal()
+        try:
+            closed_semester = Semester(
+                label=unique_name("已結束學期"),
+                status="closed",
+                created_by_name_snapshot="系統管理員",
+            )
+            db.add(closed_semester)
+            db.flush()
+            closed_classroom = Classroom(
+                semester_id=closed_semester.id,
+                campus_id=campus_id,
+                department="infant",
+                name=unique_name("歷史班"),
+            )
+            db.add(closed_classroom)
+            db.commit()
+            closed_classroom_id = closed_classroom.id
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            member = (
+                db.query(ClassroomMember)
+                .filter(
+                    ClassroomMember.classroom_id == active_classroom_id,
+                    ClassroomMember.ended_at.is_(None),
+                )
+                .one()
+            )
+            member.classroom_id = closed_classroom_id
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            assignment = (
+                db.query(ClassroomTeacher)
+                .filter(
+                    ClassroomTeacher.classroom_id == active_classroom_id,
+                    ClassroomTeacher.ended_at.is_(None),
+                )
+                .one()
+            )
+            assignment.classroom_id = closed_classroom_id
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
+        finally:
+            db.close()
+
+        # 兩筆都還留在原本的在籍班
+        db = SessionLocal()
+        try:
+            assert db.query(ClassroomMember).filter(
+                ClassroomMember.classroom_id == active_classroom_id,
+                ClassroomMember.ended_at.is_(None),
+            ).count() == 1
+            assert db.query(ClassroomTeacher).filter(
+                ClassroomTeacher.classroom_id == active_classroom_id,
+                ClassroomTeacher.ended_at.is_(None),
+            ).count() == 1
+        finally:
+            db.close()
+
+
+def test_placement_stay_target_survives_moving_a_student_away():
+    """搬走再改回原班，仍要認得出「沒有變更」。
+
+    stay_classroom_id 是「來源班在目標學期的對應班」，與使用者目前選了什麼無關；
+    若它只在目前是 stay 時才有值，搬走並儲存後就永遠回不到未變更狀態。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        source_classroom_id = _create_classroom(client, campus_id, unique_name("原班"))
+        _create_classroom(client, campus_id, unique_name("別班"))
+        _add_members(client, source_classroom_id, [unique_name("被搬來搬去的學生")])
+
+        plan = _create_plan(client)
+        placement = plan["student_placements"][0]
+        stay_classroom_id = placement["stay_classroom_id"]
+        assert stay_classroom_id == placement["target_classroom_id"]
+        assert placement["keeps_source_classroom"] is True
+
+        target_by_source = {
+            row["source_classroom_id"]: row["target_classroom_id"]
+            for row in plan["student_placements"]
+        }
+        other_target_id = next(
+            row["classroom_id"]
+            for row in plan["target_classrooms"]
+            if row["classroom_id"] not in target_by_source.values()
+        )
+
+        moved = client.put(
+            f"/api/organization/term-reclassification-plans/{plan['id']}",
+            json=_plan_update_body(
+                plan,
+                expected_revision=plan["revision"],
+                placement_overrides={
+                    placement["source_member_id"]: {
+                        "outcome": "classroom",
+                        "target_classroom_id": other_target_id,
+                    },
+                },
+            ),
+        )
+        assert_status(moved, 200)
+        moved_placement = moved.json()["student_placements"][0]
+        assert moved_placement["keeps_source_classroom"] is False
+        # 搬走之後 stay 目標仍在，前端才判斷得出「改回來就是沒變更」
+        assert moved_placement["stay_classroom_id"] == stay_classroom_id
+
+        restored = client.put(
+            f"/api/organization/term-reclassification-plans/{plan['id']}",
+            json=_plan_update_body(
+                moved.json(),
+                expected_revision=moved.json()["revision"],
+                placement_overrides={
+                    placement["source_member_id"]: {
+                        "outcome": "classroom",
+                        "target_classroom_id": stay_classroom_id,
+                    },
+                },
+            ),
+        )
+        assert_status(restored, 200)
+        restored_placement = restored.json()["student_placements"][0]
+        assert restored_placement["keeps_source_classroom"] is True
+        assert restored_placement["stay_classroom_id"] == stay_classroom_id
+        assert restored.json()["diff"]["students"]["move"] == []

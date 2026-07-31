@@ -31,15 +31,20 @@ def snapshot_schema(database_path: str | Path) -> dict[str, dict[str, object]]:
                 "AND name NOT LIKE 'sqlite_%'"
             )
         }
+        index_sql = {
+            name: " ".join((sql or "").split())
+            for name, sql in connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                "AND name NOT LIKE 'sqlite_%'"
+            )
+        }
         return {
             "tables": {
-                table: sorted(
-                    row[1] for row in connection.execute(f"PRAGMA table_info({table})")
-                )
+                table: _table_shape(connection, table)
                 for table in tables
             },
             "indexes": {
-                name: table
+                name: _index_shape(connection, name, table, index_sql.get(name, ""))
                 for name, table in connection.execute(
                     "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' "
                     "AND name NOT LIKE 'sqlite_%'"
@@ -54,6 +59,77 @@ def snapshot_schema(database_path: str | Path) -> dict[str, dict[str, object]]:
         }
     finally:
         connection.close()
+
+
+def _normalize_type(column_type: str) -> str:
+    """SQLAlchemy 產生 VARCHAR，手寫 DDL 常寫 TEXT——同一種親和性不算差異。"""
+    normalized = (column_type or "").upper().split("(")[0].strip()
+    if normalized in {"VARCHAR", "CHAR", "CLOB", "TEXT", ""}:
+        return "TEXT"
+    if normalized in {"INT", "INTEGER", "BIGINT", "SMALLINT"}:
+        return "INTEGER"
+    if normalized in {"DATETIME", "TIMESTAMP", "DATE"}:
+        return "DATETIME"
+    if normalized in {"FLOAT", "REAL", "DOUBLE", "NUMERIC", "DECIMAL"}:
+        return "REAL"
+    return normalized
+
+
+def _normalize_default(default_value):
+    """`'1'` 與 `1` 是同一個預設值，只是 DDL 寫法不同。"""
+    if default_value is None:
+        return None
+    text_value = str(default_value).strip()
+    if len(text_value) >= 2 and text_value[0] == text_value[-1] == "'":
+        text_value = text_value[1:-1]
+    return text_value
+
+
+def _table_shape(connection, table: str) -> dict[str, object]:
+    """欄位的型別、是否可為空、預設值、主鍵，加上外鍵目標與 ON DELETE。
+
+    只比欄位名會漏掉「migration 建成 nullable、ORM 要求 NOT NULL」這種差異——
+    兩邊都有那個欄位，但一邊擋得住壞資料、另一邊擋不住。
+    """
+    return {
+        "columns": {
+            row[1]: {
+                "type": _normalize_type(row[2]),
+                # INTEGER PRIMARY KEY 隱含 NOT NULL，PRAGMA 卻不一定這樣回報
+                "notnull": bool(row[3]) or bool(row[5]),
+                "default": _normalize_default(row[4]),
+                "pk": row[5],
+            }
+            for row in connection.execute(f"PRAGMA table_info({table})")
+        },
+        "foreign_keys": sorted(
+            f"{row[3]} -> {row[2]}.{row[4]} ON DELETE {row[6]}"
+            for row in connection.execute(f"PRAGMA foreign_key_list({table})")
+        ),
+    }
+
+
+def _index_shape(connection, name: str, table: str, sql: str) -> dict[str, object]:
+    """索引的表、唯一性、欄位順序與 partial 條件。"""
+    unique = next(
+        (
+            bool(row[2])
+            for row in connection.execute(f"PRAGMA index_list({table})")
+            if row[1] == name
+        ),
+        False,
+    )
+    where_clause = ""
+    if " WHERE " in sql.upper():
+        where_clause = sql[sql.upper().index(" WHERE ") + len(" WHERE "):].strip()
+    return {
+        "table": table,
+        "unique": unique,
+        "columns": [
+            row[2] for row in connection.execute(f"PRAGMA index_info({name})")
+        ],
+        "where": where_clause,
+    }
 
 
 def diff_schemas(
