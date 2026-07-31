@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from database import (
     Campus,
     Classroom,
+    ClassRosterMember,
     ClassroomTeacherAssignment,
     Project,
     RosterChild,
@@ -302,6 +303,18 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
             db.add(work_slot)
             db.flush()
         work_slot.started_at = work_slot.started_at or utc_now()
+        # 已歸班的相本學生一定對應到班上的名冊孩子；要趕在相本歸班前接上，
+        # 之後 trg_students_freeze_class_backed_identity 就不允許再改 identity。
+        student = db.get(Student, seeded["student_id"])
+        roster_child = RosterChild(name=student.name)
+        db.add(roster_child)
+        db.flush()
+        db.add(ClassRosterMember(
+            classroom_id=classroom.id,
+            roster_child_id=roster_child.id,
+        ))
+        student.roster_child_id = roster_child.id
+        db.flush()
         project.classroom_id = classroom.id
         project.class_period_work_slot_id = work_slot.id
         project.campus_id_snapshot = campus.id

@@ -58,16 +58,6 @@ export const autoFillRosterChildAlbumName = (rosterChildId) =>
 export const createClassroomProject = (classroomId, params) =>
   apiClient.post(`/organization/classrooms/${classroomId}/projects`, params);
 
-/** 將未歸班舊相本明確歸入班級，並可選擇用相本學生建立空白目前名單。 */
-export const assignProjectToClassroom = (projectId, params) =>
-  apiClient.put(`/organization/projects/${projectId}/classroom`, params);
-
-/** 取得舊相本歸班前的學生身分候選與來源資料指紋。 */
-export const fetchProjectClassroomMigrationPreview = (projectId, classroomId) =>
-  apiClient.get(`/organization/projects/${projectId}/classroom-migration-preview`, {
-    params: { classroom_id: classroomId },
-  });
-
 /** 轉交相本並留下負責人異動紀錄。 */
 export const assignProjectOwner = (projectId, params) =>
   apiClient.post(`/projects/${projectId}/assignment`, params);

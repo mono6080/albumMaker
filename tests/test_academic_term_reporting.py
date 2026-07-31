@@ -153,7 +153,12 @@ def test_closed_term_does_not_seed_children_from_current_roster():
 
         current_only_name = unique_name("current_roster_only")
         try:
-            add_classroom_members(client, classroom_id, [current_only_name])
+            # 學期一關，那學期的班就不再收人——匯出因此不可能長出當時不在的孩子
+            rejected = client.post(
+                f"/api/organization/classrooms/{classroom_id}/members/batch",
+                json={"members": [{"name": current_only_name}]},
+            )
+            assert_status(rejected, 409)
             preview = client.get(
                 "/api/roster/semester-export",
                 params={
@@ -369,21 +374,12 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
             db.flush()
             db.add_all([
                 Classroom(
-                    academic_term_id=closed_term.id,
-                    classroom_id=outside_classroom.id,
-                    campus_id_snapshot=outside_classroom.campus_id,
-                    campus_name_snapshot=outside_classroom.campus.name,
-                    classroom_name_snapshot=outside_classroom.name,
+                    academic_term_id=term.id,
+                    campus_id=outside_classroom.campus_id,
+                    name=outside_classroom.name,
                     department=outside_classroom.department,
-                ),
-                Classroom(
-                    academic_term_id=cancelled_term.id,
-                    classroom_id=outside_classroom.id,
-                    campus_id_snapshot=outside_classroom.campus_id,
-                    campus_name_snapshot=outside_classroom.campus.name,
-                    classroom_name_snapshot=outside_classroom.name,
-                    department=outside_classroom.department,
-                ),
+                )
+                for term in (closed_term, cancelled_term)
             ])
             db.commit()
             closed_term_id = closed_term.id
@@ -521,10 +517,14 @@ def test_semester_preview_hides_out_of_scope_period_ids_from_supervisor():
             assert hidden_preview.json() == {"detail": "找不到期別"}
 
 
-def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
+def test_closed_term_export_follows_roster_name_correction(
     monkeypatch,
     tmp_path,
 ):
+    """名冊姓名是唯一真相：更正之後，已結束學期的匯出也跟著顯示新名。
+
+    凍結的是相本本身——`Student.name` 與已渲染的 PDF 內容都停在當時。
+    """
     use_tmp_uploads(monkeypatch, tmp_path)
     with started_client() as client:
         login(client)
@@ -569,8 +569,8 @@ def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
             )
             assert_status(preview, 200)
             names = {child["name"] for child in preview_children(preview.json())}
-            assert historical_name in names
-            assert current_name not in names
+            assert current_name in names
+            assert historical_name not in names
 
             download = client.get(
                 "/api/roster/semester-export/download",
@@ -583,8 +583,14 @@ def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
             assert_status(download, 200)
             with ZipFile(BytesIO(download.content)) as zip_archive:
                 entry_names = zip_archive.namelist()
-            assert any(f"/{historical_name}/" in name for name in entry_names)
-            assert not any(current_name in name for name in entry_names)
+            assert any(f"/{current_name}/" in name for name in entry_names)
+            assert not any(historical_name in name for name in entry_names)
+
+            db = SessionLocal()
+            try:
+                assert db.get(Student, student_id).name == historical_name
+            finally:
+                db.close()
         finally:
             db = SessionLocal()
             try:
@@ -763,7 +769,7 @@ def test_semester_zip_appends_merged_pdf_for_multi_period_child(
         assert "全期合併" in manifest
 
 
-def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
+def test_current_supervisor_reads_historical_snapshot_after_campus_rename():
     with started_client() as client:
         login(client)
         supervisor, supervisor_password = create_user(client, "supervisor")
@@ -799,16 +805,27 @@ def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
         )
         assert_status(ended_member, 200)
         set_classroom_teachers(client, classroom_id, [])
-        moved = client.patch(
+        # 班級的分校不可變更（見 term-scoped-classroom-v1 的決定 A）；
+        # 快照與現況的分歧改由分校改名產生。
+        rejected_move = client.patch(
             f"/api/organization/classrooms/{classroom_id}",
-            json={"campus_id": target_campus_id, "is_active": False},
+            json={"campus_id": target_campus_id},
         )
-        assert_status(moved, 200)
+        assert_status(rejected_move, 409)
+        assert rejected_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
+        renamed_campus = client.patch(
+            f"/api/organization/campuses/{source_campus_id}",
+            json={"name": unique_name("renamed_source")},
+        )
+        assert_status(renamed_campus, 200)
+        renamed_campus_name = renamed_campus.json()["name"]
 
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
+        # 主管 scope 走 campus_id_snapshot，相本顯示的分校名仍是建立當時的
+        assert detail.json()["campus_name"] != renamed_campus_name
         progress = client.get(
             "/api/roster/teacher-progress",
             params={"academic_term_id": academic_term_id},

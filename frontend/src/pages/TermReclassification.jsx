@@ -56,10 +56,10 @@ const normalizeSearchText = value => value.replace(/[\s\u3000]+/g, "").toLocaleL
 const VALIDATION_ERROR_MESSAGES = {
   stale_reclassification_plan: "目前名單或老師編制已變更，這份草稿必須取消後重新建立。",
   target_classroom_not_found: "目標班級已不存在，請重新選擇。",
-  inactive_target_classroom: "學生被編入已停用的分校或班級。",
+  inactive_target_classroom: "學生被編入不屬於這個新學期的班級，或該分校已停用。",
   classroom_student_limit_exceeded: "目標班級人數超過相本可容納上限。",
   duplicate_target_student_name: "同一目標班級有重複姓名，請確認是否編錯學生。",
-  inactive_teacher_classroom: "已停用的分校或班級仍有目標老師編制。",
+  inactive_teacher_classroom: "老師編制落在不屬於這個新學期的班級，或該分校已停用。",
   invalid_lead_count: "非空老師編制必須恰有一位主教。",
   teacher_not_found: "目標老師帳號已不存在。",
   invalid_teacher_role: "目標帳號已無法指派為帶班老師，請重新指派。",
@@ -149,25 +149,23 @@ export default function TermReclassification() {
     setPendingValidationTargetId(null);
   }, [expandedStudentClassroomId, pendingValidationTargetId]);
 
-  const classrooms = useMemo(() => (
-    (overview?.campuses ?? []).flatMap(campus => (
-      campus.classrooms.map(classroom => ({
-        ...classroom,
-        campusName: campus.name,
-        campusIsActive: campus.is_active,
-      }))
-    ))
-  ), [overview]);
-  const activeClassrooms = classrooms.filter(classroom => (
-    classroom.is_active && classroom.campusIsActive
-  ));
+  // 可編入的是目標學期新建的班，不是目前學期那份清單
+  const targetClassrooms = useMemo(
+    () => (plan?.target_classrooms ?? []).map(classroom => ({
+      id: classroom.classroom_id,
+      name: classroom.name,
+      department: classroom.department,
+      campusName: classroom.campus_name,
+    })),
+    [plan?.target_classrooms],
+  );
   const teacherOptions = useMemo(
     () => overview?.teacher_options ?? [],
     [overview?.teacher_options],
   );
   const classroomById = useMemo(
-    () => new Map(classrooms.map(classroom => [classroom.id, classroom])),
-    [classrooms],
+    () => new Map(targetClassrooms.map(classroom => [classroom.id, classroom])),
+    [targetClassrooms],
   );
   const placementByMemberId = useMemo(
     () => new Map((plan?.student_placements ?? []).map(placement => (
@@ -694,15 +692,15 @@ export default function TermReclassification() {
               <School className="h-4 w-4 text-indigo-500" />
               <h2 className="font-semibold text-gray-900">可編入的目標班級</h2>
             </div>
-            <p className="mb-3 text-xs leading-5 text-gray-500">缺少新班級時，請先回班級與名單建立並啟用。</p>
+            <p className="mb-3 text-xs leading-5 text-gray-500">建立草稿時已照目前的分校／部門／班名長出新學期的班。</p>
             <div className="space-y-2">
-              {activeClassrooms.map(classroom => (
+              {targetClassrooms.map(classroom => (
                 <div key={classroom.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
                   <div className="font-medium text-gray-800">{classroom.name}</div>
                   <div className="text-xs text-gray-400">{classroom.campusName}</div>
                 </div>
               ))}
-              {activeClassrooms.length === 0 && <p className="text-sm text-amber-700">目前沒有使用中的班級。</p>}
+              {targetClassrooms.length === 0 && <p className="text-sm text-amber-700">這份草稿還沒有任何新學期班級。</p>}
             </div>
           </Surface>
 
@@ -954,7 +952,7 @@ export default function TermReclassification() {
                                 value={placement.outcome === "departed" ? "departed" : String(placement.target_classroom_id)}
                                 onChange={event => handleStudentTargetChange(placement.source_member_id, event.target.value)}
                               >
-                                {activeClassrooms.map(classroom => (
+                                {targetClassrooms.map(classroom => (
                                   <option key={classroom.id} value={classroom.id}>{classroom.campusName}／{classroom.name}</option>
                                 ))}
                                 <option value="departed">離園／畢業，不編入班級</option>

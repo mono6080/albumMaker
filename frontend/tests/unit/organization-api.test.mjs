@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { apiClient } from "../../src/api/authApi.js";
 import {
   applyTermReclassificationPlan,
-  assignProjectToClassroom,
   assignProjectOwner,
   autoFillClassroomMemberAlbumNames,
   autoFillRosterChildAlbumName,
@@ -16,7 +15,6 @@ import {
   fetchMyClassrooms,
   fetchAcademicTerms,
   fetchOrganizationOverview,
-  fetchProjectClassroomMigrationPreview,
   fetchProjectAssignmentHistory,
   fetchTermReclassificationPlan,
   updateCampus,
@@ -74,17 +72,6 @@ test("organization API calls keep admin route and payload contracts stable", asy
       owner_id: 12,
       work_slot_id: 19,
     });
-    await fetchProjectClassroomMigrationPreview(13, 5);
-    await assignProjectToClassroom(13, {
-      classroom_id: 5,
-      source_fingerprint: "preview-sha256",
-      confirmed_all: true,
-      seed_current_roster: true,
-      student_identity_decisions: [
-        { student_id: 21, action: "create_new" },
-        { student_id: 22, action: "existing", roster_child_id: 31 },
-      ],
-    });
     await assignProjectOwner(13, { owner_id: 14, reason: "改由新老師負責" });
     await fetchProjectAssignmentHistory(13);
     await createTermReclassificationPlan("2026 上學期");
@@ -136,19 +123,6 @@ test("organization API calls keep admin route and payload contracts stable", asy
       template_id: 11,
       owner_id: 12,
       work_slot_id: 19,
-    }],
-    ["get", "/organization/projects/13/classroom-migration-preview", {
-      params: { classroom_id: 5 },
-    }],
-    ["put", "/organization/projects/13/classroom", {
-      classroom_id: 5,
-      source_fingerprint: "preview-sha256",
-      confirmed_all: true,
-      seed_current_roster: true,
-      student_identity_decisions: [
-        { student_id: 21, action: "create_new" },
-        { student_id: 22, action: "existing", roster_child_id: 31 },
-      ],
     }],
     ["post", "/projects/13/assignment", { owner_id: 14, reason: "改由新老師負責" }],
     ["get", "/projects/13/assignment-history"],

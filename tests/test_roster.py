@@ -728,7 +728,7 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
             campus_a_infant_id,
             infant_template_id,
         )
-        # 專案仍歸建立當時 owner；正式學期老師快照也不因中途換班改寫。
+        # 專案仍歸建立當時 owner；學期中途換老師時，兩位都是這個班本學期的老師。
         set_classroom_teachers(client, campus_a_infant_id, [teachers[4]["id"]])
         add_classroom_members(client, campus_b_academy_id, ["部門外學生"])
         hidden_project_id = create_classroom_project(
@@ -777,9 +777,9 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
         assert hidden_project_id not in scoped_project_ids
         assert legacy_project_id not in scoped_project_ids
         assert {
-            teacher["user_id"]
+            teacher["user_id"]: teacher["ended_at"] is None
             for teacher in classroom_rows[campus_a_infant_id]["teachers"]
-        } == {teachers[0]["id"]}
+        } == {teachers[0]["id"]: False, teachers[4]["id"]: True}
         assert all(
             not slot["projects"]
             for classroom_id in (campus_a_academy_id, campus_b_infant_id)

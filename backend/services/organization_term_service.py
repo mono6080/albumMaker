@@ -397,7 +397,76 @@ def _serialize_teacher_target(target: TermClassroomTeacherTarget) -> dict:
     }
 
 
-def _student_diff(plan: TermReclassificationPlan) -> dict:
+def _source_classroom_id_by_target(
+    plan: TermReclassificationPlan,
+    db: Session,
+) -> dict[int, int]:
+    """目標學期的班對應回目前學期的哪一個班。
+
+    目標班在建立草稿時照來源班的分校／部門／班名複製出來，班級 id 不再跨學期
+    延續，所以「同一個班的新學期版本」只能靠這組 scope 認得；scope 在學期內唯一，
+    對應是精確的。找不到對應的是草稿裡新增的班。
+
+    比對的來源是**建立草稿當下的那個學期**，不是「目前學期」——套用之後目前學期
+    就是目標學期本身，用目前學期會讓每個班對應到自己，已套用計畫的 diff 因此變樣。
+    """
+    target_classroom_ids = {
+        classroom_plan.classroom_id for classroom_plan in plan.classroom_plans
+    }
+    target_classroom_ids.update(
+        placement.target_classroom_id
+        for placement in plan.student_placements
+        if placement.target_classroom_id is not None
+    )
+    if not target_classroom_ids:
+        return {}
+    source_classroom_ids = {
+        placement.source_classroom_id_snapshot
+        for placement in plan.student_placements
+    }
+    source_term_id = (
+        db.query(Classroom.academic_term_id)
+        .filter(Classroom.id.in_(source_classroom_ids))
+        .limit(1)
+        .scalar()
+        if source_classroom_ids
+        else None
+    )
+    if source_term_id is None:
+        # 名冊全空的計畫沒有來源班可推，退回目前學期（此時目標學期還是草稿）
+        source_term_id = (
+            db.query(AcademicTerm.id)
+            .filter(
+                AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES),
+                AcademicTerm.id != plan.target_academic_term_id,
+            )
+            .limit(1)
+            .scalar()
+        )
+    if source_term_id is None:
+        return {}
+    source_id_by_scope = {
+        (classroom.campus_id, classroom.department, classroom.name): classroom.id
+        for classroom in (
+            db.query(Classroom)
+            .filter(Classroom.academic_term_id == source_term_id)
+            .all()
+        )
+    }
+    source_by_target = {}
+    for classroom in db.query(Classroom).filter(
+        Classroom.id.in_(target_classroom_ids)
+    ):
+        source_id = source_id_by_scope.get(
+            (classroom.campus_id, classroom.department, classroom.name)
+        )
+        if source_id is not None:
+            source_by_target[classroom.id] = source_id
+    return source_by_target
+
+
+def _student_diff(plan: TermReclassificationPlan, db: Session) -> dict:
+    source_by_target = _source_classroom_id_by_target(plan, db)
     result = {"stay": [], "move": [], "departed": []}
     for placement in plan.student_placements:
         row = {
@@ -406,9 +475,10 @@ def _student_diff(plan: TermReclassificationPlan) -> dict:
             "from_classroom_id": placement.source_classroom_id_snapshot,
             "to_classroom_id": placement.target_classroom_id,
         }
+        target_source_id = source_by_target.get(placement.target_classroom_id)
         if placement.outcome == "departed":
             result["departed"].append(row)
-        elif placement.target_classroom_id == placement.source_classroom_id_snapshot:
+        elif target_source_id == placement.source_classroom_id_snapshot:
             result["stay"].append(row)
         else:
             result["move"].append(row)
@@ -421,29 +491,30 @@ def _student_diff(plan: TermReclassificationPlan) -> dict:
         for placement in plan.student_placements
         if placement.outcome == "classroom"
     )
-    result["classroom_counts"] = [
-        {
+    result["classroom_counts"] = []
+    for classroom_plan in plan.classroom_plans:
+        before = before_counts[source_by_target.get(classroom_plan.classroom_id)]
+        after = after_counts[classroom_plan.classroom_id]
+        result["classroom_counts"].append({
             "classroom_id": classroom_plan.classroom_id,
-            "before": before_counts[classroom_plan.classroom_id],
-            "after": after_counts[classroom_plan.classroom_id],
-            "change": (
-                after_counts[classroom_plan.classroom_id]
-                - before_counts[classroom_plan.classroom_id]
-            ),
-        }
-        for classroom_plan in plan.classroom_plans
-    ]
+            "before": before,
+            "after": after,
+            "change": after - before,
+        })
     return result
 
 
 def _teacher_source_state(plan: TermReclassificationPlan, db: Session) -> dict[int, dict]:
+    """目標班的「目前編制」——查的是它在目前學期對應的那個班。"""
     classroom_ids = [classroom_plan.classroom_id for classroom_plan in plan.classroom_plans]
     if not classroom_ids:
         return {}
+    source_by_target = _source_classroom_id_by_target(plan, db)
+    source_ids = sorted(set(source_by_target.values()))
     assignments = (
         db.query(ClassroomTeacherAssignment)
         .filter(
-            ClassroomTeacherAssignment.classroom_id.in_(classroom_ids),
+            ClassroomTeacherAssignment.classroom_id.in_(source_ids),
             ClassroomTeacherAssignment.started_at <= plan.created_at,
             or_(
                 ClassroomTeacherAssignment.ended_at.is_(None),
@@ -452,11 +523,20 @@ def _teacher_source_state(plan: TermReclassificationPlan, db: Session) -> dict[i
         )
         .order_by(ClassroomTeacherAssignment.id)
         .all()
+        if source_ids
+        else []
     )
-    source_state: dict[int, dict] = {classroom_id: {} for classroom_id in classroom_ids}
+    assignments_by_source: dict[int, dict] = defaultdict(dict)
     for assignment in assignments:
-        source_state[assignment.classroom_id][assignment.teacher_id] = assignment
-    return source_state
+        assignments_by_source[assignment.classroom_id][assignment.teacher_id] = (
+            assignment
+        )
+    return {
+        classroom_id: assignments_by_source.get(
+            source_by_target.get(classroom_id), {}
+        )
+        for classroom_id in classroom_ids
+    }
 
 
 def _teacher_diff(plan: TermReclassificationPlan, db: Session) -> dict:
@@ -514,6 +594,16 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
     )
     classroom_by_id = {classroom.id: classroom for classroom in classrooms}
 
+    def _is_usable_target(classroom: Classroom) -> bool:
+        """目標班必須屬於這份計畫的目標學期，且分校仍在使用中。
+
+        不能用 `is_current` 判斷——目標學期還是 draft，套用時才轉 active。
+        """
+        return (
+            classroom.academic_term_id == plan.target_academic_term_id
+            and classroom.campus.is_active
+        )
+
     target_students: dict[int, list[TermStudentPlacement]] = defaultdict(list)
     for placement in plan.student_placements:
         if placement.outcome == "departed":
@@ -526,7 +616,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
                 "target_classroom_id": placement.target_classroom_id,
             })
             continue
-        if not classroom.is_current or not classroom.campus.is_active:
+        if not _is_usable_target(classroom):
             errors.append({
                 "code": "inactive_target_classroom",
                 "source_member_id": placement.source_membership_id,
@@ -571,7 +661,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
                 "code": "target_classroom_not_found",
                 "classroom_id": classroom_plan.classroom_id,
             })
-        elif not classroom.is_current or not classroom.campus.is_active:
+        elif not _is_usable_target(classroom):
             errors.append({
                 "code": "inactive_teacher_classroom",
                 "classroom_id": classroom_plan.classroom_id,
@@ -620,6 +710,8 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
             "code": "stale_reclassification_plan",
             "message": "目前名單或老師編制已變更，請重建編班草稿",
         })
+    student_diff = _student_diff(plan, db)
+    stay_member_ids = {row["source_member_id"] for row in student_diff["stay"]}
     return {
         "id": plan.id,
         "label": plan.label,
@@ -645,8 +737,33 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
         "cancelled_by_id": plan.cancelled_by_id,
         "cancelled_by_name": plan.cancelled_by_name_snapshot,
         "student_placements": [
-            _serialize_student_placement(placement)
+            {
+                **_serialize_student_placement(placement),
+                # 來源班與目標班分屬不同學期，id 比不出「有沒有換班」
+                "keeps_source_classroom": (
+                    placement.source_membership_id in stay_member_ids
+                ),
+            }
             for placement in plan.student_placements
+        ],
+        # 計畫裡的班一律是目標學期新建的班，不在「目前園所」那份清單裡，
+        # 所以連班名一起附上，前端不必回頭猜 id 屬於哪個學期
+        "target_classrooms": [
+            {
+                "classroom_id": classroom.id,
+                "campus_id": classroom.campus_id,
+                "campus_name": classroom.campus.name,
+                "name": classroom.name,
+                "department": classroom.department,
+            }
+            for classroom in sorted(
+                (
+                    plan.target_academic_term.classrooms
+                    if plan.target_academic_term is not None
+                    else []
+                ),
+                key=lambda row: (row.campus_id, row.department, row.name, row.id),
+            )
         ],
         "classroom_teacher_targets": [
             {
@@ -659,7 +776,7 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
             for classroom_plan in plan.classroom_plans
         ],
         "diff": {
-            "students": _student_diff(plan),
+            "students": student_diff,
             "teachers": _teacher_diff(plan, db),
         },
         "validation": {

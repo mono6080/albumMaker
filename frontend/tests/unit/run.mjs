@@ -1,6 +1,5 @@
 import "./api.test.mjs";
 import "./organization-api.test.mjs";
-import "./legacy-project-migration.test.mjs";
 import "./editor-fonts.test.mjs";
 import "./photos.test.mjs";
 import "./photo-save.test.mjs";

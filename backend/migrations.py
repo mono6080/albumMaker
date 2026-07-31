@@ -71,6 +71,8 @@ def run_migrations():
         _add_student_completed_at_column(connection)
         _migrate_classrooms_to_term_scope(connection)
         _retire_legacy_project_classroom_triggers(connection)
+        _add_term_scoped_classroom_indexes(connection)
+        _add_term_scoped_classroom_freeze_triggers(connection)
 
 
 def _retire_legacy_project_classroom_triggers(connection):
@@ -85,6 +87,197 @@ def _retire_legacy_project_classroom_triggers(connection):
     ):
         connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
     connection.commit()
+
+
+def _add_term_scoped_classroom_indexes(connection):
+    """學期範圍班級結構的索引，新舊資料庫共用同一份清單。
+
+    組織相關的索引原本建在只跑得到舊結構的 migration 裡，全新資料庫因此少了
+    `ux_class_roster_active_child` 這類唯一鍵。集中在這裡無守衛執行，讓
+    init_db() 建出的資料庫與升級上來的資料庫收斂到同一組索引。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    # 舊名索引與 ORM 定義重複，語意相同只是命名還帶著已移除的表名
+    for legacy_index in (
+        "ux_academic_term_classrooms_term_scope_name",
+        "idx_academic_term_classrooms_scope",
+        "idx_term_classroom_teacher_targets_plan_id",
+    ):
+        connection.execute(text(f"DROP INDEX IF EXISTS {legacy_index}"))
+    index_statements = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_campuses_name ON campuses(name)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_term_scope_name "
+        "ON classrooms(academic_term_id, campus_id, department, name)",
+        "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
+        "ON classrooms(academic_term_id, campus_id, department)",
+        "CREATE INDEX IF NOT EXISTS idx_classrooms_campus_id ON classrooms(campus_id)",
+        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_classroom_id "
+        "ON class_roster_members(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_roster_child_id "
+        "ON class_roster_members(roster_child_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_class_roster_active_child "
+        "ON class_roster_members(roster_child_id) WHERE ended_at IS NULL",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_classroom_id "
+        "ON classroom_teacher_assignments(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_teacher_id "
+        "ON classroom_teacher_assignments(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_started_by_id "
+        "ON classroom_teacher_assignments(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_ended_by_id "
+        "ON classroom_teacher_assignments(ended_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_classroom_id "
+        "ON projects(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_created_by_id "
+        "ON projects(created_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_class_period_work_slot_id "
+        "ON projects(class_period_work_slot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_project_id "
+        "ON project_assignment_history(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_from_owner_id "
+        "ON project_assignment_history(from_owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_to_owner_id "
+        "ON project_assignment_history(to_owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_changed_by_id "
+        "ON project_assignment_history(changed_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_project_id "
+        "ON project_editor_assignments(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_user_id "
+        "ON project_editor_assignments(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_started_by_id "
+        "ON project_editor_assignments(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_ended_by_id "
+        "ON project_editor_assignments(ended_by_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_academic_terms_migration_key "
+        "ON academic_terms(migration_key) WHERE migration_key IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_academic_term_periods_term_id "
+        "ON academic_term_periods(academic_term_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_created_by_id "
+        "ON term_reclassification_plans(created_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_updated_by_id "
+        "ON term_reclassification_plans(updated_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_applied_by_id "
+        "ON term_reclassification_plans(applied_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_cancelled_by_id "
+        "ON term_reclassification_plans(cancelled_by_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_term_plans_target_academic_term "
+        "ON term_reclassification_plans(target_academic_term_id) "
+        "WHERE target_academic_term_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_plan_id "
+        "ON term_student_placements(plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_source_membership_id "
+        "ON term_student_placements(source_membership_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_target_classroom_id "
+        "ON term_student_placements(target_classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_plans_plan_id "
+        "ON term_classroom_plans(plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_plans_classroom_id "
+        "ON term_classroom_plans(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS "
+        "idx_term_classroom_teacher_targets_classroom_plan_id "
+        "ON term_classroom_teacher_targets(classroom_plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_teacher_targets_teacher_id "
+        "ON term_classroom_teacher_targets(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS ix_class_period_work_slots_id "
+        "ON class_period_work_slots(id)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_id ON projects(id)",
+    )
+    for statement in index_statements:
+        connection.execute(text(statement))
+    connection.commit()
+
+
+def _add_term_scoped_classroom_freeze_triggers(connection):
+    """學期範圍班級結構的不可變保證。
+
+    兩組來源：
+    - 相本快照與工作格：判斷條件由 `classroom_id` 改為 `class_period_work_slot_id`
+      （見 docs/specs/term-scoped-classroom-v1.md 的 Trigger 調整）。
+    - 已結束學期的名冊與編制：接手已移除的兩張學期快照表原本的凍結保證——
+      班本身就只活一個學期，學期一關，那學期的成員與編制就是歷史。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    for trigger_name in (
+        "trg_projects_freeze_classroom_snapshots",
+        "trg_projects_freeze_work_slot",
+        "trg_work_slots_freeze_identity",
+        "trg_work_slots_freeze_started_at",
+    ):
+        connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+    connection.execute(text("""
+        CREATE TRIGGER trg_projects_freeze_classroom_snapshots
+        BEFORE UPDATE OF campus_id_snapshot, campus_name_snapshot,
+                         classroom_name_snapshot, department ON projects
+        WHEN OLD.class_period_work_slot_id IS NOT NULL AND (
+            NEW.campus_id_snapshot IS NOT OLD.campus_id_snapshot
+            OR NEW.campus_name_snapshot IS NOT OLD.campus_name_snapshot
+            OR NEW.classroom_name_snapshot IS NOT OLD.classroom_name_snapshot
+            OR NEW.department IS NOT OLD.department
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'class-backed project snapshots are immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_projects_freeze_work_slot
+        BEFORE UPDATE OF class_period_work_slot_id ON projects
+        WHEN OLD.class_period_work_slot_id IS NOT NULL
+         AND NEW.class_period_work_slot_id IS NOT OLD.class_period_work_slot_id
+        BEGIN
+            SELECT RAISE(ABORT, 'project work slot is immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_work_slots_freeze_identity
+        BEFORE UPDATE OF classroom_id, term_period_id
+        ON class_period_work_slots
+        WHEN NEW.classroom_id IS NOT OLD.classroom_id
+          OR NEW.term_period_id IS NOT OLD.term_period_id
+        BEGIN
+            SELECT RAISE(ABORT, 'work slot identity is immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_work_slots_freeze_started_at
+        BEFORE UPDATE OF started_at ON class_period_work_slots
+        WHEN OLD.started_at IS NOT NULL
+         AND NEW.started_at IS NOT OLD.started_at
+        BEGIN
+            SELECT RAISE(ABORT, 'started work slot cannot be reset');
+        END
+    """))
+    for table, trigger_prefix, subject in (
+        ("class_roster_members", "trg_class_roster_members", "roster members"),
+        (
+            "classroom_teacher_assignments",
+            "trg_classroom_teachers",
+            "teacher assignments",
+        ),
+    ):
+        for operation, row_alias in (
+            ("INSERT", "NEW"),
+            ("UPDATE", "OLD"),
+            ("DELETE", "OLD"),
+        ):
+            connection.execute(text(f"""
+                CREATE TRIGGER IF NOT EXISTS
+                {trigger_prefix}_freeze_closed_term_{operation.lower()}
+                BEFORE {operation} ON {table}
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM classrooms
+                    JOIN academic_terms AS term
+                      ON term.id = classrooms.academic_term_id
+                    WHERE classrooms.id = {row_alias}.classroom_id
+                      AND term.status = 'closed'
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'closed term {subject} are immutable');
+                END
+            """))
+    connection.commit()
+
 
 def _is_term_scoped_classroom_schema(connection) -> bool:
     """資料庫是否已是學期範圍班級結構。
@@ -132,9 +325,6 @@ def _migrate_classrooms_to_term_scope(connection):
     if duplicated:
         raise RuntimeError("同一個班對應到多個學期，無法一對一併入")
 
-    # 工作格改指 classrooms.id（原本指 academic_term_classrooms.id）
-    work_slot_target = {row[0]: row[2] for row in term_classroom_rows}
-
     connection.execute(text("PRAGMA foreign_keys=OFF"))
     try:
         connection.execute(text(
@@ -149,14 +339,52 @@ def _migrate_classrooms_to_term_scope(connection):
                 ),
                 {"term": academic_term_id, "classroom": classroom_id},
             )
-        for term_classroom_id, classroom_id in work_slot_target.items():
-            connection.execute(
-                text(
-                    "UPDATE class_period_work_slots SET term_classroom_id = :classroom "
-                    "WHERE term_classroom_id = :term_classroom"
-                ),
-                {"classroom": classroom_id, "term_classroom": term_classroom_id},
+
+        # 工作格改指 classrooms.id（原本指 academic_term_classrooms.id）。
+        # 兩張表的 id 值域重疊，逐筆 UPDATE 會把前一輪改好的列再改一次，
+        # 所以必須一次 join 對應完。
+        connection.execute(text("""
+            UPDATE class_period_work_slots
+            SET term_classroom_id = (
+                SELECT term_classroom.classroom_id
+                FROM academic_term_classrooms AS term_classroom
+                WHERE term_classroom.id = class_period_work_slots.term_classroom_id
             )
+        """))
+        orphan_slots = connection.execute(text(
+            "SELECT COUNT(*) FROM class_period_work_slots "
+            "WHERE term_classroom_id IS NULL"
+        )).scalar_one()
+        if orphan_slots:
+            raise RuntimeError(
+                f"{orphan_slots} 個工作格對應不到班級，無法併入學期範圍"
+            )
+        # 整張重建：欄位改名之外，FK 目標也要從即將移除的 academic_term_classrooms
+        # 換成 classrooms，兩者都不是 RENAME COLUMN 做得到的。
+        connection.execute(text("DROP TABLE IF EXISTS class_period_work_slots_new"))
+        connection.execute(text("""
+            CREATE TABLE class_period_work_slots_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                classroom_id INTEGER NOT NULL
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                term_period_id INTEGER NOT NULL
+                    REFERENCES academic_term_periods(id) ON DELETE CASCADE,
+                started_at DATETIME,
+                CONSTRAINT ux_class_period_work_slots_classroom_period
+                    UNIQUE (classroom_id, term_period_id)
+            )
+        """))
+        connection.execute(text(
+            "INSERT INTO class_period_work_slots_new "
+            "(id, classroom_id, term_period_id, started_at) "
+            "SELECT id, term_classroom_id, term_period_id, started_at "
+            "FROM class_period_work_slots"
+        ))
+        connection.execute(text("DROP TABLE class_period_work_slots"))
+        connection.execute(text(
+            "ALTER TABLE class_period_work_slots_new "
+            "RENAME TO class_period_work_slots"
+        ))
 
         # 依賴被移除欄位／表的 trigger 必須先卸下，SQLite 不允許帶著它們改結構
         for trigger_name in (
@@ -182,7 +410,11 @@ def _migrate_classrooms_to_term_scope(connection):
         connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_teachers"))
         connection.execute(text("DROP TABLE IF EXISTS academic_term_classrooms"))
 
-        connection.execute(text("ALTER TABLE classrooms DROP COLUMN is_active"))
+        # 班級的啟用與時間戳都由所屬學期承擔，欄位一併移除
+        for dropped_column in ("is_active", "created_at", "updated_at"):
+            connection.execute(text(
+                f"ALTER TABLE classrooms DROP COLUMN {dropped_column}"
+            ))
         connection.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_term_scope_name "
             "ON classrooms(academic_term_id, campus_id, department, name)"

@@ -258,7 +258,6 @@ def _serialize_entry(
         "student_name": student.name,
         "campus_id": project.campus_id_snapshot,
         "campus_name": project.campus_name_snapshot,
-        "classroom_id": project.classroom_id,
         "classroom_id": classroom.id,
         "classroom_name": project.classroom_name_snapshot,
         "department": project.department,
@@ -351,16 +350,25 @@ def build_semester_export_preview(
     )
     output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
 
+    # 學期中轉過班的孩子在兩個班都有成員紀錄，依入班時間取最後一筆，
+    # 分組才會落在他最後所在的班
+    memberships = sorted(
+        (
+            (member, classroom)
+            for classroom in classrooms
+            for member in classroom.roster_members
+        ),
+        key=lambda row: (row[0].started_at, row[0].id),
+    )
     children_by_id: dict[int, dict] = {}
-    for classroom in classrooms:
-        for member in classroom.roster_members:
-            children_by_id[member.roster_child_id] = {
-                "roster_child_id": member.roster_child_id,
-                "name": member.roster_child.name,
-                "classroom_id": classroom.id,
-                "source_membership": member,
-                "entries": [],
-            }
+    for member, classroom in memberships:
+        children_by_id[member.roster_child_id] = {
+            "roster_child_id": member.roster_child_id,
+            "name": member.roster_child.name,
+            "classroom_id": classroom.id,
+            "source_membership": member,
+            "entries": [],
+        }
 
     unlinked = []
     for project in projects:
@@ -388,7 +396,6 @@ def build_semester_export_preview(
             "classroom_id": classroom.id,
             "campus_id": classroom.campus_id,
             "campus_name": classroom.campus.name,
-            "classroom_id": classroom.id,
             "classroom_name": classroom.name,
             "department": classroom.department,
             "children": [],
@@ -439,7 +446,6 @@ def build_semester_export_preview(
                 "classroom_id": classroom.id,
                 "campus_id": classroom.campus_id,
                 "campus_name": classroom.campus.name,
-                "classroom_id": classroom.id,
                 "classroom_name": classroom.name,
                 "department": classroom.department,
             },

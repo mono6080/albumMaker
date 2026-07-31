@@ -233,10 +233,16 @@ def _serialize_project_progress(
 
 
 def _serialize_teacher(teacher: ClassroomTeacherAssignment) -> dict:
+    """班級的老師編制。
+
+    班只活一個學期，所以掛在班上的每一筆指派都屬於這個學期；學期中途換過人時
+    兩位都要列出，`ended_at` 是分辨現任與曾任的唯一依據。
+    """
     return {
         "user_id": teacher.teacher_id,
         "display_name": teacher.teacher_name_snapshot,
         "duty": teacher.duty,
+        "ended_at": teacher.ended_at.isoformat() if teacher.ended_at else None,
     }
 
 
@@ -338,7 +344,6 @@ def build_teacher_progress_overview(
                 "projects": projects_payload,
             })
         classrooms_payload.append({
-            "classroom_id": classroom.id,
             "classroom_id": classroom.id,
             "campus_id": classroom.campus_id,
             "campus_name": classroom.campus.name,

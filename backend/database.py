@@ -430,10 +430,10 @@ class Classroom(Base):
             "campus_id",
             "department",
             "name",
-            name="ux_academic_term_classrooms_term_scope_name",
+            name="ux_classrooms_term_scope_name",
         ),
         Index(
-            "idx_academic_term_classrooms_scope",
+            "idx_classrooms_term_scope",
             "academic_term_id",
             "campus_id",
             "department",

@@ -66,7 +66,7 @@ function teacherName(teacher) {
 }
 
 function classroomKey(classroom) {
-  return classroom.term_classroom_id ?? classroom.classroom_id;
+  return classroom.classroom_id;
 }
 
 function slotHasAttention(slot) {

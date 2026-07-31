@@ -340,6 +340,8 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         legacy_connection = _LegacyDropConnection(connection)
         migrations._drop_bubble_texts_json_column(legacy_connection)
         assert legacy_connection.intercepted
+        # 掛在 projects 的凍結 trigger 與那個查 projects 的 students trigger，
+        # 都必須撐過重建空窗；舊歸班流程的三個 trigger 已隨學期範圍班級退場。
         rebuilt_triggers = {
             row[0]
             for row in connection.execute(text("""
@@ -348,13 +350,15 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
                 WHERE type = 'trigger'
                   AND name IN (
                       'trg_students_freeze_class_backed_identity',
-                      'trg_projects_require_identity_migration_ledger'
+                      'trg_projects_freeze_classroom_snapshots',
+                      'trg_projects_freeze_work_slot'
                   )
             """))
         }
         assert rebuilt_triggers == {
             "trg_students_freeze_class_backed_identity",
-            "trg_projects_require_identity_migration_ledger",
+            "trg_projects_freeze_classroom_snapshots",
+            "trg_projects_freeze_work_slot",
         }
 
     # fallback 完成後再跑完整序列，確認 interrupted state 已收斂且可冪等。

@@ -320,7 +320,7 @@ def test_teacher_scope_and_classroom_project_snapshot():
         }
 
 
-def test_active_term_student_snapshot_tracks_final_roster_and_closed_freezes():
+def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
     with started_client() as client:
         login(client)
         campus_id = _create_campus(client)
@@ -385,14 +385,15 @@ def test_active_term_student_snapshot_tracks_final_roster_and_closed_freezes():
             ended = db.query(ClassRosterMember).filter(
                 ClassRosterMember.roster_child_id == member["roster_child_id"],
             ).order_by(ClassRosterMember.id.desc()).first()
-            classroom = db.get(Classroom, ended.classroom_id)
-            assert classroom.classroom_id == classroom_b_id
-            assert snapshot.source_membership_id == transferred_member["id"]
+            assert ended.classroom_id == classroom_b_id
+            assert ended.id == transferred_member["id"]
+            assert ended.ended_at is not None
 
+            # 學期一關，那學期的名冊就是歷史：沒有快照表接手，改為由 trigger 擋。
             current_term = db.get(AcademicTerm, term_id)
             current_term.status = "closed"
             db.commit()
-            snapshot.student_name_snapshot = "不可改寫"
+            ended.end_reason = "不可改寫"
             with pytest.raises(IntegrityError):
                 db.commit()
             db.rollback()
@@ -437,25 +438,38 @@ def test_term_plan_rejects_active_rows_under_inactive_organization_structure():
             classroom_id
         ]
 
+        # 班級沒有自己的停用旗標，等價的異常是班級落在已結束的學期卻還有在籍學生
         db = SessionLocal()
         try:
             db.get(Campus, campus_id).is_active = True
-            db.get(Classroom, classroom_id).is_active = False
+            classroom = db.get(Classroom, classroom_id)
+            current_term_id = classroom.academic_term_id
+            closed_term = AcademicTerm(
+                label=unique_name("closed_term"),
+                status="closed",
+                created_by_name_snapshot="系統管理員",
+            )
+            db.add(closed_term)
+            db.flush()
+            classroom.academic_term_id = closed_term.id
             db.commit()
         finally:
             db.close()
-        inactive_classroom_response = client.post(
+        closed_term_classroom_response = client.post(
             "/api/organization/term-reclassification-plans",
             json={"label": "異常班級不可建草稿"},
         )
-        assert_status(inactive_classroom_response, 409)
-        assert inactive_classroom_response.json()["detail"]["code"] == (
+        assert_status(closed_term_classroom_response, 409)
+        assert closed_term_classroom_response.json()["detail"]["code"] == (
             "inactive_organization_has_active_roster_or_teachers"
         )
+        assert closed_term_classroom_response.json()["detail"]["classroom_ids"] == [
+            classroom_id
+        ]
 
         db = SessionLocal()
         try:
-            db.get(Classroom, classroom_id).is_active = True
+            db.get(Classroom, classroom_id).academic_term_id = current_term_id
             db.commit()
             assert db.query(TermReclassificationPlan).filter(
                 TermReclassificationPlan.status == "draft"
@@ -526,13 +540,20 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
             placement["student_name"]: placement
             for placement in plan["student_placements"]
         }
+        # 目標學期的班是新建的，計畫裡一律以新班 id 表示；舊班 id 只出現在來源欄位。
+        target_classroom_id_by_source = {
+            placement["source_classroom_id"]: placement["target_classroom_id"]
+            for placement in plan["student_placements"]
+        }
+        target_a_id = target_classroom_id_by_source[classroom_a_id]
+        target_b_id = target_classroom_id_by_source[classroom_b_id]
         update_body = _plan_update_body(
             plan,
             expected_revision=1,
             placement_overrides={
                 placement_by_name["編班李小華"]["source_member_id"]: {
                     "outcome": "classroom",
-                    "target_classroom_id": classroom_b_id,
+                    "target_classroom_id": target_b_id,
                 },
                 placement_by_name["編班陳小安"]["source_member_id"]: {
                     "outcome": "departed",
@@ -540,10 +561,10 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 },
             },
             teacher_overrides={
-                classroom_a_id: [
+                target_a_id: [
                     {"teacher_id": teacher_b["id"], "duty": "lead"}
                 ],
-                classroom_b_id: [
+                target_b_id: [
                     {"teacher_id": teacher_c["id"], "duty": "lead"},
                     {"teacher_id": teacher_a["id"], "duty": "co_teacher"},
                 ],
@@ -572,14 +593,14 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
             row["classroom_id"]: row
             for row in updated_plan["diff"]["students"]["classroom_counts"]
         }
-        assert classroom_counts[classroom_a_id] == {
-            "classroom_id": classroom_a_id,
+        assert classroom_counts[target_a_id] == {
+            "classroom_id": target_a_id,
             "before": 2,
             "after": 1,
             "change": -1,
         }
-        assert classroom_counts[classroom_b_id] == {
-            "classroom_id": classroom_b_id,
+        assert classroom_counts[target_b_id] == {
+            "classroom_id": target_b_id,
             "before": 1,
             "after": 1,
             "change": 0,
@@ -633,18 +654,18 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
         assert {
             row["classroom_id"]: row
             for row in applied_plan["diff"]["students"]["classroom_counts"]
-            if row["classroom_id"] in {classroom_a_id, classroom_b_id}
+            if row["classroom_id"] in {target_a_id, target_b_id}
         } == {
-            classroom_a_id: classroom_counts[classroom_a_id],
-            classroom_b_id: classroom_counts[classroom_b_id],
+            target_a_id: classroom_counts[target_a_id],
+            target_b_id: classroom_counts[target_b_id],
         }
         applied_at = datetime.fromisoformat(applied_plan["applied_at"])
 
         db = SessionLocal()
         try:
-            active_members = (
+            # 舊學期的班隨學期結束，在籍成員全部落在新學期的班
+            assert (
                 db.query(ClassRosterMember)
-                .join(RosterChild, RosterChild.id == ClassRosterMember.roster_child_id)
                 .filter(
                     ClassRosterMember.classroom_id.in_([
                         classroom_a_id,
@@ -652,19 +673,12 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                     ]),
                     ClassRosterMember.ended_at.is_(None),
                 )
-                .all()
-            )
-            active_student_locations = {
-                member.roster_child.name: member.classroom_id
-                for member in active_members
-            }
-            assert active_student_locations == {
-                "編班王小明": classroom_a_id,
-                "編班李小華": classroom_b_id,
-            }
+                .count()
+            ) == 0
             target_term_id = applied_plan["target_academic_term_id"]
-            target_members = (
+            active_members = (
                 db.query(ClassRosterMember)
+                .join(RosterChild, RosterChild.id == ClassRosterMember.roster_child_id)
                 .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
                 .filter(
                     Classroom.academic_term_id == target_term_id,
@@ -673,11 +687,11 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 .all()
             )
             assert {
-                member.roster_child.name: member.classroom.name
-                for member in target_members
+                member.roster_child.name: member.classroom_id
+                for member in active_members
             } == {
-                "編班王小明": classroom_a_id,
-                "編班李小華": classroom_b_id,
+                "編班王小明": target_a_id,
+                "編班李小華": target_b_id,
             }
             assert (
                 db.query(Project)
@@ -721,9 +735,14 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 (assignment.classroom_id, assignment.teacher_id): assignment
                 for assignment in active_assignments
             }
-            assert active_teacher_state[(classroom_a_id, teacher_b["id"])].duty == "lead"
-            assert active_teacher_state[(classroom_b_id, teacher_c["id"])].id == unchanged_b_lead_id
-            assert active_teacher_state[(classroom_b_id, teacher_a["id"])].duty == "co_teacher"
+            assert active_teacher_state[(target_a_id, teacher_b["id"])].duty == "lead"
+            # 舊班的編制隨學期結束，留任的主教在新班是另一筆指派
+            assert (
+                active_teacher_state[(target_b_id, teacher_c["id"])].id
+                != unchanged_b_lead_id
+            )
+            assert active_teacher_state[(target_b_id, teacher_c["id"])].duty == "lead"
+            assert active_teacher_state[(target_b_id, teacher_a["id"])].duty == "co_teacher"
             changed_assignments = [
                 assignment
                 for assignment in db.query(ClassroomTeacherAssignment).all()
@@ -763,12 +782,12 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
         target_template_id = plan["target_template_id"]
         future_a = _create_classroom_project(
             client,
-            classroom_a_id,
+            target_a_id,
             target_template_id,
         )
         future_b = _create_classroom_project(
             client,
-            classroom_b_id,
+            target_b_id,
             target_template_id,
         )
         assert [student["name"] for student in future_a["students"]] == [
@@ -889,11 +908,17 @@ def test_term_plan_revision_and_business_validation_are_separate():
             [{"teacher_id": teacher["id"], "duty": "lead"}],
         )
         plan = _create_plan(client, "2028 新學期")
+        # 編制設定的對象是目標學期新建的班，不是這個班在目前學期的樣子
+        target_classroom_id = next(
+            classroom_target["classroom_id"]
+            for classroom_target in plan["classroom_teacher_targets"]
+        )
+        assert target_classroom_id != classroom_id
         invalid_update_body = _plan_update_body(
             plan,
             expected_revision=99,
             teacher_overrides={
-                classroom_id: [
+                target_classroom_id: [
                     {"teacher_id": art_user["id"], "duty": "lead"},
                     {"teacher_id": teacher["id"], "duty": "lead"},
                 ]
