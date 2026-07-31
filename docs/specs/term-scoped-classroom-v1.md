@@ -273,7 +273,7 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
   待決的是**保守程度**——目前學期多一個空班就會判定 stale 要求重建，即使它與草稿的
   placements 無關。要不要放寬到「只有影響到 placements 的變動才算」仍未定；放寬等於
   要逐項比對而不是整體雜湊。
-  另外 `memberships` 與 `teacher_assignments` 沒有學期過濾，目前無害只是因為已結束
-  學期的班拒絕加人，靠的是別處的檢查而不是 fingerprint 自己的定義。
+  （`memberships` 與 `teacher_assignments` 的學期過濾已補上，見
+  `test_fingerprint_ignores_rows_outside_the_current_semester`。）
 - 班級改為學期範圍後，跨學期查詢「同一個班名的歷史」需不需要提供入口，或一律以
   孩子（`Student`，原 `RosterChild`）為軸。

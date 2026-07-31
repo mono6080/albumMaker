@@ -251,16 +251,29 @@ def compute_organization_source_fingerprint(db: Session) -> str:
         .order_by(Classroom.id)
         .all()
     )
+    # 名冊與編制同樣限定在目前學期。少了這個條件目前也不會出錯——已結束學期的班
+    # 拒絕加人——但那是靠別處的檢查撐著，fingerprint 的定義應該自己說得清楚。
+    current_semester_classrooms = select(Classroom.id).where(
+        Classroom.semester_id.in_(
+            select(Semester.id).where(Semester.status.in_(CURRENT_SEMESTER_STATUSES))
+        )
+    )
     memberships = (
         db.query(ClassroomMember)
         .options(joinedload(ClassroomMember.roster_child))
-        .filter(ClassroomMember.ended_at.is_(None))
+        .filter(
+            ClassroomMember.ended_at.is_(None),
+            ClassroomMember.classroom_id.in_(current_semester_classrooms),
+        )
         .order_by(ClassroomMember.id)
         .all()
     )
     teacher_assignments = (
         db.query(ClassroomTeacher)
-        .filter(ClassroomTeacher.ended_at.is_(None))
+        .filter(
+            ClassroomTeacher.ended_at.is_(None),
+            ClassroomTeacher.classroom_id.in_(current_semester_classrooms),
+        )
         .order_by(ClassroomTeacher.id)
         .all()
     )

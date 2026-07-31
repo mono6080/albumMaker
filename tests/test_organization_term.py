@@ -1434,3 +1434,49 @@ def test_current_semester_classroom_addition_marks_the_plan_stale():
         )
         assert_status(applied, 409)
         assert applied.json()["detail"]["code"] == "stale_reclassification_plan"
+
+
+def test_fingerprint_ignores_rows_outside_the_current_semester():
+    """fingerprint 只涵蓋目前學期的名冊與編制。
+
+    少了學期條件時，草稿學期班上的任何一筆 active 列都會讓草稿變 stale——而那些列
+    正是套用當下要建立的東西。之前不會出錯只是因為別處擋住了寫入。
+    """
+    with started_client() as client:
+        login(client)
+        teacher, _ = _create_teacher(client, None)
+        campus_id = _create_campus(client)
+        classroom_id = _create_classroom(client, campus_id, unique_name("既有班"))
+        _add_members(client, classroom_id, [unique_name("既有學生")])
+
+        plan = _create_plan(client)
+        draft_classroom_id = plan["target_classrooms"][0]["classroom_id"]
+
+        # 直接寫進草稿學期的班（API 會擋，但 fingerprint 的定義不該依賴那道檢查）
+        db = SessionLocal()
+        try:
+            # 全園唯一鍵擋住「同一個孩子同時在兩個班」，所以另建一個沒有在籍紀錄的
+            roster_child = Student(name=unique_name("只在草稿班的孩子"))
+            db.add(roster_child)
+            db.flush()
+            db.add(ClassroomMember(
+                classroom_id=draft_classroom_id,
+                roster_child_id=roster_child.id,
+            ))
+            db.add(ClassroomTeacher(
+                classroom_id=draft_classroom_id,
+                teacher_id=teacher["id"],
+                teacher_name_snapshot=teacher["display_name"],
+                duty="lead",
+                started_by_name_snapshot="系統管理員",
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan['id']}"
+        ).json()
+        assert "stale_reclassification_plan" not in {
+            error["code"] for error in refreshed["validation"]["errors"]
+        }
