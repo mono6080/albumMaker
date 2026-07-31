@@ -136,6 +136,20 @@ PWA 的 Service Worker 對 `/api/` 是 `NetworkOnly`（`vite.config.js` 已確�
 **緩解**：重新整理即可。不保留舊路徑別名——那會留下永久的技術債，而這個 App 的
 使用者是園所內部老師，可以直接通知。
 
+### R11 已結束學期的殘留 active 編制修不回來
+
+closed 學期的名冊與編制有 trigger 擋下 INSERT／UPDATE／DELETE。這保護了歷史資料，
+但也代表**萬一有一筆 `ended_at IS NULL` 殘留在已結束的學期**，一般 API 修不掉它——
+而 `_assert_active_rows_belong_to_active_structure` 會用它擋住之後每一次建草稿，
+錯誤訊息還指向一個使用者根本沒動過的班。
+
+這不是假設：套用編班原本只結束「有學生的班」的老師，空班的老師就是這樣留下來的
+（2026-07-31 由 e2e 抓到，已修，並由
+`test_apply_ends_teachers_of_classrooms_without_students` 釘住）。
+
+**若真的發生**：只能直接對資料庫補上 `ended_at`，或暫時把該學期改回 active 再從
+API 結束編制。兩者都要人工介入並留紀錄。
+
 ### R10 migration 失敗導致正式站啟動不起來
 
 `run_migrations()` 在 lifespan 中執行，拋例外就起不來。
