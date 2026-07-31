@@ -158,7 +158,8 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
         assert_status(target_campus_response, 201)
         target_campus_id = target_campus_response.json()["id"]
         moved_classroom_name = unique_name("moved-classroom")
-        update_response = client.patch(
+        # 班級的分校與部門是它的身分，中途不可變更；只有改名允許
+        blocked_move = client.patch(
             f"/api/organization/classrooms/{classroom_id}",
             json={
                 "campus_id": target_campus_id,
@@ -166,7 +167,8 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
                 "name": moved_classroom_name,
             },
         )
-        assert_status(update_response, 200)
+        assert_status(blocked_move, 409)
+        assert blocked_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
 
         lead_teacher = _create_teacher(client)
         _replace_teachers(
@@ -181,6 +183,13 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
             template_id,
             lead_teacher["id"],
         )
+
+        # 相本建立後才改名：快照必須維持建立當下的班名
+        rename_response = client.patch(
+            f"/api/organization/classrooms/{classroom_id}",
+            json={"name": moved_classroom_name},
+        )
+        assert_status(rename_response, 200)
 
         assert project["campus_id"] == source_campus_id
         assert project["campus_name"] == source_campus["name"]
@@ -331,20 +340,12 @@ def test_class_roster_changes_only_affect_future_project_snapshots():
             f"/api/organization/classrooms/{classroom_a_id}/members/{restored_member['id']}",
             json={"status": "ended", "end_reason": "departed"},
         ), 200)
+        # 班級沒有停用狀態；不屬於目前學期即為結束
         assert_status(client.patch(
             f"/api/organization/classrooms/{classroom_a_id}",
             json={"is_active": False},
-        ), 409)
+        ), 422)
         _replace_teachers(client, classroom_a_id, [])
-        assert_status(client.patch(
-            f"/api/organization/classrooms/{classroom_a_id}",
-            json={"is_active": False},
-        ), 200)
-        blocked_restore = client.patch(
-            f"/api/organization/classrooms/{classroom_a_id}/members/{restored_member['id']}",
-            json={"status": "active"},
-        )
-        assert_status(blocked_restore, 409)
         assert_status(
             client.patch(
                 f"/api/organization/classrooms/{classroom_b_id}/members/"
@@ -900,9 +901,7 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
             json={"campus_id": inactive_campus_id},
         )
         assert_status(blocked_move, 409)
-        assert blocked_move.json()["detail"]["code"] == (
-            "active_classroom_requires_active_campus"
-        )
+        assert blocked_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
 
         overview = client.get("/api/organization/overview")
         assert_status(overview, 200)

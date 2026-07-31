@@ -979,10 +979,30 @@ def create_classroom(
 @organization_mutation
 def update_classroom(db: Session, classroom_id: int, changes: dict) -> dict:
     classroom = get_classroom_or_404(classroom_id, db)
-    campus_id = changes.get("campus_id", classroom.campus_id)
-    department = _validate_department(
-        changes.get("department", classroom.department)
-    )
+    # 班級是學期範圍的實體，校別與部門就是它的身分——中途搬校或換部門等於換成
+    # 另一個班，必須結束原班、在目標校建新班並轉移成員，不能就地改寫。
+    if "is_active" in changes:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "classroom_has_no_active_flag",
+                "message": "班級沒有停用狀態；不屬於目前學期即為結束",
+            },
+        )
+    for field, current_value in (
+        ("campus_id", classroom.campus_id),
+        ("department", classroom.department),
+    ):
+        if field in changes and changes[field] != current_value:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "classroom_scope_is_immutable",
+                    "message": "班級的分校與部門不可變更；請結束原班並在目標分校建立新班",
+                },
+            )
+    campus_id = classroom.campus_id
+    department = classroom.department
     name = _normalize_organization_name(
         changes.get("name", classroom.name),
         "班級",
@@ -1003,8 +1023,6 @@ def update_classroom(db: Session, classroom_id: int, changes: dict) -> dict:
         name=name,
         excluded_classroom_id=classroom_id,
     )
-    classroom.campus_id = campus_id
-    classroom.department = department
     classroom.name = name
     db.flush()
     _ensure_current_term_classroom_grid(db, classroom)
