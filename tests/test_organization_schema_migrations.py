@@ -61,6 +61,12 @@ def _create_legacy_organization_schema(database_path: Path):
         connection.execute(text(
             "INSERT INTO projects (id, name) VALUES (1, '舊相本')"
         ))
+    # 改名排在所有 migration 之前，所以 legacy schema 建完就套用；
+    # 後續步驟看到的表名與 run_migrations 一致。
+    with migration_engine.connect() as connection:
+        import migrations
+
+        migrations._rename_classroom_membership_tables(connection)
     return migration_engine
 
 
@@ -718,7 +724,7 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
             )).one() == (None, None)
 
             expected_tables = {
-                "classroom_teacher_assignments",
+                "classroom_teachers",
                 "project_editor_assignments",
                 "term_reclassification_plans",
                 "term_student_placements",
@@ -756,19 +762,19 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
 
         with migration_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_by_id, started_by_name_snapshot
                 ) VALUES (1, 1, 1, '主教', 'lead', 3, '管理員')
             """))
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_by_id, started_by_name_snapshot
                 ) VALUES (2, 1, 2, '協同', 'co_teacher', 3, '管理員')
             """))
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_at, ended_at, started_by_id, started_by_name_snapshot
                 ) VALUES (
@@ -829,19 +835,19 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
             """))
 
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (1, 3, '管理員', 'lead', 3, '管理員')
         """)
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (1, 2, '協同', 'co_teacher', 3, '管理員')
         """)
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (2, 1, '主教', 'invalid', 3, '管理員')
@@ -977,7 +983,7 @@ def _seed_academic_term_student_snapshot_fixture(
         Base,
         Campus,
         Classroom,
-        ClassRosterMember,
+        ClassroomMember,
         Project,
         RosterChild,
         Student,
@@ -1016,7 +1022,7 @@ def _seed_academic_term_student_snapshot_fixture(
             template,
         ])
         db.flush()
-        membership = ClassRosterMember(
+        membership = ClassroomMember(
             classroom_id=current_classroom.id,
             roster_child_id=current_child.id,
         )

@@ -11,8 +11,8 @@ from database import (
     Classroom,
     Campus,
     Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomTeacher,
+    ClassroomMember,
     Project,
     RosterChild,
     SessionLocal,
@@ -749,13 +749,13 @@ def test_project_snapshot_is_immutable_and_blocks_duplicate_current_roster():
         try:
             assert db.get(Student, student_id) is not None
             assert db.get(RosterChild, member["roster_child_id"]) is not None
-            assert db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == member["roster_child_id"]
+            assert db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == member["roster_child_id"]
             ).count() == 1
             duplicate_child = RosterChild(name="林小美")
             db.add(duplicate_child)
             db.flush()
-            db.add(ClassRosterMember(
+            db.add(ClassroomMember(
                 classroom_id=classroom_id,
                 roster_child_id=duplicate_child.id,
             ))
@@ -794,8 +794,8 @@ def test_project_snapshot_is_immutable_and_blocks_duplicate_current_roster():
         db = SessionLocal()
         try:
             assert db.query(Project).count() == project_count
-            duplicate_membership = db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == duplicate_child_id
+            duplicate_membership = db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == duplicate_child_id
             ).one()
             duplicate_membership.ended_at = duplicate_membership.started_at
             duplicate_membership.end_reason = "departed"
@@ -982,6 +982,8 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         connection.exec_driver_sql("INSERT INTO projects (id, owner_id) VALUES (1, NULL)")
 
     with migration_engine.connect() as connection:
+        # 改名排在所有 migration 之前，legacy 中間狀態也一樣先改名再修結構
+        migrations._rename_classroom_membership_tables(connection)
         migrations._add_organization_structure(connection)
         migrations._add_organization_structure(connection)
         classroom_columns = {
@@ -989,7 +991,7 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         }
         member_columns = {
             row[1]
-            for row in connection.execute(text("PRAGMA table_info(class_roster_members)"))
+            for row in connection.execute(text("PRAGMA table_info(classroom_members)"))
         }
         project_columns = {
             row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
@@ -999,7 +1001,7 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         assert {"classroom_id", "created_by_id", "created_by_name"} <= project_columns
         index_sql = connection.execute(text(
             "SELECT sql FROM sqlite_master "
-            "WHERE type='index' AND name='ux_class_roster_active_child'"
+            "WHERE type='index' AND name='ux_classroom_members_active_child'"
         )).scalar_one()
         assert "(roster_child_id)" in index_sql
         assert "classroom_id" not in index_sql

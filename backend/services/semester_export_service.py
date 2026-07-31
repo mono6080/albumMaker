@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from database import (
     AcademicTerm,
     Classroom,
-    ClassRosterMember,
+    ClassroomMember,
     AcademicTermPeriod,
     ClassPeriodWorkSlot,
     Project,
@@ -221,7 +221,7 @@ def _load_scoped_term_classrooms(
 ) -> list[Classroom]:
     query = db.query(Classroom).options(
         selectinload(Classroom.roster_members).selectinload(
-            ClassRosterMember.roster_child
+            ClassroomMember.roster_child
         )
     ).filter(
         Classroom.academic_term_id == academic_term_id,

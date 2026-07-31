@@ -11,8 +11,8 @@ from database import (
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomTeacher,
+    ClassroomMember,
     Project,
     RosterChild,
     SessionLocal,
@@ -362,9 +362,9 @@ def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
 
         db = SessionLocal()
         try:
-            active = db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == member["roster_child_id"],
-                ClassRosterMember.ended_at.is_(None),
+            active = db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == member["roster_child_id"],
+                ClassroomMember.ended_at.is_(None),
             ).all()
             assert len(active) == 1
             assert active[0].classroom_id == classroom_b_id
@@ -382,9 +382,9 @@ def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
 
         db = SessionLocal()
         try:
-            ended = db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == member["roster_child_id"],
-            ).order_by(ClassRosterMember.id.desc()).first()
+            ended = db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == member["roster_child_id"],
+            ).order_by(ClassroomMember.id.desc()).first()
             assert ended.classroom_id == classroom_b_id
             assert ended.id == transferred_member["id"]
             assert ended.ended_at is not None
@@ -617,20 +617,20 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
         try:
             active_member_ids_before = {
                 row.id
-                for row in db.query(ClassRosterMember)
+                for row in db.query(ClassroomMember)
                 .filter(
-                    ClassRosterMember.classroom_id.in_([
+                    ClassroomMember.classroom_id.in_([
                         classroom_a_id,
                         classroom_b_id,
                     ]),
-                    ClassRosterMember.ended_at.is_(None),
+                    ClassroomMember.ended_at.is_(None),
                 )
                 .all()
             }
             active_assignment_ids_before = {
                 row.id
-                for row in db.query(ClassroomTeacherAssignment)
-                .filter(ClassroomTeacherAssignment.ended_at.is_(None))
+                for row in db.query(ClassroomTeacher)
+                .filter(ClassroomTeacher.ended_at.is_(None))
                 .all()
             }
             unchanged_b_lead_id = next(
@@ -665,24 +665,24 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
         try:
             # 舊學期的班隨學期結束，在籍成員全部落在新學期的班
             assert (
-                db.query(ClassRosterMember)
+                db.query(ClassroomMember)
                 .filter(
-                    ClassRosterMember.classroom_id.in_([
+                    ClassroomMember.classroom_id.in_([
                         classroom_a_id,
                         classroom_b_id,
                     ]),
-                    ClassRosterMember.ended_at.is_(None),
+                    ClassroomMember.ended_at.is_(None),
                 )
                 .count()
             ) == 0
             target_term_id = applied_plan["target_academic_term_id"]
             active_members = (
-                db.query(ClassRosterMember)
-                .join(RosterChild, RosterChild.id == ClassRosterMember.roster_child_id)
-                .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
+                db.query(ClassroomMember)
+                .join(RosterChild, RosterChild.id == ClassroomMember.roster_child_id)
+                .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
                 .filter(
                     Classroom.academic_term_id == target_term_id,
-                    ClassRosterMember.ended_at.is_(None),
+                    ClassroomMember.ended_at.is_(None),
                 )
                 .all()
             )
@@ -710,11 +710,11 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 .count()
             ) == 0
             moved_old = db.get(
-                ClassRosterMember,
+                ClassroomMember,
                 placement_by_name["編班李小華"]["source_member_id"],
             )
             departed_old = db.get(
-                ClassRosterMember,
+                ClassroomMember,
                 placement_by_name["編班陳小安"]["source_member_id"],
             )
             assert moved_old.end_reason == "term_reassignment"
@@ -728,8 +728,8 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
             )
             assert moved_new.started_at == applied_at
 
-            active_assignments = db.query(ClassroomTeacherAssignment).filter(
-                ClassroomTeacherAssignment.ended_at.is_(None)
+            active_assignments = db.query(ClassroomTeacher).filter(
+                ClassroomTeacher.ended_at.is_(None)
             ).all()
             active_teacher_state = {
                 (assignment.classroom_id, assignment.teacher_id): assignment
@@ -745,7 +745,7 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
             assert active_teacher_state[(target_b_id, teacher_a["id"])].duty == "co_teacher"
             changed_assignments = [
                 assignment
-                for assignment in db.query(ClassroomTeacherAssignment).all()
+                for assignment in db.query(ClassroomTeacher).all()
                 if assignment.ended_at == applied_at or assignment.started_at == applied_at
             ]
             assert changed_assignments
@@ -755,8 +755,8 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 for assignment in changed_assignments
             )
             project_count_before_retry = db.query(Project).count()
-            membership_count_before_retry = db.query(ClassRosterMember).count()
-            assignment_count_before_retry = db.query(ClassroomTeacherAssignment).count()
+            membership_count_before_retry = db.query(ClassroomMember).count()
+            assignment_count_before_retry = db.query(ClassroomTeacher).count()
             assert old_student_rows == [
                 (
                     student.id,
@@ -809,9 +809,9 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
         db = SessionLocal()
         try:
             assert db.query(Project).count() == project_count_before_retry + 2
-            assert db.query(ClassRosterMember).count() == membership_count_before_retry
+            assert db.query(ClassroomMember).count() == membership_count_before_retry
             assert (
-                db.query(ClassroomTeacherAssignment).count()
+                db.query(ClassroomTeacher).count()
                 == assignment_count_before_retry
             )
             assert active_assignment_ids_before
@@ -848,12 +848,12 @@ def test_term_plan_stale_guard_and_admin_only_access_leave_current_state_untouch
         try:
             memberships_before = [
                 (row.id, row.classroom_id, row.ended_at, row.end_reason)
-                for row in db.query(ClassRosterMember).order_by(ClassRosterMember.id)
+                for row in db.query(ClassroomMember).order_by(ClassroomMember.id)
             ]
             assignments_before = [
                 (row.id, row.classroom_id, row.teacher_id, row.ended_at, row.end_reason)
-                for row in db.query(ClassroomTeacherAssignment).order_by(
-                    ClassroomTeacherAssignment.id
+                for row in db.query(ClassroomTeacher).order_by(
+                    ClassroomTeacher.id
                 )
             ]
         finally:
@@ -875,12 +875,12 @@ def test_term_plan_stale_guard_and_admin_only_access_leave_current_state_untouch
         try:
             assert memberships_before == [
                 (row.id, row.classroom_id, row.ended_at, row.end_reason)
-                for row in db.query(ClassRosterMember).order_by(ClassRosterMember.id)
+                for row in db.query(ClassroomMember).order_by(ClassroomMember.id)
             ]
             assert assignments_before == [
                 (row.id, row.classroom_id, row.teacher_id, row.ended_at, row.end_reason)
-                for row in db.query(ClassroomTeacherAssignment).order_by(
-                    ClassroomTeacherAssignment.id
+                for row in db.query(ClassroomTeacher).order_by(
+                    ClassroomTeacher.id
                 )
             ]
             stored_plan = db.get(TermReclassificationPlan, plan["id"])
@@ -958,8 +958,8 @@ def test_term_plan_revision_and_business_validation_are_separate():
         try:
             active_assignment_ids = {
                 row.id
-                for row in db.query(ClassroomTeacherAssignment)
-                .filter(ClassroomTeacherAssignment.ended_at.is_(None))
+                for row in db.query(ClassroomTeacher)
+                .filter(ClassroomTeacher.ended_at.is_(None))
                 .all()
             }
         finally:
@@ -974,8 +974,8 @@ def test_term_plan_revision_and_business_validation_are_separate():
         try:
             assert active_assignment_ids == {
                 row.id
-                for row in db.query(ClassroomTeacherAssignment)
-                .filter(ClassroomTeacherAssignment.ended_at.is_(None))
+                for row in db.query(ClassroomTeacher)
+                .filter(ClassroomTeacher.ended_at.is_(None))
                 .all()
             }
         finally:

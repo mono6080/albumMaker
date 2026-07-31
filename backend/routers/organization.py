@@ -108,7 +108,7 @@ class ClassroomUpdateBody(BaseModel):
     is_active: bool | None = None
 
 
-class ClassRosterMemberInput(BaseModel):
+class ClassroomMemberInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     album_name: str | None = Field(
         None,
@@ -117,10 +117,10 @@ class ClassRosterMemberInput(BaseModel):
 
 
 class ClassRosterBatchBody(BaseModel):
-    members: list[ClassRosterMemberInput] = Field(..., max_length=100)
+    members: list[ClassroomMemberInput] = Field(..., max_length=100)
 
 
-class ClassRosterMemberUpdateBody(BaseModel):
+class ClassroomMemberUpdateBody(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     album_name: str | None = Field(
         None,
@@ -281,7 +281,7 @@ def batch_add_classroom_members(
 def update_classroom_member(
     classroom_id: int,
     member_id: int,
-    body: ClassRosterMemberUpdateBody,
+    body: ClassroomMemberUpdateBody,
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin")),
 ):

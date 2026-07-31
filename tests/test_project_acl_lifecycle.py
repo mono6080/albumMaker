@@ -10,7 +10,7 @@ from database import (
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
     ProjectAssignmentHistory,
@@ -220,7 +220,7 @@ def test_project_acl_uses_classroom_staffing_and_organization_scope_only():
             )
             db.add_all([infant_a, academy_a, infant_b])
             db.flush()
-            db.add(ClassroomTeacherAssignment(
+            db.add(ClassroomTeacher(
                 classroom_id=infant_a.id,
                 teacher_id=assigned_teacher["id"],
                 teacher_name_snapshot=assigned_teacher["display_name"],
@@ -449,7 +449,7 @@ def test_former_teacher_keeps_read_on_past_classroom_but_loses_write():
             )
             db.add_all([previous_classroom, next_classroom])
             db.flush()
-            previous_assignment = ClassroomTeacherAssignment(
+            previous_assignment = ClassroomTeacher(
                 classroom_id=previous_classroom.id,
                 teacher_id=moving_teacher["id"],
                 teacher_name_snapshot=moving_teacher["display_name"],
@@ -493,10 +493,10 @@ def test_former_teacher_keeps_read_on_past_classroom_but_loses_write():
         # 學期轉換：結束舊班編制，改編到新班
         db = SessionLocal()
         try:
-            db.get(ClassroomTeacherAssignment, previous_assignment_id).ended_at = (
+            db.get(ClassroomTeacher, previous_assignment_id).ended_at = (
                 utc_now()
             )
-            db.add(ClassroomTeacherAssignment(
+            db.add(ClassroomTeacher(
                 classroom_id=next_classroom_id,
                 teacher_id=moving_teacher["id"],
                 teacher_name_snapshot=moving_teacher["display_name"],
@@ -585,7 +585,7 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
             ])
             db.flush()
             db.add_all([
-                ClassroomTeacherAssignment(
+                ClassroomTeacher(
                     classroom_id=teaching_classroom.id,
                     teacher_id=dual_teacher["id"],
                     teacher_name_snapshot=dual_teacher["display_name"],
@@ -593,7 +593,7 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
                     started_by_id=admin["user_id"],
                     started_by_name_snapshot=admin["display_name"],
                 ),
-                ClassroomTeacherAssignment(
+                ClassroomTeacher(
                     classroom_id=supervisor_teacher_classroom.id,
                     teacher_id=supervisor_teacher["id"],
                     teacher_name_snapshot=supervisor_teacher["display_name"],
@@ -770,7 +770,7 @@ def test_role_none_is_atomic_emergency_disable_and_invalidates_old_cookie(
             )
             db.add(classroom)
             db.flush()
-            db.add(ClassroomTeacherAssignment(
+            db.add(ClassroomTeacher(
                 classroom_id=classroom.id,
                 teacher_id=teacher["id"],
                 teacher_name_snapshot=teacher["display_name"],
@@ -868,8 +868,8 @@ def test_role_none_is_atomic_emergency_disable_and_invalidates_old_cookie(
         assert disabled_user is not None
         assert disabled_user.role == "none"
         assert disabled_user.auth_version == 1
-        classroom_assignment = db.query(ClassroomTeacherAssignment).filter(
-            ClassroomTeacherAssignment.teacher_id == teacher["id"]
+        classroom_assignment = db.query(ClassroomTeacher).filter(
+            ClassroomTeacher.teacher_id == teacher["id"]
         ).one()
         assert classroom_assignment.ended_at is not None
         assert classroom_assignment.end_reason == "role_none"

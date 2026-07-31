@@ -25,8 +25,8 @@ from database import (
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomTeacher,
+    ClassroomMember,
     OrganizationSupervisorAssignment,
     Project,
     RosterChild,
@@ -90,7 +90,7 @@ def _validate_department(department: str) -> str:
     return department
 
 
-def _serialize_member(member: ClassRosterMember) -> dict:
+def _serialize_member(member: ClassroomMember) -> dict:
     return {
         "id": member.id,
         "classroom_id": member.classroom_id,
@@ -173,7 +173,7 @@ def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
     }
 
 
-def _serialize_teacher_assignment(assignment: ClassroomTeacherAssignment) -> dict:
+def _serialize_teacher_assignment(assignment: ClassroomTeacher) -> dict:
     return {
         "id": assignment.id,
         "classroom_id": assignment.classroom_id,
@@ -356,7 +356,7 @@ def get_organization_overview(db: Session) -> dict:
         .options(
             selectinload(Campus.classrooms)
             .selectinload(Classroom.roster_members)
-            .selectinload(ClassRosterMember.roster_child),
+            .selectinload(ClassroomMember.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.students)
@@ -533,9 +533,9 @@ def replace_classroom_teachers(
         if teachers and (not classroom.is_current or not classroom.campus.is_active):
             raise HTTPException(status_code=409, detail="只能設定使用中的分校與班級")
         user_by_id = _validate_teacher_targets(db, teachers)
-        current_assignments = db.query(ClassroomTeacherAssignment).filter(
-            ClassroomTeacherAssignment.classroom_id == classroom_id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
+        current_assignments = db.query(ClassroomTeacher).filter(
+            ClassroomTeacher.classroom_id == classroom_id,
+            ClassroomTeacher.ended_at.is_(None),
         ).all()
         current_by_teacher_id = {
             assignment.teacher_id: assignment for assignment in current_assignments
@@ -557,7 +557,7 @@ def replace_classroom_teachers(
             if current is not None and current.duty == requested["duty"]:
                 continue
             teacher = user_by_id[teacher_id]
-            db.add(ClassroomTeacherAssignment(
+            db.add(ClassroomTeacher(
                 classroom_id=classroom_id,
                 teacher_id=teacher.id,
                 teacher_name_snapshot=teacher.display_name,
@@ -759,7 +759,7 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
         .options(
             selectinload(Classroom.teacher_assignments),
             selectinload(Classroom.roster_members).selectinload(
-                ClassRosterMember.roster_child
+                ClassroomMember.roster_child
             ),
             selectinload(Classroom.campus),
             selectinload(Classroom.academic_term),
@@ -807,23 +807,23 @@ def update_campus(db: Session, campus_id: int, changes: dict) -> dict:
     campus = get_campus_or_404(campus_id, db)
     if changes.get("is_active") is False:
         has_active_members = (
-            db.query(ClassRosterMember.id)
-            .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
+            db.query(ClassroomMember.id)
+            .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
             .filter(
                 Classroom.campus_id == campus_id,
-                ClassRosterMember.ended_at.is_(None),
+                ClassroomMember.ended_at.is_(None),
             )
             .first()
         )
         has_active_teachers = (
-            db.query(ClassroomTeacherAssignment.id)
+            db.query(ClassroomTeacher.id)
             .join(
                 Classroom,
-                Classroom.id == ClassroomTeacherAssignment.classroom_id,
+                Classroom.id == ClassroomTeacher.classroom_id,
             )
             .filter(
                 Classroom.campus_id == campus_id,
-                ClassroomTeacherAssignment.ended_at.is_(None),
+                ClassroomTeacher.ended_at.is_(None),
             )
             .first()
         )
@@ -1045,14 +1045,14 @@ def batch_add_classroom_members(
     normalized_album_names = [
         normalize_student_album_name(item.get("album_name")) for item in members
     ]
-    created_members: list[ClassRosterMember] = []
+    created_members: list[ClassroomMember] = []
     skipped_names: list[str] = []
     names_seen: set[str] = set()
-    active_members = db.query(ClassRosterMember).options(
-        selectinload(ClassRosterMember.roster_child)
+    active_members = db.query(ClassroomMember).options(
+        selectinload(ClassroomMember.roster_child)
     ).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
     ).all()
     active_count = len(active_members)
     existing_effective_album_names = [
@@ -1073,12 +1073,12 @@ def batch_add_classroom_members(
             skipped_names.append(member_name)
             continue
         names_seen.add(normalized_identity)
-        active_membership = db.query(ClassRosterMember).join(
+        active_membership = db.query(ClassroomMember).join(
             RosterChild,
-            RosterChild.id == ClassRosterMember.roster_child_id,
+            RosterChild.id == ClassroomMember.roster_child_id,
         ).filter(
-            ClassRosterMember.classroom_id == classroom_id,
-            ClassRosterMember.ended_at.is_(None),
+            ClassroomMember.classroom_id == classroom_id,
+            ClassroomMember.ended_at.is_(None),
             RosterChild.name == normalized_identity,
         ).first()
         if active_membership:
@@ -1090,7 +1090,7 @@ def batch_add_classroom_members(
         )
         db.add(roster_child)
         db.flush()
-        member = ClassRosterMember(
+        member = ClassroomMember(
             classroom_id=classroom_id,
             roster_child_id=roster_child.id,
         )
@@ -1135,12 +1135,12 @@ def _assert_child_has_no_active_membership(
     *,
     excluded_member_id: int | None = None,
 ) -> None:
-    query = db.query(ClassRosterMember).filter(
-        ClassRosterMember.roster_child_id == roster_child_id,
-        ClassRosterMember.ended_at.is_(None),
+    query = db.query(ClassroomMember).filter(
+        ClassroomMember.roster_child_id == roster_child_id,
+        ClassroomMember.ended_at.is_(None),
     )
     if excluded_member_id is not None:
-        query = query.filter(ClassRosterMember.id != excluded_member_id)
+        query = query.filter(ClassroomMember.id != excluded_member_id)
     active_membership = query.first()
     if active_membership:
         raise HTTPException(
@@ -1159,13 +1159,13 @@ def _assert_active_name_available(
     roster_child_id: int,
     child_name: str,
 ) -> None:
-    conflict = db.query(ClassRosterMember.id).join(
+    conflict = db.query(ClassroomMember.id).join(
         RosterChild,
-        RosterChild.id == ClassRosterMember.roster_child_id,
+        RosterChild.id == ClassroomMember.roster_child_id,
     ).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
-        ClassRosterMember.roster_child_id != roster_child_id,
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
+        ClassroomMember.roster_child_id != roster_child_id,
         RosterChild.name == child_name,
     ).first()
     if conflict:
@@ -1179,9 +1179,9 @@ def _assert_active_name_available(
 
 
 def _assert_classroom_capacity(db: Session, classroom_id: int) -> None:
-    active_count = db.query(ClassRosterMember.id).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
+    active_count = db.query(ClassroomMember.id).filter(
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
     ).count()
     assert_project_student_capacity(active_count, 1)
 
@@ -1265,16 +1265,16 @@ def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
 
     for classroom_id, child_id, child_name in (
         db.query(
-            ClassRosterMember.classroom_id,
+            ClassroomMember.classroom_id,
             RosterChild.id,
             RosterChild.name,
         )
         .join(
             RosterChild,
-            RosterChild.id == ClassRosterMember.roster_child_id,
+            RosterChild.id == ClassroomMember.roster_child_id,
         )
-        .filter(ClassRosterMember.ended_at.is_(None))
-        .order_by(ClassRosterMember.classroom_id, ClassRosterMember.id)
+        .filter(ClassroomMember.ended_at.is_(None))
+        .order_by(ClassroomMember.classroom_id, ClassroomMember.id)
         .all()
     ):
         collision_scopes.setdefault(("classroom", int(classroom_id)), []).append(
@@ -1388,9 +1388,9 @@ def auto_fill_classroom_member_album_names(
         get_classroom_or_404(classroom_id, db)
         child_ids = [
             int(child_id)
-            for (child_id,) in db.query(ClassRosterMember.roster_child_id).filter(
-                ClassRosterMember.classroom_id == classroom_id,
-                ClassRosterMember.ended_at.is_(None),
+            for (child_id,) in db.query(ClassroomMember.roster_child_id).filter(
+                ClassroomMember.classroom_id == classroom_id,
+                ClassroomMember.ended_at.is_(None),
             ).all()
         ]
         project_ids = sorted({
@@ -1450,9 +1450,9 @@ def _update_classroom_member_in_transaction(
         normalized_identity = normalize_child_name(child_name)
         if not normalized_identity:
             raise HTTPException(status_code=422, detail="學生姓名不可空白")
-        active_membership = db.query(ClassRosterMember).filter(
-            ClassRosterMember.roster_child_id == member.roster_child_id,
-            ClassRosterMember.ended_at.is_(None),
+        active_membership = db.query(ClassroomMember).filter(
+            ClassroomMember.roster_child_id == member.roster_child_id,
+            ClassroomMember.ended_at.is_(None),
         ).first()
         if active_membership:
             _assert_active_name_available(
@@ -1502,7 +1502,7 @@ def _update_classroom_member_in_transaction(
         member.ended_at = now
         member.end_reason = "transfer"
         db.flush()
-        transferred_member = ClassRosterMember(
+        transferred_member = ClassroomMember(
             classroom_id=target_classroom_id,
             roster_child_id=member.roster_child_id,
             started_at=now,
@@ -1522,7 +1522,7 @@ def _update_classroom_member_in_transaction(
             roster_child_id=member.roster_child_id,
             child_name=member.roster_child.name,
         )
-        transferred_member = ClassRosterMember(
+        transferred_member = ClassroomMember(
             classroom_id=classroom_id,
             roster_child_id=member.roster_child_id,
             started_at=now,
@@ -1654,13 +1654,13 @@ def create_classroom_project(
                     detail="只能為使用中的分校與班級建立相本",
                 )
             active_assignments = (
-                db.query(ClassroomTeacherAssignment)
-                .options(selectinload(ClassroomTeacherAssignment.teacher))
+                db.query(ClassroomTeacher)
+                .options(selectinload(ClassroomTeacher.teacher))
                 .filter(
-                    ClassroomTeacherAssignment.classroom_id == classroom_id,
-                    ClassroomTeacherAssignment.ended_at.is_(None),
+                    ClassroomTeacher.classroom_id == classroom_id,
+                    ClassroomTeacher.ended_at.is_(None),
                 )
-                .order_by(ClassroomTeacherAssignment.id)
+                .order_by(ClassroomTeacher.id)
                 .all()
             )
             lead_assignments = [
@@ -1715,13 +1715,13 @@ def create_classroom_project(
                     detail="只能使用同部門且使用中的期別模板建立相本",
                 )
             active_members = (
-                db.query(ClassRosterMember)
-                .options(selectinload(ClassRosterMember.roster_child))
+                db.query(ClassroomMember)
+                .options(selectinload(ClassroomMember.roster_child))
                 .filter(
-                    ClassRosterMember.classroom_id == classroom_id,
-                    ClassRosterMember.ended_at.is_(None),
+                    ClassroomMember.classroom_id == classroom_id,
+                    ClassroomMember.ended_at.is_(None),
                 )
-                .order_by(ClassRosterMember.started_at, ClassRosterMember.id)
+                .order_by(ClassroomMember.started_at, ClassroomMember.id)
                 .all()
             )
             if not active_members:

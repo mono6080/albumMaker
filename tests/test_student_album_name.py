@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import create_engine, text
 
-from database import ClassRosterMember, Project, RosterChild, SessionLocal, Student
+from database import ClassroomMember, Project, RosterChild, SessionLocal, Student
 from services.output_keys import get_student_pdf_key
 from services.student_album_name_policy import (
     assign_automatic_album_names,
@@ -276,8 +276,8 @@ def test_roster_auto_fill_updates_only_safe_blank_names_across_existing_projects
                 roster_children[name].album_name = None
             roster_children["趙志豪"].album_name = "人工稱呼"
             for name in ("李小華", "王小明", "歐陽明", "趙志豪", "周美玲"):
-                membership = db.query(ClassRosterMember).filter(
-                    ClassRosterMember.roster_child_id == roster_children[name].id,
+                membership = db.query(ClassroomMember).filter(
+                    ClassroomMember.roster_child_id == roster_children[name].id,
                 ).one()
                 membership.ended_at = None
                 membership.end_reason = None

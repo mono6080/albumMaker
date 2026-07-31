@@ -147,7 +147,7 @@ def test_dropping_a_column_referenced_by_trigger_is_rejected():
 
 AUTHORIZATION_TABLES = (
     "users",
-    "classroom_teacher_assignments",
+    "classroom_teachers",
     "organization_supervisor_assignments",
     "project_editor_assignments",
 )

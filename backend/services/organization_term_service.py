@@ -18,8 +18,8 @@ from database import (
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomTeacher,
+    ClassroomMember,
     TermClassroomPlan,
     TermClassroomTeacherTarget,
     TermReclassificationPlan,
@@ -253,16 +253,16 @@ def compute_organization_source_fingerprint(db: Session) -> str:
         .all()
     )
     memberships = (
-        db.query(ClassRosterMember)
-        .options(joinedload(ClassRosterMember.roster_child))
-        .filter(ClassRosterMember.ended_at.is_(None))
-        .order_by(ClassRosterMember.id)
+        db.query(ClassroomMember)
+        .options(joinedload(ClassroomMember.roster_child))
+        .filter(ClassroomMember.ended_at.is_(None))
+        .order_by(ClassroomMember.id)
         .all()
     )
     teacher_assignments = (
-        db.query(ClassroomTeacherAssignment)
-        .filter(ClassroomTeacherAssignment.ended_at.is_(None))
-        .order_by(ClassroomTeacherAssignment.id)
+        db.query(ClassroomTeacher)
+        .filter(ClassroomTeacher.ended_at.is_(None))
+        .order_by(ClassroomTeacher.id)
         .all()
     )
     source_state = {
@@ -329,11 +329,11 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
     inactive_member_classroom_ids = {
         row[0]
         for row in (
-            db.query(ClassRosterMember.classroom_id)
-            .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
+            db.query(ClassroomMember.classroom_id)
+            .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
             .join(Campus, Campus.id == Classroom.campus_id)
             .filter(
-                ClassRosterMember.ended_at.is_(None),
+                ClassroomMember.ended_at.is_(None),
                 or_(
                     Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
                     Campus.is_active.is_(False),
@@ -346,14 +346,14 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
     inactive_teacher_classroom_ids = {
         row[0]
         for row in (
-            db.query(ClassroomTeacherAssignment.classroom_id)
+            db.query(ClassroomTeacher.classroom_id)
             .join(
                 Classroom,
-                Classroom.id == ClassroomTeacherAssignment.classroom_id,
+                Classroom.id == ClassroomTeacher.classroom_id,
             )
             .join(Campus, Campus.id == Classroom.campus_id)
             .filter(
-                ClassroomTeacherAssignment.ended_at.is_(None),
+                ClassroomTeacher.ended_at.is_(None),
                 or_(
                     Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
                     Campus.is_active.is_(False),
@@ -512,16 +512,16 @@ def _teacher_source_state(plan: TermReclassificationPlan, db: Session) -> dict[i
     source_by_target = _source_classroom_id_by_target(plan, db)
     source_ids = sorted(set(source_by_target.values()))
     assignments = (
-        db.query(ClassroomTeacherAssignment)
+        db.query(ClassroomTeacher)
         .filter(
-            ClassroomTeacherAssignment.classroom_id.in_(source_ids),
-            ClassroomTeacherAssignment.started_at <= plan.created_at,
+            ClassroomTeacher.classroom_id.in_(source_ids),
+            ClassroomTeacher.started_at <= plan.created_at,
             or_(
-                ClassroomTeacherAssignment.ended_at.is_(None),
-                ClassroomTeacherAssignment.ended_at > plan.created_at,
+                ClassroomTeacher.ended_at.is_(None),
+                ClassroomTeacher.ended_at > plan.created_at,
             ),
         )
-        .order_by(ClassroomTeacherAssignment.id)
+        .order_by(ClassroomTeacher.id)
         .all()
         if source_ids
         else []
@@ -868,16 +868,16 @@ def create_term_reclassification_plan(
         db.flush()
 
         memberships = (
-            db.query(ClassRosterMember)
+            db.query(ClassroomMember)
             .options(
-                joinedload(ClassRosterMember.roster_child),
-                joinedload(ClassRosterMember.classroom).joinedload(Classroom.campus),
+                joinedload(ClassroomMember.roster_child),
+                joinedload(ClassroomMember.classroom).joinedload(Classroom.campus),
             )
             .filter(
-                ClassRosterMember.ended_at.is_(None),
-                ClassRosterMember.classroom_id.in_(classroom_ids),
+                ClassroomMember.ended_at.is_(None),
+                ClassroomMember.classroom_id.in_(classroom_ids),
             )
-            .order_by(ClassRosterMember.id)
+            .order_by(ClassroomMember.id)
             .all()
         )
         for membership in memberships:
@@ -894,17 +894,17 @@ def create_term_reclassification_plan(
                 target_classroom_id=target_classroom.id,
             ))
         assignments = (
-            db.query(ClassroomTeacherAssignment)
+            db.query(ClassroomTeacher)
             .filter(
-                ClassroomTeacherAssignment.classroom_id.in_(classroom_ids),
-                ClassroomTeacherAssignment.ended_at.is_(None),
+                ClassroomTeacher.classroom_id.in_(classroom_ids),
+                ClassroomTeacher.ended_at.is_(None),
             )
-            .order_by(ClassroomTeacherAssignment.id)
+            .order_by(ClassroomTeacher.id)
             .all()
             if classroom_ids
             else []
         )
-        assignments_by_classroom: dict[int, list[ClassroomTeacherAssignment]] = (
+        assignments_by_classroom: dict[int, list[ClassroomTeacher]] = (
             defaultdict(list)
         )
         for assignment in assignments:
@@ -1121,10 +1121,10 @@ def apply_term_reclassification_plan(
         placements = list(plan.student_placements)
         source_member_ids = [placement.source_membership_id for placement in placements]
         source_members = (
-            db.query(ClassRosterMember)
+            db.query(ClassroomMember)
             .filter(
-                ClassRosterMember.id.in_(source_member_ids),
-                ClassRosterMember.ended_at.is_(None),
+                ClassroomMember.id.in_(source_member_ids),
+                ClassroomMember.ended_at.is_(None),
             )
             .all()
         )
@@ -1140,10 +1140,10 @@ def apply_term_reclassification_plan(
             placement.source_classroom_id_snapshot for placement in placements
         })
         current_assignments = (
-            db.query(ClassroomTeacherAssignment)
+            db.query(ClassroomTeacher)
             .filter(
-                ClassroomTeacherAssignment.classroom_id.in_(source_classroom_ids),
-                ClassroomTeacherAssignment.ended_at.is_(None),
+                ClassroomTeacher.classroom_id.in_(source_classroom_ids),
+                ClassroomTeacher.ended_at.is_(None),
             )
             .all()
             if source_classroom_ids
@@ -1171,14 +1171,14 @@ def apply_term_reclassification_plan(
             if placement.outcome != "classroom":
                 continue
             member = source_member_by_id[placement.source_membership_id]
-            db.add(ClassRosterMember(
+            db.add(ClassroomMember(
                 classroom_id=placement.target_classroom_id,
                 roster_child_id=member.roster_child_id,
                 started_at=applied_at,
             ))
         for classroom_plan in plan.classroom_plans:
             for target in classroom_plan.teacher_targets:
-                db.add(ClassroomTeacherAssignment(
+                db.add(ClassroomTeacher(
                     classroom_id=classroom_plan.classroom_id,
                     teacher_id=target.teacher_id,
                     teacher_name_snapshot=target.teacher_name_snapshot,

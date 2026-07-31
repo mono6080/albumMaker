@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from database import (
     Campus,
     Classroom,
-    ClassRosterMember,
-    ClassroomTeacherAssignment,
+    ClassroomMember,
+    ClassroomTeacher,
     Project,
     RosterChild,
     SessionLocal,
@@ -241,7 +241,7 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         )
         db.add(classroom)
         db.flush()
-        db.add(ClassroomTeacherAssignment(
+        db.add(ClassroomTeacher(
             classroom_id=classroom.id,
             teacher_id=teacher.id,
             teacher_name_snapshot=teacher.display_name,
@@ -309,7 +309,7 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         roster_child = RosterChild(name=student.name)
         db.add(roster_child)
         db.flush()
-        db.add(ClassRosterMember(
+        db.add(ClassroomMember(
             classroom_id=classroom.id,
             roster_child_id=roster_child.id,
         ))

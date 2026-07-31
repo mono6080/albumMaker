@@ -70,9 +70,9 @@ class User(Base):
         passive_deletes=True,
     )
     classroom_teacher_assignments = relationship(
-        "ClassroomTeacherAssignment",
+        "ClassroomTeacher",
         back_populates="teacher",
-        foreign_keys="ClassroomTeacherAssignment.teacher_id",
+        foreign_keys="ClassroomTeacher.teacher_id",
         passive_deletes=True,
     )
     organization_supervisor_assignments = relationship(
@@ -209,8 +209,8 @@ class OrganizationSupervisorAssignment(Base):
     ended_by = relationship("User", foreign_keys=[ended_by_id])
 
 
-class ClassRosterMember(Base):
-    __tablename__ = "class_roster_members"
+class ClassroomMember(Base):
+    __tablename__ = "classroom_members"
     id = Column(Integer, primary_key=True, index=True)
     classroom_id = Column(
         Integer,
@@ -232,12 +232,12 @@ class ClassRosterMember(Base):
     )
 
 
-class ClassroomTeacherAssignment(Base):
-    __tablename__ = "classroom_teacher_assignments"
+class ClassroomTeacher(Base):
+    __tablename__ = "classroom_teachers"
     __table_args__ = (
         CheckConstraint(
             "duty IN ('lead', 'co_teacher')",
-            name="ck_classroom_teacher_assignments_duty",
+            name="ck_classroom_teachers_duty",
         ),
         Index(
             "ux_classroom_teacher_active",
@@ -453,14 +453,14 @@ class Classroom(Base):
     academic_term = relationship("AcademicTerm", back_populates="classrooms")
     campus = relationship("Campus", back_populates="classrooms")
     roster_members = relationship(
-        "ClassRosterMember",
+        "ClassroomMember",
         back_populates="classroom",
-        order_by="ClassRosterMember.started_at",
+        order_by="ClassroomMember.started_at",
     )
     teacher_assignments = relationship(
-        "ClassroomTeacherAssignment",
+        "ClassroomTeacher",
         back_populates="classroom",
-        order_by="ClassroomTeacherAssignment.started_at",
+        order_by="ClassroomTeacher.started_at",
     )
     work_slots = relationship(
         "ClassPeriodWorkSlot",
@@ -763,7 +763,7 @@ class TermStudentPlacement(Base):
     )
     source_membership_id = Column(
         Integer,
-        ForeignKey("class_roster_members.id"),
+        ForeignKey("classroom_members.id"),
         nullable=False,
     )
     roster_child_id_snapshot = Column(Integer, nullable=False)
@@ -781,7 +781,7 @@ class TermStudentPlacement(Base):
 
     plan = relationship("TermReclassificationPlan", back_populates="student_placements")
     source_membership = relationship(
-        "ClassRosterMember",
+        "ClassroomMember",
         back_populates="term_placements",
     )
     target_classroom = relationship(
@@ -871,7 +871,7 @@ class RosterChild(Base):
     created_at = Column(DateTime, default=utc_now)
     students = relationship("Student", back_populates="roster_child")
     class_roster_members = relationship(
-        "ClassRosterMember",
+        "ClassroomMember",
         back_populates="roster_child",
     )
 

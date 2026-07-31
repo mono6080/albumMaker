@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import false
 from sqlalchemy.orm import Session, object_session
 
-from database import ClassroomTeacherAssignment, Project, ProjectComment, Student, User
+from database import ClassroomTeacher, Project, ProjectComment, Student, User
 from services.organization_scope_service import (
     OrganizationReadScope,
     apply_project_read_scope as apply_organization_project_read_scope,
@@ -284,11 +284,11 @@ def assert_classroom_project_creatable(
     """班級相本只允許 admin 或目前主教建立。"""
     if current_user.role == "admin":
         return
-    is_active_lead = db.query(ClassroomTeacherAssignment.id).filter(
-        ClassroomTeacherAssignment.classroom_id == classroom_id,
-        ClassroomTeacherAssignment.teacher_id == current_user.id,
-        ClassroomTeacherAssignment.duty == "lead",
-        ClassroomTeacherAssignment.ended_at.is_(None),
+    is_active_lead = db.query(ClassroomTeacher.id).filter(
+        ClassroomTeacher.classroom_id == classroom_id,
+        ClassroomTeacher.teacher_id == current_user.id,
+        ClassroomTeacher.duty == "lead",
+        ClassroomTeacher.ended_at.is_(None),
     ).first()
     if current_user.role in {"teacher", "supervisor"} and is_active_lead:
         return

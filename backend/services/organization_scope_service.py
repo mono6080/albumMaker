@@ -12,7 +12,7 @@ from database import (
     AcademicTerm,
     Campus,
     Classroom,
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
     User,
@@ -138,13 +138,13 @@ def _load_teacher_classroom_ids(db: Session, teacher_id: int) -> tuple[int, ...]
     rows = (
         _current_term_classroom_query(db)
         .join(
-            ClassroomTeacherAssignment,
-            ClassroomTeacherAssignment.classroom_id
+            ClassroomTeacher,
+            ClassroomTeacher.classroom_id
             == Classroom.id,
         )
         .filter(
-            ClassroomTeacherAssignment.teacher_id == teacher_id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
+            ClassroomTeacher.teacher_id == teacher_id,
+            ClassroomTeacher.ended_at.is_(None),
         )
         .distinct()
         .all()
@@ -162,8 +162,8 @@ def _load_teacher_readable_classroom_ids(
     天然只包含老師在場的那個學期，不會誤放上一屆。能不能改仍由目前編制決定。
     """
     rows = (
-        db.query(ClassroomTeacherAssignment.classroom_id)
-        .filter(ClassroomTeacherAssignment.teacher_id == teacher_id)
+        db.query(ClassroomTeacher.classroom_id)
+        .filter(ClassroomTeacher.teacher_id == teacher_id)
         .distinct()
         .all()
     )
@@ -325,27 +325,27 @@ def load_reporting_term_or_404(
 def load_current_scope_teacher_assignments(
     db: Session,
     scope: OrganizationReadScope,
-) -> list[ClassroomTeacherAssignment]:
+) -> list[ClassroomTeacher]:
     """載入 scope 內有效班級的目前老師編制，供進度與班級視圖共用。"""
     if not scope.classroom_ids:
         return []
     return (
-        db.query(ClassroomTeacherAssignment)
+        db.query(ClassroomTeacher)
         .options(
-            joinedload(ClassroomTeacherAssignment.teacher),
-            joinedload(ClassroomTeacherAssignment.classroom).joinedload(
+            joinedload(ClassroomTeacher.teacher),
+            joinedload(ClassroomTeacher.classroom).joinedload(
                 Classroom.campus
             ),
         )
         .filter(
-            ClassroomTeacherAssignment.classroom_id.in_(scope.classroom_ids),
-            ClassroomTeacherAssignment.teacher_id.isnot(None),
-            ClassroomTeacherAssignment.ended_at.is_(None),
+            ClassroomTeacher.classroom_id.in_(scope.classroom_ids),
+            ClassroomTeacher.teacher_id.isnot(None),
+            ClassroomTeacher.ended_at.is_(None),
         )
         .order_by(
-            ClassroomTeacherAssignment.classroom_id,
-            ClassroomTeacherAssignment.duty,
-            ClassroomTeacherAssignment.id,
+            ClassroomTeacher.classroom_id,
+            ClassroomTeacher.duty,
+            ClassroomTeacher.id,
         )
         .all()
     )

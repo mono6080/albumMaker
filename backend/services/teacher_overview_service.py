@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from database import (
     AcademicTerm,
     Classroom,
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     AcademicTermPeriod,
     ClassPeriodWorkSlot,
     Project,
@@ -232,7 +232,7 @@ def _serialize_project_progress(
     }
 
 
-def _serialize_teacher(teacher: ClassroomTeacherAssignment) -> dict:
+def _serialize_teacher(teacher: ClassroomTeacher) -> dict:
     """班級的老師編制。
 
     班只活一個學期，所以掛在班上的每一筆指派都屬於這個學期；學期中途換過人時

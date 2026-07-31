@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from database import (
     Campus,
     Classroom,
-    ClassRosterMember,
+    ClassroomMember,
     TermClassroomPlan,
     TermReclassificationPlan,
 )
@@ -30,10 +30,10 @@ def get_class_roster_member_or_404(
     member_id: int,
     classroom_id: int,
     db: Session,
-) -> ClassRosterMember:
-    member = db.query(ClassRosterMember).filter(
-        ClassRosterMember.id == member_id,
-        ClassRosterMember.classroom_id == classroom_id,
+) -> ClassroomMember:
+    member = db.query(ClassroomMember).filter(
+        ClassroomMember.id == member_id,
+        ClassroomMember.classroom_id == classroom_id,
     ).first()
     if not member:
         raise HTTPException(status_code=404, detail="找不到班級名單成員")

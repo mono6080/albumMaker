@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from crud.project_crud import get_project_or_404
 from crud.user_crud import get_user_or_404
 from database import (
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     Project,
     ProjectAssignmentHistory,
     User,
@@ -90,10 +90,10 @@ def assign_project_owner(
                     status_code=409,
                     detail="請先把相本歸入班級，再轉交進度負責人",
                 )
-            active_teacher = db.query(ClassroomTeacherAssignment.id).filter(
-                ClassroomTeacherAssignment.classroom_id == project.classroom_id,
-                ClassroomTeacherAssignment.teacher_id == target_owner.id,
-                ClassroomTeacherAssignment.ended_at.is_(None),
+            active_teacher = db.query(ClassroomTeacher.id).filter(
+                ClassroomTeacher.classroom_id == project.classroom_id,
+                ClassroomTeacher.teacher_id == target_owner.id,
+                ClassroomTeacher.ended_at.is_(None),
             ).first()
             if target_owner.role not in {"teacher", "supervisor"} or active_teacher is None:
                 raise HTTPException(

@@ -31,9 +31,53 @@ LEGACY_PROJECT_IDENTITY_QUARANTINE_TABLE = (
 ACADEMIC_TERM_REPORTING_MIGRATION_KEY = "organization-reporting-v1"
 
 
+def _assert_sqlite_can_rewrite_references(connection):
+    """改名 migration 依賴 SQLite 自動改寫 FK 與 trigger 內的表名參照。
+
+    3.25 起才會改寫，`legacy_alter_table` 打開時會退回舊行為。任一條不成立時改名
+    **不會報錯**，只留下指向舊表名的 FK 與 trigger——所以在這裡先擋下來，而不是照做。
+    """
+    version = connection.execute(text("SELECT sqlite_version()")).scalar_one()
+    version_info = tuple(int(part) for part in version.split("."))
+    if version_info < (3, 25, 0):
+        raise RuntimeError(
+            f"SQLite {version} 不會在改名時改寫 FK 與 trigger 參照，需要 3.25 以上"
+        )
+    if connection.execute(text("PRAGMA legacy_alter_table")).scalar_one():
+        raise RuntimeError(
+            "PRAGMA legacy_alter_table 已開啟，改名會留下指向舊表名的參照"
+        )
+
+
+def _rename_classroom_membership_tables(connection):
+    """表名對齊 model 命名：ClassroomMember／ClassroomTeacher。
+
+    改名排在所有 migration 之前：舊資料庫先改名，後續歷史 migration 一律對著新表名
+    跑，行為不變；全新資料庫沒有舊表，這步是 no-op。
+    """
+    existing_tables = {
+        row[0]
+        for row in connection.execute(text(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ))
+    }
+    renames = (
+        ("class_roster_members", "classroom_members"),
+        ("classroom_teacher_assignments", "classroom_teachers"),
+    )
+    if not any(old in existing_tables for old, _ in renames):
+        return
+    _assert_sqlite_can_rewrite_references(connection)
+    for old_name, new_name in renames:
+        if old_name in existing_tables and new_name not in existing_tables:
+            connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
+    connection.commit()
+
+
 def run_migrations():
     """執行所有待遷移的 schema 變更，已存在的欄位或資料表會自動跳過。"""
     with engine.connect() as connection:
+        _rename_classroom_membership_tables(connection)
         _add_bubble_texts_json_column(connection)
         _add_users_table(connection)
         _add_user_preferences_columns(connection)
@@ -93,7 +137,7 @@ def _add_term_scoped_classroom_indexes(connection):
     """學期範圍班級結構的索引，新舊資料庫共用同一份清單。
 
     組織相關的索引原本建在只跑得到舊結構的 migration 裡，全新資料庫因此少了
-    `ux_class_roster_active_child` 這類唯一鍵。集中在這裡無守衛執行，讓
+    `ux_classroom_members_active_child` 這類唯一鍵。集中在這裡無守衛執行，讓
     init_db() 建出的資料庫與升級上來的資料庫收斂到同一組索引。
     """
     if not _is_term_scoped_classroom_schema(connection):
@@ -103,6 +147,16 @@ def _add_term_scoped_classroom_indexes(connection):
         "ux_academic_term_classrooms_term_scope_name",
         "idx_academic_term_classrooms_scope",
         "idx_term_classroom_teacher_targets_plan_id",
+        # 表名改名前建立的索引，名字仍帶舊表名
+        "idx_class_roster_members_classroom_id",
+        "idx_class_roster_members_roster_child_id",
+        "ux_class_roster_active_child",
+        "idx_classroom_teacher_assignments_classroom_id",
+        "idx_classroom_teacher_assignments_teacher_id",
+        "idx_classroom_teacher_assignments_started_by_id",
+        "idx_classroom_teacher_assignments_ended_by_id",
+        "ix_class_roster_members_id",
+        "ix_classroom_teacher_assignments_id",
     ):
         connection.execute(text(f"DROP INDEX IF EXISTS {legacy_index}"))
     index_statements = (
@@ -112,20 +166,20 @@ def _add_term_scoped_classroom_indexes(connection):
         "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
         "ON classrooms(academic_term_id, campus_id, department)",
         "CREATE INDEX IF NOT EXISTS idx_classrooms_campus_id ON classrooms(campus_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_classroom_id "
-        "ON class_roster_members(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_roster_child_id "
-        "ON class_roster_members(roster_child_id)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_class_roster_active_child "
-        "ON class_roster_members(roster_child_id) WHERE ended_at IS NULL",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_classroom_id "
-        "ON classroom_teacher_assignments(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_teacher_id "
-        "ON classroom_teacher_assignments(teacher_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_started_by_id "
-        "ON classroom_teacher_assignments(started_by_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_ended_by_id "
-        "ON classroom_teacher_assignments(ended_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_classroom_id "
+        "ON classroom_members(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_roster_child_id "
+        "ON classroom_members(roster_child_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_members_active_child "
+        "ON classroom_members(roster_child_id) WHERE ended_at IS NULL",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_classroom_id "
+        "ON classroom_teachers(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_teacher_id "
+        "ON classroom_teachers(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_started_by_id "
+        "ON classroom_teachers(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_ended_by_id "
+        "ON classroom_teachers(ended_by_id)",
         "CREATE INDEX IF NOT EXISTS idx_projects_classroom_id "
         "ON projects(classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_projects_created_by_id "
@@ -181,6 +235,8 @@ def _add_term_scoped_classroom_indexes(connection):
         "CREATE INDEX IF NOT EXISTS ix_class_period_work_slots_id "
         "ON class_period_work_slots(id)",
         "CREATE INDEX IF NOT EXISTS ix_projects_id ON projects(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classroom_members_id ON classroom_members(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classroom_teachers_id ON classroom_teachers(id)",
     )
     for statement in index_statements:
         connection.execute(text(statement))
@@ -248,9 +304,9 @@ def _add_term_scoped_classroom_freeze_triggers(connection):
         END
     """))
     for table, trigger_prefix, subject in (
-        ("class_roster_members", "trg_class_roster_members", "roster members"),
+        ("classroom_members", "trg_classroom_members", "roster members"),
         (
-            "classroom_teacher_assignments",
+            "classroom_teachers",
             "trg_classroom_teachers",
             "teacher assignments",
         ),
@@ -522,7 +578,7 @@ def _add_academic_term_reporting_schema(connection):
             term_classroom_id INTEGER NOT NULL
                 REFERENCES academic_term_classrooms(id) ON DELETE CASCADE,
             source_assignment_id INTEGER
-                REFERENCES classroom_teacher_assignments(id) ON DELETE SET NULL,
+                REFERENCES classroom_teachers(id) ON DELETE SET NULL,
             teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             teacher_name_snapshot VARCHAR NOT NULL,
             duty VARCHAR NOT NULL
@@ -540,7 +596,7 @@ def _add_academic_term_reporting_schema(connection):
             term_classroom_id INTEGER NOT NULL
                 REFERENCES academic_term_classrooms(id) ON DELETE CASCADE,
             source_membership_id INTEGER
-                REFERENCES class_roster_members(id) ON DELETE SET NULL,
+                REFERENCES classroom_members(id) ON DELETE SET NULL,
             roster_child_id_snapshot INTEGER NOT NULL,
             student_name_snapshot VARCHAR NOT NULL,
             CONSTRAINT ux_academic_term_classroom_students_classroom_child
@@ -861,7 +917,7 @@ def _backfill_imported_academic_term(connection):
                 )
                OR EXISTS (
                     SELECT 1
-                    FROM class_roster_members AS member
+                    FROM classroom_members AS member
                     WHERE member.classroom_id = classroom.id
                       AND member.ended_at IS NULL
                 )
@@ -877,7 +933,7 @@ def _backfill_imported_academic_term(connection):
             SELECT term_classroom.id, assignment.id, assignment.teacher_id,
                    assignment.teacher_name_snapshot, assignment.duty
             FROM academic_term_classrooms AS term_classroom
-            JOIN classroom_teacher_assignments AS assignment
+            JOIN classroom_teachers AS assignment
               ON assignment.classroom_id = term_classroom.classroom_id
             WHERE term_classroom.academic_term_id = :term_id
               AND assignment.ended_at IS NULL
@@ -1103,7 +1159,7 @@ def _sync_imported_academic_term_student_snapshots(
         )
         SELECT member.roster_child_id, term_classroom.id,
                member.id, child.name
-        FROM class_roster_members AS member
+        FROM classroom_members AS member
         JOIN roster_children AS child ON child.id = member.roster_child_id
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = member.classroom_id
@@ -1340,7 +1396,7 @@ def _add_organization_structure(connection):
         )
     """))
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS class_roster_members (
+        CREATE TABLE IF NOT EXISTS classroom_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
             roster_child_id INTEGER NOT NULL REFERENCES roster_children(id),
@@ -1395,32 +1451,40 @@ def _add_organization_structure(connection):
         ))
     member_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(class_roster_members)"))
+        for row in connection.execute(text("PRAGMA table_info(classroom_members)"))
     }
     if "end_reason" not in member_columns:
         connection.execute(text(
-            "ALTER TABLE class_roster_members ADD COLUMN end_reason TEXT"
+            "ALTER TABLE classroom_members ADD COLUMN end_reason TEXT"
         ))
 
     # 中間版本的索引只限制同班重複，仍可能同時在兩班；只在舊定義存在時重建。
-    active_member_index_sql = connection.execute(text("""
-        SELECT sql FROM sqlite_master
-        WHERE type = 'index' AND name = 'ux_class_roster_active_child'
-    """)).scalar()
-    if active_member_index_sql and "classroom_id" in active_member_index_sql.lower():
-        connection.execute(text("DROP INDEX ux_class_roster_active_child"))
+    # 索引名不隨 ALTER TABLE RENAME 改變，所以舊名與新名都要檢查。
+    for index_name in (
+        "ux_class_roster_active_child",
+        "ux_classroom_members_active_child",
+    ):
+        active_member_index_sql = connection.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'index' AND name = :index_name"
+            ),
+            {"index_name": index_name},
+        ).scalar()
+        if active_member_index_sql and "classroom_id" in active_member_index_sql.lower():
+            connection.execute(text(f"DROP INDEX {index_name}"))
 
     index_statements = (
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_campuses_name ON campuses(name)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_scope_name "
         "ON classrooms(campus_id, department, name)",
         "CREATE INDEX IF NOT EXISTS idx_classrooms_campus_id ON classrooms(campus_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_classroom_id "
-        "ON class_roster_members(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_roster_child_id "
-        "ON class_roster_members(roster_child_id)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_class_roster_active_child "
-        "ON class_roster_members(roster_child_id) "
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_classroom_id "
+        "ON classroom_members(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_roster_child_id "
+        "ON classroom_members(roster_child_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_members_active_child "
+        "ON classroom_members(roster_child_id) "
         "WHERE ended_at IS NULL",
         "CREATE INDEX IF NOT EXISTS idx_projects_classroom_id ON projects(classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_projects_created_by_id ON projects(created_by_id)",
@@ -1476,13 +1540,13 @@ def _add_organization_access_and_reclassification_schema(connection):
         """))
 
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS classroom_teacher_assignments (
+        CREATE TABLE IF NOT EXISTS classroom_teachers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
             teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             teacher_name_snapshot VARCHAR NOT NULL,
             duty VARCHAR NOT NULL
-                CONSTRAINT ck_classroom_teacher_assignments_duty
+                CONSTRAINT ck_classroom_teachers_duty
                 CHECK (duty IN ('lead', 'co_teacher')),
             started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             ended_at DATETIME,
@@ -1541,7 +1605,7 @@ def _add_organization_access_and_reclassification_schema(connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plan_id INTEGER NOT NULL
                 REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
-            source_membership_id INTEGER NOT NULL REFERENCES class_roster_members(id),
+            source_membership_id INTEGER NOT NULL REFERENCES classroom_members(id),
             roster_child_id_snapshot INTEGER NOT NULL,
             student_name_snapshot VARCHAR NOT NULL,
             source_campus_id_snapshot INTEGER NOT NULL,
@@ -1586,19 +1650,19 @@ def _add_organization_access_and_reclassification_schema(connection):
     """))
 
     index_statements = (
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_classroom_id "
-        "ON classroom_teacher_assignments(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_teacher_id "
-        "ON classroom_teacher_assignments(teacher_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_started_by_id "
-        "ON classroom_teacher_assignments(started_by_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_ended_by_id "
-        "ON classroom_teacher_assignments(ended_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_classroom_id "
+        "ON classroom_teachers(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_teacher_id "
+        "ON classroom_teachers(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_started_by_id "
+        "ON classroom_teachers(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_ended_by_id "
+        "ON classroom_teachers(ended_by_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_teacher_active "
-        "ON classroom_teacher_assignments(classroom_id, teacher_id) "
+        "ON classroom_teachers(classroom_id, teacher_id) "
         "WHERE ended_at IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_teacher_active_lead "
-        "ON classroom_teacher_assignments(classroom_id) "
+        "ON classroom_teachers(classroom_id) "
         "WHERE ended_at IS NULL AND duty = 'lead'",
         "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_project_id "
         "ON project_editor_assignments(project_id)",
