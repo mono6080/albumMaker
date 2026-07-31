@@ -14,14 +14,43 @@
 這兩支腳本會壞，而它們要處理的 31 筆姓名、124 筆快照、28 筆稱呼是正式站等著要的
 資料。順序顛倒就得先改腳本、再改回來，多一輪沒有必要的風險。
 
-**現況（2026-07-31）**：改名已在 `refactor/term-scoped-classroom` 分支上完成，但
-**尚未合併**。合併與部署的順序必須是：
+合併與部署的順序必須是：
 
-1. `fix/roster-name-correction` 推上正式站並跑完兩支腳本。
-2. 才合併 `refactor/term-scoped-classroom`。
+1. `fix/roster-name-correction` 推上正式站並跑完兩支腳本。✅ **2026-08-01 完成**
+2. 才合併 `refactor/term-scoped-classroom`。← 現在卡在這裡
 
 顛倒的話，那兩支腳本會對著 `students`（現在是名冊表）與已不存在的 `roster_children`
 下 SQL——不會靜默失敗，但正式站等著的姓名更正會卡住。
+
+### 第 1 步的執行紀錄（2026-08-01）
+
+`master` fast-forward 至 `5dc5c9c` → push → 正式站 `git pull` 並重建 image
+（帶 `APP_BUILD_ID`）→ 備份 `album-maker-backup-20260731T190111Z` 建立並 verify
+通過 → 依序執行兩支腳本。產物（原值備份與三校名單）在 image 的
+`/app/backups/roster_correction_20260801/`，已取回
+`D:\Downloads\相冊名冊對照\正式站_20260801\`。
+
+| 步驟 | 結果 |
+|------|------|
+| `correct_roster_names.py --apply` 第一遍 | 名冊姓名 31 位、相本快照 123 筆、退回完成 11 本 |
+| 同一支第二遍 | 相本稱呼 28 位 |
+| 同一支第三遍 | 全 0，冪等確認 |
+| `fill_missing_album_names.py --apply` | 補上 11 位（在籍 10 ＋ 已離園但仍被相本引用 1），留空 0 |
+| 重跑確認 | 待補 0 位 |
+
+**`correct_roster_names.py` 必須跑兩遍**——稱呼的判斷條件是「稱呼不再是姓名的一部分」，
+姓名還沒改之前這個條件不成立，所以第一遍一定回報稱呼 0 位，要等姓名寫進去，第二遍
+才看得到那 28 筆。2026-07-30 的本機演練也是分兩次執行，當時沒寫進文件。
+
+與本機演練（2026-07-30 的副本）的差異：相本快照 123 vs 124、退回完成 11 vs 9。原因是
+副本停在 7/30 15:35，之後老師在正式站又完成了幾本相本。姓名 31 筆與稱呼 28 筆兩邊
+完全一致。
+
+**那兩支腳本現在的處境**與 `migrate_production_organization_202607.py` 相同：只能當
+稽核紀錄，不可再對現行資料庫執行。
+
+上線影響：11 本已完成的相本被退回「製作中」，老師需重新確認後再標完成——這是刻意的，
+姓名或稱呼改了就代表印出來的字會變。
 
 ---
 
@@ -270,10 +299,13 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 ## 上線前檢查清單
 
 1. 名冊姓名更正已在正式站執行完畢，`fix/roster-name-correction` 已合併
-   （見執行順序的硬前提）——**這一項沒完成之前不要合併本分支**
+   （見執行順序的硬前提）✅ 2026-08-01
 2. 正式站備份已建立並 verify 通過
 3. 在正式資料快照上跑過完整 migration，且重跑第二次為 0 筆 ✅ 2026-07-31
-4. 在正式資料快照上跑過完整 pytest
+4. 完整 pytest 通過 ✅ 2026-08-01（579 passed / 2 skipped），且在升級後的正式資料
+   副本上跑過 `scripts/smoke_upgraded_production_copy.py` ✅ 2026-08-01
+   （admin 與真實在職老師各掃 16 條無參數 GET ＋ 25 條明細路徑，無 5xx；38 個班
+   不重複、都掛在學期上、465 位在籍）
 4b. 在正式資料副本上跑過 `scripts/dry_run_term_reclassification.py`（實際套用一次
    編班：關閉舊學期、結束全部名冊與編制、建立新學期的班與工作格）
    ✅ 2026-07-31：38 班 / 465 位在籍學生 / 52 筆編制全數轉移，145 本相本的快照與
@@ -285,3 +317,9 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 
 第 3 項的驗證方式是把正式資料副本升級後，與 `init_db()` 建出的全新資料庫逐項比對表
 欄位、索引與 trigger；2026-07-31 的結果是三者完全一致。
+
+第 4 項原本寫的是「在正式資料快照上跑過完整 pytest」，但那件事做不出意義：pytest 的
+斷言是對著 `conftest.py` 建出的隔離資料庫寫的，把 `DATABASE_URL` 指向正式資料只會得到
+一堆與程式碼無關的失敗。真正沒被其他項目覆蓋的是「升級後的正式資料，app 讀不讀得動」
+——schema 對了不代表序列化、權限判斷與報表撐得住正式資料的形狀，所以改由
+`smoke_upgraded_production_copy.py` 驗這一段。

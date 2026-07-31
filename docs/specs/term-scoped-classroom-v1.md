@@ -266,7 +266,7 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
 
 ## Open Questions
 
-- `roster_children.student_serial`（行政系統學號）要在本次一併加入，還是等結構穩定後
+- `students.student_serial`（行政系統學號，名冊表）要在本次一併加入，還是等結構穩定後
   獨立一刀？兩者互不相依，但同步腳本需要 serial 才能自動化。
 - 編班計畫的 `source_fingerprint` 比對範圍：班級部分已限定為目前學期的班，草稿學期
   多開的班不會讓草稿過期（`test_draft_classroom_addition_does_not_invalidate_the_plan`）。
