@@ -241,7 +241,7 @@ function ClassroomIdentity({ classroom }) {
   // 班只活一個學期，中途換過人時新舊老師都在清單裡；現任排前面並標出已離班，
   // 否則兩位主教會看起來同時在職。
   const teachers = [...(classroom.teachers ?? [])].sort((firstTeacher, secondTeacher) => (
-    (firstTeacher.ended_at === null ? 0 : 1) - (secondTeacher.ended_at === null ? 0 : 1)
+    (firstTeacher.ended_at == null ? 0 : 1) - (secondTeacher.ended_at == null ? 0 : 1)
     || (firstTeacher.duty === "lead" ? 0 : 1) - (secondTeacher.duty === "lead" ? 0 : 1)
     || teacherName(firstTeacher).localeCompare(teacherName(secondTeacher), "zh-TW")
   ));
@@ -253,10 +253,10 @@ function ClassroomIdentity({ classroom }) {
         {teachers.map(teacher => (
           <Badge
             key={`${teacher.teacher_id ?? teacher.user_id}:${teacher.duty}`}
-            tone={teacher.ended_at !== null ? "archive" : teacher.duty === "lead" ? "primary" : "info"}
+            tone={teacher.ended_at != null ? "archive" : teacher.duty === "lead" ? "primary" : "info"}
           >
             {teacherName(teacher)} · {teacher.duty === "lead" ? "主教" : "協同"}
-            {teacher.ended_at !== null && " · 已離班"}
+            {teacher.ended_at != null && " · 已離班"}
           </Badge>
         ))}
         {teachers.length === 0 && <Badge tone="warning">尚未設定老師編制</Badge>}

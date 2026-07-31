@@ -58,8 +58,18 @@ function classroom({ classroomId, classroomName, department = "infant", slots })
     classroom_name: classroomName,
     department,
     teachers: [
-      { teacher_id: classroomId * 10, teacher_name_snapshot: `${classroomName}主教`, duty: "lead" },
-      { teacher_id: classroomId * 10 + 1, teacher_name_snapshot: `${classroomName}協同`, duty: "co_teacher" },
+      {
+        teacher_id: classroomId * 10,
+        teacher_name_snapshot: `${classroomName}主教`,
+        duty: "lead",
+        ended_at: null,
+      },
+      {
+        teacher_id: classroomId * 10 + 1,
+        teacher_name_snapshot: `${classroomName}協同`,
+        duty: "co_teacher",
+        ended_at: null,
+      },
     ],
     slots,
   };
