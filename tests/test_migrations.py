@@ -631,3 +631,74 @@ def test_upgraded_and_fresh_databases_converge_to_the_same_schema(tmp_path, monk
         "升級後與全新資料庫的表結構不一致：\n"
         + "\n".join(differences)
     )
+
+
+def test_rename_recovers_from_tables_renamed_but_columns_not(tmp_path, monkeypatch):
+    """「表已改名、欄位還沒」的中斷狀態必須能靠重啟收斂。
+
+    早期版本在沒有待改名的表時就直接 return，欄位改名整段跳過——部署卡在兩階段
+    之間時，semester_id 這類欄位會永久留著舊名。
+    """
+    import migrations
+
+    database_path = tmp_path / "interrupted-rename.db"
+    _run_startup_sequence(database_path, monkeypatch)
+    _reverse_rename_to_pre_rename_state(database_path)
+
+    # 只把表名改回新名，欄位維持舊名——正是中斷後的樣子
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for legacy_name, current_name in (
+            ("class_roster_members", "classroom_members"),
+            ("classroom_teacher_assignments", "classroom_teachers"),
+            ("academic_terms", "semesters"),
+            ("academic_term_periods", "semester_periods"),
+            ("students", "project_students"),
+            ("roster_children", "students"),
+        ):
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if legacy_name in tables and current_name not in tables:
+                connection.execute(
+                    f"ALTER TABLE {legacy_name} RENAME TO {current_name}"
+                )
+        connection.commit()
+        stranded = {
+            row[1] for row in connection.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "academic_term_id" in stranded, "起點必須是欄位還沒改的中斷狀態"
+    finally:
+        connection.close()
+
+    with sqlite3.connect(str(database_path)) as probe:
+        pass
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        monkeypatch.setattr(migrations, "engine", engine)
+        migrations.rename_tables_to_model_names()
+    finally:
+        engine.dispose()
+        monkeypatch.undo()
+
+    connection = sqlite3.connect(str(database_path))
+    try:
+        recovered = {
+            row[1] for row in connection.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "semester_id" in recovered
+        assert "academic_term_id" not in recovered
+        work_slot_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(class_period_work_slots)")
+        }
+        assert "semester_period_id" in work_slot_columns
+        assert "term_period_id" not in work_slot_columns
+    finally:
+        connection.close()

@@ -1151,3 +1151,197 @@ def test_term_scope_migration_cancels_orphan_draft_semester(tmp_path):
         assert statuses[3] == "draft"
     finally:
         migration_engine.dispose()
+
+
+def _legacy_term_scope_fixture(database_path):
+    """建出剛好可以併入學期範圍的舊結構：一個班、一本相本、一個工作格。"""
+    import sqlite3
+
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.executescript("""
+            CREATE TABLE campuses (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL);
+            CREATE TABLE classrooms (
+                id INTEGER PRIMARY KEY,
+                campus_id INTEGER NOT NULL REFERENCES campuses(id),
+                department VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+            CREATE TABLE semesters (
+                id INTEGER PRIMARY KEY,
+                label VARCHAR NOT NULL,
+                status VARCHAR NOT NULL
+            );
+            CREATE TABLE semester_periods (
+                id INTEGER PRIMARY KEY,
+                semester_id INTEGER NOT NULL REFERENCES semesters(id)
+            );
+            CREATE TABLE academic_term_classrooms (
+                id INTEGER PRIMARY KEY,
+                semester_id INTEGER NOT NULL REFERENCES semesters(id),
+                classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
+                campus_id_snapshot INTEGER NOT NULL,
+                campus_name_snapshot VARCHAR NOT NULL,
+                classroom_name_snapshot VARCHAR NOT NULL,
+                department VARCHAR NOT NULL
+            );
+            CREATE TABLE class_period_work_slots (
+                id INTEGER PRIMARY KEY,
+                term_classroom_id INTEGER NOT NULL
+                    REFERENCES academic_term_classrooms(id),
+                semester_period_id INTEGER NOT NULL REFERENCES semester_periods(id),
+                started_at DATETIME
+            );
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                classroom_id INTEGER REFERENCES classrooms(id),
+                class_period_work_slot_id INTEGER
+                    REFERENCES class_period_work_slots(id),
+                deleted_at DATETIME
+            );
+            CREATE TABLE term_reclassification_plans (
+                id INTEGER PRIMARY KEY,
+                status VARCHAR NOT NULL,
+                target_semester_id INTEGER
+            );
+            INSERT INTO campuses VALUES (1, '總校');
+            INSERT INTO classrooms VALUES (1, 1, 'infant', '太陽班', 1, NULL, NULL);
+            INSERT INTO semesters VALUES (1, '114 下', 'imported');
+            INSERT INTO semester_periods VALUES (1, 1);
+            INSERT INTO academic_term_classrooms
+                VALUES (1, 1, 1, 1, '總校', '太陽班', 'infant');
+            INSERT INTO class_period_work_slots VALUES (1, 1, 1, NULL);
+            INSERT INTO projects VALUES (1, '第一期相本', 1, 1, NULL);
+        """)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _run_term_scope_preflight(database_path):
+    import migrations
+
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.connect() as connection:
+            migrations._assert_term_scope_migration_preconditions(connection)
+    finally:
+        migration_engine.dispose()
+
+
+def test_term_scope_preflight_accepts_consistent_legacy_data(tmp_path):
+    database_path = tmp_path / "preflight-ok.db"
+    _legacy_term_scope_fixture(database_path)
+    _run_term_scope_preflight(database_path)
+
+
+@pytest.mark.parametrize(
+    "corruption, expected",
+    [
+        (
+            "UPDATE classrooms SET name = '改過名的班' WHERE id = 1",
+            "學期快照與班級現值不符",
+        ),
+        (
+            "INSERT INTO classrooms VALUES (2, 1, 'infant', '別班', 1, NULL, NULL);"
+            "UPDATE projects SET classroom_id = 2 WHERE id = 1",
+            "與工作格推出的班不一致",
+        ),
+        (
+            "UPDATE projects SET class_period_work_slot_id = NULL WHERE id = 1",
+            "沒有工作格",
+        ),
+    ],
+)
+def test_term_scope_preflight_aborts_on_inconsistent_legacy_data(
+    tmp_path,
+    corruption,
+    expected,
+):
+    """規格明列的三項不一致，各自都要在刪掉舊快照表之前中止。"""
+    import sqlite3
+
+    database_path = tmp_path / "preflight-abort.db"
+    _legacy_term_scope_fixture(database_path)
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.executescript(corruption)
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match=expected):
+        _run_term_scope_preflight(database_path)
+
+
+def test_term_scope_migration_leaves_nothing_behind_when_it_fails(tmp_path):
+    """搬遷中途失敗不得留下半套結構。
+
+    留下半套的後果不是報錯而是靜默跳過：下次啟動只要看到 classrooms 已經有
+    semester_id，就判定遷移完成，資料卻停在一半。
+    """
+    import sqlite3
+
+    import migrations
+
+    database_path = tmp_path / "term-scope-rollback.db"
+    _legacy_term_scope_fixture(database_path)
+    before = sqlite3.connect(str(database_path))
+    try:
+        original_tables = {
+            row[0]
+            for row in before.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        original_classroom_columns = {
+            row[1] for row in before.execute("PRAGMA table_info(classrooms)")
+        }
+    finally:
+        before.close()
+
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    boom = RuntimeError("simulated failure mid-migration")
+    try:
+        with migration_engine.connect() as connection:
+            real_execute = connection.execute
+            state = {"seen_drop": False}
+
+            def failing_execute(statement, *args, **kwargs):
+                # 撐到快照表被 drop 的那一刻才炸，確保已經改過結構
+                if "DROP TABLE IF EXISTS academic_term_classroom_students" in str(
+                    statement
+                ):
+                    state["seen_drop"] = True
+                    raise boom
+                return real_execute(statement, *args, **kwargs)
+
+            connection.execute = failing_execute
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                migrations._migrate_classrooms_to_term_scope(connection)
+            assert state["seen_drop"], "測試沒走到預期的失敗點"
+    finally:
+        migration_engine.dispose()
+
+    after = sqlite3.connect(str(database_path))
+    try:
+        tables = {
+            row[0]
+            for row in after.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        classroom_columns = {
+            row[1] for row in after.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "academic_term_classrooms" in tables, "舊快照表不該在失敗後消失"
+        assert classroom_columns == original_classroom_columns
+        assert "semester_id" not in classroom_columns
+        assert tables >= original_tables
+        assert after.execute("SELECT COUNT(*) FROM classrooms").fetchone()[0] == 1
+    finally:
+        after.close()

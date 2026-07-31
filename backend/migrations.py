@@ -114,12 +114,21 @@ def _rename_tables_to_model_names(connection):
         return marker_column in table_columns(table)
 
     tables = existing_tables()
-    pending = [
+    pending_tables = [
         (old, new, marker)
         for old, new, marker in TABLE_RENAMES
         if old in tables and is_legacy_source(old, marker)
     ]
-    if not pending:
+    # 欄位改名要獨立判斷：表全部改完就 return 的話，「表已改名、欄位還沒」的
+    # 中斷狀態永遠不會收斂——重啟也修不回來。
+    pending_columns = [
+        (table, old_column, new_column)
+        for table, old_column, new_column in COLUMN_RENAMES
+        if table in tables
+        and old_column in table_columns(table)
+        and new_column not in table_columns(table)
+    ]
+    if not pending_tables and not pending_columns:
         return
     _assert_sqlite_can_rewrite_references(connection)
     # 逐個執行並重讀表清單：students → project_students 完成之後，
@@ -577,6 +586,56 @@ def _cancel_draft_term_plans(connection):
     ))
 
 
+def _assert_term_scope_migration_preconditions(connection):
+    """規格明列的破壞性前提：任何一項不成立就中止，不猜也不部分套用。
+
+    這些檢查跑完之後舊快照表就會被刪除，屆時再發現不一致已經無從比對——
+    ACL 與報表會分裂成兩套歸戶，而且不會有任何錯誤訊息。
+    """
+    drifted = list(connection.execute(text("""
+        SELECT term_classroom.classroom_id
+        FROM academic_term_classrooms AS term_classroom
+        JOIN classrooms ON classrooms.id = term_classroom.classroom_id
+        WHERE term_classroom.classroom_name_snapshot IS NOT classrooms.name
+           OR term_classroom.department IS NOT classrooms.department
+           OR term_classroom.campus_id_snapshot IS NOT classrooms.campus_id
+    """)))
+    if drifted:
+        raise RuntimeError(
+            f"{len(drifted)} 個班的學期快照與班級現值不符（班級 "
+            f"{[row[0] for row in drifted][:5]}），無法併入學期範圍；"
+            "請先確認名稱、部門與分校一致"
+        )
+
+    mismatched = list(connection.execute(text("""
+        SELECT projects.id
+        FROM projects
+        JOIN class_period_work_slots AS slot
+          ON slot.id = projects.class_period_work_slot_id
+        JOIN academic_term_classrooms AS term_classroom
+          ON term_classroom.id = slot.term_classroom_id
+        WHERE projects.classroom_id IS NOT NULL
+          AND projects.classroom_id IS NOT term_classroom.classroom_id
+    """)))
+    if mismatched:
+        raise RuntimeError(
+            f"{len(mismatched)} 本相本的 classroom_id 與工作格推出的班不一致"
+            f"（相本 {[row[0] for row in mismatched][:5]}），無法併入學期範圍"
+        )
+
+    slotless = list(connection.execute(text("""
+        SELECT id FROM projects
+        WHERE deleted_at IS NULL
+          AND classroom_id IS NOT NULL
+          AND class_period_work_slot_id IS NULL
+    """)))
+    if slotless:
+        raise RuntimeError(
+            f"{len(slotless)} 本未封存的已歸班相本沒有工作格"
+            f"（相本 {[row[0] for row in slotless][:5]}），無法併入學期範圍"
+        )
+
+
 def _migrate_classrooms_to_term_scope(connection):
     """把長期班級併入學期班級，讓一個班只活一個學期。
 
@@ -609,6 +668,8 @@ def _migrate_classrooms_to_term_scope(connection):
     duplicated = len(term_classroom_rows) != len(term_by_classroom)
     if duplicated:
         raise RuntimeError("同一個班對應到多個學期，無法一對一併入")
+
+    _assert_term_scope_migration_preconditions(connection)
 
     connection.execute(text("PRAGMA foreign_keys=OFF"))
     try:
