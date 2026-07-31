@@ -13,7 +13,6 @@ from crud.organization_crud import get_term_reclassification_plan_or_404
 from database import (
     CURRENT_SEMESTER_STATUSES,
     Semester,
-    Classroom,
     SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,

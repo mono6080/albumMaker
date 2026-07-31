@@ -631,4 +631,3 @@ def test_upgraded_and_fresh_databases_converge_to_the_same_schema(tmp_path, monk
         "升級後與全新資料庫的表結構不一致：\n"
         + "\n".join(differences)
     )
-

@@ -1,9 +1,8 @@
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import configure_mappers
 
 
 def _create_legacy_organization_schema(database_path: Path):
@@ -977,87 +976,6 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
             )).scalar_one() == 0
     finally:
         migration_engine.dispose()
-
-
-def _seed_semester_student_snapshot_fixture(
-    migration_engine,
-    *,
-    project_campus_name: str = "總校",
-) -> None:
-    from sqlalchemy.orm import Session
-
-    from database import (
-        Base,
-        Campus,
-        Classroom,
-        ClassroomMember,
-        Project,
-        Student,
-        ProjectStudent,
-        Template,
-        TemplatePeriod,
-    )
-
-    Base.metadata.create_all(migration_engine)
-    with Session(migration_engine) as db:
-        campus = Campus(name="總校")
-        project_classroom = Classroom(
-            semester_id=current_semester_id(db),
-            campus=campus,
-            department="infant",
-            name="太陽班",
-        )
-        current_classroom = Classroom(
-            semester_id=current_semester_id(db),
-            campus=campus,
-            department="infant",
-            name="月亮班",
-        )
-        current_child = Student(name="目前姓名")
-        project_only_child = Student(name="已離班名冊姓名")
-        period = TemplatePeriod(
-            department="infant",
-            name="第一期",
-            status="active",
-        )
-        template = Template(name="範本", period=period)
-        db.add_all([
-            project_classroom,
-            current_classroom,
-            current_child,
-            project_only_child,
-            template,
-        ])
-        db.flush()
-        membership = ClassroomMember(
-            classroom_id=current_classroom.id,
-            roster_child_id=current_child.id,
-        )
-        project = Project(
-            name="有效舊相本",
-            template_id=template.id,
-            department="infant",
-            template_period_id=period.id,
-            classroom_id=project_classroom.id,
-            campus_id_snapshot=campus.id,
-            campus_name_snapshot=project_campus_name,
-            classroom_name_snapshot=project_classroom.name,
-        )
-        db.add_all([membership, project])
-        db.flush()
-        db.add_all([
-            ProjectStudent(
-                project_id=project.id,
-                name="舊班姓名",
-                roster_child_id=current_child.id,
-            ),
-            ProjectStudent(
-                project_id=project.id,
-                name="已離班相本姓名",
-                roster_child_id=project_only_child.id,
-            ),
-        ])
-        db.commit()
 
 
 def test_semester_current_index_is_cross_status_and_migration_safe(tmp_path):

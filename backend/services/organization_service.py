@@ -1,9 +1,6 @@
 """分校、班級目前名單與每期相本快照 use cases。"""
 
-import hashlib
-import json
 from collections import Counter
-from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
@@ -14,13 +11,11 @@ from crud.organization_crud import (
     get_class_roster_member_or_404,
     get_classroom_or_404,
 )
-from crud.project_crud import get_project_or_404
 from crud.template_crud import get_template_or_404
 from crud.user_crud import get_user_or_404
 from database import (
     CURRENT_SEMESTER_STATUSES,
     Semester,
-    Classroom,
     SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,

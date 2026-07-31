@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 
 from database import (
     Semester,
-    Classroom,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,

@@ -7,17 +7,11 @@ from uuid import uuid4
 from sqlalchemy import create_engine, text
 
 from database import (
-    Semester,
-    Classroom,
-    Campus,
-    Classroom,
-    ClassroomTeacher,
     ClassroomMember,
     Project,
     Student,
     SessionLocal,
     ProjectStudent,
-    User,
 )
 from services import organization_service
 from tests.helpers import (
@@ -506,7 +500,6 @@ def test_roster_album_name_is_admin_managed_and_updates_existing_and_future_proj
 def test_classroom_project_locks_organization_then_template_before_db_write(
     monkeypatch,
 ):
-    import services.organization_service as organization_service
     from services.organization_lock import organization_acl_lock
 
     events: list[str] = []

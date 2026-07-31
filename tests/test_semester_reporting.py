@@ -9,7 +9,6 @@ from pypdf import PdfReader
 from database import (
     Semester,
     Classroom,
-    Classroom,
     Project,
     Student,
     SessionLocal,
