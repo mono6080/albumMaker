@@ -837,20 +837,9 @@ def test_campus_cannot_be_disabled_with_active_classrooms_or_assignments():
         )
         assert_status(active_teacher_response, 409)
 
+        # 班級隨學期結束，所以「旗下還有班級」不再是停用分校的阻擋條件；
+        # 只要沒有在籍成員與在職編制就能停用。
         _replace_teachers(client, classroom_id, [])
-        active_classroom_response = client.patch(
-            f"/api/organization/campuses/{campus_id}",
-            json={"is_active": False},
-        )
-        assert_status(active_classroom_response, 409)
-
-        assert_status(
-            client.patch(
-                f"/api/organization/classrooms/{classroom_id}",
-                json={"is_active": False},
-            ),
-            200,
-        )
         disabled_response = client.patch(
             f"/api/organization/campuses/{campus_id}",
             json={"is_active": False},
@@ -883,7 +872,8 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
             "active_classroom_requires_active_campus"
         )
 
-        inactive_classroom_response = client.post(
+        # 班級沒有停用狀態：不屬於目前學期即為結束，所以建立時不接受 is_active=False
+        rejected_inactive = client.post(
             "/api/organization/classrooms",
             json={
                 "campus_id": inactive_campus_id,
@@ -892,13 +882,10 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
                 "is_active": False,
             },
         )
-        assert_status(inactive_classroom_response, 201)
-        inactive_classroom_id = inactive_classroom_response.json()["id"]
-        blocked_activation = client.patch(
-            f"/api/organization/classrooms/{inactive_classroom_id}",
-            json={"is_active": True},
+        assert_status(rejected_inactive, 422)
+        assert rejected_inactive.json()["detail"]["code"] == (
+            "classroom_has_no_active_flag"
         )
-        assert_status(blocked_activation, 409)
 
         active_campus_id, active_classroom_id = _create_campus_and_classroom(client)
         lead_teacher = _create_teacher(client)

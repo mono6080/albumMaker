@@ -249,23 +249,66 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
             started_by_name_snapshot=admin.display_name,
         ))
         db.commit()
-        preview = organization_service.get_project_classroom_migration_preview(
-            db,
-            seeded["project_id"],
-            cast(int, classroom.id),
+        # 舊相本歸班機制已退場，直接把相本掛到班級與工作格
+        from database import AcademicTermPeriod, ClassPeriodWorkSlot, Project
+        from services.organization_service import _ensure_current_term_classroom_grid
+
+        _ensure_current_term_classroom_grid(db, classroom)
+        db.flush()
+        project = db.get(Project, seeded["project_id"])
+        work_slot = (
+            db.query(ClassPeriodWorkSlot)
+            .join(
+                AcademicTermPeriod,
+                AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
+            )
+            .filter(
+                ClassPeriodWorkSlot.classroom_id == classroom.id,
+                AcademicTermPeriod.template_period_id == project.template_period_id,
+            )
+            .first()
         )
-        organization_service.assign_project_to_classroom(
-            db,
-            admin,
-            seeded["project_id"],
-            classroom_id=cast(int, classroom.id),
-            source_fingerprint=preview["source_fingerprint"],
-            seed_current_roster=False,
-            student_identity_decisions=[{
-                "student_id": seeded["student_id"],
-                "action": "create_new",
-            }],
-        )
+        if work_slot is None:
+            term_period = (
+                db.query(AcademicTermPeriod)
+                .filter(
+                    AcademicTermPeriod.academic_term_id == classroom.academic_term_id,
+                    AcademicTermPeriod.template_period_id
+                    == project.template_period_id,
+                )
+                .first()
+            )
+            if term_period is None:
+                term_period = AcademicTermPeriod(
+                    academic_term_id=classroom.academic_term_id,
+                    template_period_id=project.template_period_id,
+                    period_name_snapshot="render_guard_period",
+                    department=classroom.department,
+                    position=(
+                        db.query(AcademicTermPeriod)
+                        .filter(
+                            AcademicTermPeriod.academic_term_id
+                            == classroom.academic_term_id
+                        )
+                        .count()
+                    ),
+                )
+                db.add(term_period)
+                db.flush()
+            work_slot = ClassPeriodWorkSlot(
+                classroom_id=classroom.id,
+                term_period_id=term_period.id,
+            )
+            db.add(work_slot)
+            db.flush()
+        work_slot.started_at = work_slot.started_at or utc_now()
+        project.classroom_id = classroom.id
+        project.class_period_work_slot_id = work_slot.id
+        project.campus_id_snapshot = campus.id
+        project.campus_name_snapshot = campus.name
+        project.classroom_name_snapshot = classroom.name
+        project.department = classroom.department
+        db.commit()
         return {
             "admin_id": cast(int, admin.id),
             "teacher_id": cast(int, teacher.id),

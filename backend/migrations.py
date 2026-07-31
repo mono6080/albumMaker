@@ -70,7 +70,21 @@ def run_migrations():
         _migrate_assigned_album_names_to_roster_authority(connection)
         _add_student_completed_at_column(connection)
         _migrate_classrooms_to_term_scope(connection)
+        _retire_legacy_project_classroom_triggers(connection)
 
+
+def _retire_legacy_project_classroom_triggers(connection):
+    """移除舊相本歸班的 trigger：歸班流程已退場，班級由編班流程指派。
+
+    ledger 表保留為 append-only 稽核資料，只是執行期不再有 trigger 依賴它。
+    """
+    for trigger_name in (
+        "trg_projects_reject_empty_identity_migration",
+        "trg_projects_require_identity_migration_ledger",
+        "trg_projects_freeze_assigned_classroom",
+    ):
+        connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+    connection.commit()
 
 def _is_term_scoped_classroom_schema(connection) -> bool:
     """資料庫是否已是學期範圍班級結構。
@@ -198,6 +212,18 @@ def _add_academic_term_reporting_schema(connection):
     學期範圍班級的資料庫只跑得到「建立正式學期」那一段；已移除的學期快照表
     相關 DDL 與回填一律跳過。
     """
+    # 舊版曾以 status 本身建 unique index，會允許 imported 與 active 各一筆。
+    # 先重建為常數 expression index，讓所有 current 狀態共用唯一鍵；
+    # 這與班級結構無關，新舊資料庫都要做，所以排在守衛之前。
+    if connection.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'academic_terms'"
+    )).first():
+        connection.execute(text("DROP INDEX IF EXISTS ux_academic_terms_current"))
+        connection.execute(text(
+            "CREATE UNIQUE INDEX ux_academic_terms_current "
+            "ON academic_terms((1)) WHERE status IN ('imported', 'active')"
+        ))
+        connection.commit()
     legacy_schema = not _is_term_scoped_classroom_schema(connection)
     if not legacy_schema:
         _backfill_imported_academic_term(connection)
@@ -408,13 +434,6 @@ def _add_academic_term_reporting_schema(connection):
         "ON term_reclassification_plans(target_academic_term_id) "
         "WHERE target_academic_term_id IS NOT NULL",
     )
-    # 舊版曾以 status 本身建 unique index，會允許 imported 與 active 各一筆。
-    # 先重建為常數 expression index，讓所有 current 狀態共用唯一鍵。
-    connection.execute(text("DROP INDEX IF EXISTS ux_academic_terms_current"))
-    connection.execute(text(
-        "CREATE UNIQUE INDEX ux_academic_terms_current "
-        "ON academic_terms((1)) WHERE status IN ('imported', 'active')"
-    ))
     for statement in index_statements:
         connection.execute(text(statement))
     connection.commit()
