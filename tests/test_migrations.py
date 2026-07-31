@@ -675,8 +675,6 @@ def test_rename_recovers_from_tables_renamed_but_columns_not(tmp_path, monkeypat
     finally:
         connection.close()
 
-    with sqlite3.connect(str(database_path)) as probe:
-        pass
     from sqlalchemy import create_engine
 
     engine = create_engine(f"sqlite:///{database_path.as_posix()}")
