@@ -51,13 +51,17 @@ def _assert_sqlite_can_rewrite_references(connection):
 
 # 順序有意義：students 必須先讓位給 project_students，roster_children 才接得到
 # students 這個名字。
+#
+# 第三個欄位是「來源表的識別欄位」：`students` 這個名字在新舊結構都存在——舊的是
+# 相本學生（有 project_id），新的是名冊（沒有）。只靠表名或「表是不是空的」都分辨
+# 不出來，全新資料庫會因此把名冊表改名走。其餘表名在新結構不存在，無歧義。
 TABLE_RENAMES = (
-    ("class_roster_members", "classroom_members"),
-    ("classroom_teacher_assignments", "classroom_teachers"),
-    ("academic_terms", "semesters"),
-    ("academic_term_periods", "semester_periods"),
-    ("students", "project_students"),
-    ("roster_children", "students"),
+    ("class_roster_members", "classroom_members", None),
+    ("classroom_teacher_assignments", "classroom_teachers", None),
+    ("academic_terms", "semesters", None),
+    ("academic_term_periods", "semester_periods", None),
+    ("students", "project_students", "project_id"),
+    ("roster_children", "students", None),
 )
 
 # 索引與 trigger 名不隨 ALTER TABLE RENAME 改變，舊名留著會與新名重複。
@@ -97,16 +101,46 @@ def _rename_tables_to_model_names(connection):
             ))
         }
 
+    def table_columns(table: str) -> set[str]:
+        return {
+            row[1]
+            for row in connection.execute(text(f"PRAGMA table_info({table})"))
+        }
+
+    def is_legacy_source(table: str, marker_column: str | None) -> bool:
+        """這張表是不是「還沒改名的舊表」。"""
+        if marker_column is None:
+            return True
+        return marker_column in table_columns(table)
+
     tables = existing_tables()
-    if not any(old in tables for old, _ in TABLE_RENAMES):
+    pending = [
+        (old, new, marker)
+        for old, new, marker in TABLE_RENAMES
+        if old in tables and is_legacy_source(old, marker)
+    ]
+    if not pending:
         return
     _assert_sqlite_can_rewrite_references(connection)
     # 逐個執行並重讀表清單：students → project_students 完成之後，
     # roster_children → students 的目標名才會空出來。
-    for old_name, new_name in TABLE_RENAMES:
+    for old_name, new_name, marker_column in TABLE_RENAMES:
         tables = existing_tables()
-        if old_name in tables and new_name not in tables:
-            connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
+        if old_name not in tables or not is_legacy_source(old_name, marker_column):
+            continue
+        if new_name in tables:
+            # 目標表存在但來源仍是舊表，只有一種成因：改名之前有人跑過 create_all，
+            # 用新名字建了一張空表。留著它會讓改名被跳過——資料留在舊表、程式讀
+            # 空表，而且不會報錯。有資料就不動，交給人判斷。
+            if connection.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM {new_name})"
+            )).scalar_one():
+                raise RuntimeError(
+                    f"{old_name} 尚未改名，但 {new_name} 已存在且有資料——"
+                    "無法判斷哪一份是真的，請人工確認後再啟動"
+                )
+            connection.execute(text(f"DROP TABLE {new_name}"))
+        connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
     for object_type, object_name in LEGACY_RENAMED_OBJECTS:
         connection.execute(text(f"DROP {object_type.upper()} IF EXISTS {object_name}"))
     tables = existing_tables()
@@ -122,6 +156,17 @@ def _rename_tables_to_model_names(connection):
                 f"ALTER TABLE {table} RENAME COLUMN {old_column} TO {new_column}"
             ))
     connection.commit()
+
+
+def rename_tables_to_model_names():
+    """表名改名，必須在 `init_db()` 之前呼叫。
+
+    `create_all` 只看表存不存在。改名還沒發生時它會用新名字建出空表，接著改名
+    步驟就會判定「目標已存在」而跳過——資料留在舊表、程式讀空表，且不會報錯。
+    所以改名要先於建表，run_migrations() 裡再跑一次（冪等）只是保險。
+    """
+    with engine.connect() as connection:
+        _rename_tables_to_model_names(connection)
 
 
 def run_migrations():

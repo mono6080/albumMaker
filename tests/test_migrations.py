@@ -417,3 +417,104 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
             "SELECT COUNT(*) FROM project_students WHERE project_id = :project_id"
         ), {"project_id": project_id}).scalar_one() == 1
         assert list(connection.execute(text("PRAGMA foreign_key_check"))) == []
+
+
+def _seed_legacy_rename_source(database_path):
+    """建出改名前的最小 schema：students 是相本學生，roster_children 是名冊。"""
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript("""
+            CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR);
+            CREATE TABLE students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                name VARCHAR NOT NULL
+            );
+            CREATE TABLE roster_children (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR NOT NULL
+            );
+            INSERT INTO projects (name) VALUES ('舊相本');
+            INSERT INTO students (project_id, name) VALUES (1, '相本裡的一份');
+            INSERT INTO roster_children (name) VALUES ('名冊上的孩子');
+        """)
+
+
+def test_table_rename_uses_column_marker_not_emptiness(tmp_path):
+    """`students` 這個名字在新舊結構都存在，只能用欄位分辨是哪一個。
+
+    全新資料庫的每張表都是空的；若用「空表＝create_all 搶先建的」判斷，就會把
+    名冊表當成待改名的相本學生表改名走，資料全部對不上。
+    """
+    import migrations
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-marker.db"
+    _seed_legacy_rename_source(database_path)
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
+            migrations._rename_tables_to_model_names(connection)
+            assert connection.execute(text(
+                "SELECT name FROM project_students"
+            )).scalar_one() == "相本裡的一份"
+            assert connection.execute(text(
+                "SELECT name FROM students"
+            )).scalar_one() == "名冊上的孩子"
+    finally:
+        engine.dispose()
+
+
+def test_table_rename_reclaims_empty_table_left_by_early_create_all(tmp_path):
+    """create_all 搶在改名之前跑過，會用新名字留下空表。
+
+    留著它，改名就會判定「目標已存在」而跳過——資料留在舊表、程式讀空表，
+    而且不會報錯。這是真的發生過的啟動失敗。
+    """
+    import migrations
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-early-create-all.db"
+    _seed_legacy_rename_source(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE project_students ("
+            "id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR)"
+        )
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
+            assert connection.execute(text(
+                "SELECT name FROM project_students"
+            )).scalar_one() == "相本裡的一份"
+            assert connection.execute(text(
+                "SELECT name FROM students"
+            )).scalar_one() == "名冊上的孩子"
+    finally:
+        engine.dispose()
+
+
+def test_table_rename_refuses_when_both_tables_hold_data(tmp_path):
+    """來源仍是舊表、目標卻已經有資料：不猜，直接中止。"""
+    import migrations
+    import pytest
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-conflict.db"
+    _seed_legacy_rename_source(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE project_students ("
+            "id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR)"
+        )
+        connection.execute(
+            "INSERT INTO project_students (project_id, name) VALUES (1, '來路不明')"
+        )
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            with pytest.raises(RuntimeError, match="無法判斷哪一份是真的"):
+                migrations._rename_tables_to_model_names(connection)
+    finally:
+        engine.dispose()

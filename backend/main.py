@@ -21,7 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
 
 from database import SessionLocal, get_db, init_db
-from migrations import run_migrations
+from migrations import rename_tables_to_model_names, run_migrations
 from routers import auth, organization, projects, roster, templates, users
 from services.completion_render_service import start_render_reconciliation_thread
 from services.project_archive_service import purge_expired_archived_projects
@@ -114,6 +114,9 @@ def apply_frontend_cache_headers(response, path: str) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """初始化 schema／migration，並在啟動時清理到期封存資料。"""
+    # 改名必須先於 init_db()：create_all 只檢查表存不存在，改名還沒發生時
+    # 它會用新名字建出空表，改名就會被跳過而資料留在舊表。
+    rename_tables_to_model_names()
     init_db()
     run_migrations()
     _purge_expired_archived_projects_once()
