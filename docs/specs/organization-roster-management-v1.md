@@ -230,18 +230,11 @@ v1 新入園學生仍走園所設定的「加入目前名單」流程，在加�
   部門 scope 的 active 班級；admin 回全部。不得以 owner 或逐人主管關係擴張班級 scope。
 - `POST /api/organization/classrooms/{id}/projects`：admin 或該班 active lead 可建立班級相本；
   owner 必須是 active 班級老師，省略時採 active lead；不建立 editor assignment。
-- `GET /api/organization/projects/{id}/classroom-migration-preview?classroom_id=…`：admin 讀取固定 Project Student、
-  目標班狀態、established identity options 與 `source_fingerprint`；不寫資料、不按姓名選擇
-  或預填 decision。同名候選必須讓管理員看見其分校／部門／班級、名單 active／ended 狀態，
-  以及可取得的歷史 class-backed 相本名稱與期別；evidence 欄位的 SSOT 見
-  [API 文件](../dev/api.md#園所管理-apiorganization)。
-- `PUT /api/organization/projects/{id}/classroom`：admin 顯式把未歸班相本遷入 active 班級；
-  request 必須含與 Project Student 集合完全相等的 `student_identity_decisions`，每筆只能是
-  `action=create_new` 或指定 established `roster_child_id` 的 `action=existing`，另帶 preview
-  `source_fingerprint` 與 `confirmed_all=true`。`seed_current_roster=true` 只在目標目前名單
-  為空時把解析後的**全體**學生建成目前名單，不接受 subset。
+> 舊相本歸班的兩個端點（`classroom-migration-preview` 與 `PUT .../classroom`）已隨
+> [term-scoped-classroom-v1](term-scoped-classroom-v1.md) 退場：未歸班相本改為 admin-only
+> 唯讀，等封存到期由既有清理流程移除。
 
-班級／分校停用時不可新增編制或相本。`role=teacher|supervisor` 的 active 操作帳號都可加入
+分校停用、或班級所屬學期已結束時，不可新增編制或相本（班級沒有自己的停用旗標）。`role=teacher|supervisor` 的 active 操作帳號都可加入
 老師編制或主管 scope，同一帳號可同時存在於兩者且不改 `User.role`。
 Project Student 不提供新增、複製、刪除或完整姓名修改端點；
 三個 Project 相本稱呼 mutation 端點只供未歸班 legacy 相容，已歸班固定回 409

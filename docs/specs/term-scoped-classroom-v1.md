@@ -2,8 +2,13 @@
 
 ## Verdict
 
-Decision：班級的身分是「學期 × 分校 × 部門 × 班名」，不是跨學期的長期實體。移除
-`classrooms` 表，把 `academic_term_classrooms` 從快照層扶正為班級本體。
+Decision：班級的身分是「學期 × 分校 × 部門 × 班名」，不是跨學期的長期實體。兩層合而
+為一：`classrooms` 表留下並補上 `academic_term_id` 成為班級本體，`academic_term_classrooms`
+（及其兩張快照表）移除。
+
+> 實作時改為保留 `classrooms` 而非保留 `academic_term_classrooms`：兩者本來就 1:1，
+> 留住 `classrooms.id` 讓所有 `classroom_id` 外鍵原地不動，只有工作格需要換 id。
+> 名稱也剛好對上「班級本體」的新語意。
 
 理由是「班級跨學期延續」這個假設被實際編班資料推翻：115 上的 33 個來源班裡有 13 個被
 拆散，用學生流向推不出去向，用老師留任推也有 8 個平手、4 個沒有留任。留著長期班級會
@@ -64,24 +69,31 @@ AcademicTerm（學期）
 
 跨學期存在的只有 `Campus`、`RosterChild`、`User` 三個實體；班級不跨學期。
 
-欄位由快照改為本體：
+`classrooms` 的欄位變動：
 
 | 現在 | 之後 |
 |------|------|
-| `classroom_id` FK | 移除 |
-| `campus_id_snapshot` | `campus_id`（FK `campuses.id`）|
-| `campus_name_snapshot` | 移除，改由 `Campus` live 讀取 |
-| `classroom_name_snapshot` | `name` |
-| `department` | 不變 |
+| （無）| `academic_term_id` FK `academic_terms.id` |
+| `campus_id`／`department`／`name` | 不變 |
+| `is_active` | 移除：班級沒有自己的啟用旗標，由所屬學期的狀態決定 |
+| `created_at`／`updated_at` | 移除：時間資訊由學期承擔 |
 
-唯一鍵由 `(academic_term_id, classroom_id)` 改為
-`(academic_term_id, campus_id, department, name)`。分校改名不再需要快照——同一個實體分校
-換名字時，歷史學期顯示新名是正確的；相本層另有自己的 `campus_name_snapshot` 凍結顯示。
+唯一鍵由 `(campus_id, department, name)` 改為
+`(academic_term_id, campus_id, department, name)`，同名班級因此可以逐年重建。分校改名
+不再需要快照——同一個實體分校換名字時，歷史學期顯示新名是正確的；相本層另有自己的
+`campus_name_snapshot` 凍結顯示。名冊姓名同理：更正錯字之後，已結束學期的彙整匯出也
+跟著顯示新名，凍結的是相本本身（`Student.name` 與已渲染的輸出）。
+
+`class_period_work_slots.term_classroom_id` 改名為 `classroom_id` 並改指 `classrooms.id`。
 
 ### ClassRosterMember／ClassroomTeacherAssignment
 
-表名不改（避免無謂的改名風險），只把 `classroom_id` 改成 `term_classroom_id`。區間語意
-不變：`ended_at IS NULL` 代表目前在籍／在職，學期結束時由編班套用一次結束。
+表名與 `classroom_id` 欄位都不改——`classrooms` 就是學期班級，原本的外鍵直接成立。
+區間語意不變：`ended_at IS NULL` 代表目前在籍／在職，學期結束時由編班套用一次結束。
+
+學期一旦 `closed`，該學期班級的名冊與編制就是歷史：`class_roster_members` 與
+`classroom_teacher_assignments` 各有三個 trigger 擋下 INSERT／UPDATE／DELETE。這接手了
+兩張學期快照表原本提供的不可變保證。
 
 `ux_class_roster_active_child`（roster_child_id WHERE ended_at IS NULL）維持全園唯一——
 一個孩子同一時間只能在一個班，跨學期由不同的 term_classroom 承接。
@@ -121,15 +133,28 @@ AcademicTerm（學期）
 
 ### 資料搬遷（單一 transaction）
 
-1. `academic_term_classrooms` 補上 `campus_id`／`name`（由快照欄位改名而來，值不變）。
-2. `class_roster_members.term_classroom_id` ← 由 `classroom_id` 對應到目前正式學期的
-   term_classroom（466 筆）。
-3. `classroom_teacher_assignments.term_classroom_id` ← 同上（52 筆）。
-4. `term_classroom_plans.term_classroom_id`、`term_student_placements` 的來源／目標欄位
-   同步改指 term_classroom。
-5. 驗證 `academic_term_classroom_students`（466）與 `_teachers`（52）與 live 表逐筆等
-   價，通過後 drop 兩張表與其 trigger。
-6. drop `projects.classroom_id`、`classrooms` 與相關 trigger／索引。
+1. `classrooms` 補上 `academic_term_id`，值由 `academic_term_classrooms` 的一對一對應
+   而來；`classrooms.id` 原封保留，所有 `classroom_id` 外鍵因此不必改。
+2. `class_period_work_slots` 整張重建：`term_classroom_id` → `classroom_id`，值由
+   `academic_term_classrooms.id` 換成 `classrooms.id`，FK 目標一併換掉。
+   - 換值必須用**一次 join**完成。兩張表的 id 值域重疊，逐筆 UPDATE 會把前一輪改好的
+     列再改一次——不會報錯，只會靜默錯掛。
+   - 欄位改名與 FK 換目標都不是 `RENAME COLUMN` 做得到的，所以是重建而非改名。
+3. drop 兩張學期快照表與 `academic_term_classrooms`，連同引用它們的 trigger 與索引。
+4. `classrooms` drop `is_active`／`created_at`／`updated_at`。
+5. 既有編班草稿一律轉為 `cancelled`：source fingerprint 以舊結構算出，必然對不上。
+
+搬遷後另有兩個獨立步驟（新舊資料庫共用，全新資料庫也要跑）：
+
+- **索引**：組織相關索引集中成單一份無守衛清單。原本它們建在只跑得到舊結構的
+  migration 裡，全新資料庫會因此少掉 `ux_class_roster_active_child` 等唯一鍵。
+- **trigger**：`trg_projects_freeze_classroom_snapshots` 與 `trg_projects_freeze_work_slot`
+  以 `class_period_work_slot_id` 重建，加上已結束學期的名冊／編制凍結。
+
+`projects.classroom_id` 保留：`classrooms` 就是學期班級，這個欄位不再有跨學期歧義。
+
+> 驗證方式：把正式資料副本跑過完整 migration，再與 `init_db()` 建出的全新資料庫逐項
+> 比對表欄位、索引與 trigger。兩條路徑必須收斂到同一個結構。
 
 ### Trigger 調整
 
@@ -189,18 +214,28 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
 
 ## Implementation Slices
 
-1. **schema／migration**：前提驗證、欄位搬遷、trigger 改寫、drop 舊表；migration 冪等，
-   重跑為 0 筆。
-2. **改名 A**：`Classroom`／`ClassroomMember`／`ClassroomTeacher`（含表名與 API）。
-3. **改名 B**：`Semester`／`SemesterPeriod`。
-4. **改名 C**：`ProjectStudent`／`Student`，含 17 條 `/students/` API 路徑與前端。
-5. **scope／權限**：`OrganizationReadScope` 改為持有 classroom id 集合；讀寫分離改走
-   學期班級；移除 `teacher_past_classroom_ids`。
-6. **園所設定／my-classrooms**：班級 CRUD 改為在目前正式學期底下操作。
-7. **編班**：計畫由「搬遷」改為「建立新學期班級並放人」；新生可直接放進計畫（不再受
-   `source_membership_id NOT NULL` 限制）。
-8. **報表／匯出**：老師進度、學期彙整匯出改走學期班級。
-9. **前端**：班級相關頁面的 id 語意改動與文案。
+**結構改動不可分割**。原本規劃的九個 slice 在實作時證明是錯的：ORM 一動，scope、
+權限、園所設定、編班、報表、匯出全部同時失效，中間沒有可以停下來的綠燈狀態。以下五
+項屬於同一次改動，一起做、一起驗：
+
+1. **schema／migration**：前提驗證、資料搬遷、trigger 與索引重建、drop 舊表；migration
+   冪等，重跑為 0 筆。
+2. **scope／權限**：`OrganizationReadScope` 改為持有 classroom id 集合；讀寫分離改走
+   學期班級；`teacher_past_classroom_ids` 退場。
+3. **園所設定／my-classrooms／編班**：班級在目前正式學期底下建立；編班計畫由「舊班搬到
+   新班」改為「在目標學期建好班再放人」。
+4. **報表／匯出**：老師進度與學期彙整匯出改走學期班級。
+5. **前端**：班級的啟用語意改為 `is_current`、編班頁改用計畫自帶的目標班清單、舊相本
+   歸班流程移除。
+
+改名是**唯一**可以獨立切開的部分，因為它不改語意、只改識別字，且各組之間互不相依：
+
+6. **改名 A**：`Classroom`／`ClassroomMember`／`ClassroomTeacher`（含表名與 API）。
+7. **改名 B**：`Semester`／`SemesterPeriod`。
+8. **改名 C**：`ProjectStudent`／`Student`，含 17 條 `/students/` API 路徑與前端。
+
+改名有一個外部前提，見
+[risks 的執行順序](term-scoped-classroom-v1-risks.md#執行順序的硬前提)。
 
 ## Risks And Test Plan
 

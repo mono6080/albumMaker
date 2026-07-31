@@ -20,11 +20,7 @@ TemplatePeriod (id, department, name, status, created_at)   — 期別；狀態�
 
 AcademicTerm (id, label, status, starts_on, ends_on, actor/time snapshots)
   ├─ periods → AcademicTermPeriod(template_period_id UNIQUE, name/department/position snapshots)
-  └─ classrooms → AcademicTermClassroom(classroom_id, campus/classroom/department snapshots)
-       ├─ teachers → AcademicTermClassroomTeacher(teacher/姓名/duty snapshots)
-       ├─ students → AcademicTermClassroomStudent(academic_term_id,
-       │              source_membership_id nullable, roster_child_id/姓名 snapshots)
-       └─ work_slots → ClassPeriodWorkSlot(term_period_id, started_at)
+  └─ classrooms → Classroom[]     — 班級本體，不跨學期；見下方
 
 Template (id, name, period_id FK→TemplatePeriod, revision, created_at)
   └─ pages → TemplatePage[]（cascade delete-orphan，order_by page_number）
@@ -38,10 +34,12 @@ Campus (id, name UNIQUE, is_active, created_at, updated_at)
 
 OrganizationSupervisorAssignment (campus_id, department nullable, supervisor_id nullable, supervisor_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
 
-Classroom (id, campus_id FK→Campus, department, name, is_active,
-           created_at, updated_at)
+Classroom (id, academic_term_id FK→AcademicTerm, campus_id FK→Campus, department, name)
+  ├─ UNIQUE(academic_term_id, campus_id, department, name)  ← 班級身分＝學期×分校×部門×班名
+  ├─ is_current（property）：所屬學期是 imported/active；班級沒有自己的啟用旗標
   ├─ roster_members → ClassRosterMember[]
   ├─ teacher_assignments → ClassroomTeacherAssignment[]
+  ├─ work_slots → ClassPeriodWorkSlot(classroom_id, term_period_id, started_at)
   └─ projects → Project.classroom_id
 
 ClassRosterMember (id, classroom_id FK→Classroom,
@@ -154,8 +152,9 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
 - `ClassRosterMember` 表示班級名單的一段在班區間。`ended_at = NULL` 才屬於目前名單；
   離園寫入 `departed`，轉班在原班結束 `transfer` 區間並於目標班建立新區間。
   回班也以同一 `RosterChild.id` 建立新 row，不覆寫舊區間。
-- 同一 `RosterChild` 全園同時只能有一筆 active membership；同分校、部門與班級名稱
-  不可重複。班級的 `department` 沿用模板部門代碼 `infant` / `academy`。
+- 同一 `RosterChild` 全園同時只能有一筆 active membership；同一學期內的分校、部門與
+  班級名稱不可重複（跨學期可以重複，同名班每年是不同的班）。班級的 `department` 沿用
+  模板部門代碼 `infant` / `academy`，且與分校一樣是班級身分的一部分，建立後不可變更。
 - 新入園由班級目前名單新增流程建立全新的 `RosterChild`；從班級建立新一期 Project 時，
   只複製當下 active members 成為 `Student` 快照並沿用
   `roster_child_id`。未明確提供稱呼的新入園名單會在建立 `RosterChild` 時保守推導一次；
@@ -163,10 +162,9 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
 - `Student` 集合與 `Student.name` 在 Project runtime 不可新增、複製、刪除或改名；完整姓名
   只由建立當下的班級目前名單快照決定。跨期重新編班只改目前名單區間，下一期建立新相本
   時才形成新的學生快照。
-- `AcademicTermClassroomStudent` 是學期最終名單；冗餘 `academic_term_id`
-  由 trigger 保證與 term classroom 同期，unique index 保證同孩子每學期只落一班。
-  `imported|active` 中新增／回班會加入、改名會更新、轉班會移班，離園保留最後班；
-  `closed` 後 insert/update/delete 皆由 trigger 阻擋。這些變動不改寫既有 Project/Student。
+- 學期名單沒有另一層快照：班級只活一個學期，`ClassRosterMember` 就是那個學期的紀錄。
+  學期 `closed` 之後，名冊與老師編制的 insert/update/delete 皆由 trigger 阻擋，API 也
+  拒絕對已結束學期的班加人。這些限制不改寫既有 Project/Student。
 - 老師編制也是不可覆寫的區間：非空集合恰有一位 `lead`，可有多位 `co_teacher`；候選帳號
   可為 `role=teacher|supervisor`。所有目前老師不論 base role 都直接取得該班全部相本讀寫權；
   新增／移除編制會立即改變權限但不改 Project。
@@ -187,7 +185,8 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
 - `ClassPeriodWorkSlot` 是「正式學期 × 班級 × 期別」的唯一開工單位；新 Project 必須由目前
   `imported|active` 學期尚未開始的工作格建立，並在同一 transaction 寫入學生名冊快照、
   Project 組織快照與 `started_at`。封存不清空 `started_at`，因此同一格不能重建第二本。
-- 學期班級、學生與老師 row 只供報表快照；Project ACL 永遠由目前有效老師／主管區間推導。
+- Project ACL 由學期班級的老師指派推導：該班有任何一筆指派即可讀，`ended_at IS NULL`
+  才可編輯。因為班不跨學期，接手同名班的老師不會取得上一屆的相本。
 - migration 只為已有 `classroom_id` 的 Project 一次補齊名稱快照，不從 owner、名稱或舊主管
   關係猜班級／scope；NULL 者保持 admin-only，管理員逐本選班寫快照後才啟用班級權限。active
   editor rows 以 `classroom_scope_migration` 結束，歷史 row 不刪除且 runtime 永不讀取。

@@ -52,38 +52,23 @@ owner 只表示負責人，不能再兼任班級或權限來源。
 
 Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表。
 
-### AcademicTermClassroom
+### Classroom（學期班級）
 
-`academic_term_classrooms` 保存學期班級範圍：
+班級本體就是學期範圍實體，沒有另一層快照。結構與不可變保證的 SSOT 在
+[term-scoped-classroom-v1](term-scoped-classroom-v1.md)；本規格只依賴三件事：
 
-- `academic_term_id`, `classroom_id`
-- `campus_id_snapshot`, `campus_name_snapshot`
-- `classroom_name_snapshot`, `department`
-- 同學期同班唯一。
-
-`academic_term_classroom_teachers` 保存該學期顯示用老師快照：
-
-- `term_classroom_id`, `source_assignment_id`
-- `teacher_id`, `teacher_name_snapshot`, `duty`
-
-老師快照只供歷史報表顯示；ACL 永遠讀目前有效的園所老師／主管指派。
-
-`academic_term_classroom_students` 是學期最終班級名單快照：
-
-- `academic_term_id`, `term_classroom_id`, `source_membership_id`（nullable）
-- `roster_child_id_snapshot`, `student_name_snapshot`
-- `academic_term_id` 必須與 term classroom 相同；同一孩子每學期只能落在一班。
-
-`imported|active` 學期隨目前名單維護最終快照：新增／回班會加入、
-改名會更新、轉班會移到目標班，離園則保留最後所在班。學期轉為
-`closed` 後由 DB trigger 凍結。`Student` 仍保存每本相本建立當時的
-姓名與 Project 班級，不因最終名單轉班而改寫。
+- 班級屬於且只屬於一個 `AcademicTerm`，同學期內 `(campus_id, department, name)` 唯一。
+- 該學期的名冊（`ClassRosterMember`）與老師編制（`ClassroomTeacherAssignment`）直接掛在
+  班上；報表列出班上全部指派，`ended_at` 分辨現任與曾任。
+- 學期 `closed` 後名冊與編制由 trigger 凍結，API 也拒絕對已結束學期的班加人。分校名與
+  孩子姓名不凍結——更正後歷史報表跟著顯示新值；`Student` 仍保存每本相本建立當時的姓名
+  與 Project 班級快照。
 
 ### ClassPeriodWorkSlot
 
 `class_period_work_slots` 是進度唯一統計單位：
 
-- `term_classroom_id`, `term_period_id`, `started_at`
+- `classroom_id`, `term_period_id`, `started_at`
 - 同一學期班級與學期期別唯一。
 
 `projects.class_period_work_slot_id` 指向工作格。舊資料可有多個 Project
@@ -95,6 +80,11 @@ Project 新增不可變 `campus_id_snapshot`。班級歸入或建立時，必須
 這些欄位只在 `classroom_id: NULL → value` 的正式遷移中設定。
 
 ## Migration Contract
+
+> 以下十二條是「長期班級 + 學期快照」結構上線時的一次性遷移契約，屬歷史紀錄。班級改為
+> 學期範圍實體後（見 [term-scoped-classroom-v1](term-scoped-classroom-v1.md)），這些步驟由
+> `_is_term_scoped_classroom_schema()` 守衛整段跳過：全新資料庫由 `init_db()` 直接建出新
+> 結構，硬跑會把已移除的快照表重建回來。舊資料庫升級時仍會先跑完這段、再併入學期範圍。
 
 migration 必須冪等，並在 `run_migrations()` 末端追加：
 
@@ -112,7 +102,7 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
    不可由 owner 猜測。
 10. 對 Project 校別 id 快照依遷移 ledger、唯一校名、目前 Classroom 依序回填；
    無法唯一決定時 migration 失敗，不可猜。
-11. Project 連回 slot 後，其校 id／校名／班名／部門快照必須與 term classroom
+11. Project 連回 slot 後，其校 id／校名／班名／部門快照必須與該工作格的班級
     完全一致；不一致 migration fail-fast，不建立分裂報表 scope。
 12. 封存待清除與未歸班 Project 保持 slot NULL，不建立 term rows。
 
@@ -127,14 +117,15 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 事件備註。草稿可指定 ordered TemplatePeriods。套用順序固定為：
 
 1. 驗證 revision、source fingerprint、學期期別與目標狀態。
-2. 結束舊學生與老師區間，建立新區間。
-3. 從套用後的目標班級建立 term classrooms 與學生／老師快照。
-4. 依同部門 term classrooms × term periods 建立完整工作格。
+2. 結束舊學期班級的全部名冊與老師區間——舊班隨學期一起結束，沒有「留在原班就不動」
+   的分支。
+3. 在目標學期的班（建立草稿時就已長出來）建立新的名冊與老師區間。
+4. 依同部門的目標學期班級 × term periods 建立完整工作格。
 5. 關閉舊 active term、啟用目標 term、標記 plan applied。
 6. 一次 commit；任一步失敗全部 rollback。
 
-新期別加入 active term 時，必須在同一 transaction 為同部門 term classrooms
-補工作格。取消 draft plan 同時取消其尚未啟用的 term。
+新期別加入 active term 時，必須在同一 transaction 為同部門的該學期班級補工作格。
+取消 draft plan 同時取消其尚未啟用的 term 與其班級。
 
 ### 建立相本
 

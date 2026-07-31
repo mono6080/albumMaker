@@ -116,7 +116,8 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET | `/academic-terms` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
 | POST / PATCH | `/campuses`、`/campuses/{id}` | 建立／更新分校；旗下仍有目前學生或老師時不可停用 |
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
-| POST / PATCH | `/classrooms`、`/classrooms/{id}` | 建立／更新班級（分校、`infant\|academy` 部門、名稱、啟用狀態） |
+| POST | `/classrooms` | 在目前正式學期建立班級（分校、`infant\|academy` 部門、名稱） |
+| PATCH | `/classrooms/{id}` | 只能改班名；改分校或部門回 409 `classroom_scope_is_immutable`，送 `is_active` 回 422 `classroom_has_no_active_flag` |
 | PUT | `/classrooms/{id}/teachers` | admin 以完整集合原子替換目前老師；非空集合恰有一位 `lead`，其餘為 `co_teacher`，歷史區間保留 |
 | POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
 | PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
@@ -124,61 +125,22 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
-| GET | `/projects/{project_id}/classroom-migration-preview?classroom_id=…` | admin 讀取固定 Student 快照、目標班狀態、established identity options 與 `source_fingerprint`；零寫入且不按姓名預選 decision |
-| PUT | `/projects/{project_id}/classroom` | admin 以完整 `student_identity_decisions` 顯式解析每位 Student 並歸班；可在空班以 `seed_current_roster` 全量建立目前名單 |
-| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm |
-| POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子切換目前編制、產生學期快照／工作格並啟用目標學期；或取消且不動目前狀態 |
+| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm 與其新建班級，payload 的 `target_classrooms` 列出這些班，`classroom_id` 一律指它們 |
+| POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
-相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**；
-**讀取**另外涵蓋曾任教班級（見
-[organization-roster-management-v1](../specs/organization-roster-management-v1.md)），
-所以學期轉換不會讓老師看不到自己去年做的相本。
-未歸班 Project 保持 admin-only，管理員在 overview 逐本選班，
-系統不從 owner、名稱、舊主管關係或 provisional child link 推測。歸班 request shape 為：
+相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**（`ended_at IS NULL` 的指派）；
+**讀取**只要在該學期班級有過任何一筆指派即可，所以學期轉換不會讓老師看不到自己去年
+做的相本，而接手同名班的新老師也不會拿到上一屆的相本——班不跨學期，兩者是不同的班。
+見 [term-scoped-classroom-v1](../specs/term-scoped-classroom-v1.md#權限契約)。
+未歸班 Project 保持 admin-only 唯讀。班級改為學期範圍實體後歸班流程已退場——那些相本
+一律等封存到期由既有清理流程移除，系統不從 owner、名稱或舊主管關係推測班級。
 
 名冊 `album_name` 最多 100 字，首尾空白會移除，空字串或 `null` 代表清除。它跟隨
 `RosterChild` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
 相關學生輸出指標會失效，必須重新渲染。完整姓名與成員集合仍維持各期快照。
 自動推導與跨班／跨既有相本碰撞規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
-
-preview response 固定回 `source_fingerprint`、`target_classroom`（含目前名單數與
-`seed_allowed`）、`students`（固定快照、original provisional evidence、
-`allowed_existing_roster_child_ids`）及 `established_candidates`。candidate 的 evidence 可標示
-`target_membership`／`same_name_membership`（分校、部門、班級、membership id、目前在班或
-已結束狀態與區間時間）、`target_project`／`same_name_project`（分校、部門、班級、相本
-id／名稱／active-or-archived 狀態及可取得的期別 id／名稱），以及只說明姓名命中的
-`same_name_established`。非目標班的同名候選必須帶至少一筆實際 membership 或 class-backed
-Project 來源，不能只回模糊的全園同名標籤；target evidence 也帶同一組校班脈絡。evidence
-只解釋為何可供人工核對，不代表已選擇 action，也不得讓後端或前端自動確認。
-
-候選與 evidence 以穩定 id 排序並納入 `source_fingerprint`；同一狀態重開 preview 會得到相同
-fingerprint。補充來源脈絡不改變可選集合：每位 Student 仍只允許目標班的 established ids，
-加上全園與該 Student 正規化姓名相同的 established ids。
-
-```json
-{
-  "classroom_id": 12,
-  "seed_current_roster": true,
-  "source_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "confirmed_all": true,
-  "student_identity_decisions": [
-    {"student_id": 101, "action": "create_new"},
-    {"student_id": 102, "action": "existing", "roster_child_id": 55}
-  ]
-}
-```
-
-`source_fingerprint` 必須原樣帶回 preview 所提供的 64 字元 opaque SHA-256 hex。
-沒有任何 Student 快照的 legacy Project 在 preview 即回 422
-`empty_legacy_project_migration_forbidden`，不建立 ledger、工作格連結或班級權限。
-
-decision 集合必須與 Project Student 集合完全相等，`confirmed_all` 必須為 `true`；apply
-會在 transaction 內重算 preview fingerprint，不符回 409 且零寫入。`existing` 只接受
-established identity，`create_new` 一律建立新 id，不保存 provisional id。seed 是
-all-or-none：`true` 只接受空的目前名單並建立解析後全體成員，`false` 完全不動名單。完整交易與 freeze 契約見
-[園所名單與相本權限規格](../specs/organization-roster-management-v1.md#migration)。
 
 `migration_status` 固定包含：
 

@@ -2,7 +2,7 @@
 
 > Owns：所有「已知但尚未處理」的程式碼落差（drift）、未定案設計問題與營運缺口。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-17。
+> 最後盤點：2026-07-31。
 
 ---
 
@@ -15,6 +15,15 @@
    記錄 method/path，但尚未配置 Sentry 或 log 掃描通知收件人。
 3. **外部 uptime 告警仍需部署端設定**：`/api/health` 已檢查 SQLite，Docker
    HEALTHCHECK 也已接上；仍需外部監控服務定期探測正式網域並設定通知。
+
+## 已知 drift
+
+- **正式／開發資料庫的 `trg_students_freeze_class_backed_identity` 與程式碼定義不同**：
+  資料庫裡的版本多了一段「同工作格同模板可搬 Student」的例外，migrations.py 沒有這段
+  SQL，repo 全文也搜不到——它是一次性修復當下手工執行的結果。因為 migration 用
+  `CREATE TRIGGER IF NOT EXISTS`，既有資料庫不會被改回去。實務上資料庫版本比較寬鬆，
+  不影響正確性，但「trigger 定義以程式碼為準」在這張表上不成立。
+  2026-07-31 於學期範圍班級重構時，比對正式資料副本升級後與全新資料庫的 schema 時發現。
 
 ## 開放設計問題
 

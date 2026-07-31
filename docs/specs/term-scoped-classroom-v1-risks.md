@@ -100,6 +100,9 @@ key 由 `project_id` / `student_id` 整數推導，與表名無關。但改名�
 （`check_backend_route_boundaries.py`、`suggest_student_album_names.py`、
 `audit_text_overflow.py`）必須同 commit 改。
 
+已處理：`migrate_production_organization_202607.py` 已在檔頭標記退場（只供稽核，不可
+對現行資料庫執行），其測試一併移除——它建的是舊結構，留著只會擋住新結構的 migration。
+
 ### R5 編班草稿的 source_fingerprint 失效
 
 `compute_organization_source_fingerprint` 把 `classroom_id` 寫進雜湊來源。改成學期
@@ -179,6 +182,23 @@ Django 把權限列綁在 `content_type(app_label, model)` 上，所以搬 model
 
 route boundary 與 roster 兩份會因為 API 路徑改名而需要更新——那是預期內的契約改動，
 更新時必須是「路徑字串換掉」，不得順手改斷言。
+
+### 實際改動的既有測試與理由
+
+上表的「一字不改」標準守住了權限矩陣（`test_project_acl_lifecycle.py`、
+`test_organization_supervisors.py` 的斷言未動）。以下測試改了，每一項都是**語意本身**
+改變而非實作走樣，記在這裡供上線前覆核：
+
+| 測試 | 舊斷言 | 新語意 |
+|------|--------|--------|
+| `test_supervisor_reporting_uses_union_of_organization_scopes_only` | 老師快照凍結，中途換老師後報表仍只列原老師 | 班只活一個學期，掛在班上的指派都屬於這個學期；報表列出全部並以 `ended_at` 分辨現任 |
+| `test_closed_term_export_follows_roster_name_correction`（原名 `..._uses_term_student_name_snapshot_...`）| 已結束學期顯示當時姓名 | 名冊姓名是唯一真相，更正後歷史學期也顯示新名；凍結的是 `Student.name` 與已渲染輸出 |
+| `test_closed_term_does_not_seed_children_from_current_roster` | 加人成功但快照不受影響 | 已結束學期的班直接拒絕加人（409） |
+| `test_active_term_roster_tracks_final_placement_and_closed_term_freezes` | 快照表 trigger 擋改寫 | 名冊 live 表的 trigger 接手同一個保證 |
+| `test_current_supervisor_reads_historical_snapshot_after_campus_rename`（原名 `..._after_classroom_move`）| 班級搬分校後主管仍讀得到 | 班級的分校不可變更；快照與現況的分歧改由分校改名產生 |
+| `test_term_plan_*`（4 個）| 計畫的班級 id 是目前學期的班 | 計畫的班一律是目標學期新建的班；`stay`／人數／老師 diff 靠 scope 對應 |
+| `test_term_plan_rejects_active_rows_under_inactive_organization_structure` | 班級 `is_active = False` | 班級沒有停用旗標，等價異常是班級落在已結束學期卻還有在籍學生 |
+| `test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations` | 重建後 ledger trigger 要回來 | 該 trigger 隨歸班流程退場，改驗兩個相本凍結 trigger |
 
 ### 各 slice 要新增的測試
 
