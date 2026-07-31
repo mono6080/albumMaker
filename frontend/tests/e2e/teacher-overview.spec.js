@@ -52,7 +52,6 @@ function project({
 
 function classroom({ classroomId, classroomName, department = "infant", slots }) {
   return {
-    term_classroom_id: classroomId + 1000,
     classroom_id: classroomId,
     campus_id: department === "infant" ? 1 : 2,
     campus_name: department === "infant" ? "和平校" : "復興校",
@@ -209,7 +208,7 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await expect(statusFilter.getByRole("button", { name: "需要處理 3" })).toBeVisible();
 
   await page.getByRole("button", { name: /和平校.*星星班/ }).click();
-  const starPanel = page.locator("#teacher-classroom-1001");
+  const starPanel = page.locator("#teacher-classroom-1");
   await expect(starPanel.getByText("未建立相本", { exact: true })).toBeVisible();
   await expect(starPanel.getByText("內容完整", { exact: true })).toBeVisible();
   await expect(starPanel.getByRole("progressbar", { name: /文字完成度/ })).toHaveAttribute("aria-valuenow", "4");
@@ -218,11 +217,11 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await expect(starPanel.getByText(/PDF/)).toHaveCount(0);
 
   await page.getByRole("button", { name: /和平校.*月亮班/ }).click();
-  const moonPanel = page.locator("#teacher-classroom-1002");
+  const moonPanel = page.locator("#teacher-classroom-2");
   await expect(moonPanel.getByText("相本已封存／不可重做", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /和平校.*太陽班/ }).click();
-  const sunPanel = page.locator("#teacher-classroom-1003");
+  const sunPanel = page.locator("#teacher-classroom-3");
   await expect(sunPanel.getByText("同一工作格有 2 本相本", { exact: true })).toBeVisible();
   await expect(sunPanel.getByText("已交件鎖定", { exact: true })).toBeVisible();
   await expect(sunPanel.getByText("交件後仍缺照片", { exact: true })).toBeVisible();

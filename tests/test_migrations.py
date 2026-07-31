@@ -5,6 +5,8 @@
 
 import json
 import sqlite3
+import sys
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -518,3 +520,115 @@ def test_table_rename_refuses_when_both_tables_hold_data(tmp_path):
                 migrations._rename_tables_to_model_names(connection)
     finally:
         engine.dispose()
+
+
+# 改名前的名字**寫死在測試裡**，不從 migrations 的設定反推。用同一份設定同時
+# 產生起點與驗證，漏掉一條就會對稱地漏兩次——測試照樣綠，這正是要防的事。
+PRE_RENAME_COLUMNS = (
+    ("classrooms", "semester_id", "academic_term_id"),
+    ("semester_periods", "semester_id", "academic_term_id"),
+    ("class_period_work_slots", "semester_period_id", "term_period_id"),
+    ("term_reclassification_plans", "target_semester_id", "target_academic_term_id"),
+)
+
+# 反向順序：students（名冊）要先讓開，project_students 才回得去 students。
+PRE_RENAME_TABLES = (
+    ("students", "roster_children"),
+    ("project_students", "students"),
+    ("semester_periods", "academic_term_periods"),
+    ("semesters", "academic_terms"),
+    ("classroom_teachers", "classroom_teacher_assignments"),
+    ("classroom_members", "class_roster_members"),
+)
+
+
+def _reverse_rename_to_pre_rename_state(database_path):
+    """把 init_db() 建出的新結構倒回改名前的表名與欄位名。
+
+    欄位定義來自現行 ORM，比手寫整份舊 DDL 可靠；但名字是測試自己寫死的，所以
+    migration 少改一個欄位或少改一張表都會讓兩條路徑分歧。回傳實際倒回的表名。
+    """
+    reverted_tables: list[str] = []
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for table, current_column, legacy_column in PRE_RENAME_COLUMNS:
+            columns = {
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            if current_column in columns and legacy_column not in columns:
+                connection.execute(
+                    f"ALTER TABLE {table} "
+                    f"RENAME COLUMN {current_column} TO {legacy_column}"
+                )
+        for current_name, legacy_name in PRE_RENAME_TABLES:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if current_name in tables and legacy_name not in tables:
+                connection.execute(
+                    f"ALTER TABLE {current_name} RENAME TO {legacy_name}"
+                )
+                reverted_tables.append(legacy_name)
+        connection.commit()
+    finally:
+        connection.close()
+    return reverted_tables
+
+
+def _run_startup_sequence(database_path, monkeypatch):
+    """跑一次 main.py lifespan 的順序：改名 → init_db → migrations。
+
+    用 monkeypatch 換掉模組層 engine，而不是 reload 模組——reload 會把其他測試
+    正在用的 SessionLocal 換成另一個物件。
+    """
+    import database
+    import migrations
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{Path(database_path).as_posix()}")
+    try:
+        monkeypatch.setattr(database, "engine", engine)
+        monkeypatch.setattr(migrations, "engine", engine)
+        migrations.rename_tables_to_model_names()
+        database.init_db()
+        migrations.run_migrations()
+    finally:
+        engine.dispose()
+        monkeypatch.undo()
+
+
+def test_upgraded_and_fresh_databases_converge_to_the_same_schema(tmp_path, monkeypatch):
+    """從改名前的結構升級上來，表與欄位必須與全新建的一模一樣。
+
+    守的是一類不會報錯的失敗：欄位改名只改了值沒改欄位名、改名規則加了新的一條
+    卻沒有人跑過升級路徑。兩條路徑都會「成功」，只是長出不同的資料庫。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from compare_database_schema import diff_schemas, snapshot_schema
+
+    fresh_path = tmp_path / "fresh.db"
+    _run_startup_sequence(fresh_path, monkeypatch)
+    fresh = snapshot_schema(fresh_path)
+
+    upgraded_path = tmp_path / "upgraded.db"
+    _run_startup_sequence(upgraded_path, monkeypatch)
+    reverted_tables = _reverse_rename_to_pre_rename_state(upgraded_path)
+    # 沒有真的倒回舊結構，後面比的就是兩個相同的新資料庫——測試會空跑
+    assert set(reverted_tables) == {legacy for _, legacy in PRE_RENAME_TABLES}
+    _run_startup_sequence(upgraded_path, monkeypatch)
+    upgraded = snapshot_schema(upgraded_path)
+
+    differences = [
+        difference
+        for difference in diff_schemas(upgraded, fresh)
+        if difference.startswith("tables:")
+    ]
+    assert differences == [], (
+        "升級後與全新資料庫的表結構不一致：\n"
+        + "\n".join(differences)
+    )
+

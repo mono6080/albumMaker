@@ -986,3 +986,39 @@ def test_term_plan_revision_and_business_validation_are_separate():
             ),
             200,
         )
+
+
+def test_overview_lists_only_current_semester_classrooms_while_draft_exists():
+    """建了編班草稿之後，園所設定不能同時列出兩個學期的同名班。
+
+    班級不跨學期，草稿會先把下學期的班長出來；不過濾的話同一個班名會出現兩次，
+    一個標「本學期」一個標「已結束」。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        classroom_name = unique_name("草稿期間唯一班名")
+        classroom_id = _create_classroom(client, campus_id, classroom_name)
+        _add_members(client, classroom_id, [unique_name("草稿期間學生")])
+
+        def campus_classrooms() -> list[dict]:
+            overview = client.get("/api/organization/overview")
+            assert_status(overview, 200)
+            return next(
+                campus["classrooms"]
+                for campus in overview.json()["campuses"]
+                if campus["id"] == campus_id
+            )
+
+        assert [row["name"] for row in campus_classrooms()] == [classroom_name]
+
+        plan = _create_plan(client)
+        target_classroom_ids = {
+            row["classroom_id"] for row in plan["target_classrooms"]
+        }
+        assert target_classroom_ids and classroom_id not in target_classroom_ids
+
+        after_draft = campus_classrooms()
+        assert [row["name"] for row in after_draft] == [classroom_name]
+        assert [row["id"] for row in after_draft] == [classroom_id]
+        assert all(row["is_current"] for row in after_draft)

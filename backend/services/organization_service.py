@@ -274,7 +274,12 @@ def _serialize_classroom(classroom: Classroom) -> dict:
     }
 
 
-def _serialize_campus(campus: Campus) -> dict:
+def _serialize_campus(campus: Campus, current_semester_id: int | None) -> dict:
+    """園所設定只呈現目前學期的班。
+
+    班級不跨學期，同一個分校會累積歷屆的班；編班草稿更會先把下學期的班長出來。
+    不過濾的話，同一個班名會同時以「本學期」和「已結束」出現兩次。
+    """
     return {
         "id": campus.id,
         "name": campus.name,
@@ -282,7 +287,11 @@ def _serialize_campus(campus: Campus) -> dict:
         "created_at": campus.created_at,
         "updated_at": campus.updated_at,
         "supervisor_scopes": _serialize_supervisor_scopes(campus),
-        "classrooms": [_serialize_classroom(classroom) for classroom in campus.classrooms],
+        "classrooms": [
+            _serialize_classroom(classroom)
+            for classroom in campus.classrooms
+            if classroom.semester_id == current_semester_id
+        ],
     }
 
 
@@ -423,6 +432,7 @@ def get_organization_overview(db: Session) -> dict:
         .order_by(Semester.id.desc())
         .first()
     )
+    current_semester_id = current_term.id if current_term is not None else None
     current_work_slots = (
         db.query(ClassPeriodWorkSlot)
         .join(
@@ -446,7 +456,10 @@ def get_organization_overview(db: Session) -> dict:
         else []
     )
     return {
-        "campuses": [_serialize_campus(campus) for campus in campuses],
+        "campuses": [
+            _serialize_campus(campus, current_semester_id)
+            for campus in campuses
+        ],
         "unassigned_projects": [
             _serialize_project(project) for project in unassigned_projects
         ],
@@ -799,7 +812,7 @@ def create_campus(db: Session, name: str, is_active: bool) -> dict:
     db.add(campus)
     db.commit()
     db.refresh(campus)
-    return _serialize_campus(campus)
+    return _serialize_campus(campus, _current_semester_id(db))
 
 
 @organization_mutation
@@ -851,7 +864,7 @@ def update_campus(db: Session, campus_id: int, changes: dict) -> dict:
     campus.updated_at = utc_now()
     db.commit()
     db.refresh(campus)
-    return _serialize_campus(campus)
+    return _serialize_campus(campus, _current_semester_id(db))
 
 
 def _assert_classroom_name_available(
@@ -876,6 +889,11 @@ def _assert_classroom_name_available(
         query = query.filter(Classroom.id != excluded_classroom_id)
     if query.first():
         raise HTTPException(status_code=409, detail="同分校與部門已有同名班級")
+
+
+def _current_semester_id(db: Session) -> int | None:
+    current_semester = _current_semester(db)
+    return current_semester.id if current_semester is not None else None
 
 
 def _current_semester(db: Session) -> Semester | None:
