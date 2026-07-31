@@ -219,12 +219,19 @@ route boundary 與 roster 兩份會因為 API 路徑改名而需要更新——�
 
 ### 各 slice 要新增的測試
 
-| Slice | 新增測試 |
-|-------|----------|
-| 1 schema／migration | 前提驗證五項各自失敗時中止；搬遷後逐筆等價；trigger 順序；冪等重跑 0 筆 |
-| 2–4 改名 | 全新資料庫與 legacy 資料庫兩條路徑；改名後 FK 與 trigger 指向新表名 |
-| 5 scope／權限 | 同名班級跨兩學期各自只讀得到自己那學期；學期中途接手的老師讀得到本學期較早的相本 |
-| 7 編班 | 新生可直接放進計畫；套用後名單與編制落在新學期班級 |
+| Slice | 新增測試 | 狀態 |
+|-------|----------|------|
+| 1 schema／migration | 前提驗證五項各自失敗時中止；搬遷後逐筆等價；trigger 順序；冪等重跑 0 筆 | 冪等與 legacy 升級由 `test_migrations.py` 覆蓋；**前提驗證各自失敗時中止尚未有測試** |
+| 2–4 改名 | 全新資料庫與 legacy 資料庫兩條路徑；改名後 FK 與 trigger 指向新表名 | 兩條路徑以 schema 比對驗過（表／索引／trigger 完全一致），**但比對是手動腳本，尚未自動化** |
+| 5 scope／權限 | 同名班級跨兩學期各自只讀得到自己那學期；學期中途接手的老師讀得到本學期較早的相本 | ✅ `test_same_class_name_across_semesters_keeps_each_cohort_separate`、`test_teacher_assigned_mid_semester_reads_albums_created_before_arrival` |
+| 7 編班 | 新生可直接放進計畫；套用後名單與編制落在新學期班級 | 後半由 `test_term_plan_applies_students_and_teachers_without_rewriting_old_project` 覆蓋；**「新生可直接放進計畫」尚未有測試** |
+
+### 尚未關閉的測試缺口
+
+- migration 前提驗證的五項守衛，沒有「各自失敗時中止」的測試。
+- 「升級後 vs 全新資料庫 schema 一致」目前靠手動比對腳本，不在 pytest 裡。
+- 編班計畫還不支援把新生（沒有來源 membership）直接放進去。
+- Playwright e2e 未在本輪執行（選擇器已隨 UI 文案同步更新，但沒跑過）。
 
 ### 渲染輸出位元比對
 

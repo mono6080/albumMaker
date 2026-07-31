@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session as OrmSession
 
 from database import (
+    Semester,
     SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,
@@ -1063,3 +1064,215 @@ def test_role_none_commit_failure_rolls_back_owner_transfer(monkeypatch):
         ).count() == 0
     finally:
         db.close()
+
+
+def test_same_class_name_across_semesters_keeps_each_cohort_separate():
+    """同一個班名逐年重建：接手的老師拿不到上一屆的相本。
+
+    這是整個學期範圍班級重構的理由——舊模型下「九階A」是一個長期班級，新老師
+    一被指派就取得歷屆全部相本，且同名班每年只能沿用同一筆資料。
+    """
+    with started_client() as client:
+        admin = login(client)
+        previous_teacher, previous_password = create_user(client, "teacher")
+        next_teacher, next_password = create_user(client, "teacher")
+        class_name = unique_name("九階A")
+        previous_template_id, _ = create_template_with_page(client)
+
+        db = SessionLocal()
+        try:
+            campus = Campus(name=unique_name("同名班分校"))
+            db.add(campus)
+            db.flush()
+            previous_classroom = Classroom(
+                semester_id=current_semester_id(db),
+                campus_id=campus.id,
+                department="infant",
+                name=class_name,
+            )
+            db.add(previous_classroom)
+            db.flush()
+            db.add(ClassroomTeacher(
+                classroom_id=previous_classroom.id,
+                teacher_id=previous_teacher["id"],
+                teacher_name_snapshot=previous_teacher["display_name"],
+                duty="lead",
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            ))
+            previous_project_id = _seed_project(
+                db,
+                template_id=previous_template_id,
+                owner_id=previous_teacher["id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("上屆九階A相本"),
+                classroom=previous_classroom,
+                with_student=True,
+            )
+            db.commit()
+            previous_classroom_id = previous_classroom.id
+            campus_id = campus.id
+        finally:
+            db.close()
+
+        # 學期轉換：上一個學期結束，新學期接手成為目前學期
+        db = SessionLocal()
+        try:
+            db.get(Semester, current_semester_id(db)).status = "closed"
+            db.flush()
+            next_semester = Semester(
+                label=unique_name("下一學期"),
+                status="active",
+                created_by_name_snapshot=admin["display_name"],
+            )
+            db.add(next_semester)
+            db.commit()
+            next_semester_id = next_semester.id
+        finally:
+            db.close()
+
+        next_period = client.post(
+            "/api/templates/periods",
+            data={
+                "name": unique_name("下屆期別"),
+                "department": "infant",
+                "status": "active",
+            },
+        )
+        assert_status(next_period, 200)
+        next_template_id, _ = create_template_with_page(
+            client,
+            period_id=next_period.json()["id"],
+        )
+
+        db = SessionLocal()
+        try:
+            # 同名班在新學期是另一筆班級——唯一鍵含學期，所以建得起來
+            next_classroom = Classroom(
+                semester_id=next_semester_id,
+                campus_id=campus_id,
+                department="infant",
+                name=class_name,
+            )
+            db.add(next_classroom)
+            db.flush()
+            assert next_classroom.id != previous_classroom_id
+            db.add(ClassroomTeacher(
+                classroom_id=next_classroom.id,
+                teacher_id=next_teacher["id"],
+                teacher_name_snapshot=next_teacher["display_name"],
+                duty="lead",
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            ))
+            next_project_id = _seed_project(
+                db,
+                template_id=next_template_id,
+                owner_id=next_teacher["id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("本屆九階A相本"),
+                classroom=next_classroom,
+                with_student=True,
+            )
+            db.commit()
+            next_classroom_id = next_classroom.id
+        finally:
+            db.close()
+
+        # 接手同名班的老師只看得到自己那屆
+        client.cookies.clear()
+        login(client, next_teacher["username"], next_password)
+        assert _listed_project_ids(client) == {next_project_id}
+        assert_status(client.get(f"/api/projects/{previous_project_id}"), 403)
+        assert client.get(
+            f"/api/projects/{next_project_id}"
+        ).json()["permissions"]["can_edit"] is True
+
+        # 上一屆的老師仍讀得到自己帶過的那屆，但不會因為班名相同而取得新一屆
+        client.cookies.clear()
+        login(client, previous_teacher["username"], previous_password)
+        assert _listed_project_ids(client) == {previous_project_id}
+        previous_permissions = client.get(
+            f"/api/projects/{previous_project_id}"
+        ).json()["permissions"]
+        assert previous_permissions["can_read"] is True
+        assert previous_permissions["can_edit"] is False
+        assert_status(client.get(f"/api/projects/{next_project_id}"), 403)
+
+        # 「我的班級」只認目前學期的編制
+        my_classrooms = client.get("/api/organization/my-classrooms")
+        assert_status(my_classrooms, 200)
+        assert my_classrooms.json()["classrooms"] == []
+
+        client.cookies.clear()
+        login(client, next_teacher["username"], next_password)
+        next_my_classrooms = client.get("/api/organization/my-classrooms")
+        assert_status(next_my_classrooms, 200)
+        assert [
+            item["id"] for item in next_my_classrooms.json()["classrooms"]
+        ] == [next_classroom_id]
+
+
+def test_teacher_assigned_mid_semester_reads_albums_created_before_arrival():
+    """學期中途接手的老師，讀得到該班本學期較早建立的相本。
+
+    讀權看的是「這個學期班級上有沒有指派」，不是指派與相本建立的先後。
+    """
+    with started_client() as client:
+        admin = login(client)
+        arriving_teacher, arriving_password = create_user(client, "teacher")
+        template_id, _ = create_template_with_page(client)
+
+        db = SessionLocal()
+        try:
+            campus = Campus(name=unique_name("中途接手分校"))
+            db.add(campus)
+            db.flush()
+            classroom = Classroom(
+                semester_id=current_semester_id(db),
+                campus_id=campus.id,
+                department="infant",
+                name=unique_name("中途接手班"),
+            )
+            db.add(classroom)
+            db.flush()
+            earlier_project_id = _seed_project(
+                db,
+                template_id=template_id,
+                owner_id=admin["user_id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("接手前就存在的相本"),
+                classroom=classroom,
+                with_student=True,
+            )
+            db.commit()
+            classroom_id = classroom.id
+        finally:
+            db.close()
+
+        client.cookies.clear()
+        login(client, arriving_teacher["username"], arriving_password)
+        assert_status(client.get(f"/api/projects/{earlier_project_id}"), 403)
+
+        db = SessionLocal()
+        try:
+            db.add(ClassroomTeacher(
+                classroom_id=classroom_id,
+                teacher_id=arriving_teacher["id"],
+                teacher_name_snapshot=arriving_teacher["display_name"],
+                duty="lead",
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        permissions = client.get(
+            f"/api/projects/{earlier_project_id}"
+        ).json()["permissions"]
+        assert permissions["can_read"] is True
+        assert permissions["can_edit"] is True
