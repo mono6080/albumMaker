@@ -76,11 +76,6 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     自動拆合、class-backed identity anomaly（含封存相本）整本隔離與 append-only audit、
     identity resolution ledger／freeze trigger、名冊稱呼的既有／未來 Project 共用 authority、
     舊 editor 結束、schema constraint 與 migration 冪等
-  - `test_organization_project_migration.py`：歸班 preview 零寫入且不按姓名預選、decision 集合
-    必須完整、`source_fingerprint` stale 與 `confirmed_all` gate、`existing` 只收 established
-    identity、同名候選的校／部門／班級、membership active／ended 與歷史相本期別 evidence、
-    `create_new` 不 preserve provisional、seed all-or-none，以及兩層 ledger／ProjectStudent link／
-    membership／Project snapshot 的單一 transaction rollback
   - `test_organization_term.py`：編班完整目標、revision/fingerprint、validate 零寫入、
     stale/invalid rollback、同時間原子套用，以及既有 Project/ProjectStudent/ACL invariant
   - `test_project_acl_lifecycle.py`：目前班級老師與校／部門主管 object policy、owner 不授權、

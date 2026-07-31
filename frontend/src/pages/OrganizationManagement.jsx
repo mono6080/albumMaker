@@ -1398,7 +1398,7 @@ export default function OrganizationManagement() {
                 <p className={`mt-1 text-sm leading-6 ${hasAssignedIdentityAnomalies ? "text-red-700" : "text-amber-700"}`}>
                   {hasAssignedIdentityAnomalies
                     ? "已歸班相本仍有缺少或重複的學生身分，遷移尚未完成，請先停止學期彙整並檢查資料。"
-                    : "班級改為學期範圍實體後歸班流程已退場；這些相本只供管理員唯讀查看，屆封存期由既有清理流程移除。"}
+                    : "班級改為學期範圍實體後歸班流程已退場；這些相本仍只有管理員看得到，屆封存期由既有清理流程移除。"}
                 </p>
                 {migrationStatus.archived_teacher_supervisor_link_count > 0 && (
                   <p className="mt-2 text-xs leading-5 text-slate-600">
@@ -2163,7 +2163,7 @@ export default function OrganizationManagement() {
             <h2 className="font-semibold text-gray-900">未歸班相本</h2>
             <p className="mt-0.5 text-xs leading-5 text-gray-500">
               這些相本未從班級目前名單建立（包含班級資料上線前的舊相本）。班級改為學期範圍實體後，
-              歸班流程已退場——這些相本只保留唯讀查看，屆封存期由既有清理流程移除。
+              歸班流程已退場——這些相本仍只有管理員看得到，屆封存期由既有清理流程移除。
             </p>
           </div>
           <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">

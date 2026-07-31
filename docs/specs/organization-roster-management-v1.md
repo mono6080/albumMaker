@@ -180,12 +180,13 @@ assignment id／teacher／duty／started_at 組成 canonical JSON（固定 key �
 再取 SHA-256；validate 與 apply 都重新計算。來源已變時回 409，不得部分套用，管理員須
 重新整理或重建草稿。
 
-班級結構不在 plan 內修改；管理員須先建立並啟用新學期會使用的目標班級。plan 不負責
-建立、改名或停用分校／班級，舊班級待成功套用且無 active 名單／編制後再由既有流程停用。
+建立草稿時就照目前的分校／部門／班名在目標學期長出對應班級（見
+[term-scoped-classroom-v1](term-scoped-classroom-v1.md)）；管理員不需要先手動建立目標班。
+舊班級隨學期一起結束，不需要另外停用。
 
-apply 在單一 transaction、單一 `applied_at` 內完成：留在同班者保留原 active row；
-轉班者以 `term_reassignment` 結束舊 row 並建立新 row；離園者只結束舊 row。老師未變者
-保留原 row，新增、移除或 duty 變更才建立／結束區間。套用前必須保證目標分校與班級
+apply 在單一 transaction、單一 `applied_at` 內完成：舊學期的名冊與編制**全部**結束
+（包含沒有學生的班），目標學期的班建立新的 row；離園者只結束舊 row，不建新的。
+班不跨學期，所以沒有「留在原班就不動」的分支。套用前必須保證目標分校與班級
 皆 active、每位來源學生恰有一個目標、學生不重複、同班正規化姓名不重複、班級人數
 未超過相本學生上限、目標老師仍為 `role=teacher|supervisor` 的操作帳號，以及每個非空老師
 集合恰有一位 lead。
@@ -231,8 +232,8 @@ v1 新入園學生仍走園所設定的「加入目前名單」流程，在加�
 - `POST /api/organization/classrooms/{id}/projects`：admin 或該班 active lead 可建立班級相本；
   owner 必須是 active 班級老師，省略時採 active lead；不建立 editor assignment。
 > 舊相本歸班的兩個端點（`classroom-migration-preview` 與 `PUT .../classroom`）已隨
-> [term-scoped-classroom-v1](term-scoped-classroom-v1.md) 退場：未歸班相本改為 admin-only
-> 唯讀，等封存到期由既有清理流程移除。
+> [term-scoped-classroom-v1](term-scoped-classroom-v1.md) 退場：未歸班相本維持
+> admin-only，能力矩陣不變，等封存到期由既有清理流程移除。
 
 分校停用、或班級所屬學期已結束時，不可新增編制或相本（班級沒有自己的停用旗標）。`role=teacher|supervisor` 的 active 操作帳號都可加入
 老師編制或主管 scope，同一帳號可同時存在於兩者且不改 `User.role`。

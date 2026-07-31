@@ -1234,3 +1234,44 @@ def test_placement_stay_target_survives_moving_a_student_away():
         assert restored_placement["keeps_source_classroom"] is True
         assert restored_placement["stay_classroom_id"] == stay_classroom_id
         assert restored.json()["diff"]["students"]["move"] == []
+
+
+def test_draft_classroom_rename_scopes_uniqueness_to_its_own_semester():
+    """草稿學期的班改名，唯一性只看它自己那個學期。
+
+    固定查目前學期會兩頭錯：草稿裡的合法改名被目前學期的同名班擋掉，草稿內真正的
+    衝突反而漏過檢查、最後撞 DB 約束變成 500。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        first_name = unique_name("甲班")
+        second_name = unique_name("乙班")
+        first_classroom_id = _create_classroom(client, campus_id, first_name)
+        _create_classroom(client, campus_id, second_name)
+        _add_members(client, first_classroom_id, [unique_name("草稿改名學生")])
+
+        plan = _create_plan(client)
+        draft_by_name = {
+            row["name"]: row["classroom_id"] for row in plan["target_classrooms"]
+        }
+        draft_first_id = draft_by_name[first_name]
+
+        # 草稿建立之後才出現在目前學期的班名——草稿學期沒有它
+        current_only_name = unique_name("只在目前學期")
+        _create_classroom(client, campus_id, current_only_name)
+
+        allowed = client.patch(
+            f"/api/organization/classrooms/{draft_first_id}",
+            json={"name": current_only_name},
+        )
+        assert_status(allowed, 200)
+        assert allowed.json()["name"] == current_only_name
+
+        # 同一個草稿學期內撞名要在 preflight 就擋下
+        conflict = client.patch(
+            f"/api/organization/classrooms/{draft_first_id}",
+            json={"name": second_name},
+        )
+        assert_status(conflict, 409)
+        assert conflict.json()["detail"] == "同分校與部門已有同名班級"

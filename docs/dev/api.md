@@ -133,7 +133,8 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 **讀取**只要在該學期班級有過任何一筆指派即可，所以學期轉換不會讓老師看不到自己去年
 做的相本，而接手同名班的新老師也不會拿到上一屆的相本——班不跨學期，兩者是不同的班。
 見 [term-scoped-classroom-v1](../specs/term-scoped-classroom-v1.md#權限契約)。
-未歸班 Project 保持 admin-only 唯讀。班級改為學期範圍實體後歸班流程已退場——那些相本
+未歸班 Project 保持 admin-only（能力矩陣不變，admin 仍可編輯與封存）。班級改為學期
+範圍實體後歸班流程已退場——那些相本
 一律等封存到期由既有清理流程移除，系統不從 owner、名稱或舊主管關係推測班級。
 
 名冊 `album_name` 最多 100 字，首尾空白會移除，空字串或 `null` 代表清除。它跟隨
@@ -221,8 +222,8 @@ payload 含已完成學生整批 422；共用照片指定名單含已完成學�
 `{"text": string|null, "text_align": "left|center|right"}` entry，shape 錯誤回 422。
 
 Project 的學生集合與 `ProjectStudent.name` 沒有 runtime 新增、複製、刪除或改名端點；新相本
-只在班級端點建立時從目前名單產生快照；舊相本只有在未歸班時可由 admin 歸班流程解析
-identity，成功後同樣凍結。preview 與 apply 以外沒有 link／merge／split 入口。
+只在班級端點建立時從目前名單產生快照。歸班流程已退場，未歸班舊相本不再有解析 identity
+的入口；系統完全沒有 link／merge／split 端點。
 完整 authority 與跨期語意見 [data-model.md 的班級名單與每期快照](data-model.md#班級名單組織權限每期快照與相本遷移)。
 學生 detail／editor response 同時回傳 `name`、解析後的 `album_name` 與
 `effective_album_name`。已歸班相本動態讀 `Student.album_name`；未歸班 Project 即使有

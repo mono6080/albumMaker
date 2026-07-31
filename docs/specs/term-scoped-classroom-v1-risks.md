@@ -205,7 +205,6 @@ Django 把權限列綁在 `content_type(app_label, model)` 上，所以搬 model
 | `test_organization_term.py` | 6 | 編班計畫的建立、驗證、套用、取消 |
 | `test_semester_reporting.py` | 13 | 學期快照、老師進度、彙整匯出 |
 | `test_organization_schema_migrations.py` | 15 | 組織 schema migration |
-| `test_organization_project_migration.py` | 11 | 舊相本歸班 |
 | `test_migrations.py` | 3 | 冪等、legacy 升級、中斷復原 |
 | `test_backend_route_boundaries.py` | 15 | 路由註冊表 |
 | `test_render_regression.py` | 19 | 渲染輸出 |

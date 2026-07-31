@@ -3,7 +3,7 @@
 ## Verdict
 
 Decision：班級的身分是「學期 × 分校 × 部門 × 班名」，不是跨學期的長期實體。兩層合而
-為一：`classrooms` 表留下並補上 `academic_term_id` 成為班級本體，`academic_term_classrooms`
+為一：`classrooms` 表留下並補上 `semester_id` 成為班級本體，`academic_term_classrooms`
 （及其兩張快照表）移除。
 
 > 實作時改為保留 `classrooms` 而非保留 `academic_term_classrooms`：兩者本來就 1:1，
@@ -38,10 +38,9 @@ Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，
 
 ## Scope
 
-- `classrooms` 的移除，以及 `class_roster_members`、`classroom_teacher_assignments`、
-  `projects`、`term_classroom_plans`、`term_student_placements` 的 FK 重新指向。
-- `academic_term_classrooms` 由快照欄位改為本體欄位（`campus_id` FK、`name`、
-  `department`）。
+- 兩層班級合而為一：`classrooms` 補上 `semester_id` 成為班級本體，
+  `academic_term_classrooms` 與其兩張快照表移除。引用班級的 `classroom_id` 外鍵
+  因此不必改，只有工作格要換 id。
 - 老師 scope、`my-classrooms`、相本 object policy 與學期彙整匯出的查詢改寫。
 - 編班計畫由「舊班 → 新班的搬遷」改為「在新學期建立班級並放人」。
 - 一次性資料 migration 與其前提驗證。
@@ -96,27 +95,28 @@ AcademicTerm（學期）
 兩張學期快照表原本提供的不可變保證。
 
 `ux_class_roster_active_child`（roster_child_id WHERE ended_at IS NULL）維持全園唯一——
-一個孩子同一時間只能在一個班，跨學期由不同的 term_classroom 承接。
+一個孩子同一時間只能在一個班，跨學期由不同學期的班級 承接。
 
 ### Project
 
-`projects.classroom_id` 移除。班級一律由 `class_period_work_slot_id → term_classroom` 推
-導；現有 88 本相本已全部掛有工作格，且與 `classroom_id` 推出的班 100% 一致。
+`projects.classroom_id` 保留——`classrooms` 本身就是學期班級，這個欄位不再有跨學期
+歧義。報表與匯出仍以 `class_period_work_slot_id → classroom` 為準；現有 88 本相本已
+全部掛有工作格，且與 `classroom_id` 推出的班 100% 一致。
 
 `campus_id_snapshot`／`campus_name_snapshot`／`classroom_name_snapshot`／`department`
 四個相本層快照欄位保留不動，主管 scope 仍以 `campus_id_snapshot` 判斷歷史相本。
 
 ## 權限契約
 
-- **讀**：`Project → work_slot → term_classroom`，該 term_classroom 上使用者有任何一筆
+- **讀**：`Project → work_slot → classroom`，該學期班級 上使用者有任何一筆
   `ClassroomTeacherAssignment`（不論 `ended_at`）即可讀。
-- **製作**（`can_edit`）：同一 term_classroom 上有 `ended_at IS NULL` 的指派。
+- **製作**（`can_edit`）：同一個學期班級 上有 `ended_at IS NULL` 的指派。
 - **主管**：不變，仍走 `Project.campus_id_snapshot` × 部門的 scope key。
 - `my-classrooms` 與建立相本的閘門：只看目前正式學期（`status IN ('imported','active')`）
   且 `ended_at IS NULL` 的指派。
 
 因此 [organization-roster-management-v1](organization-roster-management-v1.md) 的
-`teacher_past_classroom_ids` 可以退場：曾任教的 term_classroom 天然只包含老師在場那個
+`teacher_past_classroom_ids` 可以退場：曾任教的學期班級 天然只包含老師在場那個
 學期，不會誤放上一屆的相本。
 
 ## Migration
@@ -269,5 +269,5 @@ SQLite 的 `ALTER TABLE RENAME` 會連帶改寫其他表的 FK 與 trigger 內�
 - `roster_children.student_serial`（行政系統學號）要在本次一併加入，還是等結構穩定後
   獨立一刀？兩者互不相依，但同步腳本需要 serial 才能自動化。
 - 編班計畫的 `source_fingerprint` 在班級改為每學期新建後要重新定義比對範圍。
-- `classrooms` 移除後，跨學期查詢「同一個班名的歷史」需不需要提供入口，或一律以孩子
-  （`RosterChild`）為軸。
+- 班級改為學期範圍後，跨學期查詢「同一個班名的歷史」需不需要提供入口，或一律以
+  孩子（`Student`，原 `RosterChild`）為軸。

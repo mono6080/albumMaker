@@ -1276,3 +1276,43 @@ def test_teacher_assigned_mid_semester_reads_albums_created_before_arrival():
         ).json()["permissions"]
         assert permissions["can_read"] is True
         assert permissions["can_edit"] is True
+
+
+def test_unassigned_legacy_project_keeps_admin_only_capabilities():
+    """未歸班舊相本維持 admin-only，能力矩陣不因歸班流程退場而改變。
+
+    文件一度寫成「唯讀」，但規格要的是「行為不變」——那 57 本封存相本仍由 admin
+    完整操作，只是沒有歸班入口了。
+    """
+    with started_client() as client:
+        admin = login(client)
+        teacher, teacher_password = create_user(client, "teacher")
+        template_id, _ = create_template_with_page(client)
+
+        db = SessionLocal()
+        try:
+            legacy_project_id = _seed_project(
+                db,
+                template_id=template_id,
+                owner_id=admin["user_id"],
+                creator_id=admin["user_id"],
+                creator_name=admin["display_name"],
+                name=unique_name("未歸班舊相本"),
+                classroom=None,
+                with_student=True,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        permissions = client.get(
+            f"/api/projects/{legacy_project_id}"
+        ).json()["permissions"]
+        assert permissions["can_read"] is True
+        assert permissions["can_edit"] is True
+        assert permissions["can_reopen"] is True
+        assert permissions["can_comment"] is True
+
+        client.cookies.clear()
+        login(client, teacher["username"], teacher_password)
+        assert_status(client.get(f"/api/projects/{legacy_project_id}"), 403)

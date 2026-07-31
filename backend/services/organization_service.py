@@ -865,17 +865,20 @@ def update_campus(db: Session, campus_id: int, changes: dict) -> dict:
 def _assert_classroom_name_available(
     db: Session,
     *,
+    semester_id: int,
     campus_id: int,
     department: str,
     name: str,
     excluded_classroom_id: int | None = None,
 ) -> None:
-    """同名檢查只在同一個學期內；班名跨學期本來就會重複。"""
-    current_term = _current_semester(db)
-    if current_term is None:
-        return
+    """同名檢查的範圍是**該班自己所屬的學期**；班名跨學期本來就會重複。
+
+    改名可能發生在草稿學期的班上（編班草稿先長出下學期的班），固定查目前學期會
+    兩頭錯：草稿裡的合法改名被目前學期的同名班擋成 409，草稿內真正的衝突反而
+    漏過檢查，最後撞 DB 約束變成 500。
+    """
     query = db.query(Classroom.id).filter(
-        Classroom.semester_id == current_term.id,
+        Classroom.semester_id == semester_id,
         Classroom.campus_id == campus_id,
         Classroom.department == department,
         Classroom.name == name,
@@ -971,6 +974,7 @@ def create_classroom(
         )
     _assert_classroom_name_available(
         db,
+        semester_id=current_term.id,
         campus_id=campus_id,
         department=classroom_department,
         name=classroom_name,
@@ -1031,6 +1035,7 @@ def update_classroom(db: Session, classroom_id: int, changes: dict) -> dict:
         )
     _assert_classroom_name_available(
         db,
+        semester_id=classroom.semester_id,
         campus_id=campus_id,
         department=department,
         name=name,
