@@ -16,7 +16,7 @@ from database import (
     ProjectAssignmentHistory,
     ProjectEditorAssignment,
     SessionLocal,
-    Student,
+    ProjectStudent,
     Template,
     User,
     utc_now,
@@ -85,7 +85,7 @@ def _seed_project(
     db.add(project)
     db.flush()
     if with_student:
-        db.add(Student(
+        db.add(ProjectStudent(
             project_id=project.id,
             name=unique_name("ACL學生"),
             order_index=0,

@@ -52,7 +52,7 @@
 - 非 admin 下載 PDF 時 `mode` 一律強制降為 `screen`
 
 `teacher`／`supervisor` 是可參與園所編制的操作帳號族群，不是互斥職務。一個帳號可在不改
-`User.role` 的情況下同時具有 `ClassroomTeacherAssignment` 與
+`User.role` 的情況下同時具有 `ClassroomTeacher` 與
 `OrganizationSupervisorAssignment`：active 任教區間授予該班讀寫與主教建立權，active
 主管區間授予範圍讀取、退回完成與主管報表權。沒有對應 active 指派就沒有該項能力；
 `admin`、`art_team`、`none` 的既有語意不受此規則擴張。
@@ -122,8 +122,8 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
 | PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
-| PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
-| POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
+| PATCH | `/students/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
+| POST | `/students/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
 | POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班，`classroom_id` 一律指它們 |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
@@ -137,7 +137,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 一律等封存到期由既有清理流程移除，系統不從 owner、名稱或舊主管關係推測班級。
 
 名冊 `album_name` 最多 100 字，首尾空白會移除，空字串或 `null` 代表清除。它跟隨
-`RosterChild` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
+`Student` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
 相關學生輸出指標會失效，必須重新渲染。完整姓名與成員集合仍維持各期快照。
 自動推導與跨班／跨既有相本碰撞規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
@@ -145,15 +145,15 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 `migration_status` 固定包含：
 
 - `unassigned_project_count`：active 且未歸班的 Project 數。
-- `pending_identity_student_count`：上述 Project 的 Student 數；即使舊 link 非 NULL 仍待決策。
-- `archived_identity_resolution_count`：已寫入稽核 ledger 的 legacy Student resolution 數；
+- `pending_identity_student_count`：上述 Project 的 ProjectStudent 數；即使舊 link 非 NULL 仍待決策。
+- `archived_identity_resolution_count`：已寫入稽核 ledger 的 legacy ProjectStudent resolution 數；
   只供稽核，不影響完成判定。
 - `assigned_identity_anomaly_count`：active class-backed Project 中 child link 缺失／無效，或與
-  同 Project 另一位 Student 共用 child id 的 Student 數。
+  同 Project 另一位 ProjectStudent 共用 child id 的 ProjectStudent 數。
 - `archived_teacher_supervisor_link_count`：已封存的舊逐人主管關係數；不影響完成判定，
   也不會自動轉成校／部門 scope 或任何 ACL。
 - `is_complete`：`unassigned_project_count` 與 `assigned_identity_anomaly_count` 皆為 0；此時
-  active 待決策 Student 必然也是 0。兩種歷史 ledger count 不影響完成判定。
+  active 待決策 ProjectStudent 必然也是 0。兩種歷史 ledger count 不影響完成判定。
 
 ### 專案 `/api/projects`
 
@@ -171,7 +171,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET | `/{id}/assignment-history` | admin 查詢完整負責人轉交時間線 |
 | POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
 | POST | `/{id}/students/{sid}/album-name/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
-| PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `Student.album_name`；已歸班回 409，必須改園所名冊中央值 |
+| PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `ProjectStudent.album_name`；已歸班回 409，必須改園所名冊中央值 |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全班；`student_ids`（JSON 陣列 form 欄位）可選，只套用到指定學生 |
@@ -220,13 +220,13 @@ payload 含已完成學生整批 422；共用照片指定名單含已完成學�
 負數或超界索引不寫資料。三種文字寫入只接受字串或
 `{"text": string|null, "text_align": "left|center|right"}` entry，shape 錯誤回 422。
 
-Project 的學生集合與 `Student.name` 沒有 runtime 新增、複製、刪除或改名端點；新相本
+Project 的學生集合與 `ProjectStudent.name` 沒有 runtime 新增、複製、刪除或改名端點；新相本
 只在班級端點建立時從目前名單產生快照；舊相本只有在未歸班時可由 admin 歸班流程解析
 identity，成功後同樣凍結。preview 與 apply 以外沒有 link／merge／split 入口。
 完整 authority 與跨期語意見 [data-model.md 的班級名單與每期快照](data-model.md#班級名單組織權限每期快照與相本遷移)。
 學生 detail／editor response 同時回傳 `name`、解析後的 `album_name` 與
-`effective_album_name`。已歸班相本動態讀 `RosterChild.album_name`；未歸班 Project 即使有
-provisional child link 仍讀 legacy `Student.album_name`。來源、回退與輸出失效規則見
+`effective_album_name`。已歸班相本動態讀 `Student.album_name`；未歸班 Project 即使有
+provisional child link 仍讀 legacy `ProjectStudent.album_name`。來源、回退與輸出失效規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 班級目前名單與由它建立的 Project 快照最多 100 位學生；姓名最多 100 字，批次加入
 目前名單最多 100 筆。容量在 organization 名單寫入與相本建立時 preflight，超限回 422
@@ -236,7 +236,7 @@ provisional child link 仍讀 legacy `Student.album_name`。來源、回退與�
 
 園所目前名單的穩定身分規則見
 [data-model.md 的孩子名冊](data-model.md#孩子名冊rosterchild園所設定是唯一-authority)。
-此 API 只讀取名冊身分作彙整，沒有 Student link、RosterChild merge 或 split mutation。
+此 API 只讀取名冊身分作彙整，沒有 ProjectStudent link、Student merge 或 split mutation。
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|

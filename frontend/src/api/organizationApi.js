@@ -46,13 +46,13 @@ export const autoFillClassroomMemberAlbumNames = (classroomId) =>
 
 /** 更新園所孩子身分的中央相本稱呼，供沒有名單區間的既有相本學生使用。 */
 export const updateRosterChildAlbumName = (rosterChildId, albumName) =>
-  apiClient.patch(`/organization/roster-children/${rosterChildId}/album-name`, {
+  apiClient.patch(`/organization/students/${rosterChildId}/album-name`, {
     album_name: albumName?.trim() || null,
   });
 
 /** 只在園所孩子身分尚未設定稱呼時，自動填入可安全判斷的稱呼。 */
 export const autoFillRosterChildAlbumName = (rosterChildId) =>
-  apiClient.post(`/organization/roster-children/${rosterChildId}/album-name/auto-fill`);
+  apiClient.post(`/organization/students/${rosterChildId}/album-name/auto-fill`);
 
 /** 以目前在班名單建立新一期相本快照。 */
 export const createClassroomProject = (classroomId, params) =>

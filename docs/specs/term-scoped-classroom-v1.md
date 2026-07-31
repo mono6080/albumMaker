@@ -185,8 +185,8 @@ Decision：與行政系統（未來 MDM）同概念的實體，命名要能一�
 | `ClassroomTeacherAssignment` | `ClassroomTeacher` | `personnel.PostLog` | 已完成 |
 | `AcademicTerm` | `Semester` | `school.Semester` | 已完成 |
 | `AcademicTermPeriod` | `SemesterPeriod` | —（相冊獨有）| 已完成 |
-| `Student` | `ProjectStudent`（本來就是「相本裡的一份」，不是學生）| —（相冊獨有）| 待做 |
-| `RosterChild` | `Student` | `student.Student` | 待做 |
+| `Student` | `ProjectStudent`（本來就是「相本裡的一份」，不是學生）| —（相冊獨有）| 已完成 |
+| `RosterChild` | `Student` | `student.Student` | 已完成 |
 
 欄位名跟著表名走：`academic_term_id` → `semester_id`、`term_period_id` →
 `semester_period_id`、`target_academic_term_id` → `target_semester_id`。索引名不會隨
@@ -196,7 +196,13 @@ Decision：與行政系統（未來 MDM）同概念的實體，命名要能一�
 `User` 是登入帳號（69 個），本來就不是同一個集合。
 
 表名跟著類別名改（`students` → `project_students`、`roster_children` → `students` 等）。
-API 路徑同步改名，前端跟著改。
+
+API 路徑只改語意真的變了的那一組：`/organization/roster-children/` → `/organization/students/`。
+`/projects/{id}/students/` 保持——它已被 `projects/` 限定，本來就是「這本相本的學生」，
+改成 `project-students` 只是把前綴講第二次。
+
+`roster_child_id` 欄位名也保持：`student_id` 在 Storage key、輸出檔名與 API 路徑參數
+已經穩定地指 `ProjectStudent.id`，讓它一詞兩義才是真的製造歧義。
 
 ### 表名改動的 migration 策略
 

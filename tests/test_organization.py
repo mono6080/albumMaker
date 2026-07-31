@@ -14,9 +14,9 @@ from database import (
     ClassroomTeacher,
     ClassroomMember,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
+    SessionLocal,
+    ProjectStudent,
     User,
 )
 from services import organization_service
@@ -747,12 +747,12 @@ def test_project_snapshot_is_immutable_and_blocks_duplicate_current_roster():
 
         db = SessionLocal()
         try:
-            assert db.get(Student, student_id) is not None
-            assert db.get(RosterChild, member["roster_child_id"]) is not None
+            assert db.get(ProjectStudent, student_id) is not None
+            assert db.get(Student, member["roster_child_id"]) is not None
             assert db.query(ClassroomMember).filter(
                 ClassroomMember.roster_child_id == member["roster_child_id"]
             ).count() == 1
-            duplicate_child = RosterChild(name="林小美")
+            duplicate_child = Student(name="林小美")
             db.add(duplicate_child)
             db.flush()
             db.add(ClassroomMember(

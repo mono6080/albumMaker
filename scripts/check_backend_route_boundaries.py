@@ -257,12 +257,12 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ),
         (
             "patch",
-            "/roster-children/{roster_child_id}/album-name",
+            "/students/{roster_child_id}/album-name",
             "update_roster_child_album_name",
         ),
         (
             "post",
-            "/roster-children/{roster_child_id}/album-name/auto-fill",
+            "/students/{roster_child_id}/album-name/auto-fill",
             "auto_fill_roster_child_album_name",
         ),
         (

@@ -65,24 +65,24 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
     使用者批次匯入、刪除的 transaction 邊界
   - `test_student_input_limits.py`：班級目前名單的姓名、中央相本稱呼、單批與總量上限，
-    以及已歸班 Project Student 不接受相本內稱呼 mutation
+    以及已歸班 Project ProjectStudent 不接受相本內稱呼 mutation
     （數值見 [api.md 的園所端點](api.md#園所管理-apiorganization)）
-  - `test_student_album_name.py`：`RosterChild.album_name` 單一來源、名冊建立與園所設定單筆／
-    整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 Student 值忽略與輸出失效契約
+  - `test_student_album_name.py`：`Student.album_name` 單一來源、名冊建立與園所設定單筆／
+    整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 ProjectStudent 值忽略與輸出失效契約
   - `test_student_album_name_candidates.py`：未歸班 legacy 相本稱呼候選的保守規則、碰撞／完成專案
     review flag、報告 hash、全量 preflight、crash reconciliation 與同 manifest apply 鎖
   - `test_organization.py` / `test_organization_schema_migrations.py`：分校／班級學生與老師
-    區間、校／部門主管、fresh legacy Student link 保持 NULL、姓名推定 link 不在 startup
+    區間、校／部門主管、fresh legacy ProjectStudent link 保持 NULL、姓名推定 link 不在 startup
     自動拆合、class-backed identity anomaly（含封存相本）整本隔離與 append-only audit、
     identity resolution ledger／freeze trigger、名冊稱呼的既有／未來 Project 共用 authority、
     舊 editor 結束、schema constraint 與 migration 冪等
   - `test_organization_project_migration.py`：歸班 preview 零寫入且不按姓名預選、decision 集合
     必須完整、`source_fingerprint` stale 與 `confirmed_all` gate、`existing` 只收 established
     identity、同名候選的校／部門／班級、membership active／ended 與歷史相本期別 evidence、
-    `create_new` 不 preserve provisional、seed all-or-none，以及兩層 ledger／Student link／
+    `create_new` 不 preserve provisional、seed all-or-none，以及兩層 ledger／ProjectStudent link／
     membership／Project snapshot 的單一 transaction rollback
   - `test_organization_term.py`：編班完整目標、revision/fingerprint、validate 零寫入、
-    stale/invalid rollback、同時間原子套用，以及既有 Project/Student/ACL invariant
+    stale/invalid rollback、同時間原子套用，以及既有 Project/ProjectStudent/ACL invariant
   - `test_project_acl_lifecycle.py`：目前班級老師與校／部門主管 object policy、owner 不授權、
     未歸班 admin-only、generic create route 不存在、歷史 editor 不進 response／生命週期、
     角色停權與刪帳 audited cleanup
@@ -158,8 +158,8 @@ python scripts/suggest_student_album_names.py --scope active
 [2026-07 正式切換 runbook](production-cutover-202607.md)。舊標題保留為連結，
 避免值班人員誤用本檔過時的片段命令。
 
-相本稱呼腳本只對**未歸班 legacy Project** 中 `Student.album_name IS NULL` 的學生產生候選；
-已歸班相本改由園所設定的 `RosterChild.album_name` 管理，報告產生會排除，apply 前若相本
+相本稱呼腳本只對**未歸班 legacy Project** 中 `ProjectStudent.album_name IS NULL` 的學生產生候選；
+已歸班相本改由園所設定的 `Student.album_name` 管理，報告產生會排除，apply 前若相本
 已被歸班也會整批阻擋。新學生規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 純漢字二至三字姓名可列候選；單字、四字以上與混合姓名保持未設定並列人工

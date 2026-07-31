@@ -29,8 +29,8 @@ from database import (
     ClassroomMember,
     OrganizationSupervisorAssignment,
     Project,
-    RosterChild,
     Student,
+    ProjectStudent,
     Template,
     TemplatePeriod,
     TermReclassificationPlan,
@@ -292,8 +292,8 @@ def _organization_migration_status(db: Session) -> dict:
         Project.deleted_at.is_(None),
     ).count()
     pending_identity_student_count = (
-        db.query(Student.id)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent.id)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
             Project.classroom_id.is_(None),
             Project.deleted_at.is_(None),
@@ -310,9 +310,9 @@ def _organization_migration_status(db: Session) -> dict:
         SELECT COUNT(DISTINCT anomaly.student_id)
         FROM (
             SELECT student.id AS student_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            LEFT JOIN roster_children AS child
+            LEFT JOIN students AS child
                 ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND project.deleted_at IS NULL
@@ -321,14 +321,14 @@ def _organization_migration_status(db: Session) -> dict:
             UNION ALL
 
             SELECT student.id AS student_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
             WHERE project.classroom_id IS NOT NULL
               AND project.deleted_at IS NULL
               AND student.roster_child_id IS NOT NULL
               AND EXISTS (
                   SELECT 1
-                  FROM students AS sibling
+                  FROM project_students AS sibling
                   WHERE sibling.project_id = student.project_id
                     AND sibling.id != student.id
                     AND sibling.roster_child_id = student.roster_child_id
@@ -360,7 +360,7 @@ def get_organization_overview(db: Session) -> dict:
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.students)
-            .selectinload(Student.roster_child),
+            .selectinload(ProjectStudent.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.assignment_history),
@@ -1059,7 +1059,7 @@ def batch_add_classroom_members(
         str(member.roster_child.effective_album_name)
         for member in active_members
     ]
-    created_children: list[RosterChild] = []
+    created_children: list[Student] = []
 
     for member_name, album_name in zip(
         normalized_names,
@@ -1074,17 +1074,17 @@ def batch_add_classroom_members(
             continue
         names_seen.add(normalized_identity)
         active_membership = db.query(ClassroomMember).join(
-            RosterChild,
-            RosterChild.id == ClassroomMember.roster_child_id,
+            Student,
+            Student.id == ClassroomMember.roster_child_id,
         ).filter(
             ClassroomMember.classroom_id == classroom_id,
             ClassroomMember.ended_at.is_(None),
-            RosterChild.name == normalized_identity,
+            Student.name == normalized_identity,
         ).first()
         if active_membership:
             skipped_names.append(member_name)
             continue
-        roster_child = RosterChild(
+        roster_child = Student(
             name=normalized_identity,
             album_name=album_name,
         )
@@ -1160,13 +1160,13 @@ def _assert_active_name_available(
     child_name: str,
 ) -> None:
     conflict = db.query(ClassroomMember.id).join(
-        RosterChild,
-        RosterChild.id == ClassroomMember.roster_child_id,
+        Student,
+        Student.id == ClassroomMember.roster_child_id,
     ).filter(
         ClassroomMember.classroom_id == classroom_id,
         ClassroomMember.ended_at.is_(None),
         ClassroomMember.roster_child_id != roster_child_id,
-        RosterChild.name == child_name,
+        Student.name == child_name,
     ).first()
     if conflict:
         raise HTTPException(
@@ -1188,7 +1188,7 @@ def _assert_classroom_capacity(db: Session, classroom_id: int) -> None:
 
 def _set_roster_child_album_name(
     db: Session,
-    roster_child: RosterChild,
+    roster_child: Student,
     raw_album_name: str | None,
 ) -> bool:
     """更新名冊唯一稱呼來源，並讓所有已歸班相本的舊輸出失效。"""
@@ -1197,10 +1197,10 @@ def _set_roster_child_album_name(
         return False
 
     affected_students = (
-        db.query(Student)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
-            Student.roster_child_id == roster_child.id,
+            ProjectStudent.roster_child_id == roster_child.id,
             Project.classroom_id.isnot(None),
         )
         .all()
@@ -1228,10 +1228,10 @@ def _assigned_project_ids_for_roster_child(
     return sorted({
         int(project_id)
         for (project_id,) in (
-            db.query(Student.project_id)
-            .join(Project, Project.id == Student.project_id)
+            db.query(ProjectStudent.project_id)
+            .join(Project, Project.id == ProjectStudent.project_id)
             .filter(
-                Student.roster_child_id == roster_child_id,
+                ProjectStudent.roster_child_id == roster_child_id,
                 Project.classroom_id.isnot(None),
             )
             .all()
@@ -1241,7 +1241,7 @@ def _assigned_project_ids_for_roster_child(
 
 def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
     """依目前班級與所有已歸班相本，推導不會碰撞的中央稱呼。"""
-    roster_children = db.query(RosterChild).order_by(RosterChild.id).all()
+    roster_children = db.query(Student).order_by(Student.id).all()
     candidate_by_child_id = {
         int(roster_child.id): suggest_automatic_album_name(str(roster_child.name))
         for roster_child in roster_children
@@ -1266,12 +1266,12 @@ def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
     for classroom_id, child_id, child_name in (
         db.query(
             ClassroomMember.classroom_id,
-            RosterChild.id,
-            RosterChild.name,
+            Student.id,
+            Student.name,
         )
         .join(
-            RosterChild,
-            RosterChild.id == ClassroomMember.roster_child_id,
+            Student,
+            Student.id == ClassroomMember.roster_child_id,
         )
         .filter(ClassroomMember.ended_at.is_(None))
         .order_by(ClassroomMember.classroom_id, ClassroomMember.id)
@@ -1282,13 +1282,13 @@ def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
         )
 
     for project_id, child_id, student_name in (
-        db.query(Student.project_id, Student.roster_child_id, Student.name)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent.project_id, ProjectStudent.roster_child_id, ProjectStudent.name)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
             Project.classroom_id.isnot(None),
-            Student.roster_child_id.isnot(None),
+            ProjectStudent.roster_child_id.isnot(None),
         )
-        .order_by(Student.project_id, Student.order_index, Student.id)
+        .order_by(ProjectStudent.project_id, ProjectStudent.order_index, ProjectStudent.id)
         .all()
     ):
         collision_scopes.setdefault(("project", int(project_id)), []).append(
@@ -1331,9 +1331,9 @@ def _auto_fill_roster_children(
     roster_child_ids: list[int],
 ) -> dict[str, int]:
     roster_children = (
-        db.query(RosterChild)
-        .filter(RosterChild.id.in_(sorted(set(roster_child_ids))))
-        .order_by(RosterChild.id)
+        db.query(Student)
+        .filter(Student.id.in_(sorted(set(roster_child_ids))))
+        .order_by(Student.id)
         .all()
         if roster_child_ids
         else []
@@ -1364,13 +1364,13 @@ def auto_fill_roster_child_album_name(
     with organization_acl_lock:
         db.rollback()
         db.expire_all()
-        roster_child = db.get(RosterChild, roster_child_id)
+        roster_child = db.get(Student, roster_child_id)
         if roster_child is None:
             raise HTTPException(status_code=404, detail="Roster child not found")
         project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
         with lock_project_content_writes(project_ids):
             with organization_write_transaction(db):
-                if db.get(RosterChild, roster_child_id) is None:
+                if db.get(Student, roster_child_id) is None:
                     raise HTTPException(status_code=404, detail="Roster child not found")
                 result = _auto_fill_roster_children(db, [roster_child_id])
                 db.commit()
@@ -1415,13 +1415,13 @@ def update_roster_child_album_name(
     with organization_acl_lock:
         db.rollback()
         db.expire_all()
-        roster_child = db.get(RosterChild, roster_child_id)
+        roster_child = db.get(Student, roster_child_id)
         if roster_child is None:
             raise HTTPException(status_code=404, detail="Roster child not found")
         project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
         with lock_project_content_writes(project_ids):
             with organization_write_transaction(db):
-                roster_child = db.get(RosterChild, roster_child_id)
+                roster_child = db.get(Student, roster_child_id)
                 if roster_child is None:
                     raise HTTPException(status_code=404, detail="Roster child not found")
                 _set_roster_child_album_name(db, roster_child, album_name)
@@ -1764,7 +1764,7 @@ def create_classroom_project(
             work_slot.started_at = utc_now()
             db.flush()
             for order_index, member in enumerate(active_members):
-                db.add(Student(
+                db.add(ProjectStudent(
                     project_id=project.id,
                     name=member.roster_child.name,
                     album_name=None,

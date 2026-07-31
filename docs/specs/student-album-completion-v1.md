@@ -26,7 +26,7 @@
 
 ## Domain Model
 
-`students` 新增:
+`project_students` 新增:
 
 - `completed_at`(DateTime, nullable)——非 NULL 代表該生相本已標記完成。
 

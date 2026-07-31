@@ -1,6 +1,6 @@
 """班級名單輸入上限與相本學生快照 API 契約。"""
 
-from database import RosterChild, SessionLocal
+from database import Student, SessionLocal
 from services.student_input_policy import (
     PROJECT_STUDENT_MAX_COUNT,
     STUDENT_ALBUM_NAME_MAX_LENGTH,
@@ -51,7 +51,7 @@ def _create_snapshot_project(
 def _any_roster_child_exists(names: list[str]) -> bool:
     db = SessionLocal()
     try:
-        return db.query(RosterChild.id).filter(RosterChild.name.in_(names)).first() is not None
+        return db.query(Student.id).filter(Student.name.in_(names)).first() is not None
     finally:
         db.close()
 
@@ -123,7 +123,7 @@ def test_roster_album_name_limit_rejects_batch_and_patch_without_mutation():
         assert_status(rejected_patch, 422)
         db = SessionLocal()
         try:
-            child = db.get(RosterChild, member["roster_child_id"])
+            child = db.get(Student, member["roster_child_id"])
             assert child.album_name == maximum_album_name
         finally:
             db.close()

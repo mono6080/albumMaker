@@ -303,7 +303,7 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         ).scalar_one()
         connection.execute(
             text("""
-                INSERT INTO students (project_id, name, pages_data_json)
+                INSERT INTO project_students (project_id, name, pages_data_json)
                 VALUES (:project_id, 'Interrupted student', '[]')
             """),
             {"project_id": project_id},
@@ -349,14 +349,14 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
                 FROM sqlite_master
                 WHERE type = 'trigger'
                   AND name IN (
-                      'trg_students_freeze_class_backed_identity',
+                      'trg_project_students_freeze_class_backed_identity',
                       'trg_projects_freeze_classroom_snapshots',
                       'trg_projects_freeze_work_slot'
                   )
             """))
         }
         assert rebuilt_triggers == {
-            "trg_students_freeze_class_backed_identity",
+            "trg_project_students_freeze_class_backed_identity",
             "trg_projects_freeze_classroom_snapshots",
             "trg_projects_freeze_work_slot",
         }
@@ -414,6 +414,6 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         }
         assert {"templates", "template_periods", "users"} <= foreign_key_targets
         assert connection.execute(text(
-            "SELECT COUNT(*) FROM students WHERE project_id = :project_id"
+            "SELECT COUNT(*) FROM project_students WHERE project_id = :project_id"
         ), {"project_id": project_id}).scalar_one() == 1
         assert list(connection.execute(text("PRAGMA foreign_key_check"))) == []

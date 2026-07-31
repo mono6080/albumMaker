@@ -186,7 +186,7 @@ def _load_students(database_path: Path, scope: str) -> list[dict[str, Any]]:
         project_columns = _column_names(connection, "projects")
         filters = []
         if "classroom_id" in project_columns:
-            # 已歸班相本改由 RosterChild 單一管理，本腳本只處理未歸班 legacy。
+            # 已歸班相本改由 Student 單一管理，本腳本只處理未歸班 legacy。
             filters.append("projects.classroom_id IS NULL")
         if scope == "active":
             filters.append("projects.deleted_at IS NULL")

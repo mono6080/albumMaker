@@ -114,8 +114,8 @@ test("organization API calls keep admin route and payload contracts stable", asy
     ["post", "/organization/classrooms/5/members/batch", { members: [{ name: "王小明" }] }],
     ["post", "/organization/classrooms/5/members/album-names/auto-fill"],
     ["patch", "/organization/classrooms/5/members/7", { name: "王小明", album_name: "小明" }],
-    ["patch", "/organization/roster-children/17/album-name", { album_name: "明明" }],
-    ["post", "/organization/roster-children/17/album-name/auto-fill"],
+    ["patch", "/organization/students/17/album-name", { album_name: "明明" }],
+    ["post", "/organization/students/17/album-name/auto-fill"],
     ["patch", "/organization/classrooms/5/members/8", { status: "ended", end_reason: "departed" }],
     ["patch", "/organization/classrooms/5/members/9", { target_classroom_id: 6 }],
     ["post", "/organization/classrooms/5/projects", {

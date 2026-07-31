@@ -15,7 +15,7 @@ from database import (
     SemesterPeriod,
     ClassPeriodWorkSlot,
     Project,
-    Student,
+    ProjectStudent,
 )
 from services.organization_scope_service import (
     OrganizationReadScope,
@@ -134,7 +134,7 @@ def load_export_projects(
             SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
         )
         .options(
-            joinedload(Project.students).joinedload(Student.roster_child),
+            joinedload(Project.students).joinedload(ProjectStudent.roster_child),
             joinedload(Project.owner),
             joinedload(Project.class_period_work_slot).joinedload(
                 ClassPeriodWorkSlot.classroom
@@ -171,13 +171,13 @@ def load_output_keys_by_project(storage, projects: list[Project]) -> dict[int, s
         return dict(executor.map(list_project_output_keys, project_ids))
 
 
-def student_pdf_key(student: Student, output_mode: str) -> str | None:
+def student_pdf_key(student: ProjectStudent, output_mode: str) -> str | None:
     if not student.output_filename:
         return None
     return student_pdf_key_for_mode(student.output_filename, output_mode)
 
 
-def _student_skipped_pages(student: Student) -> list[int]:
+def _student_skipped_pages(student: ProjectStudent) -> list[int]:
     try:
         pages_data = json.loads(student.pages_data_json or "[]")
     except ValueError:
@@ -238,7 +238,7 @@ def _load_scoped_term_classrooms(
 
 def _serialize_entry(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     existing_output_keys: set[str],
 ) -> dict:
     slot = project.class_period_work_slot

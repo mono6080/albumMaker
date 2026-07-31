@@ -16,15 +16,6 @@
 3. **外部 uptime 告警仍需部署端設定**：`/api/health` 已檢查 SQLite，Docker
    HEALTHCHECK 也已接上；仍需外部監控服務定期探測正式網域並設定通知。
 
-## 已知 drift
-
-- **正式／開發資料庫的 `trg_students_freeze_class_backed_identity` 與程式碼定義不同**：
-  資料庫裡的版本多了一段「同工作格同模板可搬 Student」的例外，migrations.py 沒有這段
-  SQL，repo 全文也搜不到——它是一次性修復當下手工執行的結果。因為 migration 用
-  `CREATE TRIGGER IF NOT EXISTS`，既有資料庫不會被改回去。實務上資料庫版本比較寬鬆，
-  不影響正確性，但「trigger 定義以程式碼為準」在這張表上不成立。
-  2026-07-31 於學期範圍班級重構時，比對正式資料副本升級後與全新資料庫的 schema 時發現。
-
 ## 開放設計問題
 
 - **舊資料群組 migration 尚未實作**：通用巢狀群組 v2 契約詳見
@@ -45,7 +36,7 @@
 - **PWA SW 與 SPA catch-all 的同名 race**：目前「先實體檔案、後 index.html」
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
-- **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`RosterChild.album_name`)
+- **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`Student.album_name`)
   修改會影響已標記完成(全班或個別)相本的稱呼顯示,但名冊寫入不經過專案
   內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
   明確不在該階段處理。下載端點的指紋補渲

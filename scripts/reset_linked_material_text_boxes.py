@@ -541,7 +541,7 @@ def configure_backend(database_path: Path):
     os.environ["DATABASE_URL"] = f"sqlite:///{database_path.resolve().as_posix()}"
     if str(BACKEND_DIR) not in sys.path:
         sys.path.insert(0, str(BACKEND_DIR))
-    from database import Project, SessionLocal, Student, Template
+    from database import Project, SessionLocal, ProjectStudent, Template
     from services.layout_group_validation import validate_layout_groups
     from services.material_text_box import project_normalized_box_to_sticker
     from services.template_asset_service import suggest_material_text_box
@@ -550,7 +550,7 @@ def configure_backend(database_path: Path):
     return (
         Project,
         SessionLocal,
-        Student,
+        ProjectStudent,
         Template,
         validate_layout_groups,
         project_normalized_box_to_sticker,

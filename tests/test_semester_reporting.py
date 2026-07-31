@@ -11,9 +11,9 @@ from database import (
     Classroom,
     Classroom,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
+    SessionLocal,
+    ProjectStudent,
 )
 from routers import roster as roster_router
 from services import semester_render_service
@@ -523,7 +523,7 @@ def test_closed_term_export_follows_roster_name_correction(
 ):
     """名冊姓名是唯一真相：更正之後，已結束學期的匯出也跟著顯示新名。
 
-    凍結的是相本本身——`Student.name` 與已渲染的 PDF 內容都停在當時。
+    凍結的是相本本身——`ProjectStudent.name` 與已渲染的 PDF 內容都停在當時。
     """
     use_tmp_uploads(monkeypatch, tmp_path)
     with started_client() as client:
@@ -553,8 +553,8 @@ def test_closed_term_export_follows_roster_name_correction(
             term = db.get(Semester, semester_id)
             original_status = term.status
             term.status = "closed"
-            student = db.get(Student, student_id)
-            db.get(RosterChild, student.roster_child_id).name = current_name
+            student = db.get(ProjectStudent, student_id)
+            db.get(Student, student.roster_child_id).name = current_name
             db.commit()
         finally:
             db.close()
@@ -588,7 +588,7 @@ def test_closed_term_export_follows_roster_name_correction(
 
             db = SessionLocal()
             try:
-                assert db.get(Student, student_id).name == historical_name
+                assert db.get(ProjectStudent, student_id).name == historical_name
             finally:
                 db.close()
         finally:
@@ -875,7 +875,7 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
         db = SessionLocal()
         try:
             original_project = db.get(Project, project_id)
-            original_student = db.get(Student, student_id)
+            original_student = db.get(ProjectStudent, student_id)
             duplicate_project = Project(
                 name=unique_name("legacy_duplicate"),
                 template_id=original_project.template_id,
@@ -893,7 +893,7 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
             )
             db.add(duplicate_project)
             db.flush()
-            db.add(Student(
+            db.add(ProjectStudent(
                 project_id=duplicate_project.id,
                 name=original_student.name,
                 order_index=0,

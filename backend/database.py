@@ -217,7 +217,7 @@ class ClassroomMember(Base):
         ForeignKey("classrooms.id"),
         nullable=False,
     )
-    roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=False)
+    roster_child_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     started_at = Column(DateTime, nullable=False, default=utc_now)
     ended_at = Column(DateTime, nullable=True)
     end_reason = Column(Text, nullable=True)
@@ -225,7 +225,7 @@ class ClassroomMember(Base):
         "Classroom",
         back_populates="roster_members",
     )
-    roster_child = relationship("RosterChild", back_populates="class_roster_members")
+    roster_child = relationship("Student", back_populates="class_roster_members")
     term_placements = relationship(
         "TermStudentPlacement",
         back_populates="source_membership",
@@ -420,7 +420,7 @@ class Classroom(Base):
     """班級本體：一個班就是「學期 × 分校 × 部門 × 班名」，不跨學期延續。
 
     名冊成員與老師編制直接掛在這裡，所以不需要另一層學期快照——班本身就只活一個
-    學期。跨學期的識別一律靠 RosterChild／User，見
+    學期。跨學期的識別一律靠 Student／User，見
     docs/specs/term-scoped-classroom-v1.md。
     """
     __tablename__ = "classrooms"
@@ -563,7 +563,7 @@ class Project(Base):
     label_texts_json = Column(Text, nullable=False, default="{}")
     template = relationship("Template", back_populates="projects")
     template_period = relationship("TemplatePeriod", back_populates="projects")
-    students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")
+    students = relationship("ProjectStudent", back_populates="project", cascade="all, delete-orphan", order_by="ProjectStudent.order_index")
     owner = relationship("User", back_populates="owned_projects", foreign_keys=[owner_id])
     creator = relationship(
         "User",
@@ -857,19 +857,19 @@ class TermClassroomTeacherTarget(Base):
     teacher = relationship("User", foreign_keys=[teacher_id])
 
 
-class RosterChild(Base):
+class Student(Base):
     """園所層級的孩子名冊：跨專案識別「同一個孩子」，供學期彙整匯出分組使用。
 
     名冊項只由園所設定建立／改名；轉班、復學與新學期編班沿用同一 id。
     name 不設 UNIQUE，因為園所內可能有同名不同人。
     """
-    __tablename__ = "roster_children"
+    __tablename__ = "students"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, index=True)
     # 已歸班相本的相本稱呼唯一來源；所有既有與未來相本都即時引用。
     album_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=utc_now)
-    students = relationship("Student", back_populates="roster_child")
+    students = relationship("ProjectStudent", back_populates="roster_child")
     class_roster_members = relationship(
         "ClassroomMember",
         back_populates="roster_child",
@@ -881,30 +881,30 @@ class RosterChild(Base):
         return self.album_name or self.name
 
 
-class Student(Base):
-    __tablename__ = "students"
+class ProjectStudent(Base):
+    __tablename__ = "project_students"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     name = Column(String, nullable=False)
-    # 只供未歸班舊相本相容；已歸班相本一律讀 RosterChild.album_name。
+    # 只供未歸班舊相本相容；已歸班相本一律讀 Student.album_name。
     album_name = Column(String, nullable=True)
     order_index = Column(Integer, default=0)
     pages_data_json = Column(Text, nullable=False, default="[]")
     output_filename = Column(String, nullable=True)
     # 未歸班舊專案可為 NULL／暫定證據；歸班後由 DB trigger 凍結正式身分。
-    roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=True)
+    roster_child_id = Column(Integer, ForeignKey("students.id"), nullable=True)
     # 單一學生相本完成時間：有效完成判斷一律走 project_access_service 的 predicate
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     project = relationship("Project", back_populates="students")
-    roster_child = relationship("RosterChild", back_populates="students")
+    roster_child = relationship("Student", back_populates="students")
 
     @property
     def resolved_album_name(self) -> str | None:
         """依相本是否正式歸班，解析唯一可信的相本稱呼來源。"""
         if self.project is not None and self.project.classroom_id is not None:
-            # 已歸班資料即使 child link 異常，也不可回頭採用 Student 的舊稱呼。
+            # 已歸班資料即使 child link 異常，也不可回頭採用 ProjectStudent 的舊稱呼。
             return self.roster_child.album_name if self.roster_child is not None else None
         return self.album_name
 

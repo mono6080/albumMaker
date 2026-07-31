@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
-from database import Project, Student, User
+from database import Project, ProjectStudent, User
 from services.draw_helpers import BUNDLED_FONT_MANIFEST_PATHS
 from services.label_texts import merge_project_label_texts_into_pages
 from services.layout_group_traversal import layout_for_render_fingerprint
@@ -254,7 +254,7 @@ def _capture_student_render_input(
         db.rollback()
         db.expire_all()
         current_project = db.get(Project, project_id)
-        current_student = db.get(Student, student_id)
+        current_student = db.get(ProjectStudent, student_id)
         if current_project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         _assert_render_access(current_project, actor_id, db)
@@ -313,7 +313,7 @@ def _current_student_render_token(project_id: int, student_id: int, db) -> tuple
     db.rollback()
     db.expire_all()
     current_project = db.get(Project, project_id)
-    current_student = db.get(Student, student_id)
+    current_student = db.get(ProjectStudent, student_id)
     if current_project is None or current_student is None or current_student.project_id != project_id:
         return None
     resolved_album_name = current_student.resolved_album_name
@@ -349,7 +349,7 @@ def _raise_render_input_changed(captured_revision: int, current_token: tuple | N
 
 def render_and_save_student_album(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     project_id: int,
     db,
     *,
@@ -410,7 +410,7 @@ def render_and_save_student_album(
                 _assert_render_access(current_project, actor_id, db)
                 if current_token != render_input["state_token"]:
                     _raise_render_input_changed(render_input["template_revision"], current_token)
-                current_student = db.get(Student, student_id)
+                current_student = db.get(ProjectStudent, student_id)
                 assert current_student is not None
                 previous_output_filename = current_student.output_filename
                 protected_output_filenames = tuple(
@@ -463,7 +463,7 @@ def render_and_save_student_album(
             if current_token != render_input["state_token"]:
                 _raise_render_input_changed(render_input["template_revision"], current_token)
 
-            current_student = db.get(Student, student_id)
+            current_student = db.get(ProjectStudent, student_id)
             assert current_student is not None
             previous_output_filename = current_student.output_filename
             protected_output_filenames = tuple(

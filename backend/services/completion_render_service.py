@@ -12,7 +12,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from database import Project, SessionLocal, Student
+from database import Project, SessionLocal, ProjectStudent
 from services.output_keys import get_student_render_state_key
 from services.request_limiter import album_render_limiter
 from services.storage_factory import get_storage
@@ -71,7 +71,7 @@ def _student_render_outputs_fresh(project_id: int, student_id: int, db) -> bool:
     )
 
 
-def ensure_student_render_fresh(db, project: Project, student: Student) -> None:
+def ensure_student_render_fresh(db, project: Project, student: ProjectStudent) -> None:
     """下載前保證輸出與目前內容一致;系統渲染(不套編輯 ACL)。
 
     快路:輸出已發布且指紋新鮮時只讀不取槽直接放行 — 背景渲染(啟動收斂、
@@ -97,7 +97,7 @@ def _student_fresh_with_own_session(project_id: int, student_id: int) -> bool:
     """
     check_db = SessionLocal()
     try:
-        student = check_db.get(Student, student_id)
+        student = check_db.get(ProjectStudent, student_id)
         if student is None or not student.output_filename:
             return False
         return _student_render_outputs_fresh(project_id, student_id, check_db)
@@ -138,7 +138,7 @@ def _render_students_in_background(project_id: int, student_ids: list[int]) -> d
     try:
         for student_id in student_ids:
             project = db.get(Project, project_id)
-            student = db.get(Student, student_id)
+            student = db.get(ProjectStudent, student_id)
             if project is None or student is None or student.project_id != project_id:
                 continue
             try:

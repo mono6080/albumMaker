@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from auth import get_current_user, require_role
 from crud.template_crud import get_template_or_404, get_template_page_or_404
-from database import Project, Student, Template, TemplatePeriod, User, get_db
+from database import Project, ProjectStudent, Template, TemplatePeriod, User, get_db
 from services.photo_frame_geometry import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -118,7 +118,7 @@ def get_template(
     usage = (
         db.query(
             func.count(func.distinct(Project.id)).label("project_count"),
-            func.count(Student.id).label("student_count"),
+            func.count(ProjectStudent.id).label("student_count"),
             func.count(func.distinct(case(
                 (Project.completed_at.isnot(None), Project.id),
             ))).label("completed_project_count"),
@@ -127,7 +127,7 @@ def get_template(
             ))).label("archived_project_count"),
         )
         .select_from(Project)
-        .outerjoin(Student, Student.project_id == Project.id)
+        .outerjoin(ProjectStudent, ProjectStudent.project_id == Project.id)
         .filter(Project.template_id == template_id)
         .one()
     )

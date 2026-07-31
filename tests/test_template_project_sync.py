@@ -8,7 +8,7 @@ import pytest
 from database import (
     Project,
     SessionLocal,
-    Student,
+    ProjectStudent,
     Template,
     TemplatePage,
     TemplateProjectSyncBackup,
@@ -93,7 +93,7 @@ def _seed_linked_template(page_count: int = 3) -> dict:
         db.add(project)
         db.flush()
 
-        student = Student(
+        student = ProjectStudent(
             project_id=project.id,
             name="同步測試學生",
             order_index=0,
@@ -170,7 +170,7 @@ def _database_snapshot(template_id: int, project_id: int, student_id: int) -> di
     try:
         template = db.query(Template).filter(Template.id == template_id).one()
         project = db.query(Project).filter(Project.id == project_id).one()
-        student = db.query(Student).filter(Student.id == student_id).one()
+        student = db.query(ProjectStudent).filter(ProjectStudent.id == student_id).one()
         pages = (
             db.query(TemplatePage)
             .filter(TemplatePage.template_id == template_id)
@@ -258,7 +258,7 @@ def test_structural_sync_requires_bound_hash_then_remaps_by_template_page_id():
                 seeded["project_id"],
             ).completed_at
             assert completed_db.get(
-                Student,
+                ProjectStudent,
                 seeded["student_id"],
             ).completed_at is not None
         finally:
@@ -336,7 +336,7 @@ def test_structural_sync_requires_bound_hash_then_remaps_by_template_page_id():
         try:
             template = db.query(Template).filter(Template.id == seeded["template_id"]).one()
             project = db.query(Project).filter(Project.id == seeded["project_id"]).one()
-            student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
+            student = db.query(ProjectStudent).filter(ProjectStudent.id == seeded["student_id"]).one()
             assert template.revision == project.template_revision == 2
             assert project.completed_at is None
             # 新增照片格：學生個別完成與全班完成同時退回
@@ -565,7 +565,7 @@ def test_corrupt_project_json_rejects_structural_snapshot_without_any_write(corr
                 project = db.query(Project).filter(Project.id == seeded["project_id"]).one()
                 project.label_texts_json = "{broken-project-json"
             else:
-                student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
+                student = db.query(ProjectStudent).filter(ProjectStudent.id == seeded["student_id"]).one()
                 student.pages_data_json = "[broken-student-json"
             db.commit()
         finally:
@@ -659,7 +659,7 @@ def test_confirmation_hash_expires_when_affected_student_content_changes():
 
         db = SessionLocal()
         try:
-            student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
+            student = db.query(ProjectStudent).filter(ProjectStudent.id == seeded["student_id"]).one()
             pages_data = json.loads(student.pages_data_json)
             pages_data[1]["photos"]["extra"] = {
                 "path": "projects/new-after-confirmation.jpg",
@@ -775,7 +775,7 @@ def test_legacy_out_of_range_page_data_is_backed_up_instead_of_blocking_sync():
         seeded = _seed_linked_template(page_count=2)
         db = SessionLocal()
         try:
-            student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
+            student = db.query(ProjectStudent).filter(ProjectStudent.id == seeded["student_id"]).one()
             pages_data = json.loads(student.pages_data_json)
             pages_data.append({
                 "page_index": 99,
@@ -812,7 +812,7 @@ def test_legacy_out_of_range_page_data_is_backed_up_instead_of_blocking_sync():
         assert_status(applied, 200)
         db = SessionLocal()
         try:
-            student = db.query(Student).filter(Student.id == seeded["student_id"]).one()
+            student = db.query(ProjectStudent).filter(ProjectStudent.id == seeded["student_id"]).one()
             assert all(page["page_index"] in {0, 1} for page in json.loads(student.pages_data_json))
             backup = (
                 db.query(TemplateProjectSyncBackup)
@@ -858,7 +858,7 @@ def test_structural_slot_deletion_clears_active_bindings_but_backup_keeps_raw_pa
         db = SessionLocal()
         try:
             project = db.get(Project, seeded["project_id"])
-            student = db.get(Student, seeded["student_id"])
+            student = db.get(ProjectStudent, seeded["student_id"])
             page_entry = json.loads(student.pages_data_json)[0]
             assert json.loads(project.label_texts_json) == {"0": {}}
             assert page_entry["photos"] == {}
@@ -910,7 +910,7 @@ def test_visible_false_keeps_photo_and_text_bindings_for_future_reappearance():
         db = SessionLocal()
         try:
             project = db.get(Project, seeded["project_id"])
-            student = db.get(Student, seeded["student_id"])
+            student = db.get(ProjectStudent, seeded["student_id"])
             page_entry = json.loads(student.pages_data_json)[0]
             slot_id = str(seeded["layouts"][0]["photo_slots"][0]["id"])
             label_id = str(seeded["layouts"][0]["text_labels"][0]["id"])
@@ -966,7 +966,7 @@ def test_deleting_an_already_hidden_slot_still_confirms_and_clears_bindings():
         db = SessionLocal()
         try:
             project = db.get(Project, seeded["project_id"])
-            student = db.get(Student, seeded["student_id"])
+            student = db.get(ProjectStudent, seeded["student_id"])
             assert json.loads(project.label_texts_json) == {"0": {}}
             page_entry = json.loads(student.pages_data_json)[0]
             assert page_entry["photos"] == {}

@@ -58,10 +58,10 @@ Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表
 [term-scoped-classroom-v1](term-scoped-classroom-v1.md)；本規格只依賴三件事：
 
 - 班級屬於且只屬於一個 `Semester`，同學期內 `(campus_id, department, name)` 唯一。
-- 該學期的名冊（`ClassRosterMember`）與老師編制（`ClassroomTeacherAssignment`）直接掛在
+- 該學期的名冊（`ClassroomMember`）與老師編制（`ClassroomTeacher`）直接掛在
   班上；報表列出班上全部指派，`ended_at` 分辨現任與曾任。
 - 學期 `closed` 後名冊與編制由 trigger 凍結，API 也拒絕對已結束學期的班加人。分校名與
-  孩子姓名不凍結——更正後歷史報表跟著顯示新值；`Student` 仍保存每本相本建立當時的姓名
+  孩子姓名不凍結——更正後歷史報表跟著顯示新值；`ProjectStudent` 仍保存每本相本建立當時的姓名
   與 Project 班級快照。
 
 ### ClassPeriodWorkSlot
@@ -97,7 +97,7 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 7. 對 active 期別 × 同部門 active 班級建立目前預期格；因此可顯示真正
    的「未建立」，archived 期別不憑目前班級補空格。
 8. 目前學生名單寫入 imported term 學生快照；不在目前名單但已有
-   有效 Project Student 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
+   有效 Project ProjectStudent 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
 9. 現有有效老師編制寫入 imported term 的班級老師快照；找不到的歷史老師
    不可由 owner 猜測。
 10. 對 Project 校別 id 快照依遷移 ledger、唯一校名、目前 Classroom 依序回填；
@@ -165,7 +165,7 @@ PDF 狀態只屬於學期匯出）：
 - `attention_codes`: 空相本、已交件但缺照片／缺文字。
 
 協同老師只列在班級老師，不產生自己的未開始卡；owner 只列 Project metadata。
-摘要計工作格與 Project，不把跨期 Student snapshots 加總稱為學生人數。
+摘要計工作格與 Project，不把跨期 ProjectStudent snapshots 加總稱為學生人數。
 
 Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別、學生明細。
 
@@ -187,7 +187,7 @@ Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別�
 
 - `not_enrolled`：在該 term 先前期別尚未有正式身分。
 - `departed`：最後出現後已 `departed|term_departed` 且無目前 membership。
-- `no_album`：學期學生快照存在，但該期沒有 Student snapshot；包含整期
+- `no_album`：學期學生快照存在，但該期沒有 ProjectStudent snapshot；包含整期
   從未建立 Project 的孩子。
 - `not_rendered|ready`：恰一筆且 PDF 未產生／已產生。
 - `duplicate`：同一 stable child 同一期有多筆；不補渲染、不下載並列 IDs。

@@ -308,7 +308,7 @@ test("admin manages current roster while period snapshots and owner history stay
   const autoFillFirstStudentResponse = page.waitForResponse(response => (
     response.request().method() === "POST"
     && new URL(response.url()).pathname
-      === `/api/organization/roster-children/${firstRosterMember.roster_child_id}/album-name/auto-fill`
+      === `/api/organization/students/${firstRosterMember.roster_child_id}/album-name/auto-fill`
   ));
   await memberDetailsDialog.getByRole("button", { name: "自動偵測", exact: true }).click();
   const autoFillFirstStudentResult = await readJsonResponse(
@@ -435,7 +435,7 @@ test("admin manages current roster while period snapshots and owner history stay
   await expect(projectAlbumNameInput).toHaveValue(projectEditedStudentAlbumName);
   const updateRosterChildAlbumNameResponse = page.waitForResponse(response => (
     response.request().method() === "PATCH"
-    && new URL(response.url()).pathname.startsWith("/api/organization/roster-children/")
+    && new URL(response.url()).pathname.startsWith("/api/organization/students/")
     && new URL(response.url()).pathname.endsWith("/album-name")
   ));
   await projectAlbumNameDialog.getByRole("button", { name: "儲存", exact: true }).click();

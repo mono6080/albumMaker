@@ -97,18 +97,19 @@ def test_roster_child_album_name_migration_is_idempotent_and_preserves_rows(
             ))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_roster_child_album_name_column(connection)
             migrations._add_roster_child_album_name_column(connection)
 
             columns = {
                 row[1]
                 for row in connection.execute(text(
-                    "PRAGMA table_info(roster_children)"
+                    "PRAGMA table_info(students)"
                 ))
             }
             assert "album_name" in columns
             assert connection.execute(text(
-                "SELECT name, album_name FROM roster_children WHERE id = 1"
+                "SELECT name, album_name FROM students WHERE id = 1"
             )).one() == ("王小明", None)
     finally:
         migration_engine.dispose()
@@ -186,11 +187,12 @@ def test_assigned_album_name_authority_migration_backfills_and_ignores_provision
             """))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             migrations._migrate_assigned_album_names_to_roster_authority(connection)
             migrations._migrate_assigned_album_names_to_roster_authority(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, album_name FROM roster_children ORDER BY id
+                SELECT id, album_name FROM students ORDER BY id
             """))) == [
                 (1, "小明"),
                 (2, None),
@@ -200,7 +202,7 @@ def test_assigned_album_name_authority_migration_backfills_and_ignores_provision
             ]
             assert list(connection.execute(text("""
                 SELECT id, album_name, output_filename
-                FROM students ORDER BY id
+                FROM project_students ORDER BY id
             """))) == [
                 (1, None, "same.pdf"),
                 (2, None, None),
@@ -247,15 +249,16 @@ def test_assigned_album_name_authority_migration_refuses_conflicting_values(
             """))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             with pytest.raises(RuntimeError, match="roster_child_ids=1"):
                 migrations._migrate_assigned_album_names_to_roster_authority(
                     connection
                 )
             assert connection.execute(text("""
-                SELECT album_name FROM roster_children WHERE id = 1
+                SELECT album_name FROM students WHERE id = 1
             """)).scalar_one() is None
             assert list(connection.execute(text("""
-                SELECT album_name, output_filename FROM students ORDER BY id
+                SELECT album_name, output_filename FROM project_students ORDER BY id
             """))) == [("小明", "one.pdf"), ("明明", "two.pdf")]
     finally:
         migration_engine.dispose()
@@ -282,14 +285,15 @@ def test_fresh_legacy_students_remain_unlinked_even_when_names_match(tmp_path):
             """))
             connection.commit()
 
-            migrations._add_roster_children_and_backfill(connection)
-            migrations._add_roster_children_and_backfill(connection)
+            migrations._rename_tables_to_model_names(connection)
+            migrations._add_students_and_backfill(connection)
+            migrations._add_students_and_backfill(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [(1, None), (2, None)]
             assert connection.execute(text(
-                "SELECT COUNT(*) FROM roster_children"
+                "SELECT COUNT(*) FROM students"
             )).scalar_one() == 0
     finally:
         migration_engine.dispose()
@@ -328,14 +332,15 @@ def test_existing_name_grouped_links_are_preserved_as_provisional_evidence(
             """))
             connection.commit()
 
-            migrations._add_roster_children_and_backfill(connection)
-            migrations._add_roster_children_and_backfill(connection)
+            migrations._rename_tables_to_model_names(connection)
+            migrations._add_students_and_backfill(connection)
+            migrations._add_students_and_backfill(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [(1, 7), (2, 7)]
             assert connection.execute(text(
-                "SELECT COUNT(*) FROM roster_children"
+                "SELECT COUNT(*) FROM students"
             )).scalar_one() == 1
     finally:
         migration_engine.dispose()
@@ -351,6 +356,7 @@ def test_identity_migration_ledger_has_no_operational_foreign_keys(tmp_path):
     try:
         Base.metadata.create_all(migration_engine)
         with migration_engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
 
@@ -371,7 +377,7 @@ def test_identity_migration_ledger_has_no_operational_foreign_keys(tmp_path):
                 """))
             }
             assert {
-                "trg_students_freeze_class_backed_identity",
+                "trg_project_students_freeze_class_backed_identity",
                 "trg_projects_reject_empty_identity_migration",
                 "trg_projects_require_identity_migration_ledger",
                 "trg_legacy_project_migrations_no_update",
@@ -471,6 +477,7 @@ def test_class_backed_identity_anomalies_are_quarantined_without_guessing(
             connection.commit()
 
             # 已存在 freeze/transition trigger 的中間版本也必須能安全 class→NULL。
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
             migrations._quarantine_class_backed_identity_anomalies(connection)
             migrations._quarantine_class_backed_identity_anomalies(connection)
@@ -495,7 +502,7 @@ def test_class_backed_identity_anomalies_are_quarantined_without_guessing(
                 ),
             ]
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [
                 (1, 1),
                 (2, 2),
@@ -985,8 +992,8 @@ def _seed_semester_student_snapshot_fixture(
         Classroom,
         ClassroomMember,
         Project,
-        RosterChild,
         Student,
+        ProjectStudent,
         Template,
         TemplatePeriod,
     )
@@ -1006,8 +1013,8 @@ def _seed_semester_student_snapshot_fixture(
             department="infant",
             name="月亮班",
         )
-        current_child = RosterChild(name="目前姓名")
-        project_only_child = RosterChild(name="已離班名冊姓名")
+        current_child = Student(name="目前姓名")
+        project_only_child = Student(name="已離班名冊姓名")
         period = TemplatePeriod(
             department="infant",
             name="第一期",
@@ -1039,12 +1046,12 @@ def _seed_semester_student_snapshot_fixture(
         db.add_all([membership, project])
         db.flush()
         db.add_all([
-            Student(
+            ProjectStudent(
                 project_id=project.id,
                 name="舊班姓名",
                 roster_child_id=current_child.id,
             ),
-            Student(
+            ProjectStudent(
                 project_id=project.id,
                 name="已離班相本姓名",
                 roster_child_id=project_only_child.id,

@@ -49,11 +49,26 @@ def _assert_sqlite_can_rewrite_references(connection):
         )
 
 
+# 順序有意義：students 必須先讓位給 project_students，roster_children 才接得到
+# students 這個名字。
 TABLE_RENAMES = (
     ("class_roster_members", "classroom_members"),
     ("classroom_teacher_assignments", "classroom_teachers"),
     ("academic_terms", "semesters"),
     ("academic_term_periods", "semester_periods"),
+    ("students", "project_students"),
+    ("roster_children", "students"),
+)
+
+# 索引與 trigger 名不隨 ALTER TABLE RENAME 改變，舊名留著會與新名重複。
+LEGACY_RENAMED_OBJECTS = (
+    ("trigger", "trg_students_freeze_class_backed_identity"),
+    ("index", "ix_students_roster_child_id"),
+    ("index", "ix_roster_children_name"),
+    ("index", "idx_students_project_id"),
+    ("index", "ix_roster_children_id"),
+    # 改名前建在相本學生上，改名後這個名字屬於名冊表，必須重建而不是沿用
+    ("index", "ix_students_id"),
 )
 
 # 欄位改名跟著表名走。三張學期快照表在這一步還在（稍後才 drop），欄位一樣要改，
@@ -83,21 +98,17 @@ def _rename_tables_to_model_names(connection):
         }
 
     tables = existing_tables()
-    pending_tables = [
-        (old, new)
-        for old, new in TABLE_RENAMES
-        if old in tables and new not in tables
-    ]
-    pending_columns = [
-        (table, old, new)
-        for table, old, new in COLUMN_RENAMES
-        if table in tables or table in {new for _, new in pending_tables}
-    ]
-    if not pending_tables and not pending_columns:
+    if not any(old in tables for old, _ in TABLE_RENAMES):
         return
     _assert_sqlite_can_rewrite_references(connection)
-    for old_name, new_name in pending_tables:
-        connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
+    # 逐個執行並重讀表清單：students → project_students 完成之後，
+    # roster_children → students 的目標名才會空出來。
+    for old_name, new_name in TABLE_RENAMES:
+        tables = existing_tables()
+        if old_name in tables and new_name not in tables:
+            connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
+    for object_type, object_name in LEGACY_RENAMED_OBJECTS:
+        connection.execute(text(f"DROP {object_type.upper()} IF EXISTS {object_name}"))
     tables = existing_tables()
     for table, old_column, new_column in COLUMN_RENAMES:
         if table not in tables:
@@ -136,7 +147,7 @@ def run_migrations():
         _add_template_page_layout_migration_backups_table(connection)
         _migrate_photo_slots_to_content_box(connection)
         _remove_empty_text_bubbles_from_template_pages(connection)
-        _add_roster_children_and_backfill(connection)
+        _add_students_and_backfill(connection)
         _add_project_completed_at_column(connection)
         _add_template_revision_tracking(connection)
         _add_student_album_name_column(connection)
@@ -284,6 +295,9 @@ def _add_term_scoped_classroom_indexes(connection):
         "CREATE INDEX IF NOT EXISTS ix_classroom_teachers_id ON classroom_teachers(id)",
         "CREATE INDEX IF NOT EXISTS ix_semesters_id ON semesters(id)",
         "CREATE INDEX IF NOT EXISTS ix_semester_periods_id ON semester_periods(id)",
+        "CREATE INDEX IF NOT EXISTS ix_project_students_id ON project_students(id)",
+        "CREATE INDEX IF NOT EXISTS ix_students_id ON students(id)",
+        "CREATE INDEX IF NOT EXISTS ix_students_name ON students(name)",
     )
     for statement in index_statements:
         connection.execute(text(statement))
@@ -494,11 +508,11 @@ def _migrate_classrooms_to_term_scope(connection):
             "trg_projects_reject_empty_identity_migration",
             "trg_projects_require_identity_migration_ledger",
             "trg_projects_freeze_assigned_classroom",
-            "trg_semester_students_match_term_insert",
-            "trg_semester_students_match_term_update",
-            "trg_semester_students_freeze_insert",
-            "trg_semester_students_freeze_update",
-            "trg_semester_students_freeze_delete",
+            "trg_academic_term_students_match_term_insert",
+            "trg_academic_term_students_match_term_update",
+            "trg_academic_term_students_freeze_insert",
+            "trg_academic_term_students_freeze_update",
+            "trg_academic_term_students_freeze_delete",
         ):
             connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
 
@@ -653,11 +667,11 @@ def _add_semester_reporting_schema(connection):
     # 更早的開發版本曾在 active term 也凍結；先拆除再補欄位，
     # 避免正確的學期 id backfill 被舊 trigger 阻擋。
     for trigger_name in (
-        "trg_semester_students_match_term_insert",
-        "trg_semester_students_match_term_update",
-        "trg_semester_students_freeze_insert",
-        "trg_semester_students_freeze_update",
-        "trg_semester_students_freeze_delete",
+        "trg_academic_term_students_match_term_insert",
+        "trg_academic_term_students_match_term_update",
+        "trg_academic_term_students_freeze_insert",
+        "trg_academic_term_students_freeze_update",
+        "trg_academic_term_students_freeze_delete",
     ):
         connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
     student_snapshot_columns = {
@@ -1162,7 +1176,7 @@ def _sync_imported_semester_student_snapshots(
             source_membership_id, student_name_snapshot
         )
         SELECT student.roster_child_id, term_classroom.id, NULL, student.name
-        FROM students AS student
+        FROM project_students AS student
         JOIN projects AS project ON project.id = student.project_id
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = project.classroom_id
@@ -1171,7 +1185,7 @@ def _sync_imported_semester_student_snapshots(
           AND student.roster_child_id IS NOT NULL
           AND NOT EXISTS (
                 SELECT 1
-                FROM students AS candidate
+                FROM project_students AS candidate
                 JOIN projects AS candidate_project
                   ON candidate_project.id = candidate.project_id
                 JOIN academic_term_classrooms AS candidate_classroom
@@ -1207,7 +1221,7 @@ def _sync_imported_semester_student_snapshots(
         SELECT member.roster_child_id, term_classroom.id,
                member.id, child.name
         FROM classroom_members AS member
-        JOIN roster_children AS child ON child.id = member.roster_child_id
+        JOIN students AS child ON child.id = member.roster_child_id
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = member.classroom_id
         WHERE term_classroom.semester_id = :term_id
@@ -1284,15 +1298,15 @@ def _add_semester_reporting_freeze_triggers(connection):
     if _is_term_scoped_classroom_schema(connection):
         return
     for trigger_name in (
-        "trg_semester_students_match_term_insert",
-        "trg_semester_students_match_term_update",
-        "trg_semester_students_freeze_insert",
-        "trg_semester_students_freeze_update",
-        "trg_semester_students_freeze_delete",
+        "trg_academic_term_students_match_term_insert",
+        "trg_academic_term_students_match_term_update",
+        "trg_academic_term_students_freeze_insert",
+        "trg_academic_term_students_freeze_update",
+        "trg_academic_term_students_freeze_delete",
     ):
         connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
     connection.execute(text("""
-        CREATE TRIGGER trg_semester_students_match_term_insert
+        CREATE TRIGGER trg_academic_term_students_match_term_insert
         BEFORE INSERT ON academic_term_classroom_students
         WHEN NEW.semester_id IS NULL OR NOT EXISTS (
             SELECT 1
@@ -1305,7 +1319,7 @@ def _add_semester_reporting_freeze_triggers(connection):
         END
     """))
     connection.execute(text("""
-        CREATE TRIGGER trg_semester_students_match_term_update
+        CREATE TRIGGER trg_academic_term_students_match_term_update
         BEFORE UPDATE OF semester_id, term_classroom_id
         ON academic_term_classroom_students
         WHEN NEW.semester_id IS NULL OR NOT EXISTS (
@@ -1319,7 +1333,7 @@ def _add_semester_reporting_freeze_triggers(connection):
         END
     """))
     connection.execute(text("""
-        CREATE TRIGGER trg_semester_students_freeze_insert
+        CREATE TRIGGER trg_academic_term_students_freeze_insert
         BEFORE INSERT ON academic_term_classroom_students
         WHEN EXISTS (
             SELECT 1
@@ -1334,7 +1348,7 @@ def _add_semester_reporting_freeze_triggers(connection):
         END
     """))
     connection.execute(text("""
-        CREATE TRIGGER trg_semester_students_freeze_update
+        CREATE TRIGGER trg_academic_term_students_freeze_update
         BEFORE UPDATE ON academic_term_classroom_students
         WHEN EXISTS (
             SELECT 1
@@ -1349,7 +1363,7 @@ def _add_semester_reporting_freeze_triggers(connection):
         END
     """))
     connection.execute(text("""
-        CREATE TRIGGER trg_semester_students_freeze_delete
+        CREATE TRIGGER trg_academic_term_students_freeze_delete
         BEFORE DELETE ON academic_term_classroom_students
         WHEN EXISTS (
             SELECT 1
@@ -1446,7 +1460,7 @@ def _add_organization_structure(connection):
         CREATE TABLE IF NOT EXISTS classroom_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
-            roster_child_id INTEGER NOT NULL REFERENCES roster_children(id),
+            roster_child_id INTEGER NOT NULL REFERENCES students(id),
             started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             ended_at DATETIME,
             end_reason TEXT
@@ -1858,12 +1872,12 @@ def _quarantine_class_backed_identity_anomalies(connection):
         project_quarantine_updates += ", class_period_work_slot_id = NULL"
 
     anomalous_projects = list(connection.execute(text("""
-        WITH duplicate_students AS (
+        WITH duplicate_project_students AS (
             SELECT student.id
-            FROM students AS student
+            FROM project_students AS student
             JOIN (
                 SELECT project_id, roster_child_id
-                FROM students
+                FROM project_students
                 WHERE roster_child_id IS NOT NULL
                 GROUP BY project_id, roster_child_id
                 HAVING COUNT(*) > 1
@@ -1891,10 +1905,10 @@ def _quarantine_class_backed_identity_anomalies(connection):
                       OR duplicate_student.id IS NOT NULL
                     THEN 1 ELSE 0
                 END) AS anomalous_student_count
-            FROM students AS student
-            LEFT JOIN roster_children AS roster_child
+            FROM project_students AS student
+            LEFT JOIN students AS roster_child
               ON roster_child.id = student.roster_child_id
-            LEFT JOIN duplicate_students AS duplicate_student
+            LEFT JOIN duplicate_project_students AS duplicate_student
               ON duplicate_student.id = student.id
             GROUP BY student.project_id
         )
@@ -2076,8 +2090,8 @@ def _add_legacy_project_identity_migration_schema(connection):
         """))
 
     connection.execute(text(f"""
-        CREATE TRIGGER IF NOT EXISTS trg_students_freeze_class_backed_identity
-        BEFORE UPDATE OF name, roster_child_id, project_id ON students
+        CREATE TRIGGER IF NOT EXISTS trg_project_students_freeze_class_backed_identity
+        BEFORE UPDATE OF name, roster_child_id, project_id ON project_students
         WHEN (
             NEW.name IS NOT OLD.name
             OR NEW.roster_child_id IS NOT OLD.roster_child_id
@@ -2104,8 +2118,8 @@ def _add_legacy_project_identity_migration_schema(connection):
         WHEN OLD.classroom_id IS NULL
           AND NEW.classroom_id IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM students
-              WHERE students.project_id = OLD.id
+              SELECT 1 FROM project_students
+              WHERE project_students.project_id = OLD.id
           )
         BEGIN
             SELECT RAISE(
@@ -2125,8 +2139,8 @@ def _add_legacy_project_identity_migration_schema(connection):
                 WHERE migration.project_id_snapshot = OLD.id
                   AND migration.target_classroom_id_snapshot = NEW.classroom_id
                   AND migration.student_count = (
-                      SELECT COUNT(*) FROM students
-                      WHERE students.project_id = OLD.id
+                      SELECT COUNT(*) FROM project_students
+                      WHERE project_students.project_id = OLD.id
                   )
                   AND migration.student_count = (
                       SELECT COUNT(*)
@@ -2136,7 +2150,7 @@ def _add_legacy_project_identity_migration_schema(connection):
                   )
                   AND NOT EXISTS (
                       SELECT 1
-                      FROM students AS student
+                      FROM project_students AS student
                       WHERE student.project_id = OLD.id
                         AND NOT EXISTS (
                             SELECT 1
@@ -2175,10 +2189,10 @@ def _add_student_album_name_column(connection):
     """為學生加入可選相本稱呼；既有資料以 NULL 沿用名冊姓名。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "album_name" not in existing_columns:
-        connection.execute(text("ALTER TABLE students ADD COLUMN album_name VARCHAR"))
+        connection.execute(text("ALTER TABLE project_students ADD COLUMN album_name VARCHAR"))
         connection.commit()
 
 
@@ -2186,11 +2200,11 @@ def _add_roster_child_album_name_column(connection):
     """為園所孩子名冊加入已歸班相本共用的可選稱呼。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(roster_children)"))
+        for row in connection.execute(text("PRAGMA table_info(students)"))
     }
     if "album_name" not in existing_columns:
         connection.execute(text(
-            "ALTER TABLE roster_children ADD COLUMN album_name VARCHAR"
+            "ALTER TABLE students ADD COLUMN album_name VARCHAR"
         ))
         connection.commit()
 
@@ -2219,9 +2233,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         int(row[0])
         for row in connection.execute(text("""
             SELECT DISTINCT student.roster_child_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            JOIN roster_children AS child ON child.id = student.roster_child_id
+            JOIN students AS child ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND child.album_name IS NULL
               AND LENGTH(TRIM(student.album_name)) > 100
@@ -2238,9 +2252,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         int(row[0])
         for row in connection.execute(text("""
             SELECT student.roster_child_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            JOIN roster_children AS child ON child.id = student.roster_child_id
+            JOIN students AS child ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND child.album_name IS NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
@@ -2258,21 +2272,21 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
 
     # 只有同一孩子所有明確舊值一致時才自動升格；provisional link 不參與。
     connection.execute(text("""
-        UPDATE roster_children
+        UPDATE students
         SET album_name = (
             SELECT MIN(TRIM(student.album_name))
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            WHERE student.roster_child_id = roster_children.id
+            WHERE student.roster_child_id = students.id
               AND project.classroom_id IS NOT NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
         )
         WHERE album_name IS NULL
           AND EXISTS (
             SELECT 1
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            WHERE student.roster_child_id = roster_children.id
+            WHERE student.roster_child_id = students.id
               AND project.classroom_id IS NOT NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
           )
@@ -2281,9 +2295,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
     # 以舊／新 runtime 真正會送進渲染器的字串比較；包含既有中央值、缺 child link
     # 及帶空白的歷史 raw 值，不能只檢查本次 backfill 的孩子。
     changed_student_filter = """
-        FROM students AS student
+        FROM project_students AS student
         JOIN projects AS project ON project.id = student.project_id
-        LEFT JOIN roster_children AS child ON child.id = student.roster_child_id
+        LEFT JOIN students AS child ON child.id = student.roster_child_id
         WHERE project.classroom_id IS NOT NULL
           AND CASE
                   WHEN student.album_name IS NOT NULL
@@ -2302,19 +2316,19 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         WHERE id IN (SELECT project.id {changed_student_filter})
     """))
     connection.execute(text(f"""
-        UPDATE students
+        UPDATE project_students
         SET output_filename = NULL,
             updated_at = CURRENT_TIMESTAMP
         WHERE id IN (SELECT student.id {changed_student_filter})
     """))
 
-    # Student.album_name 從此只保留給未歸班舊相本，避免形成第二份真相。
+    # ProjectStudent.album_name 從此只保留給未歸班舊相本，避免形成第二份真相。
     connection.execute(text("""
-        UPDATE students
+        UPDATE project_students
         SET album_name = NULL
         WHERE id IN (
             SELECT student.id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
             WHERE project.classroom_id IS NOT NULL
               AND student.album_name IS NOT NULL
@@ -2366,7 +2380,7 @@ def _add_template_revision_tracking(connection):
                 new_page_ids_json TEXT NOT NULL,
                 project_completed_at DATETIME,
                 project_label_texts_json TEXT,
-                students_json TEXT,
+                project_students_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """))
@@ -2411,10 +2425,10 @@ def _add_student_completed_at_column(connection):
     """新增學生「個別完成」時間戳；既有已全班完成的專案不回填學生時間戳。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "completed_at" not in existing_columns:
-        connection.execute(text("ALTER TABLE students ADD COLUMN completed_at DATETIME"))
+        connection.execute(text("ALTER TABLE project_students ADD COLUMN completed_at DATETIME"))
         connection.commit()
 
 
@@ -2595,7 +2609,7 @@ def _add_foreign_key_indexes(connection):
     }
     indexes_to_create = [
         ("idx_projects_owner_id",         "CREATE INDEX idx_projects_owner_id ON projects(owner_id)"),
-        ("idx_students_project_id",        "CREATE INDEX idx_students_project_id ON students(project_id)"),
+        ("idx_project_students_project_id",        "CREATE INDEX idx_project_students_project_id ON project_students(project_id)"),
         ("idx_project_comments_project_id","CREATE INDEX idx_project_comments_project_id ON project_comments(project_id)"),
         ("idx_project_comments_author_id", "CREATE INDEX idx_project_comments_author_id ON project_comments(author_id)"),
         ("idx_template_pages_template_id", "CREATE INDEX idx_template_pages_template_id ON template_pages(template_id)"),
@@ -2629,10 +2643,10 @@ def _add_template_page_unique_constraint(connection):
 
 
 def _add_timestamp_columns(connection):
-    """為 projects、students 補 updated_at；為 students 補 created_at。"""
+    """為 projects、project_students 補 updated_at；為 project_students 補 created_at。"""
     tables_columns = {
         "projects":  ["updated_at"],
-        "students":  ["created_at", "updated_at"],
+        "project_students":  ["created_at", "updated_at"],
     }
     for table, columns in tables_columns.items():
         existing = {
@@ -2703,7 +2717,7 @@ def _drop_bubble_texts_json_column(connection):
         SELECT sql
         FROM sqlite_master
         WHERE type = 'trigger'
-          AND name = 'trg_students_freeze_class_backed_identity'
+          AND name = 'trg_project_students_freeze_class_backed_identity'
           AND sql IS NOT NULL
     """)).scalar_one_or_none()
     kept_columns = [
@@ -2735,10 +2749,10 @@ def _drop_bubble_texts_json_column(connection):
             f"SELECT {quoted_columns} FROM projects"
         ))
         if external_project_trigger_sql is not None:
-            # 此 trigger 掛在 students，卻查詢 projects；重建空窗必須先移除，
+            # 此 trigger 掛在 project_students，卻查詢 projects；重建空窗必須先移除，
             # 否則 SQLite 會因 schema 內仍引用已刪除的 main.projects 而拒絕 rename。
             connection.execute(text(
-                "DROP TRIGGER trg_students_freeze_class_backed_identity"
+                "DROP TRIGGER trg_project_students_freeze_class_backed_identity"
             ))
         connection.execute(text("DROP TABLE projects"))
         connection.execute(text("ALTER TABLE projects_new RENAME TO projects"))
@@ -3378,38 +3392,38 @@ def _drop_users_supervisor_id_column(connection):
             connection.commit()
 
 
-def _add_roster_children_and_backfill(connection):
-    """只建立名冊 schema；舊 Student 身分一律等待管理員顯式遷移。
+def _add_students_and_backfill(connection):
+    """只建立名冊 schema；舊 ProjectStudent 身分一律等待管理員顯式遷移。
 
     舊版已寫入的 non-NULL link 原樣保存為 provisional evidence；fresh legacy
-    Student 保持 NULL，絕不依姓名建立或共用 RosterChild。
+    ProjectStudent 保持 NULL，絕不依姓名建立或共用 Student。
     """
     existing_tables = {
         row[0]
         for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
     }
-    if "roster_children" not in existing_tables:
+    if "students" not in existing_tables:
         connection.execute(text("""
-            CREATE TABLE roster_children (
+            CREATE TABLE students (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """))
         connection.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_roster_children_name ON roster_children (name)"
+            "CREATE INDEX IF NOT EXISTS ix_students_name ON students (name)"
         ))
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "roster_child_id" not in existing_columns:
         connection.execute(text(
-            "ALTER TABLE students ADD COLUMN roster_child_id INTEGER "
-            "REFERENCES roster_children(id)"
+            "ALTER TABLE project_students ADD COLUMN roster_child_id INTEGER "
+            "REFERENCES students(id)"
         ))
     connection.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_students_roster_child_id ON students (roster_child_id)"
+        "CREATE INDEX IF NOT EXISTS ix_project_students_roster_child_id ON project_students (roster_child_id)"
     ))
 
     connection.commit()

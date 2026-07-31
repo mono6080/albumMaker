@@ -298,7 +298,7 @@ def auto_fill_classroom_member_album_names(
     return auto_fill_classroom_album_names_use_case(db, classroom_id)
 
 
-@router.patch("/roster-children/{roster_child_id}/album-name")
+@router.patch("/students/{roster_child_id}/album-name")
 def update_roster_child_album_name(
     roster_child_id: int,
     body: RosterChildAlbumNameUpdateBody,
@@ -312,7 +312,7 @@ def update_roster_child_album_name(
     )
 
 
-@router.post("/roster-children/{roster_child_id}/album-name/auto-fill")
+@router.post("/students/{roster_child_id}/album-name/auto-fill")
 def auto_fill_roster_child_album_name(
     roster_child_id: int,
     db: Session = Depends(get_db),

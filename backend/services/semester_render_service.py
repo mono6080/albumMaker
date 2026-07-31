@@ -4,7 +4,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from database import Project, Student
+from database import Project, ProjectStudent
 from services.request_limiter import album_render_limiter
 from services.semester_export_service import (
     classify_project_student_identity_anomalies,
@@ -35,7 +35,7 @@ def render_missing_semester_albums(
 
     candidates_by_child_period: dict[
         tuple[int, int],
-        list[tuple[Project, Student]],
+        list[tuple[Project, ProjectStudent]],
     ] = {}
     for project in projects:
         identity_anomalies = classify_project_student_identity_anomalies(project)

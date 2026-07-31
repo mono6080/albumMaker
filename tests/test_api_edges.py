@@ -21,7 +21,7 @@ from tests.helpers import (
 )
 from services.roster_identity_service import normalize_child_name
 
-from database import Project, SessionLocal, Student
+from database import Project, SessionLocal, ProjectStudent
 from services.storage import get_storage
 
 
@@ -569,7 +569,7 @@ def test_corrupt_project_json_returns_422():
 
         db = SessionLocal()
         try:
-            student = db.query(Student).filter(Student.id == student_id).one()
+            student = db.query(ProjectStudent).filter(ProjectStudent.id == student_id).one()
             student.pages_data_json = "{not-json"
             db.commit()
         finally:

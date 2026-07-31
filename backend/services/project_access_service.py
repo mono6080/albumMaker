@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import false
 from sqlalchemy.orm import Session, object_session
 
-from database import ClassroomTeacher, Project, ProjectComment, Student, User
+from database import ClassroomTeacher, Project, ProjectComment, ProjectStudent, User
 from services.organization_scope_service import (
     OrganizationReadScope,
     apply_project_read_scope as apply_organization_project_read_scope,
@@ -147,14 +147,14 @@ def assert_project_readable(
     raise HTTPException(status_code=403, detail="無此專案的存取權限")
 
 
-def student_effectively_completed(project: Project, student: Student) -> bool:
+def student_effectively_completed(project: Project, student: ProjectStudent) -> bool:
     """有效完成 predicate（唯一判斷式）：學生自身或全班完成任一成立即視為完成。"""
     return student.completed_at is not None or project.completed_at is not None
 
 
 def assert_student_content_writable(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     current_user: User,
 ) -> None:
     """逐學生寫入鎖：目標學生已（有效）完成即擋；admin 比照全班內容鎖可越過。"""
@@ -171,7 +171,7 @@ def assert_student_content_writable(
     )
 
 
-def assert_student_downloadable(project: Project, student: Student) -> None:
+def assert_student_downloadable(project: Project, student: ProjectStudent) -> None:
     """單生下載閘門：該生有效完成即放行。"""
     if student_effectively_completed(project, student):
         return

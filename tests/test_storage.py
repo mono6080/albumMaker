@@ -10,7 +10,7 @@ from pathlib import Path, PureWindowsPath
 import pytest
 from PIL import Image
 
-from database import Student
+from database import ProjectStudent
 import app_paths
 from services import storage_factory
 from services.file_service import ProcessedImageUpload, content_versioned_filename
@@ -54,7 +54,7 @@ def test_reordered_page_photo_replacement_never_overwrites_other_page_asset(tmp_
         {"page_index": 0, "photos": {"1": {"path": replaced_page_key}}, "label_texts": {}},
         {"page_index": 1, "photos": {"1": {"path": other_page_key}}, "label_texts": {}},
     ]
-    student = Student(id=1, project_id=1, name="孩子", pages_data_json="[]")
+    student = ProjectStudent(id=1, project_id=1, name="孩子", pages_data_json="[]")
 
     new_key = apply_photo_to_page(
         pages_data,

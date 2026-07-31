@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from PIL import Image
 
-from database import Project, SessionLocal, Student
+from database import Project, SessionLocal, ProjectStudent
 from main import (
     FRONTEND_APP_CACHE_CONTROL,
     FRONTEND_ASSET_CACHE_CONTROL,
@@ -173,11 +173,11 @@ def test_template_project_student_and_text_contracts():
 
         db = SessionLocal()
         try:
-            roster_child_id = db.get(Student, student_id).roster_child_id
+            roster_child_id = db.get(ProjectStudent, student_id).roster_child_id
         finally:
             db.close()
         update_album_name = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={"album_name": "Alice Chen"},
         )
         assert_status(update_album_name, 200)

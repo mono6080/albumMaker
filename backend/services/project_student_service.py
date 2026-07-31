@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import Student, User, utc_now
+from database import ProjectStudent, User, utc_now
 from services.organization_lock import organization_acl_lock
 from services.project_access_service import (
     assert_project_content_writable,
@@ -41,7 +41,7 @@ def _assert_legacy_album_name_mutable(project) -> None:
         )
 
 
-def _auto_fill_eligible(project, student: Student, current_user: User) -> bool:
+def _auto_fill_eligible(project, student: ProjectStudent, current_user: User) -> bool:
     """批次 auto-fill 只處理稱呼空白且未（有效）完成的學生；admin 比照內容鎖可越過完成限制。"""
     if student.album_name and student.album_name.strip():
         return False
@@ -50,7 +50,7 @@ def _auto_fill_eligible(project, student: Student, current_user: User) -> bool:
     return not student_effectively_completed(project, student)
 
 
-def _effective_album_name_for_collision(student: Student) -> str:
+def _effective_album_name_for_collision(student: ProjectStudent) -> str:
     """碰撞檢查時讓舊資料的空白稱呼回退完整姓名。"""
     album_name = str(student.album_name) if student.album_name is not None else ""
     return album_name if album_name.strip() else str(student.name)
@@ -311,7 +311,7 @@ def update_student_album_name(
     return result
 
 
-def _serialize_student_identity(student: Student) -> dict:
+def _serialize_student_identity(student: ProjectStudent) -> dict:
     """學生更新端點的穩定回應契約。"""
     return {
         "ok": True,

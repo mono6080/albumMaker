@@ -26,7 +26,7 @@ from database import (
     Semester,
     Project,
     SessionLocal,
-    Student,
+    ProjectStudent,
     Template,
     engine,
 )
@@ -179,7 +179,7 @@ def create_unassigned_migration_project(
         )
         db.add(project)
         db.flush()
-        db.add(Student(project_id=project.id, name=student_name, order_index=0))
+        db.add(ProjectStudent(project_id=project.id, name=student_name, order_index=0))
         db.commit()
         return project.id
     finally:
@@ -223,7 +223,7 @@ def add_students(client: TestClient, project_id: int, names: list[str]) -> dict[
 def roster_child_id_of(student_id: int) -> int | None:
     db = SessionLocal()
     try:
-        return db.query(Student).filter(Student.id == student_id).one().roster_child_id
+        return db.query(ProjectStudent).filter(ProjectStudent.id == student_id).one().roster_child_id
     finally:
         db.close()
 
@@ -361,9 +361,9 @@ def test_semester_preview_reports_legacy_identity_anomaly_without_candidates():
 
         db = SessionLocal()
         try:
-            db.query(Student).filter(Student.project_id == project).delete()
+            db.query(ProjectStudent).filter(ProjectStudent.project_id == project).delete()
             # 直接種入 migration 前既存的異常快照；正式流程不可再把已歸班身分改回 NULL。
-            student = Student(
+            student = ProjectStudent(
                 project_id=project,
                 name="舊資料學生",
                 order_index=0,
@@ -399,19 +399,19 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
 
         db = SessionLocal()
         try:
-            db.query(Student).filter(Student.project_id == project_id).delete()
+            db.query(ProjectStudent).filter(ProjectStudent.project_id == project_id).delete()
             db.commit()
         finally:
             db.close()
 
         raw_connection = engine.raw_connection()
         cursor = raw_connection.cursor()
-        cursor.execute("SELECT COALESCE(MAX(id), 0) + 1000000 FROM roster_children")
+        cursor.execute("SELECT COALESCE(MAX(id), 0) + 1000000 FROM students")
         invalid_child_id = cursor.fetchone()[0]
         cursor.execute("PRAGMA foreign_keys = OFF")
         cursor.execute(
             """
-            INSERT INTO students (
+            INSERT INTO project_students (
                 project_id, name, order_index, pages_data_json, roster_child_id
             ) VALUES (?, ?, ?, ?, ?)
             """,
@@ -420,7 +420,7 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
         student_id = cursor.lastrowid
         output_key = get_student_pdf_key(project_id, student_id)
         cursor.execute(
-            "UPDATE students SET output_filename = ? WHERE id = ?",
+            "UPDATE project_students SET output_filename = ? WHERE id = ?",
             (output_key, student_id),
         )
         raw_connection.commit()
@@ -460,7 +460,7 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
         finally:
             db = SessionLocal()
             try:
-                db.query(Student).filter(Student.id == student_id).delete()
+                db.query(ProjectStudent).filter(ProjectStudent.id == student_id).delete()
                 db.commit()
             finally:
                 db.close()
@@ -484,8 +484,8 @@ def test_duplicate_child_identity_is_listed_and_skipped_by_missing_render(
 
         db = SessionLocal()
         try:
-            source_student = db.get(Student, student_ids["重複來源"])
-            duplicate_student = Student(
+            source_student = db.get(ProjectStudent, student_ids["重複來源"])
+            duplicate_student = ProjectStudent(
                 project_id=project_id,
                 name="重複影本",
                 order_index=2,
@@ -550,7 +550,7 @@ def test_duplicate_child_identity_is_listed_and_skipped_by_missing_render(
         finally:
             db = SessionLocal()
             try:
-                db.query(Student).filter(Student.id == duplicate_student_id).delete()
+                db.query(ProjectStudent).filter(ProjectStudent.id == duplicate_student_id).delete()
                 db.commit()
             finally:
                 db.close()

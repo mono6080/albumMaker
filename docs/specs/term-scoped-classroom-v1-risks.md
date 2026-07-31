@@ -14,6 +14,15 @@
 這兩支腳本會壞，而它們要處理的 31 筆姓名、124 筆快照、28 筆稱呼是正式站等著要的
 資料。順序顛倒就得先改腳本、再改回來，多一輪沒有必要的風險。
 
+**現況（2026-07-31）**：改名已在 `refactor/term-scoped-classroom` 分支上完成，但
+**尚未合併**。合併與部署的順序必須是：
+
+1. `fix/roster-name-correction` 推上正式站並跑完兩支腳本。
+2. 才合併 `refactor/term-scoped-classroom`。
+
+顛倒的話，那兩支腳本會對著 `students`（現在是名冊表）與已不存在的 `roster_children`
+下 SQL——不會靜默失敗，但正式站等著的姓名更正會卡住。
+
 ---
 
 ## 風險登錄
@@ -36,6 +45,14 @@ R2 上的檔案。
 
 **保證**：`test_render_pipeline_fingerprint_covers_exactly_the_declared_sources`
 釘住涵蓋範圍（多一個或少一個檔案都會讓失效判斷從此不準）。
+
+**實測（2026-07-31）**：
+- 結構改動與改名 A／B 的指紋**沒變**（`1eac035bd357a81d8e57`）——它們沒動到那 13 個
+  來源檔。
+- 改名 C 的指紋變了：`1eac035bd357a81d8e57` → `15447fe7671bc91ee6cf`（`Student` →
+  `ProjectStudent` 動到 `render_service.py` 與 `student_render_service.py`）。
+- 5 個 case 的輸出**位元完全相同**。也就是 468 份既有輸出會被判定過期，但重渲染不會
+  改變任何人看到的相本——所以要刻意排在離峰時段跑，而不是讓它在部署當下突襲。
 
 ### R4 `ALTER TABLE RENAME` 的參照改寫靜默失效
 
@@ -224,11 +241,15 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 
 ## 上線前檢查清單
 
-1. 名冊姓名更正已在正式站執行完畢（見執行順序的硬前提）
+1. 名冊姓名更正已在正式站執行完畢，`fix/roster-name-correction` 已合併
+   （見執行順序的硬前提）——**這一項沒完成之前不要合併本分支**
 2. 正式站備份已建立並 verify 通過
-3. 在正式資料快照上跑過完整 migration，且重跑第二次為 0 筆
+3. 在正式資料快照上跑過完整 migration，且重跑第二次為 0 筆 ✅ 2026-07-31
 4. 在正式資料快照上跑過完整 pytest
-5. `verify_render_output_unchanged.py` 比對通過
+5. `verify_render_output_unchanged.py` 比對通過 ✅ 2026-07-31（指紋變、位元相同，見 R1）
 6. 容器內 SQLite 版本 ≥ 3.25（migration 會自行斷言，但先確認避免部署中途失敗）
 7. 收斂重渲染已排程在離峰時段，且已知會跑約 468 份
 8. 已通知老師：部署後請重新整理頁面；既有編班草稿需重建
+
+第 3 項的驗證方式是把正式資料副本升級後，與 `init_db()` 建出的全新資料庫逐項比對表
+欄位、索引與 trigger；2026-07-31 的結果是三者完全一致。

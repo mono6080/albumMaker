@@ -14,9 +14,9 @@ from database import (
     ClassroomTeacher,
     ClassroomMember,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
+    SessionLocal,
+    ProjectStudent,
     TermReclassificationPlan,
 )
 from tests.helpers import (
@@ -524,9 +524,9 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                     student.output_filename,
                     student.roster_child_id,
                 )
-                for student in db.query(Student)
-                .filter(Student.project_id == old_project["id"])
-                .order_by(Student.id)
+                for student in db.query(ProjectStudent)
+                .filter(ProjectStudent.project_id == old_project["id"])
+                .order_by(ProjectStudent.id)
             ]
         finally:
             db.close()
@@ -678,7 +678,7 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
             target_term_id = applied_plan["target_semester_id"]
             active_members = (
                 db.query(ClassroomMember)
-                .join(RosterChild, RosterChild.id == ClassroomMember.roster_child_id)
+                .join(Student, Student.id == ClassroomMember.roster_child_id)
                 .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
                 .filter(
                     Classroom.semester_id == target_term_id,
@@ -768,9 +768,9 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                     student.output_filename,
                     student.roster_child_id,
                 )
-                for student in db.query(Student)
-                .filter(Student.project_id == old_project["id"])
-                .order_by(Student.id)
+                for student in db.query(ProjectStudent)
+                .filter(ProjectStudent.project_id == old_project["id"])
+                .order_by(ProjectStudent.id)
             ]
         finally:
             db.close()
