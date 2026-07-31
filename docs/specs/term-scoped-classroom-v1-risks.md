@@ -241,10 +241,18 @@ route boundary 與 roster 兩份會因為 API 路徑改名而需要更新——�
 
 ### 尚未關閉的測試缺口
 
-- migration 前提驗證的五項守衛，沒有「各自失敗時中止」的測試。
-- 「升級後 vs 全新資料庫 schema 一致」目前靠手動比對腳本，不在 pytest 裡。
-- 編班計畫還不支援把新生（沒有來源 membership）直接放進去。班級結構本身已可在草稿裡增減。
-- Playwright e2e 未在本輪執行（選擇器已隨 UI 文案同步更新，但沒跑過）。
+- 編班計畫還不支援把新生（沒有來源 membership）直接放進去。班級結構本身已可在
+  草稿裡增減（`POST /classrooms` 帶 `semester_id`、`DELETE /classrooms/{id}`）。
+
+已補上（2026-08-01）：
+
+- 破壞性搬遷的三項前提各自有中止測試（快照漂移、相本班級不一致、缺工作格），
+  另有一個原子性測試釘住「中途失敗不留下半套結構」。
+- 「升級後 vs 全新資料庫 schema 一致」已是 pytest 防線，比對涵蓋欄位型別、nullable、
+  預設值、外鍵 ON DELETE、索引唯一性與 partial 條件；`scripts/compare_database_schema.py`
+  供上線當天對正式資料副本使用。
+- Playwright e2e 已執行（chromium 全綠）。webkit 在本機偶發逾時，每輪失敗的測試不同
+  且單獨重跑均通過，含與本重構無關的 template-editor。
 
 ### 渲染輸出位元比對
 
