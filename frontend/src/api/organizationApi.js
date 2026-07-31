@@ -76,8 +76,8 @@ export const createTermReclassificationPlan = (label, options = {}) =>
   });
 
 /** 取得園所正式學期主檔（管理介面使用）。 */
-export const fetchAcademicTerms = () =>
-  apiClient.get("/organization/academic-terms");
+export const fetchSemesters = () =>
+  apiClient.get("/organization/semesters");
 
 /** 取得指定的新學期編班草稿或已套用結果。 */
 export const fetchTermReclassificationPlan = (planId) =>

@@ -100,8 +100,8 @@ class TemplatePeriod(Base):
 
     templates = relationship("Template", back_populates="period", order_by="Template.created_at.desc()")
     projects = relationship("Project", back_populates="template_period")
-    academic_term_period = relationship(
-        "AcademicTermPeriod",
+    semester_period = relationship(
+        "SemesterPeriod",
         back_populates="template_period",
         uselist=False,
     )
@@ -297,18 +297,18 @@ class ClassroomTeacher(Base):
 
 
 # 「目前」的唯一定義：班級沒有自己的啟用旗標，由所屬學期的狀態決定
-CURRENT_ACADEMIC_TERM_STATUSES = ("imported", "active")
+CURRENT_SEMESTER_STATUSES = ("imported", "active")
 
 
-class AcademicTerm(Base):
-    __tablename__ = "academic_terms"
+class Semester(Base):
+    __tablename__ = "semesters"
     __table_args__ = (
         CheckConstraint(
             "status IN ('imported', 'draft', 'active', 'closed', 'cancelled')",
-            name="ck_academic_terms_status",
+            name="ck_semesters_status",
         ),
         Index(
-            "ux_academic_terms_current",
+            "ux_semesters_current",
             text("(1)"),
             unique=True,
             sqlite_where=text("status IN ('imported', 'active')"),
@@ -355,43 +355,43 @@ class AcademicTerm(Base):
     closed_by = relationship("User", foreign_keys=[closed_by_id])
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     periods = relationship(
-        "AcademicTermPeriod",
-        back_populates="academic_term",
+        "SemesterPeriod",
+        back_populates="semester",
         cascade="all, delete-orphan",
-        order_by="AcademicTermPeriod.position",
+        order_by="SemesterPeriod.position",
     )
     classrooms = relationship(
         "Classroom",
-        back_populates="academic_term",
+        back_populates="semester",
         cascade="all, delete-orphan",
         order_by="Classroom.id",
     )
     reclassification_plan = relationship(
         "TermReclassificationPlan",
-        back_populates="target_academic_term",
+        back_populates="target_semester",
         uselist=False,
     )
 
 
-class AcademicTermPeriod(Base):
-    __tablename__ = "academic_term_periods"
+class SemesterPeriod(Base):
+    __tablename__ = "semester_periods"
     __table_args__ = (
-        CheckConstraint("position >= 0", name="ck_academic_term_periods_position"),
+        CheckConstraint("position >= 0", name="ck_semester_periods_position"),
         UniqueConstraint(
-            "academic_term_id",
+            "semester_id",
             "position",
-            name="ux_academic_term_periods_term_position",
+            name="ux_semester_periods_term_position",
         ),
         UniqueConstraint(
             "template_period_id",
-            name="ux_academic_term_periods_template_period",
+            name="ux_semester_periods_template_period",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    academic_term_id = Column(
+    semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id", ondelete="CASCADE"),
+        ForeignKey("semesters.id", ondelete="CASCADE"),
         nullable=False,
     )
     template_period_id = Column(
@@ -403,14 +403,14 @@ class AcademicTermPeriod(Base):
     department = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
 
-    academic_term = relationship("AcademicTerm", back_populates="periods")
+    semester = relationship("Semester", back_populates="periods")
     template_period = relationship(
         "TemplatePeriod",
-        back_populates="academic_term_period",
+        back_populates="semester_period",
     )
     work_slots = relationship(
         "ClassPeriodWorkSlot",
-        back_populates="term_period",
+        back_populates="semester_period",
         cascade="all, delete-orphan",
         order_by="ClassPeriodWorkSlot.id",
     )
@@ -426,7 +426,7 @@ class Classroom(Base):
     __tablename__ = "classrooms"
     __table_args__ = (
         UniqueConstraint(
-            "academic_term_id",
+            "semester_id",
             "campus_id",
             "department",
             "name",
@@ -434,23 +434,23 @@ class Classroom(Base):
         ),
         Index(
             "idx_classrooms_term_scope",
-            "academic_term_id",
+            "semester_id",
             "campus_id",
             "department",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    academic_term_id = Column(
+    semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id", ondelete="CASCADE"),
+        ForeignKey("semesters.id", ondelete="CASCADE"),
         nullable=False,
     )
     campus_id = Column(Integer, ForeignKey("campuses.id"), nullable=False)
     name = Column(String, nullable=False)
     department = Column(String, nullable=False)
 
-    academic_term = relationship("AcademicTerm", back_populates="classrooms")
+    semester = relationship("Semester", back_populates="classrooms")
     campus = relationship("Campus", back_populates="classrooms")
     roster_members = relationship(
         "ClassroomMember",
@@ -478,8 +478,8 @@ class Classroom(Base):
     def is_current(self) -> bool:
         """班級是否屬於目前正式學期：取代舊的班級啟用旗標。"""
         return (
-            self.academic_term is not None
-            and self.academic_term.status in CURRENT_ACADEMIC_TERM_STATUSES
+            self.semester is not None
+            and self.semester.status in CURRENT_SEMESTER_STATUSES
         )
 
 
@@ -488,7 +488,7 @@ class ClassPeriodWorkSlot(Base):
     __table_args__ = (
         UniqueConstraint(
             "classroom_id",
-            "term_period_id",
+            "semester_period_id",
             name="ux_class_period_work_slots_classroom_period",
         ),
     )
@@ -499,9 +499,9 @@ class ClassPeriodWorkSlot(Base):
         ForeignKey("classrooms.id", ondelete="CASCADE"),
         nullable=False,
     )
-    term_period_id = Column(
+    semester_period_id = Column(
         Integer,
-        ForeignKey("academic_term_periods.id", ondelete="CASCADE"),
+        ForeignKey("semester_periods.id", ondelete="CASCADE"),
         nullable=False,
     )
     started_at = Column(DateTime, nullable=True)
@@ -510,7 +510,7 @@ class ClassPeriodWorkSlot(Base):
         "Classroom",
         back_populates="work_slots",
     )
-    term_period = relationship("AcademicTermPeriod", back_populates="work_slots")
+    semester_period = relationship("SemesterPeriod", back_populates="work_slots")
     projects = relationship(
         "Project",
         back_populates="class_period_work_slot",
@@ -669,9 +669,9 @@ class TermReclassificationPlan(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    target_academic_term_id = Column(
+    target_semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id"),
+        ForeignKey("semesters.id"),
         nullable=True,
         unique=True,
     )
@@ -718,8 +718,8 @@ class TermReclassificationPlan(Base):
     updated_by = relationship("User", foreign_keys=[updated_by_id])
     applied_by = relationship("User", foreign_keys=[applied_by_id])
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
-    target_academic_term = relationship(
-        "AcademicTerm",
+    target_semester = relationship(
+        "Semester",
         back_populates="reclassification_plan",
     )
     student_placements = relationship(

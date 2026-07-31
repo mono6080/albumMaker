@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from database import (
-    AcademicTerm,
+    Semester,
     Classroom,
     Campus,
     ClassPeriodWorkSlot,
@@ -33,7 +33,7 @@ def _create_active_template(client, department: str = "infant") -> int:
     period_response = client.post(
         "/api/templates/periods",
         data={
-            "name": unique_name("term_period"),
+            "name": unique_name("semester_period"),
             "department": department,
             "status": "active",
         },
@@ -140,7 +140,7 @@ def _create_plan(client, label: str = "2026 新學期") -> dict:
     period_response = client.post(
         "/api/templates/periods",
         data={
-            "name": unique_name("target_term_period"),
+            "name": unique_name("target_semester_period"),
             "department": "infant",
             "status": "active",
         },
@@ -338,8 +338,8 @@ def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
 
         db = SessionLocal()
         try:
-            current_term = db.query(AcademicTerm).filter(
-                AcademicTerm.status.in_(("imported", "active"))
+            current_term = db.query(Semester).filter(
+                Semester.status.in_(("imported", "active"))
             ).one()
             original_status = current_term.status
             current_term.status = "active"
@@ -390,7 +390,7 @@ def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
             assert ended.ended_at is not None
 
             # 學期一關，那學期的名冊就是歷史：沒有快照表接手，改為由 trigger 擋。
-            current_term = db.get(AcademicTerm, term_id)
+            current_term = db.get(Semester, term_id)
             current_term.status = "closed"
             db.commit()
             ended.end_reason = "不可改寫"
@@ -399,7 +399,7 @@ def test_active_term_roster_tracks_final_placement_and_closed_term_freezes():
             db.rollback()
         finally:
             db.rollback()
-            restored_term = db.get(AcademicTerm, term_id)
+            restored_term = db.get(Semester, term_id)
             if restored_term.status != original_status:
                 restored_term.status = original_status
                 db.commit()
@@ -443,15 +443,15 @@ def test_term_plan_rejects_active_rows_under_inactive_organization_structure():
         try:
             db.get(Campus, campus_id).is_active = True
             classroom = db.get(Classroom, classroom_id)
-            current_term_id = classroom.academic_term_id
-            closed_term = AcademicTerm(
+            current_term_id = classroom.semester_id
+            closed_term = Semester(
                 label=unique_name("closed_term"),
                 status="closed",
                 created_by_name_snapshot="系統管理員",
             )
             db.add(closed_term)
             db.flush()
-            classroom.academic_term_id = closed_term.id
+            classroom.semester_id = closed_term.id
             db.commit()
         finally:
             db.close()
@@ -469,7 +469,7 @@ def test_term_plan_rejects_active_rows_under_inactive_organization_structure():
 
         db = SessionLocal()
         try:
-            db.get(Classroom, classroom_id).academic_term_id = current_term_id
+            db.get(Classroom, classroom_id).semester_id = current_term_id
             db.commit()
             assert db.query(TermReclassificationPlan).filter(
                 TermReclassificationPlan.status == "draft"
@@ -675,13 +675,13 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                 )
                 .count()
             ) == 0
-            target_term_id = applied_plan["target_academic_term_id"]
+            target_term_id = applied_plan["target_semester_id"]
             active_members = (
                 db.query(ClassroomMember)
                 .join(RosterChild, RosterChild.id == ClassroomMember.roster_child_id)
                 .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
                 .filter(
-                    Classroom.academic_term_id == target_term_id,
+                    Classroom.semester_id == target_term_id,
                     ClassroomMember.ended_at.is_(None),
                 )
                 .all()
@@ -705,7 +705,7 @@ def test_term_plan_applies_students_and_teachers_without_rewriting_old_project()
                     == ClassPeriodWorkSlot.classroom_id,
                 )
                 .filter(
-                    Classroom.academic_term_id == target_term_id
+                    Classroom.semester_id == target_term_id
                 )
                 .count()
             ) == 0

@@ -13,7 +13,7 @@ import {
   createClassroomProject,
   createTermReclassificationPlan,
   fetchMyClassrooms,
-  fetchAcademicTerms,
+  fetchSemesters,
   fetchOrganizationOverview,
   fetchProjectAssignmentHistory,
   fetchTermReclassificationPlan,
@@ -58,7 +58,7 @@ test("organization API calls keep admin route and payload contracts stable", asy
       { teacher_id: 14, duty: "co_teacher" },
     ]);
     await fetchMyClassrooms();
-    await fetchAcademicTerms();
+    await fetchSemesters();
     await batchAddClassroomMembers(5, [{ name: "王小明" }]);
     await autoFillClassroomMemberAlbumNames(5);
     await updateClassroomMember(5, 7, { name: "王小明", album_name: "小明" });
@@ -110,7 +110,7 @@ test("organization API calls keep admin route and payload contracts stable", asy
       { teacher_id: 14, duty: "co_teacher" },
     ] }],
     ["get", "/organization/my-classrooms"],
-    ["get", "/organization/academic-terms"],
+    ["get", "/organization/semesters"],
     ["post", "/organization/classrooms/5/members/batch", { members: [{ name: "王小明" }] }],
     ["post", "/organization/classrooms/5/members/album-names/auto-fill"],
     ["patch", "/organization/classrooms/5/members/7", { name: "王小明", album_name: "小明" }],

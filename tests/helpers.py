@@ -444,13 +444,13 @@ def create_project_for_owner(
     return response.json()["id"]
 
 
-def current_academic_term_id(db) -> int:
+def current_semester_id(db) -> int:
     """目前正式學期 id：班級是學期範圍實體，測試建班一律要指定。"""
-    from database import AcademicTerm
+    from database import Semester
 
     return (
-        db.query(AcademicTerm.id)
-        .filter(AcademicTerm.status.in_(("imported", "active")))
-        .order_by(AcademicTerm.id.desc())
+        db.query(Semester.id)
+        .filter(Semester.status.in_(("imported", "active")))
+        .order_by(Semester.id.desc())
         .scalar()
     )

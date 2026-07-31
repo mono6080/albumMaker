@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine, text
 
 from database import (
-    AcademicTerm,
+    Semester,
     Classroom,
     Campus,
     Classroom,
@@ -983,7 +983,7 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
 
     with migration_engine.connect() as connection:
         # 改名排在所有 migration 之前，legacy 中間狀態也一樣先改名再修結構
-        migrations._rename_classroom_membership_tables(connection)
+        migrations._rename_tables_to_model_names(connection)
         migrations._add_organization_structure(connection)
         migrations._add_organization_structure(connection)
         classroom_columns = {

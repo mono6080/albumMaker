@@ -277,7 +277,7 @@ export default function ProjectList() {
   const getCreatableWorkSlots = useCallback((classroom) => (
     (classroom.work_slots ?? []).filter(workSlot => (
       workSlot.can_create_project
-      && ["imported", "active"].includes(workSlot.academic_term_status)
+      && ["imported", "active"].includes(workSlot.semester_status)
       && workSlot.template_ids.some(templateId => availableTemplateById.has(templateId))
     ))
   ), [availableTemplateById]);
@@ -557,7 +557,7 @@ export default function ProjectList() {
                 {getCreatableWorkSlots(classProjectDraft.classroom)
                   .map(workSlot => (
                     <option key={workSlot.id} value={workSlot.id}>
-                      {workSlot.academic_term_label}／{workSlot.period_name}
+                      {workSlot.semester_label}／{workSlot.period_name}
                     </option>
                   ))}
               </select>

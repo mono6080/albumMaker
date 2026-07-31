@@ -4,7 +4,7 @@
 import { apiClient } from "./authApi";
 
 function appendReportScopeQuery(searchParams, filters) {
-  searchParams.set("academic_term_id", String(filters.academicTermId));
+  searchParams.set("semester_id", String(filters.semesterId));
   if (filters.department) searchParams.set("department", filters.department);
   if (filters.campusId) searchParams.set("campus_id", String(filters.campusId));
   if (filters.classroomId) searchParams.set("classroom_id", String(filters.classroomId));
@@ -20,8 +20,8 @@ function buildReportQuery(filters) {
 }
 
 /** 取得可用正式學期與其 ordered periods。 */
-export const fetchAcademicTerms = ({ signal } = {}) =>
-  apiClient.get("/roster/academic-terms", { signal });
+export const fetchSemesters = ({ signal } = {}) =>
+  apiClient.get("/roster/semesters", { signal });
 
 /** 取得正式學期匯出預覽；孩子每一期狀態完全採後端 cells。 */
 export const fetchSemesterExportPreview = (filters, { signal } = {}) =>
@@ -29,11 +29,11 @@ export const fetchSemesterExportPreview = (filters, { signal } = {}) =>
 
 /** 啟動補渲染背景 job；rosterChildIds 不給代表目前預覽範圍全部。 */
 export const renderMissingSemesterAlbums = ({
-  academicTermId,
+  semesterId,
   periodIds,
   rosterChildIds = null,
 }) => apiClient.post("/roster/semester-export/render-missing", {
-  academic_term_id: academicTermId,
+  semester_id: semesterId,
   period_ids: periodIds,
   roster_child_ids: rosterChildIds,
 });
@@ -43,8 +43,8 @@ export const fetchRenderMissingProgress = (jobId, { signal } = {}) =>
   apiClient.get(`/roster/semester-export/render-missing/${jobId}`, { signal });
 
 /** 班級 × 期別老師進度；不接受舊版 owner 分組 payload。 */
-export const fetchTeacherProgress = (academicTermId, { signal } = {}) =>
-  apiClient.get(`/roster/teacher-progress?academic_term_id=${encodeURIComponent(academicTermId)}`, { signal });
+export const fetchTeacherProgress = (semesterId, { signal } = {}) =>
+  apiClient.get(`/roster/teacher-progress?semester_id=${encodeURIComponent(semesterId)}`, { signal });
 
 /** 老師進度 Excel；校／部門／班級需與畫面篩選一致。 */
 export const buildTeacherOverviewExcelUrl = (filters) => {

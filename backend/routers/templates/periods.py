@@ -52,7 +52,7 @@ def create_template_period(
     name: str = Form(...),
     department: str = Form(...),
     status: str = Form("draft"),
-    academic_term_id: int | None = Form(None),
+    semester_id: int | None = Form(None),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
@@ -67,7 +67,7 @@ def create_template_period(
         name=period_name,
         department=period_department,
         status=period_status,
-        academic_term_id=academic_term_id,
+        semester_id=semester_id,
     )
     return _serialize_period(period)
 
@@ -77,7 +77,7 @@ def update_template_period(
     period_id: int,
     name: str | None = Form(None),
     status: str | None = Form(None),
-    academic_term_id: int | None = Form(None),
+    semester_id: int | None = Form(None),
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
@@ -93,6 +93,6 @@ def update_template_period(
         period_id,
         name=period_name,
         status=period_status,
-        academic_term_id=academic_term_id,
+        semester_id=semester_id,
     )
     return _serialize_period(period)

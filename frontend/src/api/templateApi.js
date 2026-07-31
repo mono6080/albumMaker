@@ -20,20 +20,20 @@ export const fetchTemplatePeriods = (params = {}) =>
   apiClient.get("/templates/periods", { params: compactParams(params) });
 
 /** 建立模板期別 */
-export const createTemplatePeriod = ({ name, department, status = "draft", academicTermId }) =>
+export const createTemplatePeriod = ({ name, department, status = "draft", semesterId }) =>
   apiClient.post("/templates/periods", toFormParams({
     name,
     department,
     status,
-    academic_term_id: academicTermId,
+    semester_id: semesterId,
   }));
 
 /** 更新模板期別 */
-export const updateTemplatePeriod = (periodId, { name, status, academicTermId }) =>
+export const updateTemplatePeriod = (periodId, { name, status, semesterId }) =>
   apiClient.patch(`/templates/periods/${periodId}`, toFormParams({
     name,
     status,
-    academic_term_id: academicTermId,
+    semester_id: semesterId,
   }));
 
 /** 取得所有模板清單 */

@@ -1208,7 +1208,7 @@ export default function OrganizationManagement() {
                 <option value="">請選擇尚未開始的期別工作格</option>
                 {creatableWorkSlots.map(workSlot => (
                   <option key={workSlot.id} value={workSlot.id}>
-                    {workSlot.academic_term_label}／{workSlot.period_name}
+                    {workSlot.semester_label}／{workSlot.period_name}
                   </option>
                 ))}
               </select>

@@ -9,10 +9,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import (
-    AcademicTerm,
+    Semester,
     Classroom,
     ClassroomMember,
-    AcademicTermPeriod,
+    SemesterPeriod,
     ClassPeriodWorkSlot,
     Project,
     Student,
@@ -21,7 +21,7 @@ from services.organization_scope_service import (
     OrganizationReadScope,
     apply_project_read_scope,
     apply_term_classroom_report_scope,
-    load_reporting_term_or_404,
+    load_reporting_semester_or_404,
 )
 from services.output_keys import (
     build_safe_zip_entry_path,
@@ -69,20 +69,20 @@ def classify_project_student_identity_anomalies(
 
 def load_export_periods(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int] | None = None,
     *,
     organization_scope: OrganizationReadScope | None = None,
-) -> list[AcademicTermPeriod]:
+) -> list[SemesterPeriod]:
     """讀取學期期別；period_ids 使用既有 TemplatePeriod id。"""
-    load_reporting_term_or_404(db, academic_term_id, organization_scope)
-    query = db.query(AcademicTermPeriod).filter(
-        AcademicTermPeriod.academic_term_id == academic_term_id
+    load_reporting_semester_or_404(db, semester_id, organization_scope)
+    query = db.query(SemesterPeriod).filter(
+        SemesterPeriod.semester_id == semester_id
     )
     if organization_scope is not None and not organization_scope.is_admin:
         scoped_department_rows = apply_term_classroom_report_scope(
             db.query(Classroom.department).filter(
-                Classroom.academic_term_id == academic_term_id,
+                Classroom.semester_id == semester_id,
             ),
             organization_scope,
         ).distinct().all()
@@ -90,12 +90,12 @@ def load_export_periods(
             department for department, in scoped_department_rows
         }
         query = query.filter(
-            AcademicTermPeriod.department.in_(visible_departments)
+            SemesterPeriod.department.in_(visible_departments)
         )
     if period_ids is not None:
         requested_ids = set(period_ids)
-        query = query.filter(AcademicTermPeriod.template_period_id.in_(requested_ids))
-    periods = query.order_by(AcademicTermPeriod.position).all()
+        query = query.filter(SemesterPeriod.template_period_id.in_(requested_ids))
+    periods = query.order_by(SemesterPeriod.position).all()
     if period_ids is not None:
         found_ids = {period.template_period_id for period in periods}
         missing_ids = set(period_ids) - found_ids
@@ -105,7 +105,7 @@ def load_export_periods(
             raise HTTPException(
                 status_code=422,
                 detail={
-                    "code": "period_not_in_academic_term",
+                    "code": "period_not_in_semester",
                     "period_ids": sorted(missing_ids),
                 },
             )
@@ -114,7 +114,7 @@ def load_export_periods(
 
 def load_export_projects(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int] | None = None,
     organization_scope: OrganizationReadScope | None = None,
 ) -> list[Project]:
@@ -130,8 +130,8 @@ def load_export_projects(
             Classroom.id == ClassPeriodWorkSlot.classroom_id,
         )
         .join(
-            AcademicTermPeriod,
-            AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
+            SemesterPeriod,
+            SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
         )
         .options(
             joinedload(Project.students).joinedload(Student.roster_child),
@@ -140,21 +140,21 @@ def load_export_projects(
                 ClassPeriodWorkSlot.classroom
             ),
             joinedload(Project.class_period_work_slot).joinedload(
-                ClassPeriodWorkSlot.term_period
+                ClassPeriodWorkSlot.semester_period
             ),
         )
         .filter(
-            Classroom.academic_term_id == academic_term_id,
+            Classroom.semester_id == semester_id,
             Project.deleted_at.is_(None),
             Project.classroom_id.isnot(None),
         )
     )
     if period_ids is not None:
-        query = query.filter(AcademicTermPeriod.template_period_id.in_(period_ids))
+        query = query.filter(SemesterPeriod.template_period_id.in_(period_ids))
     if organization_scope is not None:
         query = apply_project_read_scope(query, organization_scope)
     return query.order_by(
-        AcademicTermPeriod.position,
+        SemesterPeriod.position,
         Project.id,
     ).all()
 
@@ -191,18 +191,18 @@ def _student_skipped_pages(student: Student) -> list[int]:
     ]
 
 
-def _serialize_period(term_period: AcademicTermPeriod) -> dict:
+def _serialize_period(semester_period: SemesterPeriod) -> dict:
     return {
-        "id": term_period.template_period_id,
-        "term_period_id": term_period.id,
-        "template_period_id": term_period.template_period_id,
-        "name": term_period.period_name_snapshot,
-        "department": term_period.department,
-        "position": term_period.position,
+        "id": semester_period.template_period_id,
+        "semester_period_id": semester_period.id,
+        "template_period_id": semester_period.template_period_id,
+        "name": semester_period.period_name_snapshot,
+        "department": semester_period.department,
+        "position": semester_period.position,
     }
 
 
-def _serialize_term(term: AcademicTerm) -> dict:
+def _serialize_term(term: Semester) -> dict:
     return {
         "id": term.id,
         "label": term.label,
@@ -215,7 +215,7 @@ def _serialize_term(term: AcademicTerm) -> dict:
 
 def _load_scoped_term_classrooms(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     organization_scope: OrganizationReadScope | None,
     departments: set[str],
 ) -> list[Classroom]:
@@ -224,7 +224,7 @@ def _load_scoped_term_classrooms(
             ClassroomMember.roster_child
         )
     ).filter(
-        Classroom.academic_term_id == academic_term_id,
+        Classroom.semester_id == semester_id,
         Classroom.department.in_(departments),
     )
     if organization_scope is not None:
@@ -242,14 +242,14 @@ def _serialize_entry(
     existing_output_keys: set[str],
 ) -> dict:
     slot = project.class_period_work_slot
-    term_period = slot.term_period
+    semester_period = slot.semester_period
     classroom = slot.classroom
     print_pdf_key = student_pdf_key(student, "print")
     return {
-        "term_period_id": term_period.id,
-        "period_id": term_period.template_period_id,
-        "template_period_id": term_period.template_period_id,
-        "period_position": term_period.position,
+        "semester_period_id": semester_period.id,
+        "period_id": semester_period.template_period_id,
+        "template_period_id": semester_period.template_period_id,
+        "period_position": semester_period.position,
         "project_id": project.id,
         "project_name": project.name,
         "owner_id": project.owner_id,
@@ -307,28 +307,28 @@ def _group_summary(children: list[dict]) -> dict:
 
 def build_semester_export_preview(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int],
     organization_scope: OrganizationReadScope | None = None,
 ) -> dict:
     """由後端判定孩子各期狀態，並依 term classroom snapshot 分組。"""
-    term = load_reporting_term_or_404(
+    term = load_reporting_semester_or_404(
         db,
-        academic_term_id,
+        semester_id,
         organization_scope,
     )
     all_periods = load_export_periods(
         db,
-        academic_term_id,
+        semester_id,
         organization_scope=organization_scope,
     )
     selected_periods = load_export_periods(
         db,
-        academic_term_id,
+        semester_id,
         period_ids,
         organization_scope=organization_scope,
     )
-    selected_term_period_ids = {period.id for period in selected_periods}
+    selected_semester_period_ids = {period.id for period in selected_periods}
     selected_departments = {period.department for period in selected_periods}
     relevant_period_ids = [
         period.template_period_id
@@ -337,14 +337,14 @@ def build_semester_export_preview(
     ]
     classrooms = _load_scoped_term_classrooms(
         db,
-        academic_term_id,
+        semester_id,
         organization_scope,
         selected_departments,
     )
     term_classroom_by_id = {row.id: row for row in classrooms}
     projects = load_export_projects(
         db,
-        academic_term_id,
+        semester_id,
         relevant_period_ids,
         organization_scope=organization_scope,
     )
@@ -378,13 +378,13 @@ def build_semester_export_preview(
             entry = _serialize_entry(project, student, existing_output_keys)
             anomaly_codes = identity_anomalies.get(student.id)
             if anomaly_codes is not None:
-                if entry["term_period_id"] in selected_term_period_ids:
+                if entry["semester_period_id"] in selected_semester_period_ids:
                     entry["identity_anomalies"] = list(anomaly_codes)
                     unlinked.append(entry)
                 continue
             child = children_by_id.get(student.roster_child_id)
             if child is None:
-                if entry["term_period_id"] in selected_term_period_ids:
+                if entry["semester_period_id"] in selected_semester_period_ids:
                     entry["identity_anomalies"] = [
                         MISSING_TERM_STUDENT_SNAPSHOT
                     ]
@@ -407,9 +407,9 @@ def build_semester_export_preview(
     }
     for child in children_by_id.values():
         all_entries = child.pop("entries")
-        entries_by_term_period: dict[int, list[dict]] = {}
+        entries_by_semester_period: dict[int, list[dict]] = {}
         for entry in all_entries:
-            entries_by_term_period.setdefault(entry["term_period_id"], []).append(entry)
+            entries_by_semester_period.setdefault(entry["semester_period_id"], []).append(entry)
         source_membership = child["source_membership"]
         is_departed = bool(
             source_membership is not None
@@ -419,11 +419,11 @@ def build_semester_export_preview(
         cells = []
         for period in selected_periods:
             cell_entries = sorted(
-                entries_by_term_period.get(period.id, []),
+                entries_by_semester_period.get(period.id, []),
                 key=lambda entry: (entry["project_id"], entry["student_id"]),
             )
             cells.append({
-                "term_period_id": period.id,
+                "semester_period_id": period.id,
                 "period_id": period.template_period_id,
                 "template_period_id": period.template_period_id,
                 "status": _cell_status(
@@ -520,14 +520,14 @@ def _filter_preview_for_manifest(
 
 def _plan_semester_export_zip(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ) -> tuple[list[dict], str]:
-    preview = build_semester_export_preview(db, academic_term_id, period_ids)
+    preview = build_semester_export_preview(db, semester_id, period_ids)
     manifest_preview = _filter_preview_for_manifest(preview, roster_child_ids)
-    projects = load_export_projects(db, academic_term_id, period_ids)
+    projects = load_export_projects(db, semester_id, period_ids)
     students_by_id = {
         student.id: student
         for project in projects
@@ -668,14 +668,14 @@ def _merge_pdf_bytes(pdf_bytes_list: list[bytes]) -> bytes:
 
 def open_semester_export_zip_stream(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int],
     output_mode: str,
     roster_child_ids: list[int] | None = None,
 ):
     child_plans, manifest_text = _plan_semester_export_zip(
         db,
-        academic_term_id,
+        semester_id,
         period_ids,
         output_mode,
         roster_child_ids,

@@ -210,7 +210,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("delete", "/{user_id}", "delete_user"),
     ),
     "routers/roster.py": _routes(
-        ("get", "/academic-terms", "get_reporting_terms"),
+        ("get", "/semesters", "get_reporting_semesters"),
         ("get", "/semester-export", "get_semester_export_preview"),
         ("get", "/teacher-progress", "get_teacher_progress"),
         ("get", "/teacher-overview/export", "export_teacher_overview_excel"),
@@ -230,7 +230,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
     "routers/organization.py": _routes(
         ("get", "/overview", "get_organization_overview"),
         ("get", "/my-classrooms", "get_my_classrooms"),
-        ("get", "/academic-terms", "list_academic_terms"),
+        ("get", "/semesters", "list_semesters"),
         ("post", "/campuses", "create_campus"),
         ("patch", "/campuses/{campus_id}", "update_campus"),
         (

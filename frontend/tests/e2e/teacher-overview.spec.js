@@ -71,7 +71,7 @@ function activeOverview() {
     term: { id: 1, label: "114 學年度上學期", status: "active" },
     periods: terms[0].periods.map(period => ({
       ...period,
-      term_period_id: period.id,
+      semester_period_id: period.id,
       id: period.template_period_id,
     })),
     summary: {},
@@ -82,7 +82,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 501,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "single",
             projects: [project({
@@ -94,7 +94,7 @@ function activeOverview() {
           },
           {
             work_slot_id: 502,
-            term_period_id: 102,
+            semester_period_id: 102,
             period_id: 12,
             creation_status: "not_created",
             projects: [],
@@ -107,7 +107,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 503,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "archived",
             projects: [],
@@ -120,7 +120,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 504,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "multiple_projects",
             projects: [
@@ -143,7 +143,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 509,
-            term_period_id: 103,
+            semester_period_id: 103,
             period_id: 13,
             creation_status: "single",
             projects: [project({ projectId: 901, projectName: "學院相本", ownerName: "學院老師" })],
@@ -159,7 +159,7 @@ function secondTermOverview() {
     term: { id: 2, label: "114 學年度下學期", status: "closed" },
     periods: [{
       id: 21,
-      term_period_id: 201,
+      semester_period_id: 201,
       template_period_id: 21,
       name: "二月",
       department: "infant",
@@ -171,7 +171,7 @@ function secondTermOverview() {
       classroomName: "下學期班",
       slots: [{
         work_slot_id: 520,
-        term_period_id: 201,
+        semester_period_id: 201,
         period_id: 21,
         creation_status: "not_created",
         projects: [],
@@ -190,7 +190,7 @@ async function mockBase(page) {
       ui_font_scale: 1,
     },
   }));
-  await page.route("**/api/roster/academic-terms", route => route.fulfill({ json: { terms } }));
+  await page.route("**/api/roster/semesters", route => route.fulfill({ json: { terms } }));
 }
 
 test("teacher progress uses classroom-period slots and never creates a false co-teacher card", async ({ page }) => {
@@ -260,7 +260,7 @@ test("a slower previous term response cannot replace the selected term", async (
   const firstTermGate = new Promise(resolve => { releaseFirstTerm = resolve; });
   const firstTermStarted = new Promise(resolve => { markFirstTermStarted = resolve; });
   await page.route("**/api/roster/teacher-progress?**", async route => {
-    const termId = new URL(route.request().url()).searchParams.get("academic_term_id");
+    const termId = new URL(route.request().url()).searchParams.get("semester_id");
     if (termId === "1") {
       markFirstTermStarted();
       await firstTermGate;

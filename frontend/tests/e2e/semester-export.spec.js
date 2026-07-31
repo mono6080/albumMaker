@@ -30,7 +30,7 @@ function entry({ projectId, projectName, studentId, campusId, campusName, classr
 
 function cell(templatePeriodId, status, entries = []) {
   return {
-    term_period_id: templatePeriodId === 11 ? 101 : 102,
+    semester_period_id: templatePeriodId === 11 ? 101 : 102,
     template_period_id: templatePeriodId,
     status,
     entries,
@@ -101,7 +101,7 @@ function previewPayload({ classroomName = "向日葵班", periodIds = [11, 12] }
     term: { id: 1, label: term.label, status: "active" },
     periods: term.periods
       .filter(period => periodIds.includes(period.template_period_id))
-      .map(period => ({ ...period, term_period_id: period.id, id: period.template_period_id })),
+      .map(period => ({ ...period, semester_period_id: period.id, id: period.template_period_id })),
     summary: {},
     classroom_groups: groups,
     unlinked: [],
@@ -121,7 +121,7 @@ async function mockBase(page, role = "admin") {
         : undefined,
     },
   }));
-  await page.route("**/api/roster/academic-terms", route => route.fulfill({ json: { terms: [term] } }));
+  await page.route("**/api/roster/semesters", route => route.fulfill({ json: { terms: [term] } }));
   if (role === "supervisor") {
     await page.route("**/api/organization/my-classrooms", route => route.fulfill({
       json: {

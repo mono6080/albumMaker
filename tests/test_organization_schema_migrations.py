@@ -66,7 +66,7 @@ def _create_legacy_organization_schema(database_path: Path):
     with migration_engine.connect() as connection:
         import migrations
 
-        migrations._rename_classroom_membership_tables(connection)
+        migrations._rename_tables_to_model_names(connection)
     return migration_engine
 
 
@@ -972,7 +972,7 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
         migration_engine.dispose()
 
 
-def _seed_academic_term_student_snapshot_fixture(
+def _seed_semester_student_snapshot_fixture(
     migration_engine,
     *,
     project_campus_name: str = "總校",
@@ -995,13 +995,13 @@ def _seed_academic_term_student_snapshot_fixture(
     with Session(migration_engine) as db:
         campus = Campus(name="總校")
         project_classroom = Classroom(
-            academic_term_id=current_academic_term_id(db),
+            semester_id=current_semester_id(db),
             campus=campus,
             department="infant",
             name="太陽班",
         )
         current_classroom = Classroom(
-            academic_term_id=current_academic_term_id(db),
+            semester_id=current_semester_id(db),
             campus=campus,
             department="infant",
             name="月亮班",
@@ -1053,28 +1053,28 @@ def _seed_academic_term_student_snapshot_fixture(
         db.commit()
 
 
-def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path):
+def test_semester_current_index_is_cross_status_and_migration_safe(tmp_path):
     import migrations
     from database import Base
 
     migration_engine = create_engine(
-        f"sqlite:///{(tmp_path / 'academic_term_current_index.db').as_posix()}"
+        f"sqlite:///{(tmp_path / 'semester_current_index.db').as_posix()}"
     )
     try:
         Base.metadata.create_all(migration_engine)
         with migration_engine.begin() as connection:
             # 模擬曾上線的錯誤 index：只能防同 status 重複，無法防 imported + active。
             connection.execute(text(
-                "DROP INDEX IF EXISTS ux_academic_terms_current"
+                "DROP INDEX IF EXISTS ux_semesters_current"
             ))
             connection.execute(text(
-                "CREATE UNIQUE INDEX ux_academic_terms_current "
-                "ON academic_terms(status) "
+                "CREATE UNIQUE INDEX ux_semesters_current "
+                "ON semesters(status) "
                 "WHERE status IN ('imported', 'active')"
             ))
             connection.execute(
                 text("""
-                    INSERT INTO academic_terms (
+                    INSERT INTO semesters (
                         label, status, migration_key, created_at,
                         created_by_name_snapshot
                     ) VALUES (
@@ -1084,24 +1084,24 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
                 """),
                 {
                     "migration_key": (
-                        migrations.ACADEMIC_TERM_REPORTING_MIGRATION_KEY
+                        migrations.SEMESTER_REPORTING_MIGRATION_KEY
                     ),
                 },
             )
 
         with migration_engine.connect() as connection:
             migrations._add_legacy_project_identity_migration_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
+            migrations._add_semester_reporting_schema(connection)
+            migrations._add_semester_reporting_schema(connection)
             index_sql = connection.execute(text("""
                 SELECT sql
                 FROM sqlite_master
-                WHERE type = 'index' AND name = 'ux_academic_terms_current'
+                WHERE type = 'index' AND name = 'ux_semesters_current'
             """)).scalar_one()
-            assert "ON academic_terms((1))" in index_sql
+            assert "ON semesters((1))" in index_sql
 
         _execute_integrity_error(migration_engine, """
-            INSERT INTO academic_terms (
+            INSERT INTO semesters (
                 label, status, created_at, created_by_name_snapshot
             ) VALUES (
                 '不應並存的正式學期', 'active', CURRENT_TIMESTAMP, '管理員'
@@ -1110,7 +1110,7 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
 
         with migration_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO academic_terms (
+                INSERT INTO semesters (
                     label, status, created_at, created_by_name_snapshot
                 ) VALUES
                     ('下一學期草稿甲', 'draft', CURRENT_TIMESTAMP, '管理員'),

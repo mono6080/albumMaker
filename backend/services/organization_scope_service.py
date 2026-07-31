@@ -8,8 +8,8 @@ from sqlalchemy.orm import Query, Session, joinedload
 from sqlalchemy.sql.elements import ColumnElement
 
 from database import (
-    CURRENT_ACADEMIC_TERM_STATUSES,
-    AcademicTerm,
+    CURRENT_SEMESTER_STATUSES,
+    Semester,
     Campus,
     Classroom,
     ClassroomTeacher,
@@ -19,7 +19,7 @@ from database import (
 )
 
 
-REPORTING_TERM_STATUSES = ("imported", "active", "closed")
+REPORTING_SEMESTER_STATUSES = ("imported", "active", "closed")
 
 
 @dataclass(frozen=True)
@@ -59,11 +59,11 @@ def _current_term_classroom_query(db: Session) -> Query:
         db.query(Classroom.id)
         .join(Campus, Campus.id == Classroom.campus_id)
         .join(
-            AcademicTerm,
-            AcademicTerm.id == Classroom.academic_term_id,
+            Semester,
+            Semester.id == Classroom.semester_id,
         )
         .filter(
-            AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES),
+            Semester.status.in_(CURRENT_SEMESTER_STATUSES),
             Campus.is_active.is_(True),
         )
     )
@@ -298,22 +298,22 @@ def apply_term_classroom_report_scope(
     ))
 
 
-def load_reporting_term_or_404(
+def load_reporting_semester_or_404(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     scope: OrganizationReadScope | None = None,
-) -> AcademicTerm:
+) -> Semester:
     """載入正式報表學期，並避免主管以 direct ID 枚舉 scope 外 metadata。"""
-    term = db.query(AcademicTerm).filter(
-        AcademicTerm.id == academic_term_id,
-        AcademicTerm.status.in_(REPORTING_TERM_STATUSES),
+    term = db.query(Semester).filter(
+        Semester.id == semester_id,
+        Semester.status.in_(REPORTING_SEMESTER_STATUSES),
     ).first()
     if term is None:
         raise HTTPException(status_code=404, detail="找不到學期")
     if scope is not None and not scope.is_admin:
         scoped_term_classroom = apply_term_classroom_report_scope(
             db.query(Classroom.id).filter(
-                Classroom.academic_term_id == academic_term_id,
+                Classroom.semester_id == semester_id,
             ),
             scope,
         ).first()

@@ -721,7 +721,7 @@ test("class staffing and new-term reclassification preserve old project content 
         name: `新學期驗收期別 ${suffix}`,
         department: "infant",
         status: "active",
-        academic_term_id: String(draftPlan.target_academic_term_id),
+        semester_id: String(draftPlan.target_semester_id),
       },
     }),
     "建立新學期正式期別",

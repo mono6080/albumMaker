@@ -178,15 +178,19 @@ migration 不特別處理，也不得因為它們而中止。
 
 Decision：與行政系統（未來 MDM）同概念的實體，命名要能一眼對上。本次一併改名：
 
-| 現在 | 改成 | 對到行政系統 |
-|------|------|--------------|
-| `AcademicTermClassroom` | `Classroom`（舊 `classrooms` 刪除後名字空出來）| `school.Clas` |
-| `ClassRosterMember` | `ClassroomMember` | `student.ClasLog` |
-| `ClassroomTeacherAssignment` | `ClassroomTeacher` | `personnel.PostLog` |
-| `AcademicTerm` | `Semester` | `school.Semester` |
-| `AcademicTermPeriod` | `SemesterPeriod` | —（相冊獨有）|
-| `Student` | `ProjectStudent`（本來就是「相本裡的一份」，不是學生）| —（相冊獨有）|
-| `RosterChild` | `Student` | `student.Student` |
+| 現在 | 改成 | 對到行政系統 | 狀態 |
+|------|------|--------------|------|
+| `AcademicTermClassroom` | `Classroom`（舊 `classrooms` 留下並補上學期）| `school.Clas` | 已完成 |
+| `ClassRosterMember` | `ClassroomMember` | `student.ClasLog` | 已完成 |
+| `ClassroomTeacherAssignment` | `ClassroomTeacher` | `personnel.PostLog` | 已完成 |
+| `AcademicTerm` | `Semester` | `school.Semester` | 已完成 |
+| `AcademicTermPeriod` | `SemesterPeriod` | —（相冊獨有）| 已完成 |
+| `Student` | `ProjectStudent`（本來就是「相本裡的一份」，不是學生）| —（相冊獨有）| 待做 |
+| `RosterChild` | `Student` | `student.Student` | 待做 |
+
+欄位名跟著表名走：`academic_term_id` → `semester_id`、`term_period_id` →
+`semester_period_id`、`target_academic_term_id` → `target_semester_id`。索引名不會隨
+`ALTER TABLE RENAME` 改變，所以舊名要另外 drop，否則升級後的資料庫會多出一組同義索引。
 
 `User` 不改為 `Staff`：行政系統的 `Staff` 是員工（457 人，含非相冊使用者），相冊的
 `User` 是登入帳號（69 個），本來就不是同一個集合。

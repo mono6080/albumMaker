@@ -15,14 +15,14 @@ import {
 
 import {
   buildSemesterExportDownloadUrl,
-  fetchAcademicTerms,
+  fetchSemesters,
   fetchRenderMissingProgress,
   fetchSemesterExportPreview,
   renderMissingSemesterAlbums,
 } from "../api/rosterApi";
 import { usePermissions } from "../hooks/usePermissions";
 import { triggerNativeDownload } from "../utils/browserFiles";
-import AcademicTermReportFilters from "../components/AcademicTermReportFilters";
+import SemesterReportFilters from "../components/SemesterReportFilters";
 import ConfirmModal from "../components/ConfirmModal";
 import SemesterSummaryBar from "../components/SemesterSummaryBar";
 import SemesterRenderErrorsBanner from "../components/SemesterRenderErrorsBanner";
@@ -60,9 +60,9 @@ function groupClassroomName(group) {
   return group.classroom_name ?? group.classroom?.classroom_name ?? "未命名班級";
 }
 
-function buildServerQuerySignature(academicTermId, periodIds) {
+function buildServerQuerySignature(semesterId, periodIds) {
   return JSON.stringify({
-    academicTermId: String(academicTermId),
+    semesterId: String(semesterId),
     periodIds: [...periodIds].map(String).sort(),
   });
 }
@@ -132,7 +132,7 @@ function waitForPollInterval(signal) {
 export default function SemesterExport() {
   const { isAdmin } = usePermissions();
   const [terms, setTerms] = useState([]);
-  const [academicTermId, setAcademicTermId] = useState("");
+  const [semesterId, setSemesterId] = useState("");
   const [department, setDepartment] = useState("");
   const [selectedPeriodIds, setSelectedPeriodIds] = useState([]);
   const [campusId, setCampusId] = useState("");
@@ -179,19 +179,19 @@ export default function SemesterExport() {
     setIsLoadingTerms(true);
     setTermsError("");
     try {
-      const response = await fetchAcademicTerms({ signal: abortController.signal });
+      const response = await fetchSemesters({ signal: abortController.signal });
       if (termsRequestSequence.current !== requestSequence) return;
       const loadedTerms = response.data.terms ?? [];
       setTerms(loadedTerms);
       const activeTerm = loadedTerms.find(term => (
         term.is_current || ["active", "imported"].includes(term.status)
       )) ?? loadedTerms[0];
-      setAcademicTermId(activeTerm ? String(activeTerm.id) : "");
+      setSemesterId(activeTerm ? String(activeTerm.id) : "");
       setTermDefaults(activeTerm);
     } catch {
       if (abortController.signal.aborted || termsRequestSequence.current !== requestSequence) return;
       setTerms([]);
-      setAcademicTermId("");
+      setSemesterId("");
       setDepartment("");
       setSelectedPeriodIds([]);
       setTermsError("載入正式學期失敗，請檢查網路後重試。");
@@ -205,7 +205,7 @@ export default function SemesterExport() {
     return () => termsAbortController.current?.abort();
   }, [loadTerms]);
 
-  const serverQuerySignature = buildServerQuerySignature(academicTermId, selectedPeriodIds);
+  const serverQuerySignature = buildServerQuerySignature(semesterId, selectedPeriodIds);
 
   const loadPreview = useCallback(async (filters, requestedSignature) => {
     previewAbortController.current?.abort();
@@ -231,18 +231,18 @@ export default function SemesterExport() {
   }, []);
 
   useEffect(() => {
-    if (!academicTermId || selectedPeriodIds.length === 0 || isLoadingTerms || termsError) return undefined;
-    const filters = { academicTermId, periodIds: selectedPeriodIds };
+    if (!semesterId || selectedPeriodIds.length === 0 || isLoadingTerms || termsError) return undefined;
+    const filters = { semesterId, periodIds: selectedPeriodIds };
     void loadPreview(filters, serverQuerySignature);
     return () => previewAbortController.current?.abort();
-  }, [academicTermId, isLoadingTerms, loadPreview, selectedPeriodIds, serverQuerySignature, termsError]);
+  }, [semesterId, isLoadingTerms, loadPreview, selectedPeriodIds, serverQuerySignature, termsError]);
 
   useEffect(() => () => {
     previewAbortController.current?.abort();
     renderAbortController.current?.abort();
   }, []);
 
-  const selectedTerm = terms.find(term => String(term.id) === String(academicTermId));
+  const selectedTerm = terms.find(term => String(term.id) === String(semesterId));
   const departments = useMemo(() => (
     [...new Set((selectedTerm?.periods ?? []).map(period => period.department))]
   ), [selectedTerm]);
@@ -318,7 +318,7 @@ export default function SemesterExport() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [academicTermId, department, campusId, selectedClassroomId, searchText, quickFilter, selectedPeriodIds]);
+  }, [semesterId, department, campusId, selectedClassroomId, searchText, quickFilter, selectedPeriodIds]);
 
   const pageCount = Math.max(1, Math.ceil(filteredGroups.length / CLASSROOM_GROUPS_PER_PAGE));
   const effectivePage = Math.min(currentPage, pageCount);
@@ -352,7 +352,7 @@ export default function SemesterExport() {
     previewRequestSequence.current += 1;
     previewAbortController.current?.abort();
     const nextTerm = terms.find(term => String(term.id) === String(nextTermId));
-    setAcademicTermId(nextTermId);
+    setSemesterId(nextTermId);
     setTermDefaults(nextTerm);
     setCampusId("");
     setSelectedClassroomId("");
@@ -449,8 +449,8 @@ export default function SemesterExport() {
       if (response.data.status !== "failed") onFinished?.();
       if (activeScopeSignature.current === filterSignature) {
         await loadPreview(
-          { academicTermId, periodIds: selectedPeriodIds },
-          buildServerQuerySignature(academicTermId, selectedPeriodIds),
+          { semesterId, periodIds: selectedPeriodIds },
+          buildServerQuerySignature(semesterId, selectedPeriodIds),
         );
       }
       return;
@@ -460,7 +460,7 @@ export default function SemesterExport() {
   const startRenderMissingJob = async (requestedChildIds, filterSignature, onFinished) => {
     try {
       const response = await renderMissingSemesterAlbums({
-        academicTermId,
+        semesterId,
         periodIds: selectedPeriodIds,
         rosterChildIds: requestedChildIds,
       });
@@ -510,7 +510,7 @@ export default function SemesterExport() {
       && allPreviewChildIds.every(childId => selectedChildIds.has(childId));
     const canOmitChildIds = !campusId && !selectedClassroomId && isAllScopeSelected;
     triggerNativeDownload(buildSemesterExportDownloadUrl(
-      { academicTermId, periodIds: selectedPeriodIds },
+      { semesterId, periodIds: selectedPeriodIds },
       "print",
       canOmitChildIds ? null : [...selectedChildIds],
     ));
@@ -594,10 +594,10 @@ export default function SemesterExport() {
 
       {!isLoadingTerms && !termsError && terms.length > 0 && (
         <>
-          <AcademicTermReportFilters
+          <SemesterReportFilters
             terms={terms}
-            academicTermId={academicTermId}
-            onAcademicTermChange={handleTermChange}
+            semesterId={semesterId}
+            onSemesterChange={handleTermChange}
             departments={departments}
             department={department}
             onDepartmentChange={handleDepartmentChange}
@@ -613,7 +613,7 @@ export default function SemesterExport() {
                 size="md"
                 className="w-full"
                 onClick={() => void loadPreview(
-                  { academicTermId, periodIds: selectedPeriodIds },
+                  { semesterId, periodIds: selectedPeriodIds },
                   serverQuerySignature,
                 )}
                 disabled={isLoadingPreview || isRenderingMissing || selectedPeriodIds.length === 0}
@@ -664,7 +664,7 @@ export default function SemesterExport() {
         </>
       )}
 
-      {(isLoadingPreview || (!currentPreview && !previewError && academicTermId && selectedPeriodIds.length > 0)) && (
+      {(isLoadingPreview || (!currentPreview && !previewError && semesterId && selectedPeriodIds.length > 0)) && (
         <Surface>
           <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
             <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
@@ -684,7 +684,7 @@ export default function SemesterExport() {
               size="sm"
               variant="dangerSoft"
               onClick={() => void loadPreview(
-                { academicTermId, periodIds: selectedPeriodIds },
+                { semesterId, periodIds: selectedPeriodIds },
                 serverQuerySignature,
               )}
             >

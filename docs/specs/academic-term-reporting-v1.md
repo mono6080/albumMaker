@@ -31,9 +31,9 @@ owner 只表示負責人，不能再兼任班級或權限來源。
 
 ## Domain Model
 
-### AcademicTerm
+### Semester
 
-`academic_terms` 是整園學期主檔：
+`semesters` 是整園學期主檔：
 
 - `id`, `label`, `status`（`imported|draft|active|closed|cancelled`）
 - `migration_key`（nullable；既有資料匯入用唯一標記）
@@ -42,13 +42,13 @@ owner 只表示負責人，不能再兼任班級或權限來源。
 
 同一時間最多一筆 `active`；`draft` 由新學期編班草稿持有。
 
-### AcademicTermPeriod
+### SemesterPeriod
 
-`academic_term_periods` 把既有 `TemplatePeriod` 納入一個學期：
+`semester_periods` 把既有 `TemplatePeriod` 納入一個學期：
 
-- `academic_term_id`, `template_period_id`
+- `semester_id`, `template_period_id`
 - `period_name_snapshot`, `department`, `position`
-- 同一 TemplatePeriod 只能屬於一個 AcademicTerm；同學期 position 唯一。
+- 同一 TemplatePeriod 只能屬於一個 Semester；同學期 position 唯一。
 
 Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表。
 
@@ -57,7 +57,7 @@ Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表
 班級本體就是學期範圍實體，沒有另一層快照。結構與不可變保證的 SSOT 在
 [term-scoped-classroom-v1](term-scoped-classroom-v1.md)；本規格只依賴三件事：
 
-- 班級屬於且只屬於一個 `AcademicTerm`，同學期內 `(campus_id, department, name)` 唯一。
+- 班級屬於且只屬於一個 `Semester`，同學期內 `(campus_id, department, name)` 唯一。
 - 該學期的名冊（`ClassRosterMember`）與老師編制（`ClassroomTeacherAssignment`）直接掛在
   班上；報表列出班上全部指派，`ended_at` 分辨現任與曾任。
 - 學期 `closed` 後名冊與編制由 trigger 凍結，API 也拒絕對已結束學期的班加人。分校名與
@@ -68,7 +68,7 @@ Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表
 
 `class_period_work_slots` 是進度唯一統計單位：
 
-- `classroom_id`, `term_period_id`, `started_at`
+- `classroom_id`, `semester_period_id`, `started_at`
 - 同一學期班級與學期期別唯一。
 
 `projects.class_period_work_slot_id` 指向工作格。舊資料可有多個 Project
@@ -113,7 +113,7 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 
 ### 新學期編班
 
-建立編班草稿會同時建立 draft AcademicTerm；label 是正式學期名稱，不再只是
+建立編班草稿會同時建立 draft Semester；label 是正式學期名稱，不再只是
 事件備註。草稿可指定 ordered TemplatePeriods。套用順序固定為：
 
 1. 驗證 revision、source fingerprint、學期期別與目標狀態。
@@ -151,7 +151,7 @@ commit。空班、同格重複與錯配一律回 409/422，不建立部分資料
 
 ## Teacher Progress Contract
 
-`GET /roster/teacher-progress?academic_term_id=` 回 `term`、ordered `periods`、
+`GET /roster/teacher-progress?semester_id=` 回 `term`、ordered `periods`、
 `summary` 與 `classrooms[]`。每班有老師快照及 `slots[]`；slot 有
 `not_created|archived|single|multiple_projects` 與 `projects[]`。`archived`
 表示工作格曾開始、但目前只剩封存／已清除 Project；它不可被當成未建立而重做。

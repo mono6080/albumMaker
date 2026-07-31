@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from crud.organization_crud import get_term_reclassification_plan_or_404
 from database import (
-    CURRENT_ACADEMIC_TERM_STATUSES,
-    AcademicTerm,
+    CURRENT_SEMESTER_STATUSES,
+    Semester,
     Classroom,
-    AcademicTermPeriod,
+    SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
@@ -63,20 +63,20 @@ def _normalize_term_dates(
     if starts_on is not None and ends_on is not None and starts_on > ends_on:
         raise _coded_error(
             422,
-            "invalid_academic_term_dates",
+            "invalid_semester_dates",
             "學期開始日不可晚於結束日",
         )
     return starts_on, ends_on
 
 
-def _load_ordered_term_periods(
+def _load_ordered_semester_periods(
     db: Session,
     period_ids: list[int],
 ) -> list[TemplatePeriod]:
     if len(period_ids) != len(set(period_ids)):
         raise _coded_error(
             422,
-            "duplicate_academic_term_period",
+            "duplicate_semester_period",
             "同一學期期別不可重複",
         )
     if not period_ids:
@@ -86,19 +86,19 @@ def _load_ordered_term_periods(
     if set(period_by_id) != set(period_ids):
         raise _coded_error(
             422,
-            "academic_term_period_not_found",
+            "semester_period_not_found",
             "指定的學期期別不存在",
         )
     assigned_period_ids = {
         row[0]
-        for row in db.query(AcademicTermPeriod.template_period_id)
-        .filter(AcademicTermPeriod.template_period_id.in_(period_ids))
+        for row in db.query(SemesterPeriod.template_period_id)
+        .filter(SemesterPeriod.template_period_id.in_(period_ids))
         .all()
     }
     if assigned_period_ids:
         raise _coded_error(
             409,
-            "academic_term_period_already_assigned",
+            "semester_period_already_assigned",
             "指定期別已屬於其他正式學期",
             period_ids=sorted(assigned_period_ids),
         )
@@ -108,14 +108,14 @@ def _load_ordered_term_periods(
     if invalid_period_ids:
         raise _coded_error(
             422,
-            "invalid_academic_term_period_status",
+            "invalid_semester_period_status",
             "學期只能納入草稿或使用中的期別",
             period_ids=sorted(invalid_period_ids),
         )
     return [period_by_id[period_id] for period_id in period_ids]
 
 
-def _serialize_academic_term(term: AcademicTerm) -> dict:
+def _serialize_semester(term: Semester) -> dict:
     return {
         "id": term.id,
         "label": term.label,
@@ -130,78 +130,78 @@ def _serialize_academic_term(term: AcademicTerm) -> dict:
         "cancelled_at": term.cancelled_at,
         "periods": [
             {
-                "id": term_period.id,
-                "template_period_id": term_period.template_period_id,
-                "name": term_period.period_name_snapshot,
-                "department": term_period.department,
-                "position": term_period.position,
+                "id": semester_period.id,
+                "template_period_id": semester_period.template_period_id,
+                "name": semester_period.period_name_snapshot,
+                "department": semester_period.department,
+                "position": semester_period.position,
             }
-            for term_period in term.periods
+            for semester_period in term.periods
         ],
     }
 
 
-def list_academic_terms(db: Session) -> list[dict]:
+def list_semesters(db: Session) -> list[dict]:
     terms = (
-        db.query(AcademicTerm)
-        .options(joinedload(AcademicTerm.periods))
-        .order_by(AcademicTerm.created_at.desc(), AcademicTerm.id.desc())
+        db.query(Semester)
+        .options(joinedload(Semester.periods))
+        .order_by(Semester.created_at.desc(), Semester.id.desc())
         .all()
     )
-    return [_serialize_academic_term(term) for term in terms]
+    return [_serialize_semester(term) for term in terms]
 
 
-def _validate_target_academic_term(
+def _validate_target_semester(
     plan: TermReclassificationPlan,
-) -> AcademicTerm:
-    target_term = plan.target_academic_term
+) -> Semester:
+    target_term = plan.target_semester
     if target_term is None:
         raise _coded_error(
             409,
-            "academic_term_missing",
+            "semester_missing",
             "編班草稿尚未連結正式學期",
         )
     if target_term.status != "draft":
         raise _coded_error(
             409,
-            "academic_term_not_draft",
+            "semester_not_draft",
             "目標學期已不是草稿",
         )
     if not target_term.periods:
         raise _coded_error(
             422,
-            "academic_term_period_required",
+            "semester_period_required",
             "正式學期至少需要一個期別",
         )
     invalid_period_ids = [
-        term_period.template_period_id
-        for term_period in target_term.periods
-        if term_period.template_period is None
-        or term_period.template_period.status != "active"
+        semester_period.template_period_id
+        for semester_period in target_term.periods
+        if semester_period.template_period is None
+        or semester_period.template_period.status != "active"
     ]
     if invalid_period_ids:
         raise _coded_error(
             422,
-            "academic_term_period_not_active",
+            "semester_period_not_active",
             "套用新學期前，所有期別都必須設為使用中",
             period_ids=sorted(invalid_period_ids),
         )
     return target_term
 
 
-def _academic_term_validation_errors(
+def _semester_validation_errors(
     plan: TermReclassificationPlan,
 ) -> list[dict]:
-    target_term = plan.target_academic_term
+    target_term = plan.target_semester
     if target_term is None:
         return [{
-            "code": "academic_term_missing",
+            "code": "semester_missing",
             "message": "編班草稿尚未連結正式學期",
         }]
     errors: list[dict] = []
     if target_term.status != "draft":
         errors.append({
-            "code": "academic_term_not_draft",
+            "code": "semester_not_draft",
             "message": "目標學期已不是草稿",
         })
     if (
@@ -210,24 +210,24 @@ def _academic_term_validation_errors(
         and target_term.starts_on > target_term.ends_on
     ):
         errors.append({
-            "code": "invalid_academic_term_dates",
+            "code": "invalid_semester_dates",
             "message": "學期開始日不可晚於結束日",
         })
     if not target_term.periods:
         errors.append({
-            "code": "academic_term_period_required",
+            "code": "semester_period_required",
             "message": "正式學期至少需要一個期別",
         })
         return errors
     invalid_period_ids = [
-        term_period.template_period_id
-        for term_period in target_term.periods
-        if term_period.template_period is None
-        or term_period.template_period.status != "active"
+        semester_period.template_period_id
+        for semester_period in target_term.periods
+        if semester_period.template_period is None
+        or semester_period.template_period.status != "active"
     ]
     if invalid_period_ids:
         errors.append({
-            "code": "academic_term_period_not_active",
+            "code": "semester_period_not_active",
             "message": "套用新學期前，所有期別都必須設為使用中",
             "period_ids": sorted(invalid_period_ids),
         })
@@ -248,7 +248,7 @@ def compute_organization_source_fingerprint(db: Session) -> str:
     classrooms = (
         db.query(Classroom)
         .join(Campus, Campus.id == Classroom.campus_id)
-        .filter(Classroom.academic_term_id.in_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))), Campus.is_active.is_(True))
+        .filter(Classroom.semester_id.in_(select(Semester.id).where(Semester.status.in_(CURRENT_SEMESTER_STATUSES))), Campus.is_active.is_(True))
         .order_by(Classroom.id)
         .all()
     )
@@ -335,7 +335,7 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
             .filter(
                 ClassroomMember.ended_at.is_(None),
                 or_(
-                    Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
+                    Classroom.semester_id.notin_(select(Semester.id).where(Semester.status.in_(CURRENT_SEMESTER_STATUSES))),
                     Campus.is_active.is_(False),
                 ),
             )
@@ -355,7 +355,7 @@ def _assert_active_rows_belong_to_active_structure(db: Session) -> None:
             .filter(
                 ClassroomTeacher.ended_at.is_(None),
                 or_(
-                    Classroom.academic_term_id.notin_(select(AcademicTerm.id).where(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))),
+                    Classroom.semester_id.notin_(select(Semester.id).where(Semester.status.in_(CURRENT_SEMESTER_STATUSES))),
                     Campus.is_active.is_(False),
                 ),
             )
@@ -425,7 +425,7 @@ def _source_classroom_id_by_target(
         for placement in plan.student_placements
     }
     source_term_id = (
-        db.query(Classroom.academic_term_id)
+        db.query(Classroom.semester_id)
         .filter(Classroom.id.in_(source_classroom_ids))
         .limit(1)
         .scalar()
@@ -435,10 +435,10 @@ def _source_classroom_id_by_target(
     if source_term_id is None:
         # 名冊全空的計畫沒有來源班可推，退回目前學期（此時目標學期還是草稿）
         source_term_id = (
-            db.query(AcademicTerm.id)
+            db.query(Semester.id)
             .filter(
-                AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES),
-                AcademicTerm.id != plan.target_academic_term_id,
+                Semester.status.in_(CURRENT_SEMESTER_STATUSES),
+                Semester.id != plan.target_semester_id,
             )
             .limit(1)
             .scalar()
@@ -449,7 +449,7 @@ def _source_classroom_id_by_target(
         (classroom.campus_id, classroom.department, classroom.name): classroom.id
         for classroom in (
             db.query(Classroom)
-            .filter(Classroom.academic_term_id == source_term_id)
+            .filter(Classroom.semester_id == source_term_id)
             .all()
         )
     }
@@ -600,7 +600,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
         不能用 `is_current` 判斷——目標學期還是 draft，套用時才轉 active。
         """
         return (
-            classroom.academic_term_id == plan.target_academic_term_id
+            classroom.semester_id == plan.target_semester_id
             and classroom.campus.is_active
         )
 
@@ -696,7 +696,7 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
 def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
     validation_errors = (
         [
-            *_academic_term_validation_errors(plan),
+            *_semester_validation_errors(plan),
             *_validate_target_state(plan, db),
         ]
         if plan.status == "draft"
@@ -715,10 +715,10 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
     return {
         "id": plan.id,
         "label": plan.label,
-        "target_academic_term_id": plan.target_academic_term_id,
-        "target_academic_term": (
-            _serialize_academic_term(plan.target_academic_term)
-            if plan.target_academic_term is not None
+        "target_semester_id": plan.target_semester_id,
+        "target_semester": (
+            _serialize_semester(plan.target_semester)
+            if plan.target_semester is not None
             else None
         ),
         "status": plan.status,
@@ -758,8 +758,8 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
             }
             for classroom in sorted(
                 (
-                    plan.target_academic_term.classrooms
-                    if plan.target_academic_term is not None
+                    plan.target_semester.classrooms
+                    if plan.target_semester is not None
                     else []
                 ),
                 key=lambda row: (row.campus_id, row.department, row.name, row.id),
@@ -810,8 +810,8 @@ def create_term_reclassification_plan(
                 plan_id=existing_draft[0],
             )
         _assert_active_rows_belong_to_active_structure(db)
-        ordered_periods = _load_ordered_term_periods(db, requested_period_ids)
-        target_term = AcademicTerm(
+        ordered_periods = _load_ordered_semester_periods(db, requested_period_ids)
+        target_term = Semester(
             label=plan_label,
             status="draft",
             starts_on=term_starts_on,
@@ -820,7 +820,7 @@ def create_term_reclassification_plan(
             created_by_name_snapshot=current_admin.display_name,
         )
         for position, period in enumerate(ordered_periods):
-            target_term.periods.append(AcademicTermPeriod(
+            target_term.periods.append(SemesterPeriod(
                 template_period_id=period.id,
                 period_name_snapshot=period.name,
                 department=period.department,
@@ -831,7 +831,7 @@ def create_term_reclassification_plan(
         plan = TermReclassificationPlan(
             scope_key="organization",
             label=plan_label,
-            target_academic_term_id=target_term.id,
+            target_semester_id=target_term.id,
             status="draft",
             revision=1,
             source_fingerprint=compute_organization_source_fingerprint(db),
@@ -844,9 +844,9 @@ def create_term_reclassification_plan(
         classrooms = (
             db.query(Classroom)
             .join(Campus, Campus.id == Classroom.campus_id)
-            .join(AcademicTerm, AcademicTerm.id == Classroom.academic_term_id)
+            .join(Semester, Semester.id == Classroom.semester_id)
             .filter(
-                AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES),
+                Semester.status.in_(CURRENT_SEMESTER_STATUSES),
                 Campus.is_active.is_(True),
             )
             .order_by(Classroom.id)
@@ -858,7 +858,7 @@ def create_term_reclassification_plan(
         target_classroom_by_source_id = {}
         for classroom in classrooms:
             target_classroom = Classroom(
-                academic_term_id=target_term.id,
+                semester_id=target_term.id,
                 campus_id=classroom.campus_id,
                 department=classroom.department,
                 name=classroom.name,
@@ -1076,23 +1076,23 @@ def _raise_invalid_target_state(errors: list[dict]) -> None:
 def _create_target_term_work_slots(
     db: Session,
     plan: TermReclassificationPlan,
-    target_term: AcademicTerm,
+    target_term: Semester,
 ) -> None:
     """替目標學期的每個班補上與其部門相符的期別工作格。"""
     if any(classroom.work_slots for classroom in target_term.classrooms):
         raise _coded_error(
             409,
-            "academic_term_grid_already_created",
+            "semester_grid_already_created",
             "目標學期工作格已建立",
         )
     for classroom_plan in plan.classroom_plans:
         classroom = db.get(Classroom, classroom_plan.classroom_id)
-        for term_period in target_term.periods:
-            if term_period.department != classroom.department:
+        for semester_period in target_term.periods:
+            if semester_period.department != classroom.department:
                 continue
             db.add(ClassPeriodWorkSlot(
                 classroom_id=classroom.id,
-                term_period_id=term_period.id,
+                semester_period_id=semester_period.id,
             ))
     db.flush()
 
@@ -1112,7 +1112,7 @@ def apply_term_reclassification_plan(
             raise _coded_error(409, "term_plan_cancelled", "已取消的編班草稿不可套用")
         _assert_revision(plan, expected_revision)
         _assert_source_unchanged(plan, db)
-        target_term = _validate_target_academic_term(plan)
+        target_term = _validate_target_semester(plan)
         validation_errors = _validate_target_state(plan, db)
         if validation_errors:
             _raise_invalid_target_state(validation_errors)
@@ -1190,9 +1190,9 @@ def apply_term_reclassification_plan(
         db.flush()
 
         _create_target_term_work_slots(db, plan, target_term)
-        current_terms = db.query(AcademicTerm).filter(
-            AcademicTerm.id != target_term.id,
-            AcademicTerm.status.in_(("imported", "active")),
+        current_terms = db.query(Semester).filter(
+            Semester.id != target_term.id,
+            Semester.status.in_(("imported", "active")),
         ).all()
         for current_term in current_terms:
             current_term.status = "closed"
@@ -1228,7 +1228,7 @@ def cancel_term_reclassification_plan(
         if plan.status == "applied":
             raise _coded_error(409, "term_plan_applied", "已套用的編班計畫不可取消")
         cancelled_at = utc_now()
-        target_term = plan.target_academic_term
+        target_term = plan.target_semester
         if target_term is not None and target_term.status == "draft":
             target_term.status = "cancelled"
             target_term.cancelled_at = cancelled_at

@@ -20,7 +20,7 @@ from services.semester_export_service import (
 from services.teacher_overview_service import (
     build_teacher_overview_workbook,
     build_teacher_progress_overview,
-    list_reporting_terms,
+    list_reporting_semesters,
 )
 
 
@@ -28,23 +28,23 @@ router = APIRouter(prefix="/api/roster", tags=["roster"])
 
 
 class RenderMissingPayload(BaseModel):
-    academic_term_id: int
+    semester_id: int
     period_ids: list[int] = Field(min_length=1)
     roster_child_ids: list[int] | None = None
 
 
-@router.get("/academic-terms")
-def get_reporting_terms(
+@router.get("/semesters")
+def get_reporting_semesters(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     organization_scope = build_organization_supervisor_scope(db, current_user)
-    return list_reporting_terms(db, organization_scope)
+    return list_reporting_semesters(db, organization_scope)
 
 
 @router.get("/semester-export")
 def get_semester_export_preview(
-    academic_term_id: int = Query(..., ge=1),
+    semester_id: int = Query(..., ge=1),
     period_ids: list[int] = Query(..., min_length=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -52,7 +52,7 @@ def get_semester_export_preview(
     organization_scope = build_organization_supervisor_scope(db, current_user)
     return build_semester_export_preview(
         db,
-        academic_term_id,
+        semester_id,
         period_ids,
         organization_scope=organization_scope,
     )
@@ -60,7 +60,7 @@ def get_semester_export_preview(
 
 @router.get("/teacher-progress")
 def get_teacher_progress(
-    academic_term_id: int = Query(..., ge=1),
+    semester_id: int = Query(..., ge=1),
     department: Literal["infant", "academy"] | None = None,
     campus_id: int | None = Query(None, ge=1),
     classroom_id: int | None = Query(None, ge=1),
@@ -70,7 +70,7 @@ def get_teacher_progress(
     organization_scope = build_organization_supervisor_scope(db, current_user)
     return build_teacher_progress_overview(
         db,
-        academic_term_id,
+        semester_id,
         organization_scope,
         department=department,
         campus_id=campus_id,
@@ -80,7 +80,7 @@ def get_teacher_progress(
 
 @router.get("/teacher-overview/export")
 def export_teacher_overview_excel(
-    academic_term_id: int = Query(..., ge=1),
+    semester_id: int = Query(..., ge=1),
     department: Literal["infant", "academy"] | None = None,
     campus_id: int | None = Query(None, ge=1),
     classroom_id: int | None = Query(None, ge=1),
@@ -90,7 +90,7 @@ def export_teacher_overview_excel(
     organization_scope = build_organization_supervisor_scope(db, current_user)
     workbook_bytes = build_teacher_overview_workbook(
         db,
-        academic_term_id,
+        semester_id,
         organization_scope,
         department=department,
         campus_id=campus_id,
@@ -111,9 +111,9 @@ def render_missing_albums(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
-    load_export_periods(db, payload.academic_term_id, payload.period_ids)
+    load_export_periods(db, payload.semester_id, payload.period_ids)
     return start_render_missing_job(
-        payload.academic_term_id,
+        payload.semester_id,
         payload.period_ids,
         payload.roster_child_ids,
     )
@@ -132,7 +132,7 @@ def get_render_missing_progress(
 
 @router.get("/semester-export/download")
 def download_semester_export_zip(
-    academic_term_id: int = Query(..., ge=1),
+    semester_id: int = Query(..., ge=1),
     period_ids: list[int] = Query(..., min_length=1),
     mode: str = Query("print", pattern="^(print|screen)$"),
     roster_child_ids: list[int] | None = Query(None),
@@ -141,7 +141,7 @@ def download_semester_export_zip(
 ):
     zip_stream = open_semester_export_zip_stream(
         db,
-        academic_term_id,
+        semester_id,
         period_ids,
         mode,
         roster_child_ids,

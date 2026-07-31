@@ -18,10 +18,10 @@ from crud.project_crud import get_project_or_404
 from crud.template_crud import get_template_or_404
 from crud.user_crud import get_user_or_404
 from database import (
-    CURRENT_ACADEMIC_TERM_STATUSES,
-    AcademicTerm,
+    CURRENT_SEMESTER_STATUSES,
+    Semester,
     Classroom,
-    AcademicTermPeriod,
+    SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
@@ -147,23 +147,23 @@ def _serialize_project(project: Project) -> dict:
 
 def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
     classroom = work_slot.classroom
-    term_period = work_slot.term_period
+    semester_period = work_slot.semester_period
     return {
         "id": work_slot.id,
-        "academic_term_id": classroom.academic_term_id,
-        "academic_term_label": classroom.academic_term.label,
-        "academic_term_status": classroom.academic_term.status,
+        "semester_id": classroom.semester_id,
+        "semester_label": classroom.semester.label,
+        "semester_status": classroom.semester.status,
         "classroom_id": classroom.id,
         "campus_id": classroom.campus_id,
         "campus_name": classroom.campus.name,
         "classroom_name": classroom.name,
         "department": classroom.department,
-        "term_period_id": term_period.id,
-        "template_period_id": term_period.template_period_id,
-        "period_name": term_period.period_name_snapshot,
-        "period_position": term_period.position,
+        "semester_period_id": semester_period.id,
+        "template_period_id": semester_period.template_period_id,
+        "period_name": semester_period.period_name_snapshot,
+        "period_position": semester_period.position,
         "template_ids": [
-            template.id for template in term_period.template_period.templates
+            template.id for template in semester_period.template_period.templates
         ],
         "started_at": work_slot.started_at,
         "can_create_project": work_slot.started_at is None,
@@ -249,7 +249,7 @@ def _serialize_classroom(classroom: Classroom) -> dict:
         "campus_id": classroom.campus_id,
         "department": classroom.department,
         "name": classroom.name,
-        "academic_term_id": classroom.academic_term_id,
+        "semester_id": classroom.semester_id,
         "is_current": classroom.is_current,
         "current_teachers": [
             _serialize_teacher_assignment(assignment)
@@ -418,9 +418,9 @@ def get_organization_overview(db: Session) -> dict:
         TermReclassificationPlan.status == "draft",
     ).first()
     current_term = (
-        db.query(AcademicTerm)
-        .filter(AcademicTerm.status.in_(("imported", "active")))
-        .order_by(AcademicTerm.id.desc())
+        db.query(Semester)
+        .filter(Semester.status.in_(("imported", "active")))
+        .order_by(Semester.id.desc())
         .first()
     )
     current_work_slots = (
@@ -432,11 +432,11 @@ def get_organization_overview(db: Session) -> dict:
         .options(
             selectinload(ClassPeriodWorkSlot.projects),
             selectinload(ClassPeriodWorkSlot.classroom).selectinload(
-                Classroom.academic_term
+                Classroom.semester
             ),
-            selectinload(ClassPeriodWorkSlot.term_period),
+            selectinload(ClassPeriodWorkSlot.semester_period),
         )
-        .filter(Classroom.academic_term_id == current_term.id)
+        .filter(Classroom.semester_id == current_term.id)
         .order_by(
             Classroom.id,
             ClassPeriodWorkSlot.id,
@@ -470,7 +470,7 @@ def get_organization_overview(db: Session) -> dict:
         ],
         "migration_status": _organization_migration_status(db),
         "draft_term_plan_id": draft_term_plan[0] if draft_term_plan else None,
-        "current_academic_term": (
+        "current_semester": (
             {
                 "id": current_term.id,
                 "label": current_term.label,
@@ -762,20 +762,20 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
                 ClassroomMember.roster_child
             ),
             selectinload(Classroom.campus),
-            selectinload(Classroom.academic_term),
+            selectinload(Classroom.semester),
             selectinload(Classroom.work_slots).selectinload(
                 ClassPeriodWorkSlot.projects
             ),
             selectinload(Classroom.work_slots)
-            .selectinload(ClassPeriodWorkSlot.term_period)
-            .selectinload(AcademicTermPeriod.template_period)
+            .selectinload(ClassPeriodWorkSlot.semester_period)
+            .selectinload(SemesterPeriod.template_period)
             .selectinload(TemplatePeriod.templates),
         )
         .filter(
             Classroom.id.in_(organization_scope.classroom_ids),
-            Classroom.academic_term_id.in_(
-                select(AcademicTerm.id).where(
-                    AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES)
+            Classroom.semester_id.in_(
+                select(Semester.id).where(
+                    Semester.status.in_(CURRENT_SEMESTER_STATUSES)
                 )
             ),
             Campus.is_active.is_(True),
@@ -863,11 +863,11 @@ def _assert_classroom_name_available(
     excluded_classroom_id: int | None = None,
 ) -> None:
     """同名檢查只在同一個學期內；班名跨學期本來就會重複。"""
-    current_term = _current_academic_term(db)
+    current_term = _current_semester(db)
     if current_term is None:
         return
     query = db.query(Classroom.id).filter(
-        Classroom.academic_term_id == current_term.id,
+        Classroom.semester_id == current_term.id,
         Classroom.campus_id == campus_id,
         Classroom.department == department,
         Classroom.name == name,
@@ -878,11 +878,11 @@ def _assert_classroom_name_available(
         raise HTTPException(status_code=409, detail="同分校與部門已有同名班級")
 
 
-def _current_academic_term(db: Session) -> AcademicTerm | None:
+def _current_semester(db: Session) -> Semester | None:
     return (
-        db.query(AcademicTerm)
-        .filter(AcademicTerm.status.in_(CURRENT_ACADEMIC_TERM_STATUSES))
-        .order_by(AcademicTerm.id.desc())
+        db.query(Semester)
+        .filter(Semester.status.in_(CURRENT_SEMESTER_STATUSES))
+        .order_by(Semester.id.desc())
         .first()
     )
 
@@ -897,24 +897,24 @@ def _ensure_current_term_classroom_grid(
     """
     if not classroom.is_current or not classroom.campus.is_active:
         return None
-    current_term = classroom.academic_term
-    period_query = db.query(AcademicTermPeriod).filter(
-        AcademicTermPeriod.academic_term_id == current_term.id,
-        AcademicTermPeriod.department == classroom.department,
+    current_term = classroom.semester
+    period_query = db.query(SemesterPeriod).filter(
+        SemesterPeriod.semester_id == current_term.id,
+        SemesterPeriod.department == classroom.department,
     )
     if current_term.status == "imported":
         period_query = period_query.join(
             TemplatePeriod,
-            TemplatePeriod.id == AcademicTermPeriod.template_period_id,
+            TemplatePeriod.id == SemesterPeriod.template_period_id,
         ).filter(TemplatePeriod.status == "active")
-    for term_period in period_query.order_by(AcademicTermPeriod.position).all():
+    for semester_period in period_query.order_by(SemesterPeriod.position).all():
         if db.query(ClassPeriodWorkSlot.id).filter(
             ClassPeriodWorkSlot.classroom_id == classroom.id,
-            ClassPeriodWorkSlot.term_period_id == term_period.id,
+            ClassPeriodWorkSlot.semester_period_id == semester_period.id,
         ).first() is None:
             db.add(ClassPeriodWorkSlot(
                 classroom_id=classroom.id,
-                term_period_id=term_period.id,
+                semester_period_id=semester_period.id,
             ))
     return classroom
 
@@ -947,12 +947,12 @@ def create_classroom(
                 "message": "使用中的班級只能隸屬使用中的分校",
             },
         )
-    current_term = _current_academic_term(db)
+    current_term = _current_semester(db)
     if current_term is None:
         raise HTTPException(
             status_code=409,
             detail={
-                "code": "no_current_academic_term",
+                "code": "no_current_semester",
                 "message": "尚未建立目前正式學期，無法新增班級",
             },
         )
@@ -963,7 +963,7 @@ def create_classroom(
         name=classroom_name,
     )
     classroom = Classroom(
-        academic_term_id=current_term.id,
+        semester_id=current_term.id,
         campus_id=campus_id,
         department=classroom_department,
         name=classroom_name,
@@ -1595,10 +1595,10 @@ def create_classroom_project(
                 db.query(ClassPeriodWorkSlot)
                 .options(
                     selectinload(ClassPeriodWorkSlot.classroom).selectinload(
-                        Classroom.academic_term
+                        Classroom.semester
                     ),
-                    selectinload(ClassPeriodWorkSlot.term_period).selectinload(
-                        AcademicTermPeriod.template_period
+                    selectinload(ClassPeriodWorkSlot.semester_period).selectinload(
+                        SemesterPeriod.template_period
                     ),
                 )
                 .filter(ClassPeriodWorkSlot.id == work_slot_id)
@@ -1607,7 +1607,7 @@ def create_classroom_project(
             if work_slot is None:
                 raise HTTPException(status_code=404, detail="找不到班級期別工作格")
             classroom = work_slot.classroom
-            term_period = work_slot.term_period
+            semester_period = work_slot.semester_period
             if classroom.id != classroom_id:
                 raise HTTPException(
                     status_code=422,
@@ -1616,7 +1616,7 @@ def create_classroom_project(
                         "message": "工作格不屬於指定班級",
                     },
                 )
-            if classroom.academic_term.status not in {"imported", "active"}:
+            if classroom.semester.status not in {"imported", "active"}:
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -1624,7 +1624,7 @@ def create_classroom_project(
                         "message": "只能在目前正式學期建立相本",
                     },
                 )
-            if term_period.template_period_id != template.period_id:
+            if semester_period.template_period_id != template.period_id:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -1632,7 +1632,7 @@ def create_classroom_project(
                         "message": "工作格期別與模板期別不一致",
                     },
                 )
-            if term_period.department != classroom.department:
+            if semester_period.department != classroom.department:
                 raise HTTPException(
                     status_code=422,
                     detail={

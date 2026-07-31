@@ -9,7 +9,7 @@ import {
   createTemplatePeriod,
   updateTemplatePeriod,
 } from "../api/templateApi";
-import { fetchAcademicTerms } from "../api/organizationApi";
+import { fetchSemesters } from "../api/organizationApi";
 import {
   BookOpen,
   CalendarDays,
@@ -46,14 +46,14 @@ export default function TemplateList() {
   const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
   const [periods, setPeriods] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [academicTerms, setAcademicTerms] = useState([]);
+  const [semesters, setSemesters] = useState([]);
   const [selectedDepartment, setSelectedDepartment] = useState("infant");
   const [selectedPeriodId, setSelectedPeriodId] = useState("");
   const [periodForm, setPeriodForm] = useState({
     name: "",
     department: "infant",
     status: "draft",
-    academicTermId: "",
+    semesterId: "",
   });
   const [showTemplateCreate, setShowTemplateCreate] = useState(false);
   const [creatingPeriod, setCreatingPeriod] = useState(false);
@@ -64,12 +64,12 @@ export default function TemplateList() {
       fetchTemplateDepartments(),
       fetchTemplatePeriods(),
       fetchAllTemplates(),
-      fetchAcademicTerms(),
+      fetchSemesters(),
     ]);
     setDepartments(departmentResponse.data.length ? departmentResponse.data : FALLBACK_DEPARTMENTS);
     setPeriods(periodResponse.data);
     setTemplates(templateResponse.data);
-    setAcademicTerms(termResponse.data);
+    setSemesters(termResponse.data);
   }, []);
 
   useEffect(() => {
@@ -80,24 +80,24 @@ export default function TemplateList() {
     setPeriodForm(form => ({ ...form, department: selectedDepartment }));
   }, [selectedDepartment]);
 
-  const assignableAcademicTerms = useMemo(() => (
-    academicTerms.filter(term => ["draft", "imported", "active"].includes(term.status))
-  ), [academicTerms]);
+  const assignableSemesters = useMemo(() => (
+    semesters.filter(term => ["draft", "imported", "active"].includes(term.status))
+  ), [semesters]);
 
   useEffect(() => {
     setPeriodForm(form => {
-      if (assignableAcademicTerms.some(term => String(term.id) === String(form.academicTermId))) {
+      if (assignableSemesters.some(term => String(term.id) === String(form.semesterId))) {
         return form;
       }
-      const defaultTerm = assignableAcademicTerms.find(term => term.status === "draft")
-        ?? assignableAcademicTerms.find(term => ["active", "imported"].includes(term.status));
-      return { ...form, academicTermId: defaultTerm ? String(defaultTerm.id) : "" };
+      const defaultTerm = assignableSemesters.find(term => term.status === "draft")
+        ?? assignableSemesters.find(term => ["active", "imported"].includes(term.status));
+      return { ...form, semesterId: defaultTerm ? String(defaultTerm.id) : "" };
     });
-  }, [assignableAcademicTerms]);
+  }, [assignableSemesters]);
 
-  const academicTermNameById = useMemo(() => new Map(
-    academicTerms.map(term => [String(term.id), term.label]),
-  ), [academicTerms]);
+  const semesterNameById = useMemo(() => new Map(
+    semesters.map(term => [String(term.id), term.label]),
+  ), [semesters]);
 
   const departmentPeriods = useMemo(
     () => periods.filter(period => period.department === selectedDepartment),
@@ -141,7 +141,7 @@ export default function TemplateList() {
       const response = await createTemplatePeriod({
         ...periodForm,
         name: periodForm.name.trim(),
-        academicTermId: periodForm.academicTermId || undefined,
+        semesterId: periodForm.semesterId || undefined,
       });
       toast.success("期別已建立");
       setSelectedDepartment(response.data.department);
@@ -235,9 +235,9 @@ export default function TemplateList() {
                   <CalendarDays className="h-4 w-4 flex-shrink-0" />
                   <span className="font-medium">{period.name}</span>
                   <Badge tone={statusTone(period.status)}>{period.status_label}</Badge>
-                  {period.academic_term_id && (
+                  {period.semester_id && (
                     <span className="text-xs text-gray-400">
-                      {academicTermNameById.get(String(period.academic_term_id)) ?? "正式學期"}
+                      {semesterNameById.get(String(period.semester_id)) ?? "正式學期"}
                     </span>
                   )}
                   <span className="text-xs text-gray-400">{period.template_count} 個模板</span>
@@ -273,11 +273,11 @@ export default function TemplateList() {
               <FormField label="所屬正式學期">
                 <select
                   className={fieldControlClass}
-                  value={periodForm.academicTermId}
-                  onChange={event => setPeriodForm(form => ({ ...form, academicTermId: event.target.value }))}
+                  value={periodForm.semesterId}
+                  onChange={event => setPeriodForm(form => ({ ...form, semesterId: event.target.value }))}
                 >
                   <option value="">尚未建立正式學期</option>
-                  {assignableAcademicTerms.map(term => (
+                  {assignableSemesters.map(term => (
                     <option key={term.id} value={term.id}>
                       {term.label}{term.status === "draft" ? "（編班草稿）" : "（目前學期）"}
                     </option>

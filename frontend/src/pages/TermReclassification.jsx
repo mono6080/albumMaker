@@ -63,9 +63,9 @@ const VALIDATION_ERROR_MESSAGES = {
   invalid_lead_count: "非空老師編制必須恰有一位主教。",
   teacher_not_found: "目標老師帳號已不存在。",
   invalid_teacher_role: "目標帳號已無法指派為帶班老師，請重新指派。",
-  academic_term_period_required: "正式學期至少需要一個期別。請先到模板管理建立期別。",
-  academic_term_period_not_active: "正式學期的所有期別都必須先設為使用中。",
-  invalid_academic_term_dates: "學期開始日不可晚於結束日。",
+  semester_period_required: "正式學期至少需要一個期別。請先到模板管理建立期別。",
+  semester_period_not_active: "正式學期的所有期別都必須先設為使用中。",
+  invalid_semester_dates: "學期開始日不可晚於結束日。",
 };
 
 function getValidationErrorMessage(error) {
@@ -738,18 +738,18 @@ export default function TermReclassification() {
             </div>
           </Surface>
 
-          <Surface className={plan.target_academic_term?.periods?.length ? "border-indigo-100" : "border-amber-200 bg-amber-50"}>
+          <Surface className={plan.target_semester?.periods?.length ? "border-indigo-100" : "border-amber-200 bg-amber-50"}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-gray-900">正式學期期別</h2>
-                  <Badge tone={plan.target_academic_term?.periods?.length ? "info" : "warning"}>
-                    {plan.target_academic_term?.periods?.length ?? 0} 個期別
+                  <Badge tone={plan.target_semester?.periods?.length ? "info" : "warning"}>
+                    {plan.target_semester?.periods?.length ?? 0} 個期別
                   </Badge>
                 </div>
-                {plan.target_academic_term?.periods?.length ? (
+                {plan.target_semester?.periods?.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {plan.target_academic_term.periods.map(period => (
+                    {plan.target_semester.periods.map(period => (
                       <Badge key={period.id} tone="neutral">
                         {period.name} · {period.department === "infant" ? "嬰幼部" : "學院部"}
                       </Badge>

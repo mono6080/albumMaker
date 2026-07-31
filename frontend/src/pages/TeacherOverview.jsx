@@ -18,12 +18,12 @@ import {
 
 import {
   buildTeacherOverviewExcelUrl,
-  fetchAcademicTerms,
+  fetchSemesters,
   fetchTeacherProgress,
 } from "../api/rosterApi";
 import { apiClient } from "../api/authApi";
 import { downloadApiBlob } from "../utils/browserFiles";
-import AcademicTermReportFilters from "../components/AcademicTermReportFilters";
+import SemesterReportFilters from "../components/SemesterReportFilters";
 import {
   Badge,
   Button,
@@ -53,8 +53,8 @@ function normalizeSearchText(value) {
   return String(value ?? "").replace(/[\s\u3000]+/g, "").toLocaleLowerCase("zh-TW");
 }
 
-function termPeriodId(period) {
-  return period.term_period_id ?? period.id;
+function semesterPeriodId(period) {
+  return period.semester_period_id ?? period.id;
 }
 
 function periodName(period) {
@@ -280,7 +280,7 @@ function Pagination({ page, pageCount, onChange }) {
 
 export default function TeacherOverview() {
   const [terms, setTerms] = useState([]);
-  const [academicTermId, setAcademicTermId] = useState("");
+  const [semesterId, setSemesterId] = useState("");
   const [department, setDepartment] = useState("");
   const [campusId, setCampusId] = useState("");
   const [selectedClassroomId, setSelectedClassroomId] = useState("");
@@ -309,20 +309,20 @@ export default function TeacherOverview() {
     setIsLoadingTerms(true);
     setTermsError("");
     try {
-      const response = await fetchAcademicTerms({ signal: abortController.signal });
+      const response = await fetchSemesters({ signal: abortController.signal });
       if (termsRequestSequence.current !== requestSequence) return;
       const loadedTerms = response.data.terms ?? [];
       setTerms(loadedTerms);
       const activeTerm = loadedTerms.find(term => (
         term.is_current || ["active", "imported"].includes(term.status)
       )) ?? loadedTerms[0];
-      setAcademicTermId(activeTerm ? String(activeTerm.id) : "");
+      setSemesterId(activeTerm ? String(activeTerm.id) : "");
       const activeDepartments = [...new Set((activeTerm?.periods ?? []).map(period => period.department))];
       setDepartment(activeDepartments[0] ?? "");
     } catch {
       if (abortController.signal.aborted || termsRequestSequence.current !== requestSequence) return;
       setTerms([]);
-      setAcademicTermId("");
+      setSemesterId("");
       setDepartment("");
       setTermsError("載入正式學期失敗，請檢查網路後重試。");
     } finally {
@@ -359,16 +359,16 @@ export default function TeacherOverview() {
   }, []);
 
   useEffect(() => {
-    if (!academicTermId || isLoadingTerms || termsError) return undefined;
-    void loadOverview(academicTermId);
+    if (!semesterId || isLoadingTerms || termsError) return undefined;
+    void loadOverview(semesterId);
     return () => overviewAbortController.current?.abort();
-  }, [academicTermId, isLoadingTerms, loadOverview, termsError]);
+  }, [semesterId, isLoadingTerms, loadOverview, termsError]);
 
-  const selectedTerm = terms.find(term => String(term.id) === String(academicTermId));
+  const selectedTerm = terms.find(term => String(term.id) === String(semesterId));
   const departments = useMemo(() => (
     [...new Set((selectedTerm?.periods ?? []).map(period => period.department))]
   ), [selectedTerm]);
-  const currentOverview = overviewTermId === String(academicTermId) ? overview : null;
+  const currentOverview = overviewTermId === String(semesterId) ? overview : null;
   const periods = useMemo(() => (
     (currentOverview?.periods ?? [])
       .filter(period => !department || period.department === department)
@@ -426,7 +426,7 @@ export default function TeacherOverview() {
     let submittedCount = 0;
     for (const classroom of filteredClassrooms) {
       for (const slot of classroom.slots ?? []) {
-        if (!periods.some(period => termPeriodId(period) === (slot.term_period_id ?? slot.period_id))) continue;
+        if (!periods.some(period => semesterPeriodId(period) === (slot.semester_period_id ?? slot.period_id))) continue;
         slotCount += 1;
         if (slot.creation_status === "not_created") notCreatedCount += 1;
         if (slot.creation_status === "archived") archivedCount += 1;
@@ -448,14 +448,14 @@ export default function TeacherOverview() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [academicTermId, department, campusId, selectedClassroomId, searchText, statusFilter]);
+  }, [semesterId, department, campusId, selectedClassroomId, searchText, statusFilter]);
 
   const handleTermChange = (nextTermId) => {
     overviewRequestSequence.current += 1;
     overviewAbortController.current?.abort();
     const nextTerm = terms.find(term => String(term.id) === String(nextTermId));
     const nextDepartments = [...new Set((nextTerm?.periods ?? []).map(period => period.department))];
-    setAcademicTermId(nextTermId);
+    setSemesterId(nextTermId);
     setDepartment(nextDepartments[0] ?? "");
     setCampusId("");
     setSelectedClassroomId("");
@@ -476,11 +476,11 @@ export default function TeacherOverview() {
   };
 
   const handleExportExcel = async () => {
-    if (!academicTermId) return;
+    if (!semesterId) return;
     setIsExporting(true);
     try {
       await downloadApiBlob(apiClient, buildTeacherOverviewExcelUrl({
-        academicTermId,
+        semesterId,
         department,
         campusId,
         classroomId: selectedClassroomId,
@@ -537,10 +537,10 @@ export default function TeacherOverview() {
 
       {!isLoadingTerms && !termsError && terms.length > 0 && (
         <>
-          <AcademicTermReportFilters
+          <SemesterReportFilters
             terms={terms}
-            academicTermId={academicTermId}
-            onAcademicTermChange={handleTermChange}
+            semesterId={semesterId}
+            onSemesterChange={handleTermChange}
             departments={departments}
             department={department}
             onDepartmentChange={handleDepartmentChange}
@@ -623,7 +623,7 @@ export default function TeacherOverview() {
               <AlertCircle aria-hidden="true" className="h-4 w-4" />
               {overviewError}
             </p>
-            <Button size="sm" variant="dangerSoft" onClick={() => void loadOverview(academicTermId)}>重試</Button>
+            <Button size="sm" variant="dangerSoft" onClick={() => void loadOverview(semesterId)}>重試</Button>
           </div>
         </Surface>
       )}
@@ -644,7 +644,7 @@ export default function TeacherOverview() {
                     班級與老師編制
                   </th>
                   {periods.map(period => (
-                    <th key={termPeriodId(period)} scope="col" className="sticky top-0 z-20 min-w-72 bg-gray-50 px-3 py-3 font-medium">
+                    <th key={semesterPeriodId(period)} scope="col" className="sticky top-0 z-20 min-w-72 bg-gray-50 px-3 py-3 font-medium">
                       {periodName(period)}
                     </th>
                   ))}
@@ -653,7 +653,7 @@ export default function TeacherOverview() {
               <tbody>
                 {pagedClassrooms.map(classroom => {
                   const slotsByPeriodId = new Map((classroom.slots ?? []).map(slot => [
-                    slot.term_period_id ?? slot.period_id,
+                    slot.semester_period_id ?? slot.period_id,
                     slot,
                   ]));
                   return (
@@ -662,9 +662,9 @@ export default function TeacherOverview() {
                         <ClassroomIdentity classroom={classroom} />
                       </th>
                       {periods.map(period => (
-                        <td key={termPeriodId(period)} className="max-w-80 bg-gray-50/30 px-3 py-3">
+                        <td key={semesterPeriodId(period)} className="max-w-80 bg-gray-50/30 px-3 py-3">
                           <WorkSlotCell
-                            slot={slotsByPeriodId.get(termPeriodId(period))}
+                            slot={slotsByPeriodId.get(semesterPeriodId(period))}
                             classroomName={classroom.classroom_name}
                             periodLabel={periodName(period)}
                           />
@@ -682,7 +682,7 @@ export default function TeacherOverview() {
               const selectedKey = classroomKey(classroom);
               const isExpanded = expandedClassroomIds.has(selectedKey);
               const slotsByPeriodId = new Map((classroom.slots ?? []).map(slot => [
-                slot.term_period_id ?? slot.period_id,
+                slot.semester_period_id ?? slot.period_id,
                 slot,
               ]));
               const attentionCount = (classroom.slots ?? []).filter(slotHasAttention).length;
@@ -709,10 +709,10 @@ export default function TeacherOverview() {
                   {isExpanded && (
                     <div id={`teacher-classroom-${selectedKey}`} className="space-y-3 border-t border-gray-100 bg-gray-50/40 p-3">
                       {periods.map(period => (
-                        <section key={termPeriodId(period)} aria-label={`${classroom.classroom_name} ${periodName(period)}`}>
+                        <section key={semesterPeriodId(period)} aria-label={`${classroom.classroom_name} ${periodName(period)}`}>
                           <h3 className="mb-2 text-xs font-bold text-gray-600">{periodName(period)}</h3>
                           <WorkSlotCell
-                            slot={slotsByPeriodId.get(termPeriodId(period))}
+                            slot={slotsByPeriodId.get(semesterPeriodId(period))}
                             classroomName={classroom.classroom_name}
                             periodLabel={periodName(period)}
                           />

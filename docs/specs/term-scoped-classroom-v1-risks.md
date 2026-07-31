@@ -172,7 +172,7 @@ Django 把權限列綁在 `content_type(app_label, model)` 上，所以搬 model
 | `test_organization.py` | 13 | 園所設定、班級、名單、老師編制 |
 | `test_organization_supervisors.py` | 4 | 主管 scope |
 | `test_organization_term.py` | 6 | 編班計畫的建立、驗證、套用、取消 |
-| `test_academic_term_reporting.py` | 13 | 學期快照、老師進度、彙整匯出 |
+| `test_semester_reporting.py` | 13 | 學期快照、老師進度、彙整匯出 |
 | `test_organization_schema_migrations.py` | 15 | 組織 schema migration |
 | `test_organization_project_migration.py` | 11 | 舊相本歸班 |
 | `test_migrations.py` | 3 | 冪等、legacy 升級、中斷復原 |

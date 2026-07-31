@@ -18,8 +18,8 @@ User (id, username UNIQUE, display_name, hashed_password, role,
 TemplatePeriod (id, department, name, status, created_at)   — 期別；狀態掛在期別上
   └─ templates → Template.period_id
 
-AcademicTerm (id, label, status, starts_on, ends_on, actor/time snapshots)
-  ├─ periods → AcademicTermPeriod(template_period_id UNIQUE, name/department/position snapshots)
+Semester (id, label, status, starts_on, ends_on, actor/time snapshots)
+  ├─ periods → SemesterPeriod(template_period_id UNIQUE, name/department/position snapshots)
   └─ classrooms → Classroom[]     — 班級本體，不跨學期；見下方
 
 Template (id, name, period_id FK→TemplatePeriod, revision, created_at)
@@ -34,12 +34,12 @@ Campus (id, name UNIQUE, is_active, created_at, updated_at)
 
 OrganizationSupervisorAssignment (campus_id, department nullable, supervisor_id nullable, supervisor_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
 
-Classroom (id, academic_term_id FK→AcademicTerm, campus_id FK→Campus, department, name)
-  ├─ UNIQUE(academic_term_id, campus_id, department, name)  ← 班級身分＝學期×分校×部門×班名
+Classroom (id, semester_id FK→Semester, campus_id FK→Campus, department, name)
+  ├─ UNIQUE(semester_id, campus_id, department, name)  ← 班級身分＝學期×分校×部門×班名
   ├─ is_current（property）：所屬學期是 imported/active；班級沒有自己的啟用旗標
   ├─ roster_members → ClassRosterMember[]
   ├─ teacher_assignments → ClassroomTeacherAssignment[]
-  ├─ work_slots → ClassPeriodWorkSlot(classroom_id, term_period_id, started_at)
+  ├─ work_slots → ClassPeriodWorkSlot(classroom_id, semester_period_id, started_at)
   └─ projects → Project.classroom_id
 
 ClassRosterMember (id, classroom_id FK→Classroom,
@@ -83,7 +83,7 @@ ProjectAssignmentHistory (id, project_id FK→Project,
 ProjectEditorAssignment (project_id, user_id nullable, user_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
 
 TermReclassificationPlan (label, status, revision, source_fingerprint,
-                          target_academic_term_id, actor/time snapshots)
+                          target_semester_id, actor/time snapshots)
   ├─ student_placements → TermStudentPlacement[]（來源快照 + classroom/departed 目標） └─ classroom_plans → TermClassroomPlan[] → TermClassroomTeacherTarget[]
 
 ProjectComment (id, project_id FK, author_id FK, content, created_at)

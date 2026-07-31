@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session as OrmSession
 
 from database import (
-    AcademicTermPeriod,
+    SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
@@ -25,7 +25,7 @@ from services import user_service
 from services.organization_service import _ensure_current_term_classroom_grid
 from services.project_access_service import assert_project_content_writable
 from tests.helpers import (
-    current_academic_term_id,
+    current_semester_id,
     USER_PASSWORD,
     assert_status,
     create_template_with_page,
@@ -57,12 +57,12 @@ def _seed_project(
         work_slot = (
             db.query(ClassPeriodWorkSlot)
             .join(
-                AcademicTermPeriod,
-                AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
+                SemesterPeriod,
+                SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
             )
             .filter(
                 ClassPeriodWorkSlot.classroom_id == classroom.id,
-                AcademicTermPeriod.template_period_id == template.period_id,
+                SemesterPeriod.template_period_id == template.period_id,
             )
             .one()
         )
@@ -201,19 +201,19 @@ def test_project_acl_uses_classroom_staffing_and_organization_scope_only():
             db.add_all([campus_a, campus_b])
             db.flush()
             infant_a = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus_a.id,
                 department="infant",
                 name=unique_name("A幼幼班"),
             )
             academy_a = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus_a.id,
                 department="academy",
                 name=unique_name("A幼兒班"),
             )
             infant_b = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus_b.id,
                 department="infant",
                 name=unique_name("B幼幼班"),
@@ -436,13 +436,13 @@ def test_former_teacher_keeps_read_on_past_classroom_but_loses_write():
             db.add(campus)
             db.flush()
             previous_classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("八階A"),
             )
             next_classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("九階A"),
@@ -561,19 +561,19 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
             ])
             db.flush()
             teaching_classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=teaching_campus.id,
                 department=department,
                 name=unique_name("雙身分任教班"),
             )
             supervised_classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=supervising_campus.id,
                 department=department,
                 name=unique_name("雙身分主管班"),
             )
             supervisor_teacher_classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=supervisor_teacher_campus.id,
                 department=department,
                 name=unique_name("主管任教班"),
@@ -642,14 +642,14 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
                 Project,
                 supervisor_teacher_project_id,
             ).class_period_work_slot_id
-            term_period_id = db.get(
+            semester_period_id = db.get(
                 ClassPeriodWorkSlot,
                 supervisor_teacher_work_slot_id,
-            ).term_period_id
-            academic_term_id = db.get(
-                AcademicTermPeriod,
-                term_period_id,
-            ).academic_term_id
+            ).semester_period_id
+            semester_id = db.get(
+                SemesterPeriod,
+                semester_period_id,
+            ).semester_id
             db.commit()
             supervisor_teacher_classroom_id = supervisor_teacher_classroom.id
         finally:
@@ -695,7 +695,7 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
         }
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         identity = client.get("/api/auth/me")
@@ -731,7 +731,7 @@ def test_operational_user_combines_teacher_and_supervisor_assignment_permissions
         }
         forbidden_progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(forbidden_progress, 403)
         created = client.post(
@@ -763,7 +763,7 @@ def test_role_none_is_atomic_emergency_disable_and_invalidates_old_cookie(
             db.add(campus)
             db.flush()
             classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus.id,
                 department="infant",
                 name=unique_name("停權班級"),
@@ -1021,7 +1021,7 @@ def test_role_none_commit_failure_rolls_back_owner_transfer(monkeypatch):
             db.add(campus)
             db.flush()
             classroom = Classroom(
-                academic_term_id=current_academic_term_id(db),
+                semester_id=current_semester_id(db),
                 campus_id=campus.id,
                 department=template.period.department,
                 name=unique_name("停權回滾班級"),

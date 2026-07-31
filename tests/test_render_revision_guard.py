@@ -40,7 +40,7 @@ from services.output_keys import (
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
-from tests.helpers import current_academic_term_id, login, started_client, unique_name
+from tests.helpers import current_semester_id, login, started_client, unique_name
 
 
 _SCHEMA_READY = False
@@ -234,7 +234,7 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         db.add_all([admin, teacher, campus])
         db.flush()
         classroom = Classroom(
-            academic_term_id=current_academic_term_id(db),
+            semester_id=current_semester_id(db),
             campus_id=campus.id,
             department="infant",
             name=unique_name("render_classroom"),
@@ -251,7 +251,7 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         ))
         db.commit()
         # 舊相本歸班機制已退場，直接把相本掛到班級與工作格
-        from database import AcademicTermPeriod, ClassPeriodWorkSlot, Project
+        from database import SemesterPeriod, ClassPeriodWorkSlot, Project
         from services.organization_service import _ensure_current_term_classroom_grid
 
         _ensure_current_term_classroom_grid(db, classroom)
@@ -260,45 +260,45 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         work_slot = (
             db.query(ClassPeriodWorkSlot)
             .join(
-                AcademicTermPeriod,
-                AcademicTermPeriod.id == ClassPeriodWorkSlot.term_period_id,
+                SemesterPeriod,
+                SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
             )
             .filter(
                 ClassPeriodWorkSlot.classroom_id == classroom.id,
-                AcademicTermPeriod.template_period_id == project.template_period_id,
+                SemesterPeriod.template_period_id == project.template_period_id,
             )
             .first()
         )
         if work_slot is None:
-            term_period = (
-                db.query(AcademicTermPeriod)
+            semester_period = (
+                db.query(SemesterPeriod)
                 .filter(
-                    AcademicTermPeriod.academic_term_id == classroom.academic_term_id,
-                    AcademicTermPeriod.template_period_id
+                    SemesterPeriod.semester_id == classroom.semester_id,
+                    SemesterPeriod.template_period_id
                     == project.template_period_id,
                 )
                 .first()
             )
-            if term_period is None:
-                term_period = AcademicTermPeriod(
-                    academic_term_id=classroom.academic_term_id,
+            if semester_period is None:
+                semester_period = SemesterPeriod(
+                    semester_id=classroom.semester_id,
                     template_period_id=project.template_period_id,
                     period_name_snapshot="render_guard_period",
                     department=classroom.department,
                     position=(
-                        db.query(AcademicTermPeriod)
+                        db.query(SemesterPeriod)
                         .filter(
-                            AcademicTermPeriod.academic_term_id
-                            == classroom.academic_term_id
+                            SemesterPeriod.semester_id
+                            == classroom.semester_id
                         )
                         .count()
                     ),
                 )
-                db.add(term_period)
+                db.add(semester_period)
                 db.flush()
             work_slot = ClassPeriodWorkSlot(
                 classroom_id=classroom.id,
-                term_period_id=term_period.id,
+                semester_period_id=semester_period.id,
             )
             db.add(work_slot)
             db.flush()

@@ -95,7 +95,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/departments` | 固定部門清單 |
-| GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別）；建立可帶 `academic_term_id` 接到草稿或目前正式學期 |
+| GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別）；建立可帶 `semester_id` 接到草稿或目前正式學期 |
 | GET / POST | `/` | 模板摘要清單 / 建立（可複製既有模板） |
 | GET / PATCH / DELETE | `/{id}` | 詳情（含頁面）/ 改名或移動期別 / 刪除 |
 | PUT | `/{id}/pages` | 原子儲存完整頁面快照；必帶 `expected_revision` + `expected_page_ids`。既有專案遇結構變更先回 409 影響摘要／`change_hash`，確認重送後同 transaction 依 page id 搬移內容 |
@@ -113,7 +113,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 |------|------|------|
 | GET | `/overview` | admin：園所結構、編制、名單、相本、待遷移狀態，以及目前正式學期的 `work_slots`／可用模板；owner 只從該班目前老師選擇 |
 | GET | `/my-classrooms` | admin 全部；`teacher\|supervisor` 回目前任教班級與 active 主管 scope 聯集，每班含目前正式學期 `work_slots`，另回 `permissions.can_view_supervisor_reports`；其他角色 403 |
-| GET | `/academic-terms` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
+| GET | `/semesters` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
 | POST / PATCH | `/campuses`、`/campuses/{id}` | 建立／更新分校；旗下仍有目前學生或老師時不可停用 |
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
 | POST | `/classrooms` | 在目前正式學期建立班級（分校、`infant\|academy` 部門、名稱） |
@@ -125,7 +125,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
-| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm 與其新建班級，payload 的 `target_classrooms` 列出這些班，`classroom_id` 一律指它們 |
+| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班，`classroom_id` 一律指它們 |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
@@ -240,13 +240,13 @@ provisional child link 仍讀 legacy `Student.album_name`。來源、回退與�
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | `/academic-terms` | 回可報表的 `imported\|active\|closed` 學期與 ordered 期別；非 admin 只回主管 snapshot scope 內實際可見的部門期別 |
-| GET | `/semester-export?academic_term_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
-| POST | `/semester-export/render-missing` | body 必帶 `academic_term_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
+| GET | `/semesters` | 回可報表的 `imported\|active\|closed` 學期與 ordered 期別；非 admin 只回主管 snapshot scope 內實際可見的部門期別 |
+| GET | `/semester-export?semester_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
+| POST | `/semester-export/render-missing` | body 必帶 `semester_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
 | GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
-| GET | `/teacher-progress?academic_term_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
-| GET | `/teacher-overview/export?academic_term_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
-| GET | `/semester-export/download?academic_term_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
+| GET | `/teacher-progress?semester_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
+| GET | `/teacher-overview/export?semester_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
+| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
 
 主管呼叫 `/semester-export` 時，`period_ids` 必須全部屬於該學期且位於其主管 snapshot scope
 實際可見的部門；不存在、跨學期或超出部門 scope 一律回 404，不回傳部分期別 metadata。

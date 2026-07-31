@@ -30,7 +30,7 @@ from services.organization_term_service import (
     cancel_term_reclassification_plan as cancel_term_reclassification_plan_use_case,
     create_term_reclassification_plan as create_term_reclassification_plan_use_case,
     get_term_reclassification_plan as get_term_reclassification_plan_use_case,
-    list_academic_terms as list_academic_terms_use_case,
+    list_semesters as list_semesters_use_case,
     update_term_reclassification_plan as update_term_reclassification_plan_use_case,
     validate_term_reclassification_plan as validate_term_reclassification_plan_use_case,
 )
@@ -350,12 +350,12 @@ def create_term_reclassification_plan(
     )
 
 
-@router.get("/academic-terms")
-def list_academic_terms(
+@router.get("/semesters")
+def list_semesters(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    return list_academic_terms_use_case(db)
+    return list_semesters_use_case(db)
 
 
 @router.get("/term-reclassification-plans/{plan_id}")

@@ -8,10 +8,10 @@ const DEPARTMENT_LABELS = {
   academy: "學院部",
 };
 
-export default function AcademicTermReportFilters({
+export default function SemesterReportFilters({
   terms,
-  academicTermId,
-  onAcademicTermChange,
+  semesterId,
+  onSemesterChange,
   departments,
   department,
   onDepartmentChange,
@@ -47,9 +47,9 @@ export default function AcademicTermReportFilters({
         <FormField label="學期">
           <select
             aria-label="選擇學期"
-            value={academicTermId ?? ""}
+            value={semesterId ?? ""}
             disabled={disabled || terms.length === 0}
-            onChange={event => onAcademicTermChange(event.target.value)}
+            onChange={event => onSemesterChange(event.target.value)}
             className={fieldControlClass}
           >
             {terms.length === 0 && <option value="">尚無正式學期</option>}
