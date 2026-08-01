@@ -52,6 +52,37 @@
 上線影響：11 本已完成的相本被退回「製作中」，老師需重新確認後再標完成——這是刻意的，
 姓名或稱呼改了就代表印出來的字會變。
 
+### 115 上編班的做法比較（2026-08-01 實測）
+
+問題：整批換班時，把舊班**改名**成新班名（學生原地不動）會不會比一班一班**搬**快？
+
+在同一份正式副本上各跑一次完整編班再比對結果：
+
+| | 搬移法 | 改名法 |
+|---|---|---|
+| 新增班級 | 6 | 11 |
+| 改名 | 0 | 12 |
+| 移除班級 | 7 | 12 |
+| 移除前要先清老師 | 7 | 12 |
+| 換班拖曳組數 | 49 | 37 |
+| **動作合計** | **69** | **84** |
+
+**結論：改名法不會比較快**，反而多 15 個動作。原因是這所幼兒園每個階別名稱**每年都被
+下一屆重用**——把「八階A」改名成「九階A」之後，還是得重建一個「八階A」給銜接班的孩子
+進來，一次改名只省下一組拖曳，卻多出「移除擋名字的班」＋「重建原名的班」＋「清老師」。
+
+而且改名有**嚴格的相依順序**：`八階A→九階A` 要等九階A 讓出名字、`九階A→十階A` 要等
+十階A 讓出，而十階A 要先把畢業生標成離園、清掉老師、移除，整條鏈才動得了。實測 16 個
+可一對一改名的班只成功 12 個；剩下 4 個是安平校 `一二階A→三階A→四階A→五階A→六階A`
+這條鏈，鏈頭的六階A 要拆成七階A／B（不是一對一），必須先被拖空移除，整條鏈才解得開。
+
+**兩種做法產出的資料完全相同**：班級（含部門）37、在籍名單 378、老師編制 47、工作格
+37、既有相本 90 本，逐筆比對一字不差。唯一差別是班級的**顯示順序**——改名法的班沿用
+原班的 `sort_order`，排出來的先後不同，集合相同。
+
+跨部門的改名是禁區，理由見
+[known-issues.md](../dev/known-issues.md#編班的操作缺口2026-08-01-照行政系統實地演練-115-上時發現)。
+
 ---
 
 ## 風險登錄
@@ -264,7 +295,7 @@ route boundary 與 roster 兩份會因為 API 路徑改名而需要更新——�
 | Slice | 新增測試 | 狀態 |
 |-------|----------|------|
 | 1 schema／migration | 前提驗證五項各自失敗時中止；搬遷後逐筆等價；trigger 順序；冪等重跑 0 筆 | 冪等與 legacy 升級由 `test_migrations.py` 覆蓋；**前提驗證各自失敗時中止尚未有測試** |
-| 2–4 改名 | 全新資料庫與 legacy 資料庫兩條路徑；改名後 FK 與 trigger 指向新表名 | 兩條路徑以 schema 比對驗過（表／索引／trigger 完全一致），**但比對是手動腳本，尚未自動化** |
+| 2–4 改名 | 全新資料庫與 legacy 資料庫兩條路徑；改名後 FK 與 trigger 指向新表名 | 兩條路徑以 schema 比對驗過（表／索引／trigger 完全一致），且 `test_migrations.py` 會擋下差異 |
 | 5 scope／權限 | 同名班級跨兩學期各自只讀得到自己那學期；學期中途接手的老師讀得到本學期較早的相本 | ✅ `test_same_class_name_across_semesters_keeps_each_cohort_separate`、`test_teacher_assigned_mid_semester_reads_albums_created_before_arrival` |
 | 7 編班 | 新生可直接放進計畫；套用後名單與編制落在新學期班級 | 後半由 `test_term_plan_applies_students_and_teachers_without_rewriting_old_project` 覆蓋；**「新生可直接放進計畫」尚未有測試** |
 
@@ -278,7 +309,7 @@ route boundary 與 roster 兩份會因為 API 路徑改名而需要更新——�
 - 破壞性搬遷的三項前提各自有中止測試（快照漂移、相本班級不一致、缺工作格），
   另有一個原子性測試釘住「中途失敗不留下半套結構」。
 - 「升級後 vs 全新資料庫 schema 一致」已是 pytest 防線，比對涵蓋欄位型別、nullable、
-  預設值、外鍵 ON DELETE、索引唯一性與 partial 條件；`scripts/compare_database_schema.py`
+  預設值、外鍵 ON DELETE、索引唯一性與 partial 條件，以及 trigger 定義；`scripts/compare_database_schema.py`
   供上線當天對正式資料副本使用。
 - Playwright e2e 已執行（chromium 全綠）。webkit 在本機偶發逾時，每輪失敗的測試不同
   且單獨重跑均通過，含與本重構無關的 template-editor。
@@ -306,7 +337,8 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
    副本上跑過 `scripts/smoke_upgraded_production_copy.py` ✅ 2026-08-01
    （admin 與真實在職老師各掃 16 條無參數 GET ＋ 25 條明細路徑，無 5xx；38 個班
    不重複、都掛在學期上、465 位在籍）
-4b. 在正式資料副本上跑過 `scripts/dry_run_term_reclassification.py`（實際套用一次
+4b. 在正式資料副本上跑過 `scripts/dry_run_term_reclassification.py --db <副本> --apply`
+   （實際套用一次
    編班：關閉舊學期、結束全部名冊與編制、建立新學期的班與工作格）
    ✅ 2026-07-31：38 班 / 465 位在籍學生 / 52 筆編制全數轉移，145 本相本的快照與
    學生名單完全未變，老師對舊相本可讀不可製作
