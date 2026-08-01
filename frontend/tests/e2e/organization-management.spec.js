@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { loginViaApi, repoRoot } from "./helpers.js";
+import { cancelLeftoverTermPlan, loginViaApi, repoRoot } from "./helpers.js";
 
 
 if (process.env.ORGANIZATION_E2E_BASE_URL) {
@@ -65,6 +65,9 @@ function seedLegacyProject(templateId, projectName, studentNames) {
 
 
 test("admin manages current roster while period snapshots and owner history stay intact", async ({ page }) => {
+  // 這兩條走完整條園所流程（名冊、期別、相本、編班），webkit 本機就要 20～30 秒，
+  // CI 的 runner 更慢會超過預設的 60 秒。慢是事實，不是壞掉——標 slow 讓它有三倍時間。
+  test.slow();
   await loginViaApi(page);
   const suffix = `${Date.now()}-${test.info().project.name}`;
   const currentUser = await readJsonResponse(
@@ -492,6 +495,9 @@ test("admin manages current roster while period snapshots and owner history stay
   expect((await assignmentResponse).ok()).toBeTruthy();
   await expect(projectSection.getByText(nextOwner.display_name, { exact: true })).toBeVisible();
   await projectSection.getByRole("button", { name: "查看完整歷程" }).click();
+  // 展開歷程要先打 API 再 render，按鈕翻成「收合歷程」才代表真的展開了。
+  // 少了這一步，webkit 偶爾會在還沒 render 完就去找內容而失敗。
+  await expect(projectSection.getByRole("button", { name: "收合歷程" })).toBeVisible();
   await expect(projectSection.getByText(transferReason, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: new RegExp(`^${targetClassName}`) }).click();
@@ -501,6 +507,9 @@ test("admin manages current roster while period snapshots and owner history stay
 
 
 test("class staffing and new-term reclassification preserve old project content while access follows class", async ({ page }) => {
+  // 這兩條走完整條園所流程（名冊、期別、相本、編班），webkit 本機就要 20～30 秒，
+  // CI 的 runner 更慢會超過預設的 60 秒。慢是事實，不是壞掉——標 slow 讓它有三倍時間。
+  test.slow();
   await loginViaApi(page);
   const suffix = `${Date.now().toString(36)}-${test.info().project.name}`;
   const teacherPassword = "organization-teacher-password";
@@ -674,6 +683,7 @@ test("class staffing and new-term reclassification preserve old project content 
   );
   const expectedStableProject = stableProjectSnapshot(projectBeforeReclassification);
 
+  await cancelLeftoverTermPlan(page);
   await page.getByRole("link", { name: "新學期編班" }).click();
   await expect(page.getByRole("heading", { name: "新學期編班" })).toBeVisible();
   await page.getByLabel("正式學期名稱").fill(planLabel);

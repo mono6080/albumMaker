@@ -316,3 +316,17 @@ export async function fetchTemplateDetail(page, templateId) {
   expect(detailResponse.ok()).toBeTruthy();
   return await detailResponse.json();
 }
+
+
+// 全園同時只允許一份編班草稿。任何 spec 在建草稿前都要先清掉殘留的那一份，
+// 否則只要有一條測試中途逾時、草稿沒收乾淨，後面每一條要建草稿的都會拿到
+// 409 draft_exists——失敗會出現在無辜的那條 spec 上，很難追。
+export async function cancelLeftoverTermPlan(page) {
+  const overview = await page.request.get("/api/organization/overview");
+  if (!overview.ok()) return;
+  const planId = (await overview.json()).draft_term_plan_id;
+  if (!planId) return;
+  await page.request.post(
+    `/api/organization/term-reclassification-plans/${planId}/cancel`,
+  );
+}

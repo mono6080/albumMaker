@@ -9,11 +9,13 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from zipfile import ZipFile
 
+import pytest
 from PIL import Image
 
 from database import Project, SessionLocal, ProjectStudent
 from main import (
     FRONTEND_APP_CACHE_CONTROL,
+    FRONTEND_DIST_DIR,
     FRONTEND_ASSET_CACHE_CONTROL,
     FRONTEND_REVALIDATED_ASSET_CACHE_CONTROL,
     apply_frontend_cache_headers,
@@ -112,6 +114,12 @@ def test_frontend_static_cache_headers_policy():
     assert api_response.headers["cache-control"] == "no-store"
 
 
+# 字型是從 `frontend/dist` serve 的，沒 build 過就整條測不了。CI 的 Backend job
+# 從頭到尾不碰前端，這條在那裡必定失敗——而長年失敗的紅燈等於沒有紅燈。
+@pytest.mark.skipif(
+    not (FRONTEND_DIST_DIR / "fonts" / "NotoSansTC-VF.woff2").is_file(),
+    reason="需要先 build 前端（frontend/dist/fonts）才驗得到字型的靜態檔契約",
+)
 def test_frontend_font_static_files_support_conditional_revalidation():
     with started_client() as client:
         font_response = client.get("/fonts/NotoSansTC-VF.woff2")

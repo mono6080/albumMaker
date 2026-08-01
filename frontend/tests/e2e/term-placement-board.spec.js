@@ -2,7 +2,7 @@
 // 跨分校搬動。這些都是「不會報錯、只會做錯」的操作，靠 API 測不出來。
 import { expect, test } from "@playwright/test";
 
-import { loginViaApi } from "./helpers.js";
+import { cancelLeftoverTermPlan, loginViaApi } from "./helpers.js";
 
 
 async function readJson(response, operation) {
@@ -120,6 +120,7 @@ test("編班看板：拖曳、框選、老師搬動與班級維護", async ({ pa
     "設定來源班編制",
   );
 
+  await cancelLeftoverTermPlan(page);
   const plan = await readJson(
     await page.request.post("/api/organization/term-reclassification-plans", {
       data: { label: `看板驗收 ${suffix}` },
