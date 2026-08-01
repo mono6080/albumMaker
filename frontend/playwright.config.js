@@ -19,7 +19,10 @@ const config = {
   reporter: [["list"]],
   use: {
     baseURL,
-    trace: "retain-on-failure",
+    // retain-on-failure 是「每一次都錄、成功才丟掉」，webkit 錄 trace 很吃記憶體，
+    // CI 的 runner 上會直接 "Page crashed"。改成只有重試時才錄：第一次跑不帶負擔，
+    // 真的失敗時第二次仍然留得到 trace 可以查。
+    trace: "on-first-retry",
   },
   projects: [
     {
