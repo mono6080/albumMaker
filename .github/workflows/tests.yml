@@ -44,11 +44,58 @@ jobs:
         run: python -m pytest -q
 
   frontend:
+    # 與瀏覽器無關的檢查只跑一次。render parity 會自己啟動 chromium
+    # （scripts/check_text_raster_parity.mjs），所以這個 job 要裝 chromium。
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+
+      # 瀏覽器每次重抓要好幾分鐘，而它只跟 playwright 版本有關
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Frontend unit tests
+        run: npm run test:unit
+
+      - name: Render parity
+        run: npm run test:render-parity
+
+      - name: Build
+        run: npm run build
+
+      - name: Bundle budget
+        run: npm run test:bundle-budget
+
+  e2e:
     # 每個瀏覽器一台 runner。整套 e2e 共用同一個後端與同一份 .tmp/e2e/e2e.db 且從不
     # 重置，兩個 project 在同一台機器上接著跑時，後跑的那個要面對前面全部測試累積下來
     # 的資料——organization-management 的兩條在 webkit 因此從 30 秒漲到 3 分鐘而逾時。
-    # 拆成 matrix 之後兩邊各有乾淨的資料庫，順帶讓 e2e 的牆鐘時間砍半。
-    name: Frontend (${{ matrix.browser }})
+    # 拆成 matrix 之後兩邊各有乾淨的資料庫，牆鐘時間也砍半。
+    name: E2E (${{ matrix.browser }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -84,30 +131,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r ../backend/requirements.txt
 
-      # 瀏覽器每次重抓要好幾分鐘，而它只跟 playwright 版本有關
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('frontend/package-lock.json') }}
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
-
-      - name: ESLint
-        run: npm run lint
-
-      - name: Frontend unit tests
-        run: npm run test:unit
-
-      - name: Render parity
-        run: npm run test:render-parity
 
       - name: Browser E2E
         run: npm run test:e2e -- --project=${{ matrix.browser }}
-
-      - name: Build
-        run: npm run build
-
-      - name: Bundle budget
-        run: npm run test:bundle-budget
