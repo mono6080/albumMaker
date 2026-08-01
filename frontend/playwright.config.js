@@ -12,6 +12,10 @@ const config = {
   },
   fullyParallel: false,
   workers: 1,
+  // CI 的 runner 上 webkit 會整個 crash（"Page crashed"），那是瀏覽器層的意外、
+  // 不是斷言不成立。本機不重試，紅了就是紅了。重試成功的會被標成 flaky 而不是
+  // passed，訊號不會被吃掉。
+  retries: process.env.CI ? 2 : 0,
   reporter: [["list"]],
   use: {
     baseURL,
