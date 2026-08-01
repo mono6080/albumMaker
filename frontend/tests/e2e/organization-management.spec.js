@@ -716,24 +716,37 @@ test("class staffing and new-term reclassification preserve old project content 
     "建立新學期模板",
   );
 
-  const sourceStudentGroupButton = page.getByRole("button", {
-    name: `編輯 ${campusName}／${sourceClassName} 學生目標班級`,
+  // 看板：卡片點一下選取，再點目標班級的標題整批搬過去
+  const studentCard = name => page.locator("#term-board").getByRole("button", {
+    name, exact: true,
   });
-  await sourceStudentGroupButton.click();
-  await expect(sourceStudentGroupButton).toHaveAttribute("aria-expanded", "true");
-  const stayTarget = page.getByLabel(`${stayStudentName} 的目標班級`);
-  await expect(stayTarget).toHaveValue(String(nextSourceClassroomId));
-  await page.getByLabel(`${moveStudentName} 的目標班級`).selectOption(String(nextTargetClassroomId));
-  await page.getByLabel(`${departedStudentName} 的目標班級`).selectOption("departed");
+  const columnHeader = className => page.getByRole("button", {
+    name: new RegExp(`^(重新命名|放進) ${campusName}／${className}$`),
+  });
+  const departedColumn = page.getByRole("button", { name: /^(重新命名|放進) 離園$/ });
+
+  // 看板依分校分頁，預設停在第一個分校；重載後也會重置，所以每次都要切回來
+  const openCampusTab = () => page.getByRole("button", { name: `切換到 ${campusName}` }).click();
+  await openCampusTab();
+  await expect(studentCard(stayStudentName)).toBeVisible();
+  await studentCard(moveStudentName).click();
+  await expect(studentCard(moveStudentName)).toHaveAttribute("aria-pressed", "true");
+  await columnHeader(targetClassName).click();
+  await expect(studentCard(moveStudentName)).toHaveAttribute("aria-pressed", "false");
+
+  // 離園走卡片上的 ×，不必拖到最後一欄
+  await page.getByRole("button", { name: `把 ${departedStudentName} 標記為離園` }).click();
+  await expect(departedColumn).toBeVisible();
+
   const changedStudentsOnly = page.getByLabel("僅顯示有變更", { exact: true });
   await changedStudentsOnly.check();
-  await expect(page.getByLabel(`${stayStudentName} 的目標班級`)).toHaveCount(0);
-  await expect(page.getByLabel(`${moveStudentName} 的目標班級`)).toBeVisible();
+  await expect(studentCard(stayStudentName)).toHaveCount(0);
+  await expect(studentCard(moveStudentName)).toBeVisible();
   await changedStudentsOnly.uncheck();
   const studentSearch = page.getByLabel("搜尋學生或班級", { exact: true });
   await studentSearch.fill(departedStudentName);
-  await expect(page.getByLabel(`${moveStudentName} 的目標班級`)).toHaveCount(0);
-  await expect(page.getByLabel(`${departedStudentName} 的目標班級`)).toBeVisible();
+  await expect(studentCard(moveStudentName)).toHaveCount(0);
+  await expect(studentCard(departedStudentName)).toBeVisible();
   await studentSearch.fill("");
 
   await page.getByRole("button", { name: "返回班級與名單", exact: true }).click();
@@ -741,19 +754,16 @@ test("class staffing and new-term reclassification preserve old project content 
   await expect(dirtyLeaveDialog).toBeVisible();
   await dirtyLeaveDialog.getByRole("button", { name: "取消", exact: true }).click();
 
-  const sourceTeacherSection = page.getByRole("region", {
-    name: `新學期老師編制 ${campusName}／${sourceClassName}`,
+  const openTeacherEditor = className => page.getByRole("button", {
+    name: `調整 ${campusName}／${className} 的老師`,
   });
-  const targetTeacherSection = page.getByRole("region", {
-    name: `新學期老師編制 ${campusName}／${targetClassName}`,
-  });
-  await sourceTeacherSection.getByRole("button", { name: "調整老師", exact: true }).click();
+  await openTeacherEditor(sourceClassName).click();
   const sourceTeacherDialog = page.getByRole("dialog", {
     name: `調整老師：${campusName}／${sourceClassName}`,
   });
   await sourceTeacherDialog.getByLabel("主教", { exact: true }).selectOption(String(initialCoTeacher.id));
   await sourceTeacherDialog.getByRole("button", { name: "套用老師設定", exact: true }).click();
-  await targetTeacherSection.getByRole("button", { name: "調整老師", exact: true }).click();
+  await openTeacherEditor(targetClassName).click();
   let targetTeacherDialog = page.getByRole("dialog", {
     name: `調整老師：${campusName}／${targetClassName}`,
   });
@@ -776,7 +786,8 @@ test("class staffing and new-term reclassification preserve old project content 
 
   await page.reload();
   await expect(page.getByRole("heading", { name: planLabel, exact: true })).toBeVisible();
-  await targetTeacherSection.getByRole("button", { name: "調整老師", exact: true }).click();
+  await openCampusTab();
+  await openTeacherEditor(targetClassName).click();
   targetTeacherDialog = page.getByRole("dialog", {
     name: `調整老師：${campusName}／${targetClassName}`,
   });
@@ -796,8 +807,12 @@ test("class staffing and new-term reclassification preserve old project content 
   ));
   await page.getByRole("button", { name: "儲存草稿" }).click();
   expect((await saveRemovedTargetResponsePromise).ok()).toBeTruthy();
-  await expect(targetTeacherSection.getByText("尚無老師", { exact: true })).toBeVisible();
-  await targetTeacherSection.getByRole("button", { name: "調整老師", exact: true }).click();
+  // 看板上該欄的老師區會顯示「尚無老師」
+  await expect(
+    page.getByRole("button", { name: `調整 ${campusName}／${targetClassName} 的老師` })
+      .locator("xpath=preceding-sibling::p[1]"),
+  ).toHaveText("尚無老師");
+  await openTeacherEditor(targetClassName).click();
   targetTeacherDialog = page.getByRole("dialog", {
     name: `調整老師：${campusName}／${targetClassName}`,
   });

@@ -65,7 +65,7 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
     使用者批次匯入、刪除的 transaction 邊界
   - `test_student_input_limits.py`：班級目前名單的姓名、中央相本稱呼、單批與總量上限，
-    以及已歸班 Project ProjectStudent 不接受相本內稱呼 mutation
+    以及已歸班 ProjectStudent 不接受相本內稱呼 mutation
     （數值見 [api.md 的園所端點](api.md#園所管理-apiorganization)）
   - `test_student_album_name.py`：`Student.album_name` 單一來源、名冊建立與園所設定單筆／
     整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 ProjectStudent 值忽略與輸出失效契約
@@ -100,10 +100,12 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   Ctrl/Cmd+G、固定 typography、isolation 內 undo，以及分析建立／重設普通文字框、不改 topology、
   invalid-link 修復與跨頁 stale response guard。
   `tests/e2e/organization-management.spec.js` 覆蓋校／部門主管、老師編制、班級相本，以及
-  舊相本 preview 後逐位 explicit identity decision、空班全量 seed、跨期沿用 established id、
-  新學期學生／老師差異與 teacher 班級導向工作流中不存在通用建立入口；歸班 UI 預設未決定，
-  不得自動套用同名候選。`organization-migration-wizard.spec.js` 另驗證同名既有候選顯示
-  校／部門／班級、名單狀態與歷史相本期別，並以這些來源區分同名不同人。
+  跨期沿用 established id、新學期學生／老師差異，以及 teacher 班級導向工作流中不存在
+  通用建立入口；編班的學生編排走**看板**（點卡片選取 → 點目標班級標題搬動、
+  卡片 × 標記離園、每欄的「調整老師」開編制對話框），舊的逐班展開 + 每位學生一個下拉
+  已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
+  `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
+  一併移除。
   `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。

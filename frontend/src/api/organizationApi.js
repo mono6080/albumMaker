@@ -24,6 +24,12 @@ export const createClassroom = (params) =>
 export const updateClassroom = (classroomId, params) =>
   apiClient.patch(`/organization/classrooms/${classroomId}`, params);
 
+/** 重排一個學期內班級的顯示順序；必須送出該學期完整的班級集合。 */
+export const reorderClassrooms = (semesterId, classroomIds) =>
+  apiClient.put(`/organization/semesters/${semesterId}/classroom-order`, {
+    classroom_ids: classroomIds,
+  });
+
 /** 移除編班草稿學期裡尚未使用的班級。 */
 export const deleteClassroom = (classroomId) =>
   apiClient.delete(`/organization/classrooms/${classroomId}`);
@@ -43,6 +49,10 @@ export const batchAddClassroomMembers = (classroomId, members) =>
 /** 更新學生完整姓名、園所相本稱呼、在班狀態，或轉往另一班。 */
 export const updateClassroomMember = (classroomId, memberId, params) =>
   apiClient.patch(`/organization/classrooms/${classroomId}/members/${memberId}`, params);
+
+/** 移除草稿學期班級上的新生：整列刪掉，不是把在班區間結束掉。 */
+export const deleteDraftClassroomMember = (classroomId, memberId) =>
+  apiClient.delete(`/organization/classrooms/${classroomId}/members/${memberId}`);
 
 /** 自動填入班級目前名單中尚未設定的園所相本稱呼。 */
 export const autoFillClassroomMemberAlbumNames = (classroomId) =>
