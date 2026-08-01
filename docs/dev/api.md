@@ -116,16 +116,19 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | GET | `/semesters` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
 | POST / PATCH | `/campuses`、`/campuses/{id}` | 建立／更新分校；旗下仍有目前學生或老師時不可停用 |
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
-| POST | `/classrooms` | 在目前正式學期建立班級（分校、`infant\|academy` 部門、名稱） |
+| POST | `/classrooms` | 建立班級（分校、`infant\|academy` 部門、名稱）。省略 `semester_id` 建在目前正式學期；帶編班草稿的目標學期則建在草稿裡（並自動補進計畫），該草稿學期必須仍有 draft 計畫，否則回 409 `draft_semester_has_no_plan` |
 | PATCH | `/classrooms/{id}` | 只能改班名；改分校或部門回 409 `classroom_scope_is_immutable`，送 `is_active` 回 422 `classroom_has_no_active_flag` |
+| DELETE | `/classrooms/{id}` | admin 移除**編班草稿學期**的班；已有名冊、編制、工作格、相本或 placement 指著它時回 409 `classroom_not_empty` 並附 `counts`；目前／已結束學期的班一律回 409 `classroom_not_in_draft_semester` |
+| PUT | `/semesters/{id}/classroom-order` | admin 重排該學期班級的顯示順序；body `classroom_ids` 必須是**該學期完整的集合**，缺漏回 422 `incomplete_classroom_order`、重複回 422 `duplicate_classroom_id`；已結束或已取消的學期回 409 |
 | PUT | `/classrooms/{id}/teachers` | admin 以完整集合原子替換目前老師；非空集合恰有一位 `lead`，其餘為 `co_teacher`，歷史區間保留 |
-| POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
+| POST | `/classrooms/{id}/members/batch` | 批次加入名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班。除了目前學期的班，**編班草稿學期的班**也收（新生的唯一入口，見下）；其餘學期回 409 |
 | PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
+| DELETE | `/classrooms/{id}/members/{member_id}` | admin 把**草稿學期**的新生整列刪掉（連同該筆名冊項，若它已無其他 membership 與相本引用）；其他學期回 409 `member_not_in_draft_semester`，是 placement 來源的名單列回 409 `member_is_a_placement_source` |
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
 | PATCH | `/students/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/students/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
-| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班，`classroom_id` 一律指它們 |
+| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班（含 `sort_order` 與 `can_remove`——後者由後端算，前端據此決定移除鍵能不能按），`classroom_id` 一律指它們。在草稿學期新增班級會自動補進計畫，該班才編得到老師。payload 另有 `new_students`：草稿期間直接編進目標班的新生，他們沒有來源名單列因此不是 placement，套用時不會被動到 |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央

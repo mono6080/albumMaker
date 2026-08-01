@@ -622,14 +622,12 @@ def test_upgraded_and_fresh_databases_converge_to_the_same_schema(tmp_path, monk
     _run_startup_sequence(upgraded_path, monkeypatch)
     upgraded = snapshot_schema(upgraded_path)
 
-    differences = [
-        difference
-        for difference in diff_schemas(upgraded, fresh)
-        if difference.startswith("tables:")
-    ]
+    # 索引與 trigger 的 drift 一樣要擋：唯一鍵只建在跑得到舊結構的 migration 裡、
+    # 或 trigger 只在其中一條路徑重建，都不會讓 migration 失敗，只會讓兩條路徑
+    # 長出不同的資料庫。丟掉非 tables: 的差異等於把這道防線關掉。
+    differences = diff_schemas(upgraded, fresh)
     assert differences == [], (
-        "升級後與全新資料庫的表結構不一致：\n"
-        + "\n".join(differences)
+        "升級後與全新資料庫的 schema 不一致：\n" + "\n".join(differences)
     )
 
 

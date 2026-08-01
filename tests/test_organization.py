@@ -1005,3 +1005,61 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         assert connection.execute(text(
             "SELECT COUNT(*) FROM project_assignment_history WHERE project_id = 1"
         )).scalar_one() == 0
+
+
+def test_classroom_order_is_stored_and_requires_the_complete_set():
+    """班級順序只能存下來，推導不出來。
+
+    班名是「一二階／三階／十階」這種中文數字，字面排序會排成
+    一二階 七階 三階 九階 五階…，與階段順序無關。排序是園所自己的意思。
+    """
+    with started_client() as client:
+        login(client)
+        campus = client.post("/api/organization/campuses", json={"name": unique_name("排序校")})
+        assert_status(campus, 201)
+        campus_id = campus.json()["id"]
+        ids = []
+        for name in ("十階A", "一二階A", "三階A"):
+            created = client.post(
+                "/api/organization/classrooms",
+                json={"campus_id": campus_id, "department": "infant", "name": unique_name(name)},
+            )
+            assert_status(created, 201)
+            ids.append(created.json()["id"])
+        semester_id = client.get("/api/organization/semesters").json()[0]["id"]
+
+        def listed_ids():
+            overview = client.get("/api/organization/overview").json()
+            rooms = next(
+                campus_row["classrooms"]
+                for campus_row in overview["campuses"]
+                if campus_row["id"] == campus_id
+            )
+            return [room["id"] for room in rooms]
+
+        # 沒設過順序時退回 id
+        assert listed_ids() == ids
+
+        desired = [ids[1], ids[2], ids[0]]
+        reordered = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": desired},
+        )
+        assert_status(reordered, 200)
+        assert listed_ids() == desired
+
+        # 只送一部分會被拒絕：沒送到的班要排哪裡沒有答案
+        partial = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": desired[:2]},
+        )
+        assert_status(partial, 422)
+        assert partial.json()["detail"]["code"] == "incomplete_classroom_order"
+        assert listed_ids() == desired
+
+        duplicated = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": [desired[0], desired[0], desired[1]]},
+        )
+        assert_status(duplicated, 422)
+        assert duplicated.json()["detail"]["code"] == "duplicate_classroom_id"

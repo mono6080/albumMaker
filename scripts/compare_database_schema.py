@@ -20,8 +20,24 @@ import sys
 from pathlib import Path
 
 
+def _normalize_sql(sql: str | None) -> str:
+    """壓平空白並拿掉識別字的雙引號。
+
+    `ALTER TABLE RENAME` 會把 trigger 內的表名重寫成加引號的形式，全新資料庫則沒有
+    引號。兩者語意完全相同，拿來當差異只會製造雜訊，掩蓋真正的 drift。
+    """
+    return " ".join((sql or "").replace('"', "").split())
+
+
 def snapshot_schema(database_path: str | Path) -> dict[str, dict[str, object]]:
-    """讀出表欄位、索引歸屬與 trigger 定義。"""
+    """讀出表欄位、索引歸屬與 trigger 定義。
+
+    路徑不存在時直接失敗：`sqlite3.connect` 對不存在的檔案會**建出一個空資料庫**，
+    兩個打錯的路徑因此會比出「完全一致」——最糟的假綠。
+    """
+    for path in (database_path,):
+        if not Path(path).is_file():
+            raise SystemExit(f"找不到資料庫：{path}")
     connection = sqlite3.connect(str(database_path))
     try:
         tables = {
@@ -51,7 +67,7 @@ def snapshot_schema(database_path: str | Path) -> dict[str, dict[str, object]]:
                 )
             },
             "triggers": {
-                name: " ".join((sql or "").split())
+                name: _normalize_sql(sql)
                 for name, sql in connection.execute(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
                 )

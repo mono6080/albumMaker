@@ -97,7 +97,7 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 7. 對 active 期別 × 同部門 active 班級建立目前預期格；因此可顯示真正
    的「未建立」，archived 期別不憑目前班級補空格。
 8. 目前學生名單寫入 imported term 學生快照；不在目前名單但已有
-   有效 Project ProjectStudent 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
+   有效 ProjectStudent 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
 9. 現有有效老師編制寫入 imported term 的班級老師快照；找不到的歷史老師
    不可由 owner 猜測。
 10. 對 Project 校別 id 快照依遷移 ledger、唯一校名、目前 Classroom 依序回填；

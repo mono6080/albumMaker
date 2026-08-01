@@ -1480,3 +1480,311 @@ def test_fingerprint_ignores_rows_outside_the_current_semester():
         assert "stale_reclassification_plan" not in {
             error["code"] for error in refreshed["validation"]["errors"]
         }
+
+
+def test_new_draft_classroom_takes_teachers_and_unused_copies_can_be_dropped():
+    """新學期的班要能編老師；這學期收掉、下學期不開的班要能移除。
+
+    這兩件事以前都做不到，而且都是靜默的：
+    - 草稿只在建立當下長出 `TermClassroomPlan`，後加的班沒有 plan 列，老師編制頁面
+      根本不會出現它，套用後成為無人帶班的空班
+    - `delete_classroom` 把 plan 列當成佔用，而複製來的班每一個都有 plan 列，
+      等於一個都刪不掉——包括這學期收掉的班
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        kept_id = _create_classroom(client, campus_id, unique_name("續開的班"))
+        _create_classroom(client, campus_id, unique_name("下學期收掉的班"))
+        _add_members(client, kept_id, [unique_name("續讀學生")])
+        teacher, _ = _create_teacher(client, None)
+
+        plan = _create_plan(client)
+        plan_id = plan["id"]
+        target_semester_id = plan["target_semester_id"]
+        copies = {row["name"]: row for row in plan["target_classrooms"]}
+        dropped_copy_id = copies[
+            next(name for name in copies if name.startswith("下學期收掉的班"))
+        ]["classroom_id"]
+        kept_copy_id = copies[
+            next(name for name in copies if name.startswith("續開的班"))
+        ]["classroom_id"]
+
+        # 沒有人被編進去的複製班可以移除；有 placement 指著的不行
+        assert copies[
+            next(name for name in copies if name.startswith("下學期收掉的班"))
+        ]["can_remove"] is True
+        assert copies[
+            next(name for name in copies if name.startswith("續開的班"))
+        ]["can_remove"] is False
+        blocked = client.delete(f"/api/organization/classrooms/{kept_copy_id}")
+        assert_status(blocked, 409)
+        assert blocked.json()["detail"]["counts"] == {"placements": 1}
+
+        removed = client.delete(f"/api/organization/classrooms/{dropped_copy_id}")
+        assert_status(removed, 200)
+
+        # 移除後它就不在老師編制裡了。這裡要先驗完再新增班級——SQLite 會回收
+        # 剛刪掉的 rowid，新班很可能拿到同一個 id，用 id 比對會得到假的結果。
+        after_removal = client.get(
+            f"/api/organization/term-reclassification-plans/{plan_id}"
+        ).json()
+        assert dropped_copy_id not in {
+            row["classroom_id"] for row in after_removal["classroom_teacher_targets"]
+        }
+        assert dropped_copy_id not in {
+            row["classroom_id"] for row in after_removal["target_classrooms"]
+        }
+
+        # 新開一個班，它必須進到老師編制裡
+        added = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("新學期多開的班"),
+                "semester_id": target_semester_id,
+            },
+        )
+        assert_status(added, 201)
+        added_id = added.json()["id"]
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan_id}"
+        ).json()
+        target_ids = {row["classroom_id"] for row in refreshed["classroom_teacher_targets"]}
+        assert added_id in target_ids, "新開的班必須出現在老師編制裡"
+        assert next(
+            row for row in refreshed["classroom_teacher_targets"]
+            if row["classroom_id"] == added_id
+        )["teachers"] == [], "新班的編制應該是空的，等人指定"
+
+        updated = client.put(
+            f"/api/organization/term-reclassification-plans/{plan_id}",
+            json=_plan_update_body(
+                refreshed,
+                expected_revision=refreshed["revision"],
+                teacher_overrides={
+                    added_id: [{"teacher_id": teacher["id"], "duty": "lead"}],
+                },
+            ),
+        )
+        assert_status(updated, 200)
+
+        ready = client.get(
+            f"/api/organization/term-reclassification-plans/{plan_id}"
+        ).json()
+        assert ready["validation"]["is_valid"] is True
+        applied = client.post(
+            f"/api/organization/term-reclassification-plans/{plan_id}/apply",
+            json={"expected_revision": ready["revision"]},
+        )
+        assert_status(applied, 200)
+
+        # 套用後那個新班真的有主教，不是空班
+        teachers_after = client.get("/api/organization/overview").json()
+        classrooms_after = {
+            room["id"]: room
+            for campus in teachers_after["campuses"]
+            for room in campus["classrooms"]
+        }
+        assert [
+            (item["teacher_id"], item["duty"])
+            for item in classrooms_after[added_id]["current_teachers"]
+        ] == [(teacher["id"], "lead")]
+
+
+def test_draft_semester_without_a_plan_cannot_grow_classrooms():
+    """沒有編班計畫的草稿學期不可以長出班級。
+
+    草稿學期唯一的用途是承載編班計畫，這時建出來的班不在園所總覽、也不會被任何
+    套用流程處理——是永遠看不到也刪不掉的孤兒。
+
+    正常流程造不出這個狀態（取消計畫會連同目標學期一起取消），所以這裡直接寫一筆
+    沒有計畫的草稿學期進去，驗證守衛本身成立而不是依賴上游剛好沒有漏洞。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+
+        session = SessionLocal()
+        try:
+            orphan = Semester(
+                label=unique_name("沒有計畫的草稿"),
+                status="draft",
+                created_by_name_snapshot="測試",
+            )
+            session.add(orphan)
+            session.commit()
+            orphan_id = orphan.id
+        finally:
+            session.close()
+
+        rejected = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("孤兒班"),
+                "semester_id": orphan_id,
+            },
+        )
+        assert_status(rejected, 409)
+        assert rejected.json()["detail"]["code"] == "draft_semester_has_no_plan"
+
+
+def test_draft_semester_accepts_new_students_who_survive_apply():
+    """名冊裡還沒有的新生，必須能在草稿階段就編進新學期的班。
+
+    新生沒有來源名單列，所以不是 placement。套用只處理 placement，因此他們會原封不動
+    留在新學期。少了這條路，新生只能等套用完才補建，那段期間沒有班也沒有相本——
+    2026-08 照行政系統演練 115 上時，24 位新生就是卡在這裡。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        source_classroom_id = _create_classroom(client, campus_id, unique_name("原班"))
+        _add_members(client, source_classroom_id, [unique_name("續讀生")])
+
+        plan = _create_plan(client)
+        target_classroom_id = plan["target_classrooms"][0]["classroom_id"]
+        assert plan["new_students"] == []
+
+        newcomer_name = unique_name("新生")
+        added = client.post(
+            f"/api/organization/classrooms/{target_classroom_id}/members/batch",
+            json={"members": [{"name": newcomer_name}]},
+        )
+        assert_status(added, 201)
+
+        refreshed = client.get(
+            f"/api/organization/term-reclassification-plans/{plan['id']}"
+        )
+        assert_status(refreshed, 200)
+        body = refreshed.json()
+        assert [
+            (row["classroom_id"], row["name"]) for row in body["new_students"]
+        ] == [(target_classroom_id, newcomer_name)]
+        # 新生不是 placement——他沒有來源名單列可以當 key
+        assert newcomer_name not in {
+            row["student_name"] for row in body["student_placements"]
+        }
+
+        apply_response = client.post(
+            f"/api/organization/term-reclassification-plans/{plan['id']}/apply",
+            json={"expected_revision": body["revision"]},
+        )
+        assert_status(apply_response, 200)
+
+        db = SessionLocal()
+        try:
+            names = {
+                member.roster_child.name
+                for member in db.query(ClassroomMember).filter(
+                    ClassroomMember.classroom_id == target_classroom_id,
+                    ClassroomMember.ended_at.is_(None),
+                )
+            }
+        finally:
+            db.close()
+        assert newcomer_name in names, "新生套用後不見了"
+        assert len(names) == 2, f"新學期的班應該有續讀生與新生兩位，實際 {names}"
+
+
+def test_classrooms_outside_current_or_drafting_semesters_reject_new_members():
+    """已關閉學期的班不可以再加人——那是歷史，不是可編輯的名單。"""
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        source_classroom_id = _create_classroom(client, campus_id, unique_name("原班"))
+        _add_members(client, source_classroom_id, [unique_name("續讀生")])
+
+        plan = _create_plan(client)
+        apply_response = client.post(
+            f"/api/organization/term-reclassification-plans/{plan['id']}/apply",
+            json={"expected_revision": plan["revision"]},
+        )
+        assert_status(apply_response, 200)
+
+        rejected = client.post(
+            f"/api/organization/classrooms/{source_classroom_id}/members/batch",
+            json={"members": [{"name": unique_name("補加")}]},
+        )
+        assert_status(rejected, 409)
+
+
+def test_removing_a_draft_newcomer_frees_the_classroom_for_deletion():
+    """新生編入又移除之後，那個班還要刪得掉。
+
+    `classroom_members` 對 `classrooms` 的外鍵沒有 CASCADE，移除班級又會數所有成員列
+    （含已結束的）。所以草稿學期的新生必須整列刪掉，不能只是把在班區間結束——否則
+    多開錯一個班、試編了一位新生，那個班就永遠留在新學期了。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id = _create_campus(client)
+        source_classroom_id = _create_classroom(client, campus_id, unique_name("原班"))
+        _add_members(client, source_classroom_id, [unique_name("續讀生")])
+
+        plan = _create_plan(client)
+        spare = client.post(
+            "/api/organization/classrooms",
+            json={
+                "campus_id": campus_id,
+                "department": "infant",
+                "name": unique_name("多開的班"),
+                "semester_id": plan["target_semester_id"],
+            },
+        )
+        assert_status(spare, 201)
+        spare_id = spare.json()["id"]
+
+        newcomer = unique_name("新生")
+        added = client.post(
+            f"/api/organization/classrooms/{spare_id}/members/batch",
+            json={"members": [{"name": newcomer}]},
+        )
+        assert_status(added, 201)
+        member_id = added.json()["created"][0]["id"]
+
+        occupied = client.delete(f"/api/organization/classrooms/{spare_id}")
+        assert_status(occupied, 409)
+
+        db = SessionLocal()
+        try:
+            roster_child_id = int(
+                db.get(ClassroomMember, member_id).roster_child_id
+            )
+        finally:
+            db.close()
+
+        removed = client.delete(
+            f"/api/organization/classrooms/{spare_id}/members/{member_id}"
+        )
+        assert_status(removed, 200)
+
+        db = SessionLocal()
+        try:
+            assert db.get(Student, roster_child_id) is None, (
+                "名冊項要一起收回，否則再編一次同一位新生就變成兩個孩子"
+            )
+        finally:
+            db.close()
+
+        freed = client.delete(f"/api/organization/classrooms/{spare_id}")
+        assert_status(freed, 200)
+
+        # 目前學期的名單列不可以走這條路——那是有歷史的
+        db = SessionLocal()
+        try:
+            source_member_id = db.query(ClassroomMember.id).filter(
+                ClassroomMember.classroom_id == source_classroom_id
+            ).scalar()
+        finally:
+            db.close()
+        rejected = client.delete(
+            f"/api/organization/classrooms/{source_classroom_id}"
+            f"/members/{source_member_id}"
+        )
+        assert_status(rejected, 409)
+        assert rejected.json()["detail"]["code"] == "member_not_in_draft_semester"

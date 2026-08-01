@@ -126,7 +126,7 @@ migration 後不再為班級相本建立新 editor row；舊 row 不刪除。除
 新學期重新編班後，舊相本仍以建立當下名稱顯示。已有明確 `classroom_id` 的資料由 schema
 migration 一次補齊快照；未歸班資料在管理員執行歸班時寫入，讀取期不做 fallback。
 
-### Project ProjectStudent snapshot
+### ProjectStudent snapshot
 
 `ProjectStudent.name`、`roster_child_id` 與成員集合是期別快照，不是目前班級名單。從目前名單
 建立的新 Project 一開始就是凍結快照；舊 Project 在 `classroom_id=NULL` 期間只允許 admin
@@ -237,7 +237,7 @@ v1 新入園學生仍走園所設定的「加入目前名單」流程，在加�
 
 分校停用、或班級所屬學期已結束時，不可新增編制或相本（班級沒有自己的停用旗標）。`role=teacher|supervisor` 的 active 操作帳號都可加入
 老師編制或主管 scope，同一帳號可同時存在於兩者且不改 `User.role`。
-Project ProjectStudent 不提供新增、複製、刪除或完整姓名修改端點；
+ProjectStudent 不提供新增、複製、刪除或完整姓名修改端點；
 三個 Project 相本稱呼 mutation 端點只供未歸班 legacy 相容，已歸班固定回 409
 `roster_album_name_authority`。
 `/api/roster` 也不提供 ProjectStudent link、Student merge 或 split 端點。
@@ -353,7 +353,7 @@ active 班級端點建立，協作權只來自 active 班級老師編制。semes
   [data-model.md](../dev/data-model.md#orm-模型backenddatabasepy)。DB trigger 阻止沒有完整
   header／resolution ledger 的 legacy Project 歸班，也阻止已歸班 Project 的 ProjectStudent
   `project_id`／`name`／`roster_child_id` 再被修改。
-- `seed_current_roster=true` 僅能在目標 active roster 為空時，把已解析的完整 Project ProjectStudent
+- `seed_current_roster=true` 僅能在目標 active roster 為空時，把已解析的完整 ProjectStudent
   集合一次建立為目前名單；`false` 完全不動名單。部分 seed 明確不屬於本契約。
 - `migration_status` 的欄位與完成判定由 [API 文件](../dev/api.md#園所管理-apiorganization) 擁有；
   遷移完成前未歸班相本維持 admin-only，且不存在 runtime fallback。

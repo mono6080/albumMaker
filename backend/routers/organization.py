@@ -16,10 +16,12 @@ from services.organization_service import (
     create_campus as create_campus_use_case,
     create_classroom as create_classroom_use_case,
     delete_classroom as delete_classroom_use_case,
+    delete_draft_classroom_member as delete_draft_classroom_member_use_case,
     create_classroom_project as create_classroom_project_use_case,
     get_my_classrooms as get_my_classrooms_use_case,
     get_organization_overview as get_organization_overview_use_case,
     replace_campus_supervisors as replace_campus_supervisors_use_case,
+    reorder_classrooms as reorder_classrooms_use_case,
     replace_classroom_teachers as replace_classroom_teachers_use_case,
     update_campus as update_campus_use_case,
     update_classroom as update_classroom_use_case,
@@ -102,6 +104,11 @@ class ClassroomCreateBody(BaseModel):
     is_active: bool = True
     # 省略時建在目前學期；編班草稿要多開班時指定草稿的目標學期
     semester_id: int | None = None
+
+
+class ClassroomOrderBody(BaseModel):
+    # 要求完整集合，所以上限跟一個學期可能的班數同量級即可
+    classroom_ids: list[int] = Field(..., max_length=500)
 
 
 class ClassroomUpdateBody(BaseModel):
@@ -254,6 +261,16 @@ def delete_classroom(
     return delete_classroom_use_case(db, classroom_id)
 
 
+@router.put("/semesters/{semester_id}/classroom-order")
+def reorder_classrooms(
+    semester_id: int,
+    body: ClassroomOrderBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return reorder_classrooms_use_case(db, semester_id, body.classroom_ids)
+
+
 @router.patch("/classrooms/{classroom_id}")
 def update_classroom(
     classroom_id: int,
@@ -299,6 +316,16 @@ def update_classroom_member(
 ):
     changes = body.model_dump(exclude_unset=True)
     return update_classroom_member_use_case(db, classroom_id, member_id, changes)
+
+
+@router.delete("/classrooms/{classroom_id}/members/{member_id}")
+def delete_draft_classroom_member(
+    classroom_id: int,
+    member_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return delete_draft_classroom_member_use_case(db, classroom_id, member_id)
 
 
 @router.post("/classrooms/{classroom_id}/members/album-names/auto-fill")

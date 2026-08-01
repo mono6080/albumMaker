@@ -252,6 +252,11 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "update_classroom_member",
         ),
         (
+            "delete",
+            "/classrooms/{classroom_id}/members/{member_id}",
+            "delete_draft_classroom_member",
+        ),
+        (
             "post",
             "/classrooms/{classroom_id}/members/album-names/auto-fill",
             "auto_fill_classroom_member_album_names",
@@ -275,6 +280,11 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "put",
             "/classrooms/{classroom_id}/teachers",
             "replace_classroom_teachers",
+        ),
+        (
+            "put",
+            "/semesters/{semester_id}/classroom-order",
+            "reorder_classrooms",
         ),
         (
             "post",

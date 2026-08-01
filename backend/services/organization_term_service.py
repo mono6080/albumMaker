@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from crud.organization_crud import get_term_reclassification_plan_or_404
 from database import (
@@ -27,6 +27,7 @@ from database import (
     User,
     utc_now,
 )
+from services.organization_service import blocked_classroom_ids
 from services.organization_transaction import organization_write_transaction
 from services.roster_identity_service import normalize_child_name
 from services.student_input_policy import PROJECT_STUDENT_MAX_COUNT
@@ -705,7 +706,33 @@ def _validate_target_state(plan: TermReclassificationPlan, db: Session) -> list[
     return errors
 
 
+def _draft_new_members(
+    plan: TermReclassificationPlan,
+    db: Session,
+) -> list[ClassroomMember]:
+    """目標學期班級上「已經在籍」的成員——套用前只可能是草稿期間編入的新生。"""
+    if plan.target_semester is None:
+        return []
+    classroom_ids = [room.id for room in plan.target_semester.classrooms]
+    if not classroom_ids:
+        return []
+    return (
+        db.query(ClassroomMember)
+        .options(selectinload(ClassroomMember.roster_child))
+        .filter(
+            ClassroomMember.classroom_id.in_(classroom_ids),
+            ClassroomMember.ended_at.is_(None),
+        )
+        .order_by(ClassroomMember.id)
+        .all()
+    )
+
+
 def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
+    target_classroom_rows = (
+        plan.target_semester.classrooms if plan.target_semester is not None else []
+    )
+    blocked_ids = blocked_classroom_ids(db, [room.id for room in target_classroom_rows])
     validation_errors = (
         [
             *_semester_validation_errors(plan),
@@ -776,6 +803,10 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
                 "campus_name": classroom.campus.name,
                 "name": classroom.name,
                 "department": classroom.department,
+                "sort_order": classroom.sort_order,
+                # 可不可以移除由後端算，前端照這個畫按鈕——規則只有一份。
+                # 一次算完全部班級，不要每班五個 COUNT（38 班就是 190 次查詢）。
+                "can_remove": classroom.id not in blocked_ids,
             }
             for classroom in sorted(
                 (
@@ -783,8 +814,24 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
                     if plan.target_semester is not None
                     else []
                 ),
-                key=lambda row: (row.campus_id, row.department, row.name, row.id),
+                # 顯示順序由 sort_order 決定；沒設過的排在最後、退回 id
+                key=lambda row: (
+                    row.sort_order is None,
+                    row.sort_order if row.sort_order is not None else 0,
+                    row.id,
+                ),
             )
+        ],
+        # 草稿期間直接編入的新生：他們沒有來源名單列、因此不是 placement，但已經是
+        # 目標學期班級的成員。套用只處理 placement，所以他們會直接留在新學期。
+        "new_students": [
+            {
+                "member_id": member.id,
+                "classroom_id": member.classroom_id,
+                "name": member.roster_child.name,
+                "album_name": member.roster_child.effective_album_name,
+            }
+            for member in _draft_new_members(plan, db)
         ],
         "classroom_teacher_targets": [
             {

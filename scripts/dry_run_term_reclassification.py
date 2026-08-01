@@ -3,19 +3,56 @@
 編班套用會關閉舊學期、結束全部名冊與編制、在新學期建立對應的班與工作格——
 上線當天一定會做，而且做錯無法回頭。這支腳本讓那一步先在副本上跑過一次。
 
-用法（**只對副本執行**，它會真的寫入）：
+這支腳本**會真的寫入**指定的資料庫（建管理員、重設取樣老師密碼、建立並套用編班），
+名字裡的 dry run 指的是「在副本上預演上線那一步」，不是「不會寫入」。所以：
+
+    - `--db` 必填，不吃環境變數的預設連線
+    - `--apply` 必填，沒帶就只印出將要對哪個檔案做什麼
+    - 目標檔名必須看得出是副本（含 dryrun／copy／tmp／bak 其中之一），
+      避免手滑指到 backend/album_maker.db
+
+用法：
 
     cp backend/album_maker.db /tmp/dryrun.db
-    DATABASE_URL="sqlite:////tmp/dryrun.db"     ALBUM_MAKER_UPLOADS_DIR=/tmp/dryrun_uploads     python scripts/dry_run_term_reclassification.py
+    python scripts/dry_run_term_reclassification.py --db /tmp/dryrun.db --apply
 
 驗的是：草稿涵蓋全部班級與在籍學生、套用後舊學期清空而新學期承接、相本快照與
 學生名單一個位元都沒動、每個新班都有工作格、老師對舊相本可讀不可製作、
 以及沒有殘留的在職編制擋住下一次編班。
 """
+import argparse
 import json
+import os
 import pathlib
 import sys
 
+# 副本檔名必須看得出來是副本；正式檔名不含這些字樣
+COPY_MARKERS = ("dryrun", "dry_run", "copy", "tmp", "temp", "bak", "backup")
+
+
+def _resolve_target() -> pathlib.Path:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", type=pathlib.Path, required=True,
+                        help="要預演的**副本**路徑；這支腳本會寫入它")
+    parser.add_argument("--apply", action="store_true",
+                        help="沒帶就只印出將要做什麼")
+    args = parser.parse_args()
+    if not args.db.is_file():
+        raise SystemExit(f"找不到資料庫：{args.db}")
+    name = args.db.name.lower()
+    if not any(marker in name for marker in COPY_MARKERS):
+        raise SystemExit(
+            f"{args.db.name} 看起來不是副本。這支腳本會關閉學期、結束全部名冊與編制，"
+            f"請先複製一份並在檔名帶上 {COPY_MARKERS[0]} 之類的字樣。"
+        )
+    if not args.apply:
+        print(f"將對 {args.db} 執行完整編班預演（會寫入）。確定的話加 --apply。")
+        raise SystemExit(0)
+    return args.db
+
+
+TARGET_DB = _resolve_target()
+os.environ["DATABASE_URL"] = f"sqlite:///{TARGET_DB.resolve().as_posix()}"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "backend"))
 
 from fastapi.testclient import TestClient  # noqa: E402

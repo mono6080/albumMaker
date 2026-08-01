@@ -1345,3 +1345,111 @@ def test_term_scope_migration_leaves_nothing_behind_when_it_fails(tmp_path):
         assert after.execute("SELECT COUNT(*) FROM classrooms").fetchone()[0] == 1
     finally:
         after.close()
+
+
+def test_student_serial_is_unique_only_where_present(tmp_path):
+    """學號的唯一性只能在有值時要求。
+
+    多數孩子沒有學號（已離園、或未在行政系統登記），全欄位 UNIQUE 會把他們互相排擠。
+    partial index 讓 NULL 可以有很多個，但同一個學號只能屬於一個孩子——與行政系統
+    對帳靠的就是這個保證。
+    """
+    import migrations
+
+    migration_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'student-serial.db').as_posix()}"
+    )
+    try:
+        with migration_engine.begin() as connection:
+            # 升級前的名冊表：沒有 student_serial
+            connection.execute(text("""
+                CREATE TABLE students (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    created_at DATETIME,
+                    album_name VARCHAR
+                )
+            """))
+            connection.execute(text(
+                "INSERT INTO students (id, name) VALUES (1, '甲'), (2, '乙'), (3, '丙')"
+            ))
+
+        with migration_engine.connect() as connection:
+            migrations._add_student_serial_column(connection)
+            migrations._add_student_serial_column(connection)  # 重跑不出錯
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(students)"))
+            }
+            assert "student_serial" in columns
+            # 既有資料不受影響
+            assert connection.execute(
+                text("SELECT COUNT(*) FROM students")
+            ).scalar_one() == 3
+
+        with migration_engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE students SET student_serial = 'DN0000001' WHERE id = 1"
+            ))
+
+        # 同一個學號不可屬於兩個孩子
+        _execute_integrity_error(migration_engine, """
+            UPDATE students SET student_serial = 'DN0000001' WHERE id = 2
+        """)
+
+        # 沒有學號的孩子可以有很多個
+        with migration_engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO students (name, student_serial) VALUES ('丁', NULL), ('戊', NULL)"
+            ))
+            without_serial = connection.execute(text(
+                "SELECT COUNT(*) FROM students WHERE student_serial IS NULL"
+            )).scalar_one()
+            assert without_serial == 4
+    finally:
+        migration_engine.dispose()
+
+
+def test_term_scope_migration_rejects_foreign_key_drift_before_committing(tmp_path):
+    """FK 不一致必須在 commit 前擋下，而且不能留下半套結構。
+
+    這一段會 drop 掉兩張快照表與 mapping 表。commit 之後才發現 FK 壞掉就沒有回頭路，
+    而下次啟動又會因為 classrooms 已有 semester_id 而判定完成——帶著 drift 繼續跑。
+    """
+    import migrations
+
+    database_path = tmp_path / "term-scope-fk-drift.db"
+    _legacy_term_scope_fixture(database_path)
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.begin() as connection:
+            # 工作格指向一個不存在的期別：搬遷後會是貨真價實的 FK 違反
+            connection.execute(text(
+                "UPDATE class_period_work_slots SET semester_period_id = 999999"
+            ))
+
+        with migration_engine.connect() as connection:
+            with pytest.raises(RuntimeError, match="外鍵不一致"):
+                migrations._migrate_classrooms_to_term_scope(connection)
+
+        # 舊結構必須原封不動，才有機會修完再跑一次
+        with migration_engine.connect() as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ))
+            }
+            assert "academic_term_classrooms" in tables, "失敗後 mapping 表不該消失"
+            classroom_columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+            }
+            assert "semester_id" not in classroom_columns, (
+                "失敗後 classrooms 不該留下半套結構，否則重跑會誤判已完成"
+            )
+            assert connection.execute(
+                text("PRAGMA foreign_keys")
+            ).scalar_one() == 1, "失敗路徑必須把 foreign_keys 還原"
+    finally:
+        migration_engine.dispose()

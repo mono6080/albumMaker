@@ -247,6 +247,7 @@ def _serialize_classroom(classroom: Classroom) -> dict:
         "department": classroom.department,
         "name": classroom.name,
         "semester_id": classroom.semester_id,
+        "sort_order": classroom.sort_order,
         "is_current": classroom.is_current,
         "current_teachers": [
             _serialize_teacher_assignment(assignment)
@@ -791,7 +792,12 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
             Campus.is_active.is_(True),
         )
     )
-    classrooms = query.distinct().order_by(Campus.name, Classroom.name).all()
+    classrooms = query.distinct().order_by(
+        Campus.name,
+        Classroom.sort_order.is_(None),
+        Classroom.sort_order,
+        Classroom.id,
+    ).all()
     return {
         "classrooms": [
             _serialize_scoped_classroom(classroom) for classroom in classrooms
@@ -937,7 +943,6 @@ def _ensure_current_term_classroom_grid(
     return classroom
 
 
-@organization_mutation
 def _resolve_classroom_target_semester(db: Session, semester_id: int | None) -> Semester:
     """班級可以建在目前學期，或建在編班草稿的目標學期。
 
@@ -966,9 +971,25 @@ def _resolve_classroom_target_semester(db: Session, semester_id: int | None) -> 
                 "message": "只能在目前學期或編班草稿的學期新增班級",
             },
         )
+    if semester.status == "draft":
+        # 草稿學期唯一的用途是承載編班計畫。沒有計畫的草稿學期建出來的班
+        # 不在園所總覽裡，也不會被任何套用流程處理，是永遠的孤兒。
+        has_plan = db.query(TermReclassificationPlan.id).filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
+        ).first()
+        if has_plan is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "draft_semester_has_no_plan",
+                    "message": "這個草稿學期沒有編班計畫，不能在裡面建立班級",
+                },
+            )
     return semester
 
 
+@organization_mutation
 def create_classroom(
     db: Session,
     *,
@@ -998,6 +1019,17 @@ def create_classroom(
             },
         )
     target_semester = _resolve_classroom_target_semester(db, semester_id)
+    # 進到鎖之後再確認一次：上面的檢查發生在 BEGIN IMMEDIATE 之前，
+    # 期間另一個 transaction 可能剛把這個分校停用。
+    db.refresh(campus)
+    if not campus.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "active_classroom_requires_active_campus",
+                "message": "使用中的班級只能隸屬使用中的分校",
+            },
+        )
     _assert_classroom_name_available(
         db,
         semester_id=target_semester.id,
@@ -1015,17 +1047,74 @@ def create_classroom(
     db.flush()
     # 草稿學期的工作格在套用時才建；只有目前學期需要立刻補格
     _ensure_current_term_classroom_grid(db, classroom)
+    _ensure_draft_plan_covers_classroom(db, classroom, target_semester)
     db.commit()
     db.refresh(classroom)
     return _serialize_classroom(classroom)
 
 
-@organization_mutation
-def delete_classroom(db: Session, classroom_id: int) -> dict:
-    """移除編班草稿裡多開的班。
+def _ensure_draft_plan_covers_classroom(
+    db: Session,
+    classroom: Classroom,
+    semester: Semester,
+) -> None:
+    """新學期多開的班也要進編班計畫，否則它永遠編不到老師。
 
-    只限草稿學期，而且必須是空的：一旦有名冊、編制、工作格或相本，刪掉就會連帶
-    抹掉那些歸屬。目前學期與已結束學期的班一律不可刪——班是歷史的一部分。
+    老師編制是逐 `TermClassroomPlan` 送出的，而計畫只在建立草稿的那一刻照目前的班
+    長出 plan 列。少了這一步，後加的班在老師編制頁面根本不會出現，套用後成為無人
+    帶班的空班——而且整個過程不會報錯。
+    """
+    if semester.status != "draft":
+        return
+    plan = (
+        db.query(TermReclassificationPlan)
+        .filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
+        )
+        .first()
+    )
+    if plan is None:
+        return
+    db.add(TermClassroomPlan(plan_id=plan.id, classroom_id=classroom.id))
+    db.flush()
+
+
+def roster_editable(db: Session, classroom: Classroom) -> bool:
+    """這個班的名單能不能動。
+
+    目前學期的班當然可以。草稿學期的班在**有編班草稿**時也可以——新生（名冊裡還沒有
+    的孩子）只有這條路能進新學期：套用時只處理 placement，不會碰已經在班上的成員，
+    所以他們會原封不動留在新學期。少了這條，新生得等套用完才能補建，那段期間沒有班、
+    也沒有相本。
+    """
+    if classroom.is_current:
+        return True
+    semester = classroom.semester
+    if semester is None or semester.status != "draft":
+        return False
+    return (
+        db.query(TermReclassificationPlan.id)
+        .filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
+        )
+        .first()
+        is not None
+    )
+
+
+def delete_draft_classroom_member(
+    db: Session,
+    classroom_id: int,
+    member_id: int,
+) -> dict:
+    """把草稿學期班級上的新生整列刪掉——只有草稿學期可以這樣做。
+
+    為什麼是真的刪、不是把區間結束掉：這位新生從來沒有在任何一個學期在籍過，沒有歷史
+    要保留。而且 `classroom_members` 對 `classrooms` 的外鍵沒有 CASCADE、移除班級又會
+    數所有成員列（含已結束的），留著空殼會讓那個班永遠刪不掉。名冊項也一起收回——
+    `batch_add_classroom_members` 每次都新建一筆，留著的話再加一次就是重複的孩子。
     """
     classroom = get_classroom_or_404(classroom_id, db)
     semester = classroom.semester
@@ -1033,10 +1122,69 @@ def delete_classroom(db: Session, classroom_id: int) -> dict:
         raise HTTPException(
             status_code=409,
             detail={
-                "code": "classroom_not_in_draft_semester",
-                "message": "只能移除編班草稿學期裡的班級",
+                "code": "member_not_in_draft_semester",
+                "message": "只有草稿學期的新生可以直接移除",
             },
         )
+    member = get_class_roster_member_or_404(member_id, classroom_id, db)
+    placements = db.query(TermStudentPlacement.id).filter(
+        TermStudentPlacement.source_membership_id == member.id
+    ).count()
+    if placements:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "member_is_a_placement_source",
+                "message": "這一列是編班計畫的來源名單，不可直接移除",
+            },
+        )
+    roster_child_id = int(member.roster_child_id)
+    with organization_write_transaction(db):
+        db.delete(member)
+        db.flush()
+        still_enrolled = db.query(ClassroomMember.id).filter(
+            ClassroomMember.roster_child_id == roster_child_id
+        ).count()
+        linked_projects = db.query(ProjectStudent.id).filter(
+            ProjectStudent.roster_child_id == roster_child_id
+        ).count()
+        if not still_enrolled and not linked_projects:
+            child = db.get(Student, roster_child_id)
+            if child is not None:
+                db.delete(child)
+        db.commit()
+    return {"deleted_member_id": member_id}
+
+
+def blocked_classroom_ids(db: Session, classroom_ids: list[int]) -> set[int]:
+    """一次算出「不能移除」的班級集合。
+
+    逐班呼叫 `classroom_removal_blockers` 要五個 COUNT，38 班就是 190 次查詢；
+    序列化整份編班計畫時每次都跑一遍，不划算。這裡改成五個 IN 查詢。
+    """
+    if not classroom_ids:
+        return set()
+    blocked: set[int] = set()
+    for model, column in (
+        (ClassroomMember, ClassroomMember.classroom_id),
+        (ClassroomTeacher, ClassroomTeacher.classroom_id),
+        (ClassPeriodWorkSlot, ClassPeriodWorkSlot.classroom_id),
+        (Project, Project.classroom_id),
+        (TermStudentPlacement, TermStudentPlacement.target_classroom_id),
+    ):
+        blocked.update(
+            row[0]
+            for row in db.query(column).filter(column.in_(classroom_ids)).distinct()
+            if row[0] is not None
+        )
+    return blocked
+
+
+def classroom_removal_blockers(db: Session, classroom_id: int) -> dict[str, int]:
+    """回傳擋住移除的東西與筆數；空 dict 代表可以移除。
+
+    前端的移除按鈕也讀這個結果（經由計畫序列化的 `can_remove`），規則只住在這裡一份。
+    """
     blockers = {
         "members": db.query(ClassroomMember.id).filter(
             ClassroomMember.classroom_id == classroom_id
@@ -1053,11 +1201,75 @@ def delete_classroom(db: Session, classroom_id: int) -> dict:
         "placements": db.query(TermStudentPlacement.id).filter(
             TermStudentPlacement.target_classroom_id == classroom_id
         ).count(),
-        "classroom_plans": db.query(TermClassroomPlan.id).filter(
-            TermClassroomPlan.classroom_id == classroom_id
-        ).count(),
     }
-    occupied = {key: count for key, count in blockers.items() if count}
+    return {key: count for key, count in blockers.items() if count}
+
+
+@organization_mutation
+def reorder_classrooms(db: Session, semester_id: int, classroom_ids: list[int]) -> dict:
+    """重排一個學期內班級的顯示順序。
+
+    要求送出**該學期完整的班級 id 集合**：只送一部分的話，沒送到的班要排哪裡沒有答案，
+    與其自己猜不如拒絕。已結束或已取消的學期不可重排——那是歷史。
+    """
+    semester = db.get(Semester, semester_id)
+    if semester is None:
+        raise HTTPException(status_code=404, detail="找不到學期")
+    if semester.status not in (*CURRENT_SEMESTER_STATUSES, "draft"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "semester_not_open_for_classrooms",
+                "message": "只能重排目前學期或編班草稿學期的班級順序",
+            },
+        )
+    if len(classroom_ids) != len(set(classroom_ids)):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "duplicate_classroom_id", "message": "班級 id 不可重複"},
+        )
+    classrooms = {
+        classroom.id: classroom
+        for classroom in db.query(Classroom).filter(
+            Classroom.semester_id == semester_id
+        )
+    }
+    if set(classroom_ids) != set(classrooms):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "incomplete_classroom_order",
+                "message": "必須送出這個學期完整的班級順序",
+            },
+        )
+    for position, classroom_id in enumerate(classroom_ids):
+        classrooms[classroom_id].sort_order = position
+    db.commit()
+    return {"semester_id": semester_id, "classroom_ids": classroom_ids}
+
+
+@organization_mutation
+def delete_classroom(db: Session, classroom_id: int) -> dict:
+    """移除編班草稿裡多開的班。
+
+    只限草稿學期，而且必須沒有人編進去：一旦有名冊、編制、工作格或相本，刪掉就會
+    連帶抹掉那些歸屬。目前學期與已結束學期的班一律不可刪——班是歷史的一部分。
+
+    草稿的 `TermClassroomPlan` 不算佔用。草稿學期的班**每一個**都有 plan 列（建立
+    草稿時一對一長出來的），把它當擋門等於一個班都刪不掉，包括這學期收掉、下學期
+    不再開的班。真正該擋的是 `placements`——有學生指著它才是有人編進去。
+    """
+    classroom = get_classroom_or_404(classroom_id, db)
+    semester = classroom.semester
+    if semester is None or semester.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "classroom_not_in_draft_semester",
+                "message": "只能移除編班草稿學期裡的班級",
+            },
+        )
+    occupied = classroom_removal_blockers(db, classroom_id)
     if occupied:
         raise HTTPException(
             status_code=409,
@@ -1067,6 +1279,10 @@ def delete_classroom(db: Session, classroom_id: int) -> dict:
                 "counts": occupied,
             },
         )
+    # plan 列的 FK 是 ON DELETE CASCADE，但這裡明寫比較不依賴 pragma 狀態
+    db.query(TermClassroomPlan).filter(
+        TermClassroomPlan.classroom_id == classroom_id
+    ).delete(synchronize_session=False)
     db.delete(classroom)
     db.commit()
     return {"deleted_classroom_id": classroom_id}
@@ -1135,7 +1351,7 @@ def batch_add_classroom_members(
     members: list[dict],
 ) -> dict:
     classroom = get_classroom_or_404(classroom_id, db)
-    if not classroom.is_current or not classroom.campus.is_active:
+    if not roster_editable(db, classroom) or not classroom.campus.is_active:
         raise HTTPException(status_code=409, detail="只能編輯使用中的分校與班級")
     validate_student_batch_size(len(members))
     normalized_names = [normalize_student_name(item["name"]) for item in members]

@@ -34,7 +34,8 @@ Campus (id, name UNIQUE, is_active, created_at, updated_at)
 
 OrganizationSupervisorAssignment (campus_id, department nullable, supervisor_id nullable, supervisor_name_snapshot, started_at/ended_at, end_reason, actor snapshots)
 
-Classroom (id, semester_id FK→Semester, campus_id FK→Campus, department, name)
+Classroom (id, semester_id FK→Semester, campus_id FK→Campus, department, name,
+           sort_order nullable〔顯示順序〕)
   ├─ UNIQUE(semester_id, campus_id, department, name)  ← 班級身分＝學期×分校×部門×班名
   ├─ is_current（property）：所屬學期是 imported/active；班級沒有自己的啟用旗標
   ├─ roster_members → ClassroomMember[]
@@ -70,7 +71,8 @@ ProjectStudent (id, project_id FK, name, album_name nullable, order_index, pages
          created_at, updated_at)
   └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
 
-Student (id, name〔正規化後、不設 UNIQUE〕, album_name nullable, created_at)
+Student (id, name〔正規化後、不設 UNIQUE〕, album_name nullable,
+         student_serial nullable〔行政系統學號〕, created_at)
   — 園所層級孩子名冊與已歸班相本的唯一稱呼來源
   ├─ students → ProjectStudent.roster_child_id
   └─ classroom_members → ClassroomMember.roster_child_id
@@ -194,6 +196,29 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
   ledger rows；trigger 阻止繞過。歸班 apply 將 ledger、resolved links、可選的全量目前名單與
   Project 組織快照放在同一 transaction，`seed_current_roster` 不支援 subset。沒有任何
   ProjectStudent 快照的空 legacy Project 不可歸班；管理員須封存後從班級目前名單重新建立相本。
+
+## 班級的顯示順序
+
+- `Classroom.sort_order` 是園所自己決定的排列順序，**推導不出來**：班名是「一二階／三階／
+  十階」這種中文數字，字面排序會排成 `一二階 七階 三階 九階 五階…`，與階段順序無關。
+- 可為 `NULL`（既有資料），排序時退回 `id`：`ORDER BY sort_order IS NULL, sort_order, id`。
+- 重排走 `PUT /organization/semesters/{id}/classroom-order`，**必須送出該學期完整的班級集合**
+  ——只送一部分的話，沒送到的班要排哪裡沒有答案。已結束或已取消的學期不可重排。
+- 順序在**同一分校內**才有意義：班級的分校不可變更，編班看板也只允許同校內調整。
+
+## 名冊與行政系統的對帳鍵
+
+- `Student.student_serial` 是行政系統學號，**與行政系統對帳的唯一鍵**。姓名不能當鍵：
+  2026-08 就更正過 31 筆打錯的姓名與 28 筆跟著錯的稱呼，而學號在行政系統內唯一且不變。
+- 可為 `NULL`——已離園、或從未在行政系統登記過的孩子沒有學號。唯一性因此是
+  partial index `ux_students_student_serial ... WHERE student_serial IS NOT NULL`：
+  NULL 可以有很多個，同一個學號只能屬於一個孩子。契約由
+  `tests/test_organization_schema_migrations.py::test_student_serial_is_unique_only_where_present` 釘住。
+- 回填由 `scripts/backfill_student_serials.py --mapping <對照表> --db <資料庫>` 執行；學號值不同時
+  **不覆寫**，列出來讓人決定——學號變了代表行政系統換了身分，不是腳本該自己決定的事。
+- 身分證字號**不進本系統**。它與學號在行政系統內嚴格一對一，對帳能力完全相同，但把
+  可辨識個人的政府識別號放進會被複製與備份的相本資料庫，是沒有換到任何東西的風險。
+  需要更強的核對時，在一次性腳本裡直接讀行政系統的身分證交叉驗證即可。
 
 ## 相本稱呼與姓名變數
 

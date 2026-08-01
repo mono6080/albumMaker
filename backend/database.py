@@ -141,7 +141,7 @@ class Campus(Base):
     classrooms = relationship(
         "Classroom",
         back_populates="campus",
-        order_by="Classroom.id",
+        order_by="(Classroom.sort_order.is_(None), Classroom.sort_order, Classroom.id)",
     )
     supervisor_assignments = relationship(
         "OrganizationSupervisorAssignment",
@@ -364,7 +364,7 @@ class Semester(Base):
         "Classroom",
         back_populates="semester",
         cascade="all, delete-orphan",
-        order_by="Classroom.id",
+        order_by="(Classroom.sort_order.is_(None), Classroom.sort_order, Classroom.id)",
     )
     reclassification_plan = relationship(
         "TermReclassificationPlan",
@@ -449,6 +449,10 @@ class Classroom(Base):
     campus_id = Column(Integer, ForeignKey("campuses.id"), nullable=False)
     name = Column(String, nullable=False)
     department = Column(String, nullable=False)
+    # 顯示順序：班名是「一二階／三階／十階」這種中文數字，字面排序與階段順序無關
+    # （字面排會排成 一二階 七階 三階 九階 五階…）。順序是園所自己的意思，
+    # 沒有可靠的推導方式，只能存下來。NULL 排在最後，沿用 id 當次序。
+    sort_order = Column(Integer, nullable=True)
 
     semester = relationship("Semester", back_populates="classrooms")
     campus = relationship("Campus", back_populates="classrooms")
@@ -868,10 +872,21 @@ class Student(Base):
     name 不設 UNIQUE，因為園所內可能有同名不同人。
     """
     __tablename__ = "students"
+    __table_args__ = (
+        Index(
+            "ux_students_student_serial",
+            "student_serial",
+            unique=True,
+            sqlite_where=text("student_serial IS NOT NULL"),
+        ),
+    )
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, index=True)
     # 已歸班相本的相本稱呼唯一來源；所有既有與未來相本都即時引用。
     album_name = Column(String, nullable=True)
+    # 行政系統學號：與行政系統對帳的唯一鍵。姓名會打錯（2026-08 就更正過 31 筆），
+    # 學號不會。可為空——已離園、或從未在行政系統登記過的孩子沒有學號。
+    student_serial = Column(String, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     students = relationship("ProjectStudent", back_populates="roster_child")
     class_roster_members = relationship(

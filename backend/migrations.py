@@ -222,6 +222,8 @@ def run_migrations():
         _rebuild_term_plan_classroom_foreign_keys(connection)
         _add_term_scoped_classroom_indexes(connection)
         _add_term_scoped_classroom_freeze_triggers(connection)
+        _add_student_serial_column(connection)
+        _add_classroom_sort_order_column(connection)
 
 
 def _retire_legacy_project_classroom_triggers(connection):
@@ -318,6 +320,10 @@ def _rebuild_term_plan_classroom_foreign_keys(connection):
             connection.execute(text(f"DROP TABLE {table}"))
             connection.execute(text(f"ALTER TABLE {table}_new RENAME TO {table}"))
         connection.commit()
+    except Exception:
+        # 先 rollback 再切回 pragma：SQLite 在 active transaction 內會忽略切換
+        connection.rollback()
+        raise
     finally:
         connection.execute(text("PRAGMA foreign_keys=ON"))
 
@@ -787,13 +793,24 @@ def _migrate_classrooms_to_term_scope(connection):
         ))
 
         _cancel_draft_term_plans(connection)
+
+        # 外鍵檢查必須在 commit 之前：這一段已經 drop 掉兩張快照表與 mapping 表，
+        # commit 之後就沒有回頭路，而重跑又會因為 classrooms 已有 semester_id 而
+        # 直接判定完成——帶著 FK drift 繼續啟動。
+        # `foreign_keys=OFF` 期間 SQLite 不會即時擋，但 PRAGMA foreign_key_check
+        # 仍會掃出違反，所以在這裡查得到。
+        violations = list(connection.execute(text("PRAGMA foreign_key_check")))
+        if violations:
+            raise RuntimeError(f"學期範圍班級遷移後外鍵不一致：{violations[:5]}")
+
         connection.commit()
+    except Exception:
+        # 先 rollback 再切回 pragma：SQLite 在 active transaction 內會忽略
+        # foreign_keys 的切換，順序反了等於沒切回來。
+        connection.rollback()
+        raise
     finally:
         connection.execute(text("PRAGMA foreign_keys=ON"))
-
-    violations = list(connection.execute(text("PRAGMA foreign_key_check")))
-    if violations:
-        raise RuntimeError(f"學期範圍班級遷移後外鍵不一致：{violations[:5]}")
 
 
 def _add_semester_reporting_schema(connection):
@@ -2448,6 +2465,45 @@ def _add_roster_child_album_name_column(connection):
             "ALTER TABLE students ADD COLUMN album_name VARCHAR"
         ))
         connection.commit()
+
+
+def _add_classroom_sort_order_column(connection):
+    """為班級加入顯示順序。
+
+    班名是「一二階／三階／十階」這種中文數字，字面排序排出來是
+    一二階 七階 三階 九階 五階…，與階段順序無關。順序是園所自己的意思，
+    推導不出來，只能存。既有資料留 NULL，排序時退回 id。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    if "sort_order" not in existing_columns:
+        connection.execute(text(
+            "ALTER TABLE classrooms ADD COLUMN sort_order INTEGER"
+        ))
+        connection.commit()
+
+
+def _add_student_serial_column(connection):
+    """為名冊加入行政系統學號，並以 partial unique index 擋重複。
+
+    唯一性只能在「有值」時要求：沒有學號的孩子（已離園、或未在行政系統登記）留 NULL，
+    SQLite 的一般 UNIQUE 對多個 NULL 本來就放行，但寫成 partial index 才與 ORM 一致。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(students)"))
+    }
+    if "student_serial" not in existing_columns:
+        connection.execute(text(
+            "ALTER TABLE students ADD COLUMN student_serial VARCHAR"
+        ))
+    connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_students_student_serial "
+        "ON students(student_serial) WHERE student_serial IS NOT NULL"
+    ))
+    connection.commit()
 
 
 def _migrate_assigned_album_names_to_roster_authority(connection):
