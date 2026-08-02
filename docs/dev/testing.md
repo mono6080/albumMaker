@@ -106,6 +106,18 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
   `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
   一併移除。
+  **e2e 只留「非它不可」的**：跑第二顆瀏覽器引擎只在畫布渲染與幾何、觸控手勢、縮圖與
+  裁切版面這些地方買得到訊號，所以 webkit 只跑
+  `template-editor`／`template-editor-mobile`／`illustrator-groups`／`editor-multi-transform`／
+  `student-photos`／`mobile-student-edit`／`term-placement-board`；純表單 CRUD 只跑 chromium。
+  即使在上述檔案裡，行為與引擎無關的那幾條（草稿保留、儲存對帳、undo 合併——規則已由
+  `utils/layoutHistoryModel` 的單元測試釘住）也用 `skipNonBrowserSensitive(browserName)`
+  標成 chromium-only。
+  壓力／效能測試（`preview-switching`、`preview-interrupt-recovery`）靠大量固定等待製造
+  真實時序，本質上就是慢，預設不跑；動到預覽、頁面切換或渲染排程時用
+  `npm run test:e2e:soak` 手動跑。
+  2026-08 依這套規則整理後：**126 條 14 分鐘 → 96 條 2.8 分鐘**（工作量 653s → 約 250s）。
+
   **競態邏輯往下搬**：「最後一個請求才算數」（連續切換選項時，晚回來的舊回應不可以蓋掉
   新選擇）抽在 `src/utils/latestRequest.js`，由 `tests/unit/latest-request.test.mjs` 用
   可控 promise 精確排出交錯順序來驗；`TeacherOverview` 與 `SemesterExport` 都用它。

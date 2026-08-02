@@ -4,6 +4,7 @@ import "./editor-fonts.test.mjs";
 import "./photos.test.mjs";
 import "./photo-save.test.mjs";
 import "./latest-request.test.mjs";
+import "./layout-history.test.mjs";
 import "./preview-cache.test.mjs";
 import "./camera.test.mjs";
 import "./render.test.mjs";

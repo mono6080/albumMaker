@@ -24,3 +24,14 @@ export const test = base.extend({
 });
 
 export { expect };
+
+
+// 只在 chromium 跑：這條測試驗的是與瀏覽器引擎無關的行為（草稿保留、儲存對帳、
+// undo 合併），規則本身已由 tests/unit 釘住，e2e 只是確認畫面有接對。
+// 第二顆引擎在這裡買不到訊號，只會讓每次 push 多等。
+export function skipNonBrowserSensitive(browserName) {
+  test.skip(
+    browserName === "webkit",
+    "行為與瀏覽器引擎無關，規則已由單元測試覆蓋（見 utils/layoutHistoryModel）",
+  );
+}

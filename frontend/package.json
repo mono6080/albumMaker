@@ -13,7 +13,8 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:reuse": "node scripts/playwright-reuse.mjs",
     "test:bundle-budget": "node ../scripts/check_frontend_bundle_budget.mjs dist",
-    "test:render-parity": "node ../scripts/check_render_parity.mjs && node ../scripts/check_render_canvas_parity.mjs && node ../scripts/check_text_layout_parity.mjs && node ../scripts/check_text_raster_parity.mjs"
+    "test:render-parity": "node ../scripts/check_render_parity.mjs && node ../scripts/check_render_canvas_parity.mjs && node ../scripts/check_text_layout_parity.mjs && node ../scripts/check_text_raster_parity.mjs",
+    "test:e2e:soak": "node scripts/run-e2e-soak.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

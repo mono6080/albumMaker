@@ -4,6 +4,49 @@ const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === "1";
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
 
+
+// 只有「瀏覽器引擎差異真的會咬人」的地方才值得跑第二顆引擎：畫布渲染與幾何、
+// 觸控手勢、縮圖與裁切的版面計算。純表單 CRUD 在 webkit 再跑一次，2026-08 的
+// 實測是 371 秒的 e2e 時間裡零個產品 bug——買到的只有瀏覽器自己的崩潰與逾時。
+const BROWSER_SENSITIVE_SPECS = [
+  "**/template-editor.spec.js",
+  "**/template-editor-mobile.spec.js",
+  "**/illustrator-groups.spec.js",
+  "**/editor-multi-transform.spec.js",
+  "**/student-photos.spec.js",
+  "**/mobile-student-edit.spec.js",
+  "**/term-placement-board.spec.js",
+];
+
+// 壓力／效能測試：靠大量固定等待製造真實時序，本質上就是慢（兩支合計約 95 秒），
+// 而且每次 push 都跑並不會更早發現問題。預設不跑，用 npm run test:e2e:soak 手動觸發。
+const SOAK_SPECS = [
+  "**/preview-switching.spec.js",
+  "**/preview-interrupt-recovery.spec.js",
+];
+
+function buildProjects() {
+  if (process.env.E2E_SOAK === "1") {
+    return [{
+      name: "soak",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: SOAK_SPECS,
+    }];
+  }
+  return [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: SOAK_SPECS,
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+      testMatch: BROWSER_SENSITIVE_SPECS,
+    },
+  ];
+}
+
 const config = {
   testDir: "./tests/e2e",
   timeout: 60_000,
@@ -26,16 +69,7 @@ const config = {
     // 真的失敗時第二次仍然留得到 trace 可以查。
     trace: "on-first-retry",
   },
-  projects: [
-    {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "webkit",
-      use: { ...devices["Desktop Safari"] },
-    },
-  ],
+  projects: buildProjects(),
 };
 
 if (!skipWebServer) {
