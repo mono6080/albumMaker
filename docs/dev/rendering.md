@@ -137,6 +137,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   commit，因此純 pan／pinch frame 不得重 render TemplateEditor／Artwork。Camera、sheet、responsive
   panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload；手勢尾端的
   synthetic tap 也不得清除既有選取。此契約由 `template-editor-mobile.spec.js` 的 render probe 釘住。
+- 分頁草稿與 undo/redo 的狀態機在 `utils/layoutHistoryModel.js`（純模組、不含 React），
+  `hooks/useLayoutHistory.js` 只是把結果接到畫面狀態的薄層。四張表：每頁的草稿版面、
+  伺服器基準版本、undo/redo 堆疊、以及連續同類操作的合併群組。三條容易寫錯而且**不會報錯**
+  的規則寫在那裡並由 `tests/unit/layout-history.test.mjs` 釘住：非同步上傳的結果要寫回
+  **發起上傳的那一頁**而不是使用者切過去的那一頁；上傳結果要疊在最新草稿上而不是覆蓋回基準
+  版本；儲存請求還在飛時又編輯過的草稿必須保留並搬到正式 page id（比的是**物件 identity**，
+  不是內容）。
 - TemplateEditor 只協調 route 與 responsive composition；selection、clipboard、shortcuts、素材分析、
   文件／完整快照 CAS、離頁保護分別由 `useEditorSelection.js`、`useLayoutClipboard.js`、
   `useEditorShortcuts.js`、`useMaterialTextSuggestion.js`、`useTemplateEditorDocument.js`、
