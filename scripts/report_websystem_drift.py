@@ -109,6 +109,23 @@ def load_album_state(db: sqlite3.Connection) -> dict:
     ):
         staffing[(row["campus"], row["room"], row["username"])] = dict(row)
 
+    # 有製作中相本的孩子：離園要改走待審，不能自動結束在班區間——老師可能正在做他的相本
+    in_progress = {
+        row["student_serial"]
+        for row in db.execute(
+            """
+            select distinct s.student_serial
+              from project_students ps
+              join projects pr on pr.id = ps.project_id
+              join students s on s.id = ps.roster_child_id
+             where pr.deleted_at is null
+               and pr.completed_at is null
+               and ps.completed_at is null
+               and s.student_serial is not null
+            """
+        )
+    }
+
     serials = {
         row["student_serial"]: dict(row)
         for row in db.execute(
@@ -126,6 +143,7 @@ def load_album_state(db: sqlite3.Connection) -> dict:
         "staffing": staffing,
         "serials": serials,
         "accounts": accounts,
+        "in_progress": in_progress,
     }
 
 
@@ -237,10 +255,11 @@ def diff(album: dict, upstream: dict) -> dict:
             ))
     for serial, here in sorted(album["members"].items()):
         if serial not in upstream["members"]:
-            auto.append((
-                "名冊：應離園",
-                f"{here['name']}（{serial}）目前在 {here['campus']}／{here['room']}",
-            ))
+            detail = f"{here['name']}（{serial}）目前在 {here['campus']}／{here['room']}"
+            if serial in album.get("in_progress", set()):
+                review.append(("名冊：應離園但有製作中相本", detail))
+            else:
+                auto.append(("名冊：應離園", detail))
 
     # ── 老師編制（一律待審：會即時改變四處權限判斷）────────────────────────
     for key, up_row in sorted(upstream["staffing"].items()):
