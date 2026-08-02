@@ -1190,7 +1190,9 @@ def test_same_class_name_across_semesters_keeps_each_cohort_separate():
             f"/api/projects/{next_project_id}"
         ).json()["permissions"]["can_edit"] is True
 
-        # 上一屆的老師仍讀得到自己帶過的那屆，但不會因為班名相同而取得新一屆
+        # 上一屆的老師仍讀得到自己帶過的那屆，但不會因為班名相同而取得新一屆。
+        # 那本還沒完成，所以她仍然改得動——學期在日曆上結束時相本通常還沒做完，
+        # 2026-08 首次切換學期時 114 下就有 40 本仍在製作、當天還有人在編。
         client.cookies.clear()
         login(client, previous_teacher["username"], previous_password)
         assert _listed_project_ids(client) == {previous_project_id}
@@ -1198,8 +1200,16 @@ def test_same_class_name_across_semesters_keeps_each_cohort_separate():
             f"/api/projects/{previous_project_id}"
         ).json()["permissions"]
         assert previous_permissions["can_read"] is True
-        assert previous_permissions["can_edit"] is False
+        assert previous_permissions["can_edit"] is True, "未完成的相本要讓原老師做完"
         assert_status(client.get(f"/api/projects/{next_project_id}"), 403)
+
+        # 但標記完成之後就回到鎖定：這是「做完自己開始的」與「永久後門」的界線
+        assert_status(client.post(f"/api/projects/{previous_project_id}/complete"), 200)
+        completed_permissions = client.get(
+            f"/api/projects/{previous_project_id}"
+        ).json()["permissions"]
+        assert completed_permissions["can_read"] is True
+        assert completed_permissions["can_edit"] is False, "完成後不該再靠跨期沿用改得動"
 
         # 「我的班級」只認目前學期的編制
         my_classrooms = client.get("/api/organization/my-classrooms")

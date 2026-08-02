@@ -20,9 +20,20 @@ Decision：名冊成員與老師編制改掛學期班級，區間欄位（`start
 `academic_term_classroom_teachers` 兩張快照表隨之移除——班本身就只活一個學期，不需要
 再快照一次自己。
 
-Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，**製作**權 =「目前學期的指
-派」。這讓 [organization-roster-management-v1](organization-roster-management-v1.md) 的
-讀寫分離變成模型的自然結果，不需要任何學期區間比對。
+Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，**製作**權 =「目前學期的指派，
+**加上因學期輪替而結束、且相本尚未完成的班級**」。這讓
+[organization-roster-management-v1](organization-roster-management-v1.md) 的讀寫分離
+變成模型的自然結果，不需要任何學期區間比對。
+
+> 製作權那半條是 2026-08-03 補的。原本只認「目前學期的指派」，假設「學期結束＝相本都
+> 做完了」。上線前查正式站才發現不成立：114 下有 **40 本仍在製作**（202605 二十一本、
+> 202606 十二本、202607 七本），最近更新是切換當天，多數完成度是 0/10。套用編班會在那
+> 一瞬間讓這 40 本對老師變成唯讀，而不套用又會擋住整個新學期。
+>
+> 認的是**編制的結束原因**而不是「曾經任教」：`term_reassignment`（學期輪替帶來的）
+> 放行，`assignment_replaced`（被管理員換掉）仍然擋住——否則撤銷指派就形同無效。
+> 相本標記完成後回到鎖定，需要主管或 admin 退回，所以不是永久後門。
+> 範圍在 `organization_scope_service.teacher_carryover_classroom_ids`。
 
 ## Problem
 

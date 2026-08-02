@@ -41,6 +41,9 @@ class OrganizationReadScope:
     # 曾經或現在被指派的所有學期班級：讀取權。不進 classroom_ids，
     # 「我的班級」與建立相本仍只看目前學期
     teacher_readable_classroom_ids: tuple[int, ...] = ()
+    # 目前編制，加上「只因為學期輪替而結束」的編制：讓老師做完自己開始、
+    # 但跨過學期界線還沒完成的相本。被管理員移出班級（assignment_replaced）不算。
+    teacher_carryover_classroom_ids: tuple[int, ...] = ()
     supervisor_classroom_ids: tuple[int, ...] = ()
     has_supervisor_assignment: bool = False
     supervisor_scope_keys: tuple[SupervisorScopeKey, ...] = ()
@@ -170,6 +173,45 @@ def _load_teacher_readable_classroom_ids(
     return tuple(sorted(row[0] for row in rows))
 
 
+def _load_teacher_carryover_classroom_ids(
+    db: Session,
+    teacher_id: int,
+) -> tuple[int, ...]:
+    """目前在編制、或編制只因為學期輪替而結束的班級。
+
+    學期在日曆上結束時相本通常還沒做完——2026-08 首次切換學期時，114 下有 40 本仍在
+    製作、當天還有人在編。製作權若只看目前學期的編制，那些相本會在套用編班的瞬間
+    對老師變成唯讀。
+
+    但「被移出班級」必須仍然擋得住，所以認的是結束原因而不是「曾經任教」：
+    `term_reassignment` 是學期輪替帶來的，`assignment_replaced` 是有人刻意把她換掉。
+    """
+    rows = (
+        db.query(ClassroomTeacher.classroom_id)
+        .filter(
+            ClassroomTeacher.teacher_id == teacher_id,
+            or_(
+                ClassroomTeacher.ended_at.is_(None),
+                ClassroomTeacher.end_reason == "term_reassignment",
+            ),
+        )
+        .distinct()
+        .all()
+    )
+    return tuple(sorted(row[0] for row in rows))
+
+
+def project_in_teacher_carryover_scope(
+    project: Project,
+    scope: OrganizationReadScope,
+) -> bool:
+    """相本所屬班級是否在「目前編制或僅因學期輪替而結束」的範圍內。"""
+    return (
+        project.classroom_id is not None
+        and project.classroom_id in scope.teacher_carryover_classroom_ids
+    )
+
+
 def has_active_organization_supervisor_assignment(
     db: Session,
     user_id: int,
@@ -191,13 +233,16 @@ def build_organization_read_scope(
             sorted(row[0] for row in _current_term_classroom_query(db).all())
         )
         return OrganizationReadScope(
-            "admin",
-            classroom_ids,
+            viewer_role="admin",
+            classroom_ids=classroom_ids,
             has_supervisor_assignment=True,
         )
     if current_user.role in {"teacher", "supervisor"}:
         teacher_classroom_ids = _load_teacher_classroom_ids(db, current_user.id)
         teacher_readable_classroom_ids = _load_teacher_readable_classroom_ids(
+            db, current_user.id
+        )
+        teacher_carryover_classroom_ids = _load_teacher_carryover_classroom_ids(
             db, current_user.id
         )
         supervisor_scope_keys = _load_supervisor_scope_keys(db, current_user.id)
@@ -208,16 +253,18 @@ def build_organization_read_scope(
         classroom_ids = tuple(sorted(
             set(teacher_classroom_ids) | set(supervisor_classroom_ids)
         ))
+        # 一律具名：這個 dataclass 的欄位中間插過新項目，位置參數會靜靜地錯位
         return OrganizationReadScope(
-            current_user.role,
-            classroom_ids,
-            teacher_classroom_ids,
-            teacher_readable_classroom_ids,
-            supervisor_classroom_ids,
-            has_supervisor_assignment,
-            supervisor_scope_keys,
+            viewer_role=current_user.role,
+            classroom_ids=classroom_ids,
+            teacher_classroom_ids=teacher_classroom_ids,
+            teacher_readable_classroom_ids=teacher_readable_classroom_ids,
+            teacher_carryover_classroom_ids=teacher_carryover_classroom_ids,
+            supervisor_classroom_ids=supervisor_classroom_ids,
+            has_supervisor_assignment=has_supervisor_assignment,
+            supervisor_scope_keys=supervisor_scope_keys,
         )
-    return OrganizationReadScope(current_user.role, ())
+    return OrganizationReadScope(viewer_role=current_user.role, classroom_ids=())
 
 
 def build_organization_supervisor_scope(
@@ -237,8 +284,8 @@ def build_organization_supervisor_scope(
         supervisor_scope_keys,
     )
     return OrganizationReadScope(
-        current_user.role,
-        supervisor_classroom_ids,
+        viewer_role=current_user.role,
+        classroom_ids=supervisor_classroom_ids,
         supervisor_classroom_ids=supervisor_classroom_ids,
         has_supervisor_assignment=True,
         supervisor_scope_keys=supervisor_scope_keys,

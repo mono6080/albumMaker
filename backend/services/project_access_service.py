@@ -11,6 +11,7 @@ from services.organization_scope_service import (
     build_organization_read_scope,
     project_in_read_scope,
     project_in_supervisor_scope,
+    project_in_teacher_carryover_scope,
     project_in_teacher_scope,
 )
 
@@ -81,6 +82,16 @@ def get_project_permissions(
     in_supervisor_scope = bool(
         actor_scope and project_in_supervisor_scope(project, actor_scope)
     )
+    # 老師要能做完自己開始的相本。學期在日曆上結束時，相本通常還沒做完——2026-08 首次
+    # 切換學期時，114 下有 40 本仍在製作、當天還有人在編，三個期別都有。把製作權只綁在
+    # 「目前學期的編制」，那 40 本會在套用編班的瞬間對老師變成唯讀。
+    # 相本一旦標記完成仍然鎖住（要主管或 admin 退回），所以這不是永久的後門。
+    # 認的是「編制只因為學期輪替而結束」，不是「曾經任教」——被移出班級仍然要擋得住。
+    in_unfinished_own_classroom = bool(
+        actor_scope
+        and project.completed_at is None
+        and project_in_teacher_carryover_scope(project, actor_scope)
+    )
 
     return {
         "can_read": bool(
@@ -91,7 +102,7 @@ def get_project_permissions(
             is_admin
             or (
                 is_classroom_project
-                and in_teacher_scope
+                and (in_teacher_scope or in_unfinished_own_classroom)
             )
         ),
         "can_reopen": bool(
