@@ -994,10 +994,17 @@ test("class staffing and new-term reclassification preserve old project content 
   await expect(page.getByText("主教", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "建立新一期相本" })).toBeVisible();
   await expect(page.getByRole("button", { name: "新建專案" })).toHaveCount(0);
-  // 舊相本屬於已結束學期的班：那個班的指派已 ended，所以可讀不可製作。
-  // 它會落在「我帶過的班級」唯讀區，而不是可編輯的班級卡片裡。
+  // 舊相本屬於已結束學期的班，會落在「我帶過的班級」區，而不是可編輯的班級卡片裡。
+  // 但它**還沒完成**——學期在日曆上結束時相本通常還沒做完，所以原老師仍然做得完。
   const pastClassroomSection = page.getByRole("heading", { name: "我帶過的班級" }).locator("..");
   await expect(pastClassroomSection).toBeVisible();
+  await expect(page.getByText(projectName, { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "編輯相本" })).toHaveCount(1);
+
+  // 標記完成之後就回到唯讀：這是「做完自己開始的」與「永久後門」的界線
+  const completed = await page.request.post(`/api/projects/${project.id}/complete`);
+  expect(completed.ok(), `標記完成回應 ${completed.status()}`).toBeTruthy();
+  await page.reload();
   await expect(page.getByText(projectName, { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "編輯相本" })).toHaveCount(0);
   const forbiddenGenericCreate = await page.request.post("/api/projects/", {
