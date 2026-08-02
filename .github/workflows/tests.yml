@@ -79,12 +79,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r ../backend/requirements.txt
 
-      # 瀏覽器每次重抓要好幾分鐘，而它只跟 playwright 版本有關
+      # 快取 key 只該綁 playwright 版本。綁 package-lock 的話，任何一個無關的相依變動
+      # （今天加一個 npm script 就中了）都會讓快取失效，webkit 得重抓 59 秒。
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('frontend/package-lock.json') }}
+          key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
 
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
@@ -147,11 +152,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r ../backend/requirements.txt
 
+      # 快取 key 只該綁 playwright 版本。綁 package-lock 的話，任何一個無關的相依變動
+      # （今天加一個 npm script 就中了）都會讓快取失效，webkit 得重抓 59 秒。
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ steps.playwright.outputs.version }}
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
