@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, skipNonBrowserSensitive, test } from "./fixtures.js";
 
 import { getNodeBounds } from "../../src/utils/layoutGroups.js";
 import {
@@ -680,7 +680,8 @@ test("marquee selects every supported direct node type and a group without creat
   await expect(page.getByRole("heading", { name: /物件群組/ })).toBeVisible();
 });
 
-test("layer metadata, ordering and multi-selection tools persist for direct leaves", async ({ page }) => {
+test("layer metadata, ordering and multi-selection tools persist for direct leaves", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   await loginViaApi(page);
   const textItems = [
     {
@@ -1097,7 +1098,8 @@ test("exact sticker and text shortcut links and fits without grouping or reorder
   expect(fittedText.font_color).toBe(text.font_color);
 });
 
-test("invalid layout-level material links show one-click repair", async ({ page }) => {
+test("invalid layout-level material links show one-click repair", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   await loginViaApi(page);
   const sticker = {
     id: 701,
