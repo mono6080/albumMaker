@@ -106,6 +106,12 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
   `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
   一併移除。
+  **競態邏輯往下搬**：「最後一個請求才算數」（連續切換選項時，晚回來的舊回應不可以蓋掉
+  新選擇）抽在 `src/utils/latestRequest.js`，由 `tests/unit/latest-request.test.mjs` 用
+  可控 promise 精確排出交錯順序來驗；`TeacherOverview` 與 `SemesterExport` 都用它。
+  這類錯只會做錯不會報錯，但在瀏覽器裡得靠攔截網路人工延遲才能重現，慢又不穩——
+  規則抽成純模組之後，e2e 只留「畫面有沒有接對」，競態本身由單元測試釘死。
+
   **e2e 的隔離與平行**：每個 Playwright worker 有自己的一組後端與 vite
   （port `8765+i` 與 `5173+i`、資料庫 `.tmp/e2e/w{i}/e2e.db`），由
   `frontend/tests/e2e/fixtures.js` 依 `parallelIndex` 決定 baseURL。所有 spec 必須

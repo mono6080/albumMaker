@@ -23,6 +23,7 @@ import {
 } from "../api/rosterApi";
 import { apiClient } from "../api/authApi";
 import { downloadApiBlob } from "../utils/browserFiles";
+import { createLatestRequestCoordinator } from "../utils/latestRequest";
 import SemesterReportFilters from "../components/SemesterReportFilters";
 import {
   Badge,
@@ -300,9 +301,10 @@ export default function TeacherOverview() {
   const [termsError, setTermsError] = useState("");
   const [overviewError, setOverviewError] = useState("");
   const termsRequestSequence = useRef(0);
-  const overviewRequestSequence = useRef(0);
+  // 「最後一個請求才算數」的規則抽在 utils/latestRequest.js，並有單元測試釘住；
+  // 這裡只負責把結果接到畫面狀態上。
+  const overviewRequest = useRef(createLatestRequestCoordinator());
   const termsAbortController = useRef(null);
-  const overviewAbortController = useRef(null);
 
   const loadTerms = useCallback(async () => {
     termsAbortController.current?.abort();
@@ -340,32 +342,31 @@ export default function TeacherOverview() {
   }, [loadTerms]);
 
   const loadOverview = useCallback(async (requestedTermId) => {
-    overviewAbortController.current?.abort();
-    const abortController = new AbortController();
-    overviewAbortController.current = abortController;
-    const requestSequence = overviewRequestSequence.current + 1;
-    overviewRequestSequence.current = requestSequence;
-    setIsLoadingOverview(true);
-    setOverviewError("");
-    setOverview(null);
-    setOverviewTermId("");
-    try {
-      const response = await fetchTeacherProgress(requestedTermId, { signal: abortController.signal });
-      if (overviewRequestSequence.current !== requestSequence) return;
-      setOverview(response.data);
-      setOverviewTermId(String(requestedTermId));
-    } catch {
-      if (abortController.signal.aborted || overviewRequestSequence.current !== requestSequence) return;
-      setOverviewError("載入班級期別進度失敗，請檢查網路後重試。");
-    } finally {
-      if (overviewRequestSequence.current === requestSequence) setIsLoadingOverview(false);
-    }
+    await overviewRequest.current.run(
+      signal => fetchTeacherProgress(requestedTermId, { signal }),
+      {
+        onStart: () => {
+          setIsLoadingOverview(true);
+          setOverviewError("");
+          setOverview(null);
+          setOverviewTermId("");
+        },
+        onResult: (response) => {
+          setOverview(response.data);
+          setOverviewTermId(String(requestedTermId));
+        },
+        onError: () => setOverviewError("載入班級期別進度失敗，請檢查網路後重試。"),
+        onSettled: () => setIsLoadingOverview(false),
+      },
+    );
   }, []);
 
   useEffect(() => {
     if (!semesterId || isLoadingTerms || termsError) return undefined;
+    // coordinator 存在 ref 裡且從不重建，但 cleanup 仍要抓住當下這一個實例
+    const coordinator = overviewRequest.current;
     void loadOverview(semesterId);
-    return () => overviewAbortController.current?.abort();
+    return () => coordinator.abort();
   }, [semesterId, isLoadingTerms, loadOverview, termsError]);
 
   const selectedTerm = terms.find(term => String(term.id) === String(semesterId));
@@ -455,8 +456,7 @@ export default function TeacherOverview() {
   }, [semesterId, department, campusId, selectedClassroomId, searchText, statusFilter]);
 
   const handleTermChange = (nextTermId) => {
-    overviewRequestSequence.current += 1;
-    overviewAbortController.current?.abort();
+    overviewRequest.current.abort();
     const nextTerm = terms.find(term => String(term.id) === String(nextTermId));
     const nextDepartments = [...new Set((nextTerm?.periods ?? []).map(period => period.department))];
     setSemesterId(nextTermId);

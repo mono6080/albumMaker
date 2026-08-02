@@ -22,6 +22,7 @@ import {
 } from "../api/rosterApi";
 import { usePermissions } from "../hooks/usePermissions";
 import { triggerNativeDownload } from "../utils/browserFiles";
+import { createLatestRequestCoordinator } from "../utils/latestRequest";
 import SemesterReportFilters from "../components/SemesterReportFilters";
 import ConfirmModal from "../components/ConfirmModal";
 import SemesterSummaryBar from "../components/SemesterSummaryBar";
@@ -152,10 +153,10 @@ export default function SemesterExport() {
   const [previewError, setPreviewError] = useState("");
   const anomalySectionRef = useRef(null);
   const termsRequestSequence = useRef(0);
-  const previewRequestSequence = useRef(0);
+  // 「最後一個請求才算數」抽在 utils/latestRequest.js，規則與單元測試都只有一份
+  const previewRequest = useRef(createLatestRequestCoordinator());
   const renderRequestSequence = useRef(0);
   const termsAbortController = useRef(null);
-  const previewAbortController = useRef(null);
   const renderAbortController = useRef(null);
   const activeScopeSignature = useRef("");
   const lastSelectionScopeSignature = useRef("");
@@ -208,38 +209,39 @@ export default function SemesterExport() {
   const serverQuerySignature = buildServerQuerySignature(semesterId, selectedPeriodIds);
 
   const loadPreview = useCallback(async (filters, requestedSignature) => {
-    previewAbortController.current?.abort();
-    const abortController = new AbortController();
-    previewAbortController.current = abortController;
-    const requestSequence = previewRequestSequence.current + 1;
-    previewRequestSequence.current = requestSequence;
-    setIsLoadingPreview(true);
-    setPreviewError("");
-    setPreview(null);
-    setPreviewSignature("");
-    try {
-      const response = await fetchSemesterExportPreview(filters, { signal: abortController.signal });
-      if (previewRequestSequence.current !== requestSequence) return;
-      setPreview(response.data);
-      setPreviewSignature(requestedSignature);
-    } catch {
-      if (abortController.signal.aborted || previewRequestSequence.current !== requestSequence) return;
-      setPreviewError("載入學期彙整預覽失敗，請檢查網路後重試。");
-    } finally {
-      if (previewRequestSequence.current === requestSequence) setIsLoadingPreview(false);
-    }
+    await previewRequest.current.run(
+      signal => fetchSemesterExportPreview(filters, { signal }),
+      {
+        onStart: () => {
+          setIsLoadingPreview(true);
+          setPreviewError("");
+          setPreview(null);
+          setPreviewSignature("");
+        },
+        onResult: (response) => {
+          setPreview(response.data);
+          setPreviewSignature(requestedSignature);
+        },
+        onError: () => setPreviewError("載入學期彙整預覽失敗，請檢查網路後重試。"),
+        onSettled: () => setIsLoadingPreview(false),
+      },
+    );
   }, []);
 
   useEffect(() => {
     if (!semesterId || selectedPeriodIds.length === 0 || isLoadingTerms || termsError) return undefined;
     const filters = { semesterId, periodIds: selectedPeriodIds };
+    const coordinator = previewRequest.current;
     void loadPreview(filters, serverQuerySignature);
-    return () => previewAbortController.current?.abort();
+    return () => coordinator.abort();
   }, [semesterId, isLoadingTerms, loadPreview, selectedPeriodIds, serverQuerySignature, termsError]);
 
-  useEffect(() => () => {
-    previewAbortController.current?.abort();
-    renderAbortController.current?.abort();
+  useEffect(() => {
+    const coordinator = previewRequest.current;
+    return () => {
+      coordinator.abort();
+      renderAbortController.current?.abort();
+    };
   }, []);
 
   const selectedTerm = terms.find(term => String(term.id) === String(semesterId));
@@ -349,8 +351,7 @@ export default function SemesterExport() {
   };
 
   const handleTermChange = (nextTermId) => {
-    previewRequestSequence.current += 1;
-    previewAbortController.current?.abort();
+    previewRequest.current.abort();
     const nextTerm = terms.find(term => String(term.id) === String(nextTermId));
     setSemesterId(nextTermId);
     setTermDefaults(nextTerm);

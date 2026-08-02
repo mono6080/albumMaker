@@ -163,31 +163,6 @@ function activeOverview() {
   };
 }
 
-function secondTermOverview() {
-  return {
-    term: { id: 2, label: "114 學年度下學期", status: "closed" },
-    periods: [{
-      id: 21,
-      semester_period_id: 201,
-      template_period_id: 21,
-      name: "二月",
-      department: "infant",
-      position: 1,
-    }],
-    summary: {},
-    classrooms: [classroom({
-      classroomId: 20,
-      classroomName: "下學期班",
-      slots: [{
-        work_slot_id: 520,
-        semester_period_id: 201,
-        period_id: 21,
-        creation_status: "not_created",
-        projects: [],
-      }],
-    })],
-  };
-}
 
 async function mockBase(page) {
   await page.route("**/api/auth/me", route => route.fulfill({
@@ -260,31 +235,4 @@ test("teacher progress keeps errors persistent and retries", async ({ page }) =>
   await expect(page.getByText("此學期與部門沒有班級工作格。", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "重試" }).click();
   await expect(page.getByText("星星班", { exact: true }).first()).toBeVisible();
-});
-
-test("a slower previous term response cannot replace the selected term", async ({ page }) => {
-  await mockBase(page);
-  let releaseFirstTerm;
-  let markFirstTermStarted;
-  const firstTermGate = new Promise(resolve => { releaseFirstTerm = resolve; });
-  const firstTermStarted = new Promise(resolve => { markFirstTermStarted = resolve; });
-  await page.route("**/api/roster/teacher-progress?**", async route => {
-    const termId = new URL(route.request().url()).searchParams.get("semester_id");
-    if (termId === "1") {
-      markFirstTermStarted();
-      await firstTermGate;
-      await route.fulfill({ json: activeOverview() });
-      return;
-    }
-    await route.fulfill({ json: secondTermOverview() });
-  });
-
-  await page.goto("/admin/teacher-overview");
-  await firstTermStarted;
-  await page.getByLabel("選擇學期").selectOption("2");
-  await expect(page.getByText("下學期班", { exact: true }).first()).toBeVisible();
-  releaseFirstTerm();
-  await page.waitForTimeout(150);
-  await expect(page.getByText("下學期班", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("星星班", { exact: true })).toHaveCount(0);
 });
