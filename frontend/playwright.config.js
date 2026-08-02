@@ -16,6 +16,7 @@ const BROWSER_SENSITIVE_SPECS = [
   "**/student-photos.spec.js",
   "**/mobile-student-edit.spec.js",
   "**/term-placement-board.spec.js",
+  "**/_rotate-probe.spec.js",
 ];
 
 // 壓力／效能測試：靠大量固定等待製造真實時序，本質上就是慢（兩支合計約 95 秒），
