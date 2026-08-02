@@ -10,8 +10,10 @@ const config = {
   expect: {
     timeout: 10_000,
   },
+  // 檔案之間平行、檔案內部依序：每個 worker 有自己的後端與資料庫（見 tests/e2e/fixtures.js），
+  // 所以平行是安全的；同一個檔案裡的測試仍照順序，因為它們常共用前面建立的資料。
   fullyParallel: false,
-  workers: 1,
+  workers: Number(process.env.E2E_WORKERS ?? 2),
   // CI 的 runner 上 webkit 會整個 crash（"Page crashed"），那是瀏覽器層的意外、
   // 不是斷言不成立。本機不重試，紅了就是紅了。重試成功的會被標成 flaky 而不是
   // passed，訊號不會被吃掉。

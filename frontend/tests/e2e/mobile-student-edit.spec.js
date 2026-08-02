@@ -1,5 +1,5 @@
 // 手機版學生編輯 e2e：三面板不溢出
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   redPng,
   bluePng,

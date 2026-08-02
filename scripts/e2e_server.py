@@ -12,7 +12,12 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
-E2E_TMP_DIR = ROOT_DIR / ".tmp" / "e2e"
+# 每個 Playwright worker 一套後端：自己的 port、自己的 SQLite、自己的 uploads。
+# 共用一份資料庫會讓測試互相污染——跑越後面的測試要面對前面所有測試累積的資料，
+# 同一條測試「單獨跑會過、跑全套會掛」，而且因為怕互相踩只能 workers=1 序列跑。
+WORKER_INDEX = int(os.environ.get("ALBUM_MAKER_E2E_INDEX", "0"))
+BACKEND_PORT = 8765 + WORKER_INDEX
+E2E_TMP_DIR = ROOT_DIR / ".tmp" / "e2e" / f"w{WORKER_INDEX}"
 E2E_DB_FILE = E2E_TMP_DIR / "e2e.db"
 E2E_UPLOADS_DIR = E2E_TMP_DIR / "uploads"
 ADMIN_PASSWORD = "admin-password-123"
@@ -59,7 +64,7 @@ def main() -> None:
     import uvicorn
     from main import app
 
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=BACKEND_PORT, log_level="warning")
 
 
 if __name__ == "__main__":

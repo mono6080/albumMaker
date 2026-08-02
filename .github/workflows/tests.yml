@@ -115,6 +115,8 @@ jobs:
         browser: [chromium, webkit]
     env:
       SECRET_KEY: e2e-secret-do-not-use
+      # 每個 worker 一套後端與資料庫，資料不互相污染，時間也砍半
+      E2E_WORKERS: "2"
     defaults:
       run:
         working-directory: frontend

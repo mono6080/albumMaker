@@ -7,7 +7,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-E2E_DB_FILE = REPO_ROOT / ".tmp" / "e2e" / "e2e.db"
+# 每個 Playwright worker 有自己的資料庫（見 frontend/tests/e2e/fixtures.js），
+# 這支腳本必須寫進呼叫它的那個 worker 的那一份，否則會 seed 到別人的資料庫去。
+WORKER_INDEX = os.environ.get("ALBUM_MAKER_E2E_INDEX", "0")
+E2E_DB_FILE = REPO_ROOT / ".tmp" / "e2e" / f"w{WORKER_INDEX}" / "e2e.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{E2E_DB_FILE.as_posix()}"
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 

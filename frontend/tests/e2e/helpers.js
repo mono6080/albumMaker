@@ -10,7 +10,12 @@ import { fileURLToPath } from "node:url";
 
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
 export const E2E_SECRET_KEY = "e2e-secret-do-not-use";
-export const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
+// worker 是獨立 process，這個模組層變數天然是 worker-local；由 fixtures.js 設定
+let workerBaseUrl = null;
+export function setE2eBaseUrl(url) { workerBaseUrl = url; }
+export function e2eBaseUrl() {
+  return workerBaseUrl ?? process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
+}
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 export const redPng = Buffer.from(
@@ -37,7 +42,7 @@ export async function loginViaApi(page) {
   await page.context().addCookies([{
     name: "access_token",
     value: token,
-    url: E2E_BASE_URL,
+    url: e2eBaseUrl(),
     httpOnly: true,
     sameSite: "Lax",
     expires: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,

@@ -39,21 +39,6 @@
    含「開始日」）。登入頁的 `<label>` 更是完全沒跟 input 綁定。應改用
    `aria-describedby` 掛說明。
 
-## webkit 在 CI runner 上會 crash（2026-08-02）
-
-`organization-management.spec.js` 的「class staffing and new-term reclassification…」
-跑到最後一段（切換成老師身分再 `page.goto("/projects")`）時，在 GitHub runner 的 webkit
-上固定 `page.goto: Page crashed`。已排除的可能：不是斷言不成立（chromium 全過）、不是
-資料累積（拆成獨立 job、有乾淨資料庫之後仍舊）、不是隨機（三次重試都在同一個導覽點）、
-不是 trace 錄製（改成 `on-first-retry` 之後仍舊）。本機 webkit 單獨跑 60 passed。
-
-目前在 CI 的 webkit 上跳過該條（chromium 仍完整覆蓋其契約）。**還沒排除的是「這是不是
-真的 Safari 問題」**——如果是應用本身在切換使用者時吃掉太多記憶體，真實的 Safari 使用者
-也可能踩到。要查就從那次 crash 的 trace 開始。
-
-另一條 `editor-multi-transform.spec.js:86` 在 webkit 上轉不到 20 度，master 上同樣失敗，
-目前靠 CI 的重試吸收。
-
 ## 開放設計問題
 
 - **舊資料群組 migration 尚未實作**：通用巢狀群組 v2 契約詳見

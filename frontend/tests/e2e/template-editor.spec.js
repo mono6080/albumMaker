@@ -1,5 +1,5 @@
 // 模板編輯器 e2e：畫布元素放置與 PIL 渲染 parity
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   loginViaUi,
   loginViaApi,

@@ -1,5 +1,5 @@
 // 專案主流程 e2e：班級名單快照、相本稱呼、共用照片、全班完成鎖定
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   redPng,
   bluePng,

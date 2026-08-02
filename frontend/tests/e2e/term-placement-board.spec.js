@@ -1,6 +1,6 @@
 // 編班看板的互動契約：真實拖曳、框選、老師搬動與升主教、班級增刪改名與排序、
 // 跨分校搬動。這些都是「不會報錯、只會做錯」的操作，靠 API 測不出來。
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 import { cancelLeftoverTermPlan, loginViaApi } from "./helpers.js";
 

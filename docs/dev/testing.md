@@ -106,6 +106,13 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
   `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
   一併移除。
+  **e2e 的隔離與平行**：每個 Playwright worker 有自己的一組後端與 vite
+  （port `8765+i` 與 `5173+i`、資料庫 `.tmp/e2e/w{i}/e2e.db`），由
+  `frontend/tests/e2e/fixtures.js` 依 `parallelIndex` 決定 baseURL。所有 spec 必須
+  `import { test, expect } from "./fixtures.js"`，不能直接從 `@playwright/test` 取，
+  否則會連到別的 worker 的後端。worker 數由 `E2E_WORKERS` 控制（預設 2）。
+  共用單一資料庫的舊做法會讓後跑的測試面對前面所有測試累積的資料，症狀是「單獨跑會過、
+  跑全套會掛」與 webkit 在 CI 上崩潰；改成隔離後兩者都消失，整套時間也從 14 分鐘降到 5 分鐘。
   `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
