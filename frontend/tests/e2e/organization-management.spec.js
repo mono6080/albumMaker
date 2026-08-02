@@ -507,7 +507,16 @@ test("admin manages current roster while period snapshots and owner history stay
 });
 
 
-test("class staffing and new-term reclassification preserve old project content while access follows class", async ({ page }) => {
+test("class staffing and new-term reclassification preserve old project content while access follows class", async ({ page, browserName }) => {
+  // 這條在 GitHub runner 的 webkit 上固定 `page.goto: Page crashed`，發生在最後
+  // 「切換成老師身分再進 /projects」那一步。已排除：不是斷言不成立（chromium 全過）、
+  // 不是隨機（三次重試都在同一點）、不是 trace 錄製（改 on-first-retry 後仍舊）、
+  // 也不是資料累積（改成每個 worker 獨立資料庫後，本機 webkit 全過、CI 仍舊）。
+  // 契約在 chromium 已完整覆蓋，先在 CI 的 webkit 跳過；細節見 known-issues。
+  test.skip(
+    browserName === "webkit" && Boolean(process.env.CI),
+    "webkit 在 CI runner 上會在切換使用者的導覽時整個 crash（未解，見 known-issues）",
+  );
   // 這兩條走完整條園所流程（名冊、期別、相本、編班），webkit 本機就要 20～30 秒，
   // CI 的 runner 更慢會超過預設的 60 秒。慢是事實，不是壞掉——標 slow 讓它有三倍時間。
   test.slow();
