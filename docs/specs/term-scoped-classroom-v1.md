@@ -34,6 +34,9 @@ Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，
 > 放行，`assignment_replaced`（被管理員換掉）仍然擋住——否則撤銷指派就形同無效。
 > 相本標記完成後回到鎖定，需要主管或 admin 退回，所以不是永久後門。
 > 範圍在 `organization_scope_service.teacher_carryover_classroom_ids`。
+>
+> 同一條規則也套用在**轉交進度負責人**：原本要求接手人在該班有未結束的編制，切換之後
+> 那些未完成的相本就再也換不了人——而原老師離職或請假正是最需要換人的時候。
 
 ## Problem
 

@@ -1326,3 +1326,110 @@ def test_unassigned_legacy_project_keeps_admin_only_capabilities():
         client.cookies.clear()
         login(client, teacher["username"], teacher_password)
         assert_status(client.get(f"/api/projects/{legacy_project_id}"), 403)
+
+
+def _seed_handover_case(client, admin, *, complete: bool, remove_second: bool):
+    """建一個班、兩位老師、一本相本，並依參數決定完成狀態與是否把第二位移出班級。"""
+    template_id, _ = create_template_with_page(client)
+    keeping, _ = create_user(client, "teacher")
+    taking_over, _ = create_user(client, "teacher")
+    db = SessionLocal()
+    try:
+        campus = Campus(name=unique_name("轉交分校"))
+        db.add(campus)
+        db.flush()
+        classroom = Classroom(
+            semester_id=current_semester_id(db),
+            campus_id=campus.id,
+            department="infant",
+            name=unique_name("轉交班"),
+        )
+        db.add(classroom)
+        db.flush()
+        for teacher, duty in ((keeping, "lead"), (taking_over, "co_teacher")):
+            db.add(ClassroomTeacher(
+                classroom_id=classroom.id,
+                teacher_id=teacher["id"],
+                teacher_name_snapshot=teacher["display_name"],
+                duty=duty,
+                started_at=utc_now(),
+                started_by_id=admin['user_id'],
+                started_by_name_snapshot=admin['display_name'],
+            ))
+        db.flush()
+        project_id = _seed_project(
+            db,
+            template_id=template_id,
+            owner_id=keeping["id"],
+            creator_id=admin["user_id"],
+            creator_name=admin["display_name"],
+            name=unique_name("轉交相本"),
+            classroom=classroom,
+            with_student=True,
+        )
+        project = db.get(Project, project_id)
+        if complete:
+            project.completed_at = utc_now()
+        for row in db.query(ClassroomTeacher).filter(
+            ClassroomTeacher.classroom_id == classroom.id
+        ):
+            if remove_second and row.teacher_id == taking_over["id"]:
+                # 被管理員移出班級
+                row.ended_at = utc_now()
+                row.end_reason = "assignment_replaced"
+            else:
+                # 學期輪替
+                row.ended_at = utc_now()
+                row.end_reason = "term_reassignment"
+        db.commit()
+    finally:
+        db.close()
+    return project_id, taking_over
+
+
+def test_unfinished_album_can_still_be_handed_over_after_the_term_rolls_over():
+    """學期切換之後，未完成的相本仍要轉交得出去。
+
+    原本的條件是「接手人必須在該班有 ended_at is NULL 的編制」。套用編班會把上學期的
+    編制全部結束，那些跨過學期界線還沒做完的相本就再也換不了人——而原老師離職或請假
+    正是最需要換人接手的時候。與製作權同一條規則：學期輪替結束的編制仍算數。
+    """
+    with started_client() as client:
+        admin = login(client)
+        project_id, taking_over = _seed_handover_case(
+            client, admin, complete=False, remove_second=False,
+        )
+        handover = client.post(
+            f"/api/projects/{project_id}/assignment",
+            json={"owner_id": taking_over["id"], "reason": "原老師請假"},
+        )
+        assert_status(handover, 200)
+        assert handover.json()["owner_id"] == taking_over["id"]
+
+
+def test_finished_album_cannot_be_handed_over_after_the_term_rolls_over():
+    """已完成的相本不吃這條例外——否則它就變成永久後門。"""
+    with started_client() as client:
+        admin = login(client)
+        project_id, taking_over = _seed_handover_case(
+            client, admin, complete=True, remove_second=False,
+        )
+        rejected = client.post(
+            f"/api/projects/{project_id}/assignment",
+            json={"owner_id": taking_over["id"], "reason": "不該成立"},
+        )
+        assert_status(rejected, 422)
+
+
+def test_teacher_removed_from_class_cannot_take_over_even_if_unfinished():
+    """被管理員移出班級（assignment_replaced）的老師仍然不能接手。"""
+    with started_client() as client:
+        admin = login(client)
+        project_id, taking_over = _seed_handover_case(
+            client, admin, complete=False, remove_second=True,
+        )
+        rejected = client.post(
+            f"/api/projects/{project_id}/assignment",
+            json={"owner_id": taking_over["id"], "reason": "不該成立"},
+        )
+        assert_status(rejected, 422)
