@@ -83,11 +83,7 @@ function expectCommittedSceneMatchesLive(liveScene, committedScene) {
   }
 }
 
-test("multi-selection resize and rotate preserve live geometry through commit", async ({ page, browserName }) => {
-  // webkit 上旋轉手把拖到底也轉不到 20 度——master 上同樣失敗，不是這個分支造成的。
-  // **這很可能是真的 Safari bug**：多選旋轉在 Safari 根本沒作用，而不只是測試飄。
-  // 詳見 docs/dev/known-issues.md，那裡也寫了要怎麼查。
-  test.skip(browserName === "webkit", "多選旋轉在 webkit 轉不到 20 度（疑似真的 Safari bug，未解）");
+test("multi-selection resize and rotate preserve live geometry through commit", async ({ page }) => {
   await loginViaApi(page);
   const firstText = {
     id: 1101,
@@ -193,6 +189,17 @@ test("multi-selection resize and rotate preserve live geometry through commit", 
     y: selectionCenter.y
       + rotateVector.x * Math.sin(rotateRadians) + rotateVector.y * Math.cos(rotateRadians),
   };
+  // Konva 的命中判定讀的是另一張「命中畫布」，而它在前一步 resize 之後是**延後重繪**的。
+  // 直接按下去，在慢的機器上會發生：錨點座標正確、也 visible，但 getIntersection 回傳
+  // null，於是點擊落到 Stage 上，旋轉完全不會發生（CI 的 webkit 三次重試都是這樣）。
+  // 等命中畫布真的認得這個錨點，比加固定延遲精確，也不會在快的機器上白等。
+  await expect.poll(async () => page.evaluate((ids) => {
+    const stage = window.Konva.stages.find(c => ids.every(id => c.findOne(`#text-${id}`)));
+    const rotater = stage?.findOne("Transformer")?.findOne(".rotater");
+    if (!rotater) return false;
+    return stage.getIntersection(rotater.getAbsolutePosition()) === rotater;
+  }, textIds)).toBe(true);
+
   await page.mouse.move(
     canvasBox.x + committedResize.rotater.x,
     canvasBox.y + committedResize.rotater.y,

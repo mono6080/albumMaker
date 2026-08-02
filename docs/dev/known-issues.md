@@ -55,19 +55,6 @@
 Safari 問題」**——如果是應用本身在切換使用者時吃掉太多記憶體，真實的 Safari 使用者也
 可能踩到。要查就從那次 crash 的 trace 開始。
 
-## 多選旋轉在 webkit 可能根本沒作用（2026-08-02）
-
-`editor-multi-transform.spec.js` 的「multi-selection resize and rotate…」在 webkit 上，
-旋轉手把拖到底也讓每個節點轉不到 20 度；chromium 同一條穩定通過。master 上同樣失敗，
-不是學期範圍班級這個分支造成的。先前靠 CI 重試偶爾矇混過去，e2e 瘦身後三次重試全敗。
-
-**不要當成測試飄**：同樣的拖曳在 chromium 有效、在 webkit 無效，最可能的解釋是
-**多選旋轉在 Safari 上真的不能用**。老師多半用手機，Safari 是實際會遇到的環境。
-
-目前在 webkit 跳過該條，讓 CI 的紅燈維持有意義。要查的話：先在真的 Safari（或 webkit
-headed）手動試多選後拖旋轉手把；若手動也轉不動，就是產品 bug 而不是測試問題，
-方向從 Konva Transformer 的 rotate anchor 對 webkit 指標事件的處理開始。
-
 ## 開放設計問題
 
 - **舊資料群組 migration 尚未實作**：通用巢狀群組 v2 契約詳見

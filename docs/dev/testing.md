@@ -106,6 +106,13 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
   `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
   一併移除。
+  **Konva 的命中判定要等命中畫布**：`stage.getIntersection()` 讀的是另一張延後重繪的
+  「命中畫布」。剛改動過 Transformer（例如 resize 提交）就立刻按錨點，在慢的機器上會
+  遇到「座標正確、`visible()` 為真，但 `getIntersection` 回傳 null」，點擊於是落到 Stage、
+  手勢完全不發生。要按畫布上的錨點之前，先 poll
+  `stage.getIntersection(anchor.getAbsolutePosition()) === anchor`——比加固定延遲精確，
+  快的機器也不會白等。
+
   **e2e 只留「非它不可」的**：跑第二顆瀏覽器引擎只在畫布渲染與幾何、觸控手勢、縮圖與
   裁切版面這些地方買得到訊號，所以 webkit 只跑
   `template-editor`／`template-editor-mobile`／`illustrator-groups`／`editor-multi-transform`／
