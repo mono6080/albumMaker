@@ -16,12 +16,25 @@ _TEST_TMP_ROOT = Path(
     )
 )
 _TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
-_TEST_TMP_DIR = _TEST_TMP_ROOT / f"album_maker_tests_{uuid4().hex}"
-_TEST_TMP_DIR.mkdir(parents=True, exist_ok=False)
+# pytest-xdist 的 worker 是獨立 process，但會**繼承 controller 的環境變數**——
+# 若沿用 setdefault，四個 worker 會全部指向 controller 那一份資料庫而互相踩。
+# 有 worker id 就以它命名資料夾並強制覆寫連線字串。
+_WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER")
+_TEST_TMP_DIR = _TEST_TMP_ROOT / (
+    f"album_maker_tests_{_WORKER_ID}" if _WORKER_ID else f"album_maker_tests_{uuid4().hex}"
+)
+if _WORKER_ID:
+    shutil.rmtree(_TEST_TMP_DIR, ignore_errors=True)
+_TEST_TMP_DIR.mkdir(parents=True, exist_ok=bool(_WORKER_ID))
 _TEST_DB_FILE = _TEST_TMP_DIR / "test.db"
 _PRISTINE_DB_FILE = _TEST_TMP_DIR / "pristine.db"
 
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_FILE.as_posix()}")
+if _WORKER_ID:
+    os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_FILE.as_posix()}"
+    # 上傳目錄同理：共用會讓不同 worker 的檔案互相看見
+    os.environ["ALBUM_MAKER_UPLOADS_DIR"] = str(_TEST_TMP_DIR / "uploads")
+else:
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_FILE.as_posix()}")
 os.environ.setdefault("SECRET_KEY", "test-secret-do-not-use")
 # 啟動收斂掃描在測試停用(每個 started_client 都會走 lifespan);專測時直接呼叫函式
 os.environ.setdefault("RENDER_RECONCILE_ON_STARTUP", "0")

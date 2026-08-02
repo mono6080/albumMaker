@@ -131,6 +131,12 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   這類錯只會做錯不會報錯，但在瀏覽器裡得靠攔截網路人工延遲才能重現，慢又不穩——
   規則抽成純模組之後，e2e 只留「畫面有沒有接對」，競態本身由單元測試釘死。
 
+  **pytest 平行**：`python -m pytest -q -n auto`（需要 `pytest-xdist`）。每個 worker
+  有自己的資料庫與 uploads 目錄——`tests/conftest.py` 依 `PYTEST_XDIST_WORKER` 命名並
+  **強制覆寫** `DATABASE_URL`，不能用 `setdefault`：xdist 的 worker 會繼承 controller 的
+  環境變數，沿用 setdefault 會讓四個 worker 全部指向同一份資料庫（實測 363 個 error）。
+  本機 309 秒 → 108 秒。不加 `-n` 的序列模式行為不變。
+
   **e2e 的隔離與平行**：每個 Playwright worker 有自己的一組後端與 vite
   （port `8765+i` 與 `5173+i`、資料庫 `.tmp/e2e/w{i}/e2e.db`），由
   `frontend/tests/e2e/fixtures.js` 依 `parallelIndex` 決定 baseURL。所有 spec 必須

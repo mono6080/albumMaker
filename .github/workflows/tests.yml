@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt
           # 鎖定版本避免工具升版無預警讓 CI 轉紅（2026-05 mypy 升版曾造成一個月紅燈）
-          python -m pip install pytest==9.0.3 httpx ruff==0.15.12 mypy==1.20.2
+          python -m pip install pytest==9.0.3 pytest-xdist==3.6.1 httpx ruff==0.15.12 mypy==1.20.2
 
       - name: Ruff
         run: python -m ruff check backend tests
@@ -40,8 +40,10 @@ jobs:
       - name: Mypy
         run: python -m mypy backend tests
 
+      # 每個 worker 有自己的資料庫與 uploads（見 tests/conftest.py），平行是安全的。
+      # 本機實測 309 秒 → 108 秒。
       - name: Pytest
-        run: python -m pytest -q
+        run: python -m pytest -q -n auto
 
   frontend:
     # 與瀏覽器無關的檢查只跑一次。render parity 會自己啟動 chromium
