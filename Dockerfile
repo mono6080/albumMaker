@@ -40,6 +40,9 @@ COPY scripts/backup_data.py \
      scripts/audit_production_migration_202607.py \
      scripts/snapshot_production_r2_outputs_202607.py \
      scripts/rerender_production_projects_202607.py \
+     scripts/backfill_student_serials.py \
+     scripts/report_websystem_drift.py \
+     scripts/sync_websystem_roster.py \
      /app/scripts/
 
 # 前端編譯結果（放在 main.py 預期的相對位置）

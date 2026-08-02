@@ -157,9 +157,31 @@ v1 以「班級異動一律進待審佇列」迴避；要根治需要在 `classr
 
 **Slice 3 — 排程**
 
-正式主機的 cron：先做快照，再跑同步。失敗與待審筆數要能通知到人——通知管道本身是
+**頻率：每天一次，離峰時段（約 02:00）。** 依據是實測的異動量——一個學期 76 件、
+約每月 12 件，多數日子是 0 件；每小時跑只會產生大量空轉。而延遲的代價可以接受：
+孩子週一入班、隔天早上就在名冊裡，老師還沒開始做他那一頁。
+
+每次執行的順序（都在正式主機上，albumMaker 與 webSystem 是兩個 compose）：
+
+1. `docker exec production_websystem_web python -c "…backup…"` 產生一致性快照
+   （不直接讀原檔：WAL 模式下會跟 10 個 uwsgi worker 搶鎖）
+2. `docker cp` 把快照送進 albumMaker 的 app 容器
+3. `docker compose exec app python scripts/report_websystem_drift.py …`
+4. `docker compose exec app python scripts/sync_websystem_roster.py … --apply`
+5. 刪掉兩邊的快照暫存
+
+三支腳本必須在 image 裡（Dockerfile 是逐檔列舉，不是整個 `scripts/` 目錄）。
+
+**分兩階段開啟**：
+
+- **階段 A（可以先做）**：只跑第 3 步的報告，不加 `--apply`。零風險，而且立刻讓漂移
+  可見——目前沒有人知道相本系統跟行政系統差多少。
+- **階段 B**：確認有人真的在看報告、而且通知管道已配置之後，才加上 `--apply`。
+  在沒有人看的情況下開啟自動寫入，等於讓資料無聲改變而沒有任何觀察者。
+
+通知管道本身是
 [known-issues.md 的營運缺口](../dev/known-issues.md#營運缺口依風險排序2026-07-13-記錄)
-第 2 項，尚未配置。
+第 2 項，尚未配置——階段 B 卡在它。
 
 ## Risks And Test Plan
 
