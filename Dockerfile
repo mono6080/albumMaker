@@ -44,6 +44,9 @@ COPY scripts/backup_data.py \
      scripts/report_websystem_drift.py \
      scripts/sync_websystem_roster.py \
      /app/scripts/
+# correct_roster_names.py 與 fill_missing_album_names.py 不再納入 image：它們讀
+# `roster_children`，而學期範圍班級重構把那張表改名了，在容器裡只會找不到表。
+# 兩支已於 2026-08-01 在正式站執行完畢並標記退場，留在 repo 供稽核即可。
 
 # 前端編譯結果（放在 main.py 預期的相對位置）
 COPY --from=frontend-builder /build/dist/ /frontend/dist/
