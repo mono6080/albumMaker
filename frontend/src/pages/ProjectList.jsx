@@ -870,8 +870,9 @@ export default function ProjectList() {
                   {canViewReports ? "帶過的班級與主管檢視範圍" : "我帶過的班級"}
                 </h2>
                 <p className="mt-0.5 text-xs text-gray-500">
-                  以下相本來自你曾任教的班級{canViewReports ? "與校／部門主管範圍" : ""}，
-                  可以查看與下載；只有目前列入該班老師編制的相本可以製作。
+                  以下相本來自你曾任教的班級{canViewReports ? "與校／部門主管範圍" : ""}。
+                  學期換過去之後，這裡<strong>還沒完成的相本仍然可以繼續製作</strong>；
+                  已標記完成的、以及不是你帶過的班，都只能查看與下載。
                 </p>
               </div>
               {visibleReadOnlyProjects.length > 0 ? (
