@@ -362,7 +362,7 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
    | 工作格 | 37 班全部都有 |
    | 舊學期 | 在籍 0、在職編制 0 |
    | 外鍵／integrity | 無違規／ok |
-   | 回填新生學號後的漂移 | **0 筆** |
+   | 編班後的漂移 | **0 筆**（新生連學號一起編入，不需要事後回填） |
 
 5. `verify_render_output_unchanged.py` 比對通過 ✅ 2026-07-31（指紋變、位元相同，見 R1）
 6. 容器內 SQLite 版本 ≥ 3.25（migration 會自行斷言，但先確認避免部署中途失敗）
@@ -378,14 +378,14 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 11. **正式站已存在一個 `status='cancelled'` 的「115上」學期**（id=2，2026-08-01 ~
    2027-01-31），是先前試建留下的。建立本次期別前先確認要沿用還是另建，避免出現兩個
    同名學期
-12. **編班套用後必須回填新生學號**：
-   `python scripts/backfill_new_student_serials.py --db <db> --upstream <快照> --as-of <編班基準日> --apply`
+12. **編班時新生要連學號一起輸入**（格式「姓名 學號」，可從行政系統的表格整欄複製）。
+   學號是名冊同步唯一的孩子對應鍵，沒有的話這批孩子永遠對不到上游；看板會把沒有學號
+   的卡片標成「新·無學號」。契約見
+   [websystem-roster-sync-v1 的手動編入的孩子一定要帶學號](websystem-roster-sync-v1.md#手動編入的孩子一定要帶學號2026-08-04-演練發現並修掉)。
 
-   看板的「＋新生」收不到學號（見
-   [websystem-roster-sync-v1 的看板新建的孩子沒有學號](websystem-roster-sync-v1.md#看板新建的孩子沒有學號2026-08-04-演練發現)），
-   不補回去的話這批孩子在名冊同步裡永遠對不到上游。2026-08-04 演練實測：編班後漂移
-   88 筆（觸發爆炸半徑警告）→ 回填 44 位 → 漂移 0 筆。做完再跑一次
-   `scripts/report_websystem_drift.py` 確認歸零
+   編班套用後跑一次 `scripts/report_websystem_drift.py` 確認漂移為 0。若有漏掉學號的，
+   用 `scripts/backfill_new_student_serials.py --db <db> --upstream <快照> --as-of <基準日> --apply`
+   補回去再驗一次
 
 第 3 項的驗證方式是把正式資料副本升級後，與 `init_db()` 建出的全新資料庫逐項比對表
 欄位、索引與 trigger；2026-07-31 的結果是三者完全一致。

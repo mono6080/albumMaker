@@ -121,7 +121,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | DELETE | `/classrooms/{id}` | admin 移除**編班草稿學期**的班；已有名冊、編制、工作格、相本或 placement 指著它時回 409 `classroom_not_empty` 並附 `counts`；目前／已結束學期的班一律回 409 `classroom_not_in_draft_semester` |
 | PUT | `/semesters/{id}/classroom-order` | admin 重排該學期班級的顯示順序；body `classroom_ids` 必須是**該學期完整的集合**，缺漏回 422 `incomplete_classroom_order`、重複回 422 `duplicate_classroom_id`；已結束或已取消的學期回 409 |
 | PUT | `/classrooms/{id}/teachers` | admin 以完整集合原子替換目前老師；非空集合恰有一位 `lead`，其餘為 `co_teacher`，歷史區間保留 |
-| POST | `/classrooms/{id}/members/batch` | 批次加入名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班。除了目前學期的班，**編班草稿學期的班**也收（新生的唯一入口，見下）；其餘學期回 409 |
+| POST | `/classrooms/{id}/members/batch` | 批次加入名單；每筆可帶中央 `album_name` 與 `student_serial`（行政系統學號，去空白轉大寫），省略 `album_name` 時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班。學號已屬於名冊中的孩子時**沿用該筆名冊項**而不是新建；姓名對不上、該孩子已在其他班、同批重複學號三種情形列進回應的 `serial_conflicts` 而不讓整批失敗。除了目前學期的班，**編班草稿學期的班**也收（新生的唯一入口，見下）；其餘學期回 409 |
 | PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
 | DELETE | `/classrooms/{id}/members/{member_id}` | admin 把**草稿學期**的新生整列刪掉（連同該筆名冊項，若它已無其他 membership 與相本引用）；其他學期回 409 `member_not_in_draft_semester`，是 placement 來源的名單列回 409 `member_is_a_placement_source` |
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |

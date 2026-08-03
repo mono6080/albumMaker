@@ -263,11 +263,25 @@ test("編班看板：拖曳、框選、老師搬動與班級維護", async ({ pa
   await page.getByRole("button", { name: "儲存草稿" }).click();
   await expect(page.getByText("編班草稿已儲存").first()).toBeVisible();
   const newcomer = `新生${suffix}`;
+  const newcomerWithoutSerial = `無學號${suffix}`;
   await page.getByRole("button", { name: `在 ${campusName}／${addedName} 新增新生` }).click();
-  await page.getByLabel(/^姓名/).fill(newcomer);
+  // 學號是與行政系統對帳的唯一鍵；沒有它，這位孩子在名冊同步裡永遠對不到上游。
+  // 一次驗兩種：帶學號的正常編入，沒帶的仍可編入但要在看板上標示出來。
+  // 故意用小寫送出：學號會被正規化成大寫，同一個孩子才不會因為大小寫對不上
+  const newcomerSerial = `DN${suffix}`;
+  await page.getByLabel(/^姓名/).fill(`${newcomer}	${newcomerSerial}
+${newcomerWithoutSerial}`);
   await page.getByRole("button", { name: "編入", exact: true }).click();
-  await expect(page.getByText(/已編入 1 位新生/)).toBeVisible();
+  await expect(page.getByText(/已編入 2 位新生/)).toBeVisible();
   await expect(columnNamed(campusName, addedName).getByText(newcomer, { exact: true })).toBeVisible();
+  await expect(
+    columnNamed(campusName, addedName).getByTitle(`${newcomer}（新生，學號 ${newcomerSerial.toUpperCase()}）`),
+  ).toBeVisible();
+  await expect(
+    columnNamed(campusName, addedName).getByLabel(`${newcomerWithoutSerial} 沒有學號`),
+  ).toBeVisible();
+  await page.getByRole("button", { name: `移除新生 ${newcomerWithoutSerial}` }).click();
+  await expect(page.getByText(`已移除新生 ${newcomerWithoutSerial}`)).toBeVisible();
   // 新生沒有來源名單列，不能拖也不能標離園——只有「移除新生」
   await expect(
     columnNamed(campusName, addedName).getByRole("button", { name: `把 ${newcomer} 標記為離園` }),

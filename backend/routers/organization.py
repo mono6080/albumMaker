@@ -37,7 +37,10 @@ from services.organization_term_service import (
     update_term_reclassification_plan as update_term_reclassification_plan_use_case,
     validate_term_reclassification_plan as validate_term_reclassification_plan_use_case,
 )
-from services.student_input_policy import STUDENT_ALBUM_NAME_MAX_LENGTH
+from services.student_input_policy import (
+    STUDENT_ALBUM_NAME_MAX_LENGTH,
+    STUDENT_SERIAL_MAX_LENGTH,
+)
 
 
 router = APIRouter(prefix="/api/organization", tags=["organization"])
@@ -123,6 +126,12 @@ class ClassroomMemberInput(BaseModel):
     album_name: str | None = Field(
         None,
         max_length=STUDENT_ALBUM_NAME_MAX_LENGTH,
+    )
+    # 學號是名冊與行政系統之間唯一穩定的對應鍵。沒有它，手動編進來的孩子在名冊同步
+    # 裡永遠對不到上游，還會被誤判成「上游有、相本沒有」而重複建檔。
+    student_serial: str | None = Field(
+        None,
+        max_length=STUDENT_SERIAL_MAX_LENGTH,
     )
 
 

@@ -57,6 +57,10 @@ import {
   fieldControlClass,
 } from "../components/ui";
 import { getApiErrorMessage } from "../utils/apiError";
+import {
+  describeSerialConflicts,
+  parseRosterMemberInput,
+} from "../utils/rosterMemberInput";
 import { buildClassroomOwnerOptions } from "../utils/classroomAssignments";
 import { showRetryToast } from "../utils/retryToast";
 import { getAssignableAccountLabel, ROLE_LABELS } from "../utils/userRoles";
@@ -399,11 +403,11 @@ export default function OrganizationManagement() {
 
   const handleMembersSubmit = async (event) => {
     event.preventDefault();
-    const members = formModal.names
-      .split(/\r?\n/)
-      .map(name => name.trim())
-      .filter(Boolean)
-      .map(name => ({ name }));
+    const { members, invalid } = parseRosterMemberInput(formModal.names);
+    if (invalid.length > 0) {
+      toast.error(`這幾行超過兩欄，看不出哪個是姓名哪個是學號：${invalid.join("、")}`);
+      return;
+    }
     if (members.length === 0) {
       toast.error("請至少輸入一位學生姓名");
       return;
@@ -414,6 +418,10 @@ export default function OrganizationManagement() {
       toast.success(`已新增 ${response.data.created.length} 位學生`);
       if (response.data.skipped.length > 0) {
         toast(`已跳過：${response.data.skipped.join("、")}`);
+      }
+      const conflicts = response.data.serial_conflicts ?? [];
+      if (conflicts.length > 0) {
+        toast.error(`${conflicts.length} 位學號有問題未新增：${describeSerialConflicts(conflicts)}`);
       }
       setFormModal(null);
       await loadOverview();
@@ -991,7 +999,10 @@ export default function OrganizationManagement() {
       >
         {formModal?.type === "members" && (
           <form className="space-y-4" onSubmit={handleMembersSubmit}>
-            <FormField label="學生完整姓名" hint="每行一位；已在此班目前名單中的同名學生會跳過。">
+            <FormField
+              label="學生完整姓名與學號"
+              hint="每行一位，格式「姓名 學號」；已在此班目前名單中的同名學生會跳過。學號是與行政系統對帳的依據，沒有的話名冊同步會對不到人。"
+            >
               <CompositionTextarea
                 autoFocus
                 rows={7}
