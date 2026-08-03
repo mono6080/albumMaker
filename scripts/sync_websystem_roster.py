@@ -63,9 +63,13 @@ def blast_radius_error(auto_count: int, roster_size: int) -> str | None:
 
 
 def _current_semester_id(db: sqlite3.Connection) -> int:
-    row = db.execute("select id from semesters where status = 'imported'").fetchone()
+    # 與 report_websystem_drift 同一條判定：`imported` 是遷移進來的第一個學期，
+    # 之後每次編班套用產生的新學期都是 `active`。兩者同時只會有一個（唯一索引保證）。
+    row = db.execute(
+        "select id from semesters where status in ('imported', 'active')"
+    ).fetchone()
     if row is None:
-        sys.exit("相本系統沒有 imported 學期")
+        sys.exit("相本系統沒有 imported/active 學期")
     return int(row[0])
 
 

@@ -348,6 +348,22 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
    `purge_expired_archived_projects` 真刪的軟刪列（已軟刪 57 → 13）。**實際存在的相本
    一直是 90 本**（7/31 為 89，8/1 新增 1 本後未再變動）。核對本數時要扣掉軟刪列，
    否則會把正常的封存清理讀成資料遺失。
+4c. 在正式資料副本上跑過**真實的 115 上編班**（不是 `dry_run_term_reclassification.py`
+   的合成計畫——那份把 38 班原封不動搬過去，驗的是機制，不是實際的班級重組）
+   ✅ 2026-08-04，基準日取編班當天：
+
+   | | |
+   |---|---|
+   | 班級 | 沿用 32、新建 5、移除 6 → **37** |
+   | 學生 | 續讀 379（換班 366）、離園 86、新生 44 → **在籍 423** |
+   | 編制 | **49 筆**，全部有帳號（先補建 2 個） |
+   | 逐筆對回行政系統 | 班級集合、每班部門、每位學生的班、編制 **全部一致** |
+   | 舊相本 | 90 本的欄位與學生名單 **一位元未變** |
+   | 工作格 | 37 班全部都有 |
+   | 舊學期 | 在籍 0、在職編制 0 |
+   | 外鍵／integrity | 無違規／ok |
+   | 回填新生學號後的漂移 | **0 筆** |
+
 5. `verify_render_output_unchanged.py` 比對通過 ✅ 2026-07-31（指紋變、位元相同，見 R1）
 6. 容器內 SQLite 版本 ≥ 3.25（migration 會自行斷言，但先確認避免部署中途失敗）
 7. 收斂重渲染已排程在離峰時段，且已知會跑約 468 份
@@ -362,6 +378,14 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 11. **正式站已存在一個 `status='cancelled'` 的「115上」學期**（id=2，2026-08-01 ~
    2027-01-31），是先前試建留下的。建立本次期別前先確認要沿用還是另建，避免出現兩個
    同名學期
+12. **編班套用後必須回填新生學號**：
+   `python scripts/backfill_new_student_serials.py --db <db> --upstream <快照> --as-of <編班基準日> --apply`
+
+   看板的「＋新生」收不到學號（見
+   [websystem-roster-sync-v1 的看板新建的孩子沒有學號](websystem-roster-sync-v1.md#看板新建的孩子沒有學號2026-08-04-演練發現)），
+   不補回去的話這批孩子在名冊同步裡永遠對不到上游。2026-08-04 演練實測：編班後漂移
+   88 筆（觸發爆炸半徑警告）→ 回填 44 位 → 漂移 0 筆。做完再跑一次
+   `scripts/report_websystem_drift.py` 確認歸零
 
 第 3 項的驗證方式是把正式資料副本升級後，與 `init_db()` 建出的全新資料庫逐項比對表
 欄位、索引與 trigger；2026-07-31 的結果是三者完全一致。

@@ -119,11 +119,41 @@ v1 以「班級異動一律進待審佇列」迴避；要根治需要在 `classr
 `organization_scope_service`（主管範圍）、`teacher_overview_service`（進度報表）。
 上游把老師從班上移掉，她會在製作到一半時瞬間失去編輯權，而且四個地方同時改變。
 
+## 看板新建的孩子沒有學號（2026-08-04 演練發現）
+
+編班看板的「＋新生」走 `batch_add_classroom_members`，那個端點只收姓名與相本稱呼，
+**收不到學號**。於是每一位在看板上建的孩子 `students.student_serial` 都是空的——而
+學號是本 spec 唯一的孩子對應鍵。
+
+在正式資料上照編班當天基準演練，編班一次就產生 **44 位沒有學號的在籍孩子**，後果是：
+
+- 上游有學號、相本以學號查不到 → 被判成「新生應建檔並入班」→ **同一個孩子建成兩筆**
+- 兩位以上沒有學號時，以學號為鍵的 `members` 字典會共用同一個 `None` 鍵互相覆蓋，
+  `sorted()` 直接 `TypeError`——**同步整組停掉**
+
+v1 的處理分兩層：
+
+1. **報告端擋住**：沒有學號的在籍孩子單獨收在 `members_without_serial`，逐筆列為待審；
+   上游那筆若與某位無學號孩子同班同名，改列「疑似同一位但相本沒有學號」而**不**自動建檔。
+   這裡用姓名只是為了不要自動動手，不是拿姓名當鍵。
+2. **編班後補回**：`scripts/backfill_new_student_serials.py` 以（分校，班級，姓名）對回
+   上游補上學號，預設 dry-run。同班同名、學號已被占用、上游查無一律跳過並列出。
+
+實測：編班後漂移 88 筆（23.2%，觸發爆炸半徑警告）→ 回填 44 位 → **漂移 0 筆**。
+
+**根治要讓 `batch_add_classroom_members` 收學號**（連同看板的新生輸入欄位），留待 v2；
+在那之前，編班後回填是必要步驟，見
+[term-scoped-classroom-v1-risks.md 的上線前檢查清單](term-scoped-classroom-v1-risks.md#上線前檢查清單)。
+
 ## 安全閘
 
 1. **爆炸半徑上限**：單次同步若要改動超過在籍名冊的 5%，整批中止並告警。防的是上游
    快照損壞或對應鍵大量失效把名冊洗掉
-2. **只寫目前學期**：已結束學期由 `trg_classroom_members_freeze_closed_term_*` 與
+2. **只寫目前學期**：目前學期＝`status in ('imported', 'active')`（`imported` 只是遷移
+   進來的第一個學期，之後每次編班套用產生的新學期都是 `active`；資料庫層有唯一索引
+   保證兩者同時只有一個）。只認 `imported` 會讓同步在第一次編班套用後整組停掉——
+   2026-08-04 的演練踩過這個。已結束學期由
+   `trg_classroom_members_freeze_closed_term_*` 與
    `trg_classroom_teachers_freeze_closed_term_*` 保護，同步碰到它們就是 bug
 3. **預設 dry-run**：`--apply` 才寫入，與
    [testing.md 的維運腳本慣例](../dev/testing.md) 一致

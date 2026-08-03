@@ -41,6 +41,7 @@ COPY scripts/backup_data.py \
      scripts/snapshot_production_r2_outputs_202607.py \
      scripts/rerender_production_projects_202607.py \
      scripts/backfill_student_serials.py \
+     scripts/backfill_new_student_serials.py \
      scripts/report_websystem_drift.py \
      scripts/sync_websystem_roster.py \
      /app/scripts/

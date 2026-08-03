@@ -178,3 +178,95 @@ def test_student_serial_and_staff_serial_are_separate_namespaces():
     # 同一個序號在兩邊都各自對得上，不該因為撞號而被判成姓名不符或編制缺漏
     assert result["auto"] == [], result["auto"]
     assert result["review"] == [], result["review"]
+
+
+def _minimal_album_db(semester_status):
+    """建一份剛好夠 load_album_state 讀的資料庫。
+
+    釘的是「目前學期怎麼認」——這條在 2026-08-04 的演練裡炸過：報告只認 `imported`，
+    而編班一套用，新學期是 `active`，同步就在最需要它的時候整組停掉。
+    """
+    import sqlite3
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        create table semesters (id integer primary key, label text, status text,
+                                starts_on text, ends_on text);
+        create table campuses (id integer primary key, name text);
+        create table classrooms (id integer primary key, name text, department text,
+                                 campus_id integer, semester_id integer);
+        create table students (id integer primary key, name text, student_serial text);
+        create table classroom_members (id integer primary key, roster_child_id integer,
+                                        classroom_id integer, ended_at text);
+        create table users (id integer primary key, username text, display_name text);
+        create table classroom_teachers (id integer primary key, teacher_id integer,
+                                         classroom_id integer, duty text, ended_at text);
+        create table projects (id integer primary key, deleted_at text, completed_at text);
+        create table project_students (project_id integer, roster_child_id integer,
+                                       completed_at text);
+        insert into campuses values (1, '安平校');
+        insert into classrooms values (1, '三階A', 'infant', 1, 1);
+        insert into students values (1, '有學號的孩子', 'DN0001'),
+                                    (2, '沒學號的新生', null);
+        insert into classroom_members values (1, 1, 1, null), (2, 2, 1, null);
+        """
+    )
+    db.execute(
+        "insert into semesters values (1, '測試學期', ?, '2026-02-01', '2026-07-31')",
+        (semester_status,),
+    )
+    db.commit()
+    return db
+
+
+def test_current_semester_is_imported_or_active():
+    """`imported` 只是遷移進來的第一個學期；每次編班套用產生的新學期都是 `active`。"""
+    for status in ("imported", "active"):
+        state = drift.load_album_state(_minimal_album_db(status))
+        assert state["semester"]["label"] == "測試學期", status
+
+
+def test_roster_child_without_serial_is_surfaced_not_collapsed():
+    """編班看板建的新生沒有學號（batch_add_classroom_members 收不到）。
+
+    混進以學號為鍵的 members 會共用同一個 None 鍵互相覆蓋，兩位以上還會讓 sorted()
+    直接爆掉——2026-08-04 的演練就是這樣停在 TypeError。
+    """
+    state = drift.load_album_state(_minimal_album_db("active"))
+    assert set(state["members"]) == {"DN0001"}
+    assert [row["name"] for row in state["members_without_serial"]] == ["沒學號的新生"]
+
+
+def test_child_without_serial_blocks_duplicate_creation():
+    """上游有學號、相本這位沒有，不能判成新生再建一次——同一個孩子會變成兩筆。"""
+    album = _album(members={})
+    album["members_without_serial"] = [
+        {"name": "沒學號的新生", "campus": "安平校", "room": "三階A"}
+    ]
+    upstream = _upstream(
+        members={"DN0009": {"name": "沒學號的新生", "campus": "安平校", "room": "三階A"}}
+    )
+
+    result = drift.diff(album, upstream)
+
+    assert _kinds(result["auto"]) == [], result["auto"]
+    kinds = _kinds(result["review"])
+    assert "名冊：疑似同一位但相本沒有學號" in kinds
+    assert "名冊：在籍但沒有學號" in kinds
+
+
+def test_child_without_serial_does_not_mask_a_genuinely_new_child():
+    """擋重建不能連真的新生一起擋掉——不同班或不同名就該照常自動建檔。"""
+    album = _album(members={})
+    album["members_without_serial"] = [
+        {"name": "沒學號的新生", "campus": "安平校", "room": "三階A"}
+    ]
+    upstream = _upstream(
+        members={"DN0009": {"name": "真的新生", "campus": "安平校", "room": "三階A"}}
+    )
+
+    result = drift.diff(album, upstream)
+
+    assert "名冊：新生應建檔並入班" in _kinds(result["auto"])
