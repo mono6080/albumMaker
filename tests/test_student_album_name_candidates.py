@@ -24,7 +24,7 @@ def _create_database(database_path):
                    completed_at DATETIME,
                    updated_at DATETIME
                );
-               CREATE TABLE students (
+               CREATE TABLE project_students (
                    id INTEGER PRIMARY KEY,
                    project_id INTEGER NOT NULL,
                    name TEXT NOT NULL,
@@ -38,7 +38,7 @@ def _create_database(database_path):
                    (1, '使用中班級', NULL, NULL, '2026-01-01'),
                    (2, '已完成班級', NULL, '2026-02-01', '2026-01-01'),
                    (3, '封存班級', '2026-03-01', NULL, '2026-01-01');
-               INSERT INTO students VALUES
+               INSERT INTO project_students VALUES
                    (1, 1, '王小明', NULL, 0, '2026-01-01', '2026-01-01', 'outputs/old1.pdf'),
                    (2, 1, '李小明', NULL, 1, '2026-01-02', '2026-01-02', NULL),
                    (3, 1, '歐陽小明', NULL, 2, '2026-01-03', '2026-01-03', NULL),
@@ -99,7 +99,7 @@ def test_review_plan_marks_collisions_and_does_not_touch_existing_values(tmp_pat
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM students WHERE album_name IS NOT NULL"
+            "SELECT COUNT(*) FROM project_students WHERE album_name IS NOT NULL"
         ).fetchone()[0] == 1
 
 
@@ -122,7 +122,7 @@ def test_reviewed_apply_requires_hash_and_is_all_or_nothing(tmp_path):
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT album_name FROM students WHERE id = 1"
+            "SELECT album_name FROM project_students WHERE id = 1"
         ).fetchone()[0] is None
 
     cleanup_calls = []
@@ -141,10 +141,10 @@ def test_reviewed_apply_requires_hash_and_is_all_or_nothing(tmp_path):
     assert report_path.is_file()
     with sqlite3.connect(database_path) as connection:
         values = dict(connection.execute(
-            "SELECT id, album_name FROM students ORDER BY id"
+            "SELECT id, album_name FROM project_students ORDER BY id"
         ))
         outputs = dict(connection.execute(
-            "SELECT id, output_filename FROM students ORDER BY id"
+            "SELECT id, output_filename FROM project_students ORDER BY id"
         ))
     assert values == {
         1: "小明",
@@ -171,7 +171,7 @@ def test_reviewed_apply_rejects_drift_before_any_write(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     with sqlite3.connect(database_path) as connection:
-        connection.execute("UPDATE students SET name = '王已改名' WHERE id = 1")
+        connection.execute("UPDATE project_students SET name = '王已改名' WHERE id = 1")
 
     with pytest.raises(RuntimeError, match="已漂移"):
         apply_reviewed_manifest(
@@ -184,7 +184,7 @@ def test_reviewed_apply_rejects_drift_before_any_write(tmp_path):
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM students WHERE album_name IS NOT NULL"
+            "SELECT COUNT(*) FROM project_students WHERE album_name IS NOT NULL"
         ).fetchone()[0] == 1
     failed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert failed_manifest["overall_status"] == "preflight_failed"
@@ -239,7 +239,7 @@ def test_reviewed_apply_requires_rendering_stopped_acknowledgement(
     assert unchanged_manifest["overall_status"] == "review_ready"
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM students WHERE album_name IS NOT NULL"
+            "SELECT COUNT(*) FROM project_students WHERE album_name IS NOT NULL"
         ).fetchone()[0] == 1
 
 
@@ -249,7 +249,7 @@ def test_crash_before_commit_resumes_same_manifest_from_not_applied(tmp_path):
     _create_database(database_path)
     with sqlite3.connect(database_path) as connection:
         connection.execute(
-            "UPDATE students SET output_filename = 'outputs/keep.pdf' WHERE id = 5"
+            "UPDATE project_students SET output_filename = 'outputs/keep.pdf' WHERE id = 5"
         )
     _report_path, manifest_path = _dry_run(
         database_path,
@@ -285,10 +285,10 @@ def test_crash_before_commit_resumes_same_manifest_from_not_applied(tmp_path):
     }
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT album_name FROM students WHERE id = 1"
+            "SELECT album_name FROM project_students WHERE id = 1"
         ).fetchone()[0] is None
         assert connection.execute(
-            "SELECT output_filename FROM students WHERE id = 1"
+            "SELECT output_filename FROM project_students WHERE id = 1"
         ).fetchone()[0] == "outputs/old1.pdf"
 
     cleanup_calls = []
@@ -311,7 +311,7 @@ def test_crash_after_commit_reconciles_without_duplicate_database_updates(tmp_pa
     with sqlite3.connect(database_path) as connection:
         connection.executescript(
             """CREATE TABLE student_update_audit (student_id INTEGER);
-               CREATE TRIGGER audit_student_update AFTER UPDATE ON students
+               CREATE TRIGGER audit_student_update AFTER UPDATE ON project_students
                BEGIN
                    INSERT INTO student_update_audit VALUES (NEW.id);
                END;"""
@@ -342,7 +342,7 @@ def test_crash_after_commit_reconciles_without_duplicate_database_updates(tmp_pa
             "SELECT COUNT(*) FROM student_update_audit"
         ).fetchone()[0] == 3
         assert connection.execute(
-            "SELECT album_name FROM students WHERE id = 1"
+            "SELECT album_name FROM project_students WHERE id = 1"
         ).fetchone()[0] == "小明"
 
     cleanup_calls = []
@@ -409,7 +409,7 @@ def test_database_lock_rereads_latest_manifest_instead_of_stale_caller_dict(
     assert stale_manifest["cleanup_plan"] == persisted_manifest["cleanup_plan"]
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT album_name FROM students WHERE id = 1"
+            "SELECT album_name FROM project_students WHERE id = 1"
         ).fetchone()[0] == "小明"
 
 
@@ -481,7 +481,7 @@ def test_cleanup_errors_can_retry_without_database_mutation(tmp_path):
     with sqlite3.connect(database_path) as connection:
         connection.executescript(
             """CREATE TABLE student_update_audit (student_id INTEGER);
-               CREATE TRIGGER audit_student_update AFTER UPDATE ON students
+               CREATE TRIGGER audit_student_update AFTER UPDATE ON project_students
                BEGIN
                    INSERT INTO student_update_audit VALUES (NEW.id);
                END;"""
@@ -545,7 +545,7 @@ def test_resume_rejects_mixed_apply_state_without_further_writes(tmp_path):
         )
     with sqlite3.connect(database_path) as connection:
         connection.execute(
-            "UPDATE students SET album_name = '小明', output_filename = NULL WHERE id = 1"
+            "UPDATE project_students SET album_name = '小明', output_filename = NULL WHERE id = 1"
         )
 
     with pytest.raises(RuntimeError, match="部分學生已套用"):
@@ -561,7 +561,7 @@ def test_resume_rejects_mixed_apply_state_without_further_writes(tmp_path):
     assert failed_manifest["database_reconciliation"] == "mixed"
     with sqlite3.connect(database_path) as connection:
         values = dict(connection.execute(
-            "SELECT id, album_name FROM students WHERE id IN (1, 2, 6)"
+            "SELECT id, album_name FROM project_students WHERE id IN (1, 2, 6)"
         ))
     assert values == {1: "小明", 2: None, 6: None}
 
@@ -609,5 +609,5 @@ def test_resume_rejects_modified_cleanup_plan(tmp_path):
         )
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT album_name FROM students WHERE id = 1"
+            "SELECT album_name FROM project_students WHERE id = 1"
         ).fetchone()[0] is None

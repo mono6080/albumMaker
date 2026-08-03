@@ -35,6 +35,9 @@ Claude Code 在此專案的工作指引。本檔只放 **agent 行為規則** �
 | [docs/specs/structural-refactor-v1.md](docs/specs/structural-refactor-v1.md) | 行為保持型結構重構的範圍、並行 ownership、相容契約與驗收標準 | 拆編輯器、前後端服務、測試或工具鏈之前 |
 | [docs/specs/structural-refactor-v1-backend-contracts.md](docs/specs/structural-refactor-v1-backend-contracts.md) | 結構重構期間的後端 transaction、lock、Storage path、fingerprint 與同步型別契約 | 下移後端 route、拆 service、Storage 或 template sync 之前 |
 | [docs/specs/organization-roster-management-v1.md](docs/specs/organization-roster-management-v1.md) | 分校、班級老師編制、目前名單、跨期相本快照與穩定專案權限的實作契約 | 實作或審查園所管理、老師指派、專案轉交與組織權限 |
+| [docs/specs/term-scoped-classroom-v1.md](docs/specs/term-scoped-classroom-v1.md) | 班級改為「學期 × 分校 × 部門 × 班名」、`academic_term_classrooms` 退場與資料搬遷的實作契約 | 動班級身分、名冊／老師編制歸屬、編班或相本權限來源 |
+| [docs/specs/term-scoped-classroom-v1-risks.md](docs/specs/term-scoped-classroom-v1-risks.md) | 該重構的風險登錄、緩解決定、測試計畫與上線前檢查 | 動手做該重構之前、排上線順序之前 |
+| [docs/specs/websystem-roster-sync-v1.md](docs/specs/websystem-roster-sync-v1.md) | 行政系統為組織資料上游、對應鍵、快照取得、同步分類與安全閘的實作契約 | 實作或審查名冊／編制的自動同步、期中異動 |
 | [docs/specs/academic-term-reporting-v1.md](docs/specs/academic-term-reporting-v1.md) | 正式學期、班級期別工作格、老師進度與學期彙整匯出的實作契約 | 實作或審查學期遷移、進度報表、彙整匯出與歷史主管 scope |
 | [docs/specs/student-album-completion-v1.md](docs/specs/student-album-completion-v1.md) | 學生層個別完成、分層內容鎖、全班文字硬鎖與下載閘門的實作契約 | 實作或審查個別完成、完成鎖定、單生/全班下載解鎖 |
 | docs/teacher-album-guide.md 等 | 終端使用者教學（老師 / 設計組），由 `scripts/generate_*.mjs` 產出 HTML/PDF | 改使用者教學 |

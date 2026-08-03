@@ -64,9 +64,9 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   超出 local frame 的部分先裁切再旋轉。溢框稽核另走未裁切量測路徑，操作方式見
   [testing.md 的資料修復腳本 runbook](testing.md#資料修復腳本-runbook)
 - 姓名變數由後端 `text_variables.py` 解析，前端 `textVariables.js` 鏡像同一契約：
-  `{name}` 使用 `Student.effective_album_name`，`{full_name}` 使用完整姓名；raw 文字、兩個
-  replacement 與 final 結果都套用 200 字上限。已歸班 Student 的 effective 值動態解析
-  `RosterChild.album_name`，未歸班才讀 legacy `Student.album_name`；名冊 raw 值與 authority
+  `{name}` 使用 `ProjectStudent.effective_album_name`，`{full_name}` 使用完整姓名；raw 文字、兩個
+  replacement 與 final 結果都套用 200 字上限。已歸班 ProjectStudent 的 effective 值動態解析
+  `Student.album_name`，未歸班才讀 legacy `ProjectStudent.album_name`；名冊 raw 值與 authority
   切換狀態都納入 publish CAS，避免修改途中發布舊輸出。
   TemplateCanvas 的一般文字與 footer 先分別顯示
   `（相本稱呼）`、`（完整姓名）`，與後端模板預覽一致；契約由
@@ -91,7 +91,7 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   同一縮圖 key 使用 single-flight，且不同尺寸的縮圖生成共用照片重工作槽
 - 渲染捕捉 `Project.template_revision` 與內容快照，完成後在 per-student render lock 內做
   revision/content CAS 才發布 canonical PDF/JPG 與 `output_filename`。模板若在慢渲染途中更新，
-  舊渲染不得晚到覆寫新輸出或重新發布已失效 PDF；CAS 也包含 Project／Student `created_at`，
+  舊渲染不得晚到覆寫新輸出或重新發布已失效 PDF；CAS 也包含 Project／ProjectStudent `created_at`，
   防止 SQLite 重用刪除後的 id 形成 ABA；全班／學期補渲染也不跨學生重用舊 layout。
   專案／學生改名與刪除使用相同 project→student locks，完成後失效並清除舊 canonical 輸出
 - 渲染併發：單本渲染與全班/補渲染 job 都**逐位**取 `album_render_limiter`
@@ -137,6 +137,13 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   commit，因此純 pan／pinch frame 不得重 render TemplateEditor／Artwork。Camera、sheet、responsive
   panel 與多選模式都是 editor view state，不得進入 layout、dirty、undo 或 save payload；手勢尾端的
   synthetic tap 也不得清除既有選取。此契約由 `template-editor-mobile.spec.js` 的 render probe 釘住。
+- 分頁草稿與 undo/redo 的狀態機在 `utils/layoutHistoryModel.js`（純模組、不含 React），
+  `hooks/useLayoutHistory.js` 只是把結果接到畫面狀態的薄層。四張表：每頁的草稿版面、
+  伺服器基準版本、undo/redo 堆疊、以及連續同類操作的合併群組。三條容易寫錯而且**不會報錯**
+  的規則寫在那裡並由 `tests/unit/layout-history.test.mjs` 釘住：非同步上傳的結果要寫回
+  **發起上傳的那一頁**而不是使用者切過去的那一頁；上傳結果要疊在最新草稿上而不是覆蓋回基準
+  版本；儲存請求還在飛時又編輯過的草稿必須保留並搬到正式 page id（比的是**物件 identity**，
+  不是內容）。
 - TemplateEditor 只協調 route 與 responsive composition；selection、clipboard、shortcuts、素材分析、
   文件／完整快照 CAS、離頁保護分別由 `useEditorSelection.js`、`useLayoutClipboard.js`、
   `useEditorShortcuts.js`、`useMaterialTextSuggestion.js`、`useTemplateEditorDocument.js`、

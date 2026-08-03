@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from auth import hash_password
 from crud.user_crud import get_user_or_404
 from database import (
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
     ProjectComment,
@@ -196,9 +196,9 @@ def _end_classroom_teacher_assignments(
     reason: str,
     ended_at,
 ) -> None:
-    assignments = db.query(ClassroomTeacherAssignment).filter(
-        ClassroomTeacherAssignment.teacher_id == user_id,
-        ClassroomTeacherAssignment.ended_at.is_(None),
+    assignments = db.query(ClassroomTeacher).filter(
+        ClassroomTeacher.teacher_id == user_id,
+        ClassroomTeacher.ended_at.is_(None),
     ).all()
     for assignment in assignments:
         assignment.ended_at = ended_at
@@ -382,9 +382,9 @@ def update_user_record(
             raise HTTPException(status_code=409, detail="請先解除目前園所主管範圍")
 
     if role_is_changing and next_role not in {"teacher", "supervisor", "none"}:
-        active_classroom_count = db.query(ClassroomTeacherAssignment).filter(
-            ClassroomTeacherAssignment.teacher_id == target_user.id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
+        active_classroom_count = db.query(ClassroomTeacher).filter(
+            ClassroomTeacher.teacher_id == target_user.id,
+            ClassroomTeacher.ended_at.is_(None),
         ).count()
         if active_classroom_count:
             raise HTTPException(

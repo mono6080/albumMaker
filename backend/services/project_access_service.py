@@ -4,13 +4,14 @@ from fastapi import HTTPException
 from sqlalchemy import false
 from sqlalchemy.orm import Session, object_session
 
-from database import ClassroomTeacherAssignment, Project, ProjectComment, Student, User
+from database import ClassroomTeacher, Project, ProjectComment, ProjectStudent, User
 from services.organization_scope_service import (
     OrganizationReadScope,
     apply_project_read_scope as apply_organization_project_read_scope,
     build_organization_read_scope,
     project_in_read_scope,
     project_in_supervisor_scope,
+    project_in_teacher_carryover_scope,
     project_in_teacher_scope,
 )
 
@@ -81,6 +82,16 @@ def get_project_permissions(
     in_supervisor_scope = bool(
         actor_scope and project_in_supervisor_scope(project, actor_scope)
     )
+    # 老師要能做完自己開始的相本。學期在日曆上結束時，相本通常還沒做完——2026-08 首次
+    # 切換學期時，114 下有 40 本仍在製作、當天還有人在編，三個期別都有。把製作權只綁在
+    # 「目前學期的編制」，那 40 本會在套用編班的瞬間對老師變成唯讀。
+    # 相本一旦標記完成仍然鎖住（要主管或 admin 退回），所以這不是永久的後門。
+    # 認的是「編制只因為學期輪替而結束」，不是「曾經任教」——被移出班級仍然要擋得住。
+    in_unfinished_own_classroom = bool(
+        actor_scope
+        and project.completed_at is None
+        and project_in_teacher_carryover_scope(project, actor_scope)
+    )
 
     return {
         "can_read": bool(
@@ -91,7 +102,7 @@ def get_project_permissions(
             is_admin
             or (
                 is_classroom_project
-                and in_teacher_scope
+                and (in_teacher_scope or in_unfinished_own_classroom)
             )
         ),
         "can_reopen": bool(
@@ -146,14 +157,14 @@ def assert_project_readable(
     raise HTTPException(status_code=403, detail="無此專案的存取權限")
 
 
-def student_effectively_completed(project: Project, student: Student) -> bool:
+def student_effectively_completed(project: Project, student: ProjectStudent) -> bool:
     """有效完成 predicate（唯一判斷式）：學生自身或全班完成任一成立即視為完成。"""
     return student.completed_at is not None or project.completed_at is not None
 
 
 def assert_student_content_writable(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     current_user: User,
 ) -> None:
     """逐學生寫入鎖：目標學生已（有效）完成即擋；admin 比照全班內容鎖可越過。"""
@@ -170,7 +181,7 @@ def assert_student_content_writable(
     )
 
 
-def assert_student_downloadable(project: Project, student: Student) -> None:
+def assert_student_downloadable(project: Project, student: ProjectStudent) -> None:
     """單生下載閘門：該生有效完成即放行。"""
     if student_effectively_completed(project, student):
         return
@@ -283,11 +294,11 @@ def assert_classroom_project_creatable(
     """班級相本只允許 admin 或目前主教建立。"""
     if current_user.role == "admin":
         return
-    is_active_lead = db.query(ClassroomTeacherAssignment.id).filter(
-        ClassroomTeacherAssignment.classroom_id == classroom_id,
-        ClassroomTeacherAssignment.teacher_id == current_user.id,
-        ClassroomTeacherAssignment.duty == "lead",
-        ClassroomTeacherAssignment.ended_at.is_(None),
+    is_active_lead = db.query(ClassroomTeacher.id).filter(
+        ClassroomTeacher.classroom_id == classroom_id,
+        ClassroomTeacher.teacher_id == current_user.id,
+        ClassroomTeacher.duty == "lead",
+        ClassroomTeacher.ended_at.is_(None),
     ).first()
     if current_user.role in {"teacher", "supervisor"} and is_active_lead:
         return

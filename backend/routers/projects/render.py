@@ -2,7 +2,6 @@
 # 處理頁面預覽圖生成、相冊 PDF 渲染（單生 / 全班）、PDF 與 ZIP 下載
 
 import asyncio
-import io
 import logging
 import time
 

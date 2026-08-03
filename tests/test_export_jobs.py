@@ -15,7 +15,7 @@ def test_render_job_is_singleton_until_running_job_finishes(monkeypatch):
 
     def render_missing(
         db,
-        academic_term_id,
+        semester_id,
         period_ids,
         roster_child_ids,
         progress_callback,
@@ -50,7 +50,7 @@ def test_render_job_is_singleton_until_running_job_finishes(monkeypatch):
         time.sleep(0.01)
     assert final_state == {
         "job_id": first_state["job_id"],
-        "academic_term_id": 10,
+        "semester_id": 10,
         "period_ids": [1],
         "roster_child_ids": None,
         "status": "done",

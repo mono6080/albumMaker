@@ -70,9 +70,9 @@ class User(Base):
         passive_deletes=True,
     )
     classroom_teacher_assignments = relationship(
-        "ClassroomTeacherAssignment",
+        "ClassroomTeacher",
         back_populates="teacher",
-        foreign_keys="ClassroomTeacherAssignment.teacher_id",
+        foreign_keys="ClassroomTeacher.teacher_id",
         passive_deletes=True,
     )
     organization_supervisor_assignments = relationship(
@@ -100,8 +100,8 @@ class TemplatePeriod(Base):
 
     templates = relationship("Template", back_populates="period", order_by="Template.created_at.desc()")
     projects = relationship("Project", back_populates="template_period")
-    academic_term_period = relationship(
-        "AcademicTermPeriod",
+    semester_period = relationship(
+        "SemesterPeriod",
         back_populates="template_period",
         uselist=False,
     )
@@ -141,7 +141,7 @@ class Campus(Base):
     classrooms = relationship(
         "Classroom",
         back_populates="campus",
-        order_by="Classroom.created_at",
+        order_by="(Classroom.sort_order.is_(None), Classroom.sort_order, Classroom.id)",
     )
     supervisor_assignments = relationship(
         "OrganizationSupervisorAssignment",
@@ -209,65 +209,35 @@ class OrganizationSupervisorAssignment(Base):
     ended_by = relationship("User", foreign_keys=[ended_by_id])
 
 
-class Classroom(Base):
-    __tablename__ = "classrooms"
+class ClassroomMember(Base):
+    __tablename__ = "classroom_members"
     id = Column(Integer, primary_key=True, index=True)
-    campus_id = Column(Integer, ForeignKey("campuses.id"), nullable=False)
-    department = Column(String, nullable=False)
-    name = Column(String, nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
-    created_at = Column(DateTime, default=utc_now)
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
-    campus = relationship("Campus", back_populates="classrooms")
-    roster_members = relationship(
-        "ClassRosterMember",
-        back_populates="classroom",
-        order_by="ClassRosterMember.started_at",
+    classroom_id = Column(
+        Integer,
+        ForeignKey("classrooms.id"),
+        nullable=False,
     )
-    teacher_assignments = relationship(
-        "ClassroomTeacherAssignment",
-        back_populates="classroom",
-        order_by="ClassroomTeacherAssignment.started_at",
-    )
-    projects = relationship(
-        "Project",
-        back_populates="classroom",
-        order_by="Project.created_at",
-    )
-    academic_term_classrooms = relationship(
-        "AcademicTermClassroom",
-        back_populates="classroom",
-        order_by="AcademicTermClassroom.id",
-    )
-
-
-class ClassRosterMember(Base):
-    __tablename__ = "class_roster_members"
-    id = Column(Integer, primary_key=True, index=True)
-    classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
-    roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=False)
+    roster_child_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     started_at = Column(DateTime, nullable=False, default=utc_now)
     ended_at = Column(DateTime, nullable=True)
     end_reason = Column(Text, nullable=True)
-    classroom = relationship("Classroom", back_populates="roster_members")
-    roster_child = relationship("RosterChild", back_populates="class_roster_members")
+    classroom = relationship(
+        "Classroom",
+        back_populates="roster_members",
+    )
+    roster_child = relationship("Student", back_populates="class_roster_members")
     term_placements = relationship(
         "TermStudentPlacement",
         back_populates="source_membership",
     )
-    academic_term_student_snapshots = relationship(
-        "AcademicTermClassroomStudent",
-        back_populates="source_membership",
-        foreign_keys="AcademicTermClassroomStudent.source_membership_id",
-    )
 
 
-class ClassroomTeacherAssignment(Base):
-    __tablename__ = "classroom_teacher_assignments"
+class ClassroomTeacher(Base):
+    __tablename__ = "classroom_teachers"
     __table_args__ = (
         CheckConstraint(
             "duty IN ('lead', 'co_teacher')",
-            name="ck_classroom_teacher_assignments_duty",
+            name="ck_classroom_teachers_duty",
         ),
         Index(
             "ux_classroom_teacher_active",
@@ -285,7 +255,11 @@ class ClassroomTeacherAssignment(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
+    classroom_id = Column(
+        Integer,
+        ForeignKey("classrooms.id"),
+        nullable=False,
+    )
     teacher_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -309,7 +283,10 @@ class ClassroomTeacherAssignment(Base):
     )
     ended_by_name_snapshot = Column(String, nullable=True)
 
-    classroom = relationship("Classroom", back_populates="teacher_assignments")
+    classroom = relationship(
+        "Classroom",
+        back_populates="teacher_assignments",
+    )
     teacher = relationship(
         "User",
         back_populates="classroom_teacher_assignments",
@@ -317,22 +294,21 @@ class ClassroomTeacherAssignment(Base):
     )
     started_by = relationship("User", foreign_keys=[started_by_id])
     ended_by = relationship("User", foreign_keys=[ended_by_id])
-    academic_term_teacher_snapshots = relationship(
-        "AcademicTermClassroomTeacher",
-        back_populates="source_assignment",
-        foreign_keys="AcademicTermClassroomTeacher.source_assignment_id",
-    )
 
 
-class AcademicTerm(Base):
-    __tablename__ = "academic_terms"
+# 「目前」的唯一定義：班級沒有自己的啟用旗標，由所屬學期的狀態決定
+CURRENT_SEMESTER_STATUSES = ("imported", "active")
+
+
+class Semester(Base):
+    __tablename__ = "semesters"
     __table_args__ = (
         CheckConstraint(
             "status IN ('imported', 'draft', 'active', 'closed', 'cancelled')",
-            name="ck_academic_terms_status",
+            name="ck_semesters_status",
         ),
         Index(
-            "ux_academic_terms_current",
+            "ux_semesters_current",
             text("(1)"),
             unique=True,
             sqlite_where=text("status IN ('imported', 'active')"),
@@ -379,43 +355,43 @@ class AcademicTerm(Base):
     closed_by = relationship("User", foreign_keys=[closed_by_id])
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     periods = relationship(
-        "AcademicTermPeriod",
-        back_populates="academic_term",
+        "SemesterPeriod",
+        back_populates="semester",
         cascade="all, delete-orphan",
-        order_by="AcademicTermPeriod.position",
+        order_by="SemesterPeriod.position",
     )
     classrooms = relationship(
-        "AcademicTermClassroom",
-        back_populates="academic_term",
+        "Classroom",
+        back_populates="semester",
         cascade="all, delete-orphan",
-        order_by="AcademicTermClassroom.id",
+        order_by="(Classroom.sort_order.is_(None), Classroom.sort_order, Classroom.id)",
     )
     reclassification_plan = relationship(
         "TermReclassificationPlan",
-        back_populates="target_academic_term",
+        back_populates="target_semester",
         uselist=False,
     )
 
 
-class AcademicTermPeriod(Base):
-    __tablename__ = "academic_term_periods"
+class SemesterPeriod(Base):
+    __tablename__ = "semester_periods"
     __table_args__ = (
-        CheckConstraint("position >= 0", name="ck_academic_term_periods_position"),
+        CheckConstraint("position >= 0", name="ck_semester_periods_position"),
         UniqueConstraint(
-            "academic_term_id",
+            "semester_id",
             "position",
-            name="ux_academic_term_periods_term_position",
+            name="ux_semester_periods_term_position",
         ),
         UniqueConstraint(
             "template_period_id",
-            name="ux_academic_term_periods_template_period",
+            name="ux_semester_periods_template_period",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    academic_term_id = Column(
+    semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id", ondelete="CASCADE"),
+        ForeignKey("semesters.id", ondelete="CASCADE"),
         nullable=False,
     )
     template_period_id = Column(
@@ -427,190 +403,118 @@ class AcademicTermPeriod(Base):
     department = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
 
-    academic_term = relationship("AcademicTerm", back_populates="periods")
+    semester = relationship("Semester", back_populates="periods")
     template_period = relationship(
         "TemplatePeriod",
-        back_populates="academic_term_period",
+        back_populates="semester_period",
     )
     work_slots = relationship(
         "ClassPeriodWorkSlot",
-        back_populates="term_period",
+        back_populates="semester_period",
         cascade="all, delete-orphan",
         order_by="ClassPeriodWorkSlot.id",
     )
 
 
-class AcademicTermClassroom(Base):
-    __tablename__ = "academic_term_classrooms"
+class Classroom(Base):
+    """班級本體：一個班就是「學期 × 分校 × 部門 × 班名」，不跨學期延續。
+
+    名冊成員與老師編制直接掛在這裡，所以不需要另一層學期快照——班本身就只活一個
+    學期。跨學期的識別一律靠 Student／User，見
+    docs/specs/term-scoped-classroom-v1.md。
+    """
+    __tablename__ = "classrooms"
     __table_args__ = (
         UniqueConstraint(
-            "academic_term_id",
-            "classroom_id",
-            name="ux_academic_term_classrooms_term_classroom",
+            "semester_id",
+            "campus_id",
+            "department",
+            "name",
+            name="ux_classrooms_term_scope_name",
         ),
         Index(
-            "idx_academic_term_classrooms_scope",
-            "academic_term_id",
-            "campus_id_snapshot",
+            "idx_classrooms_term_scope",
+            "semester_id",
+            "campus_id",
             "department",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    academic_term_id = Column(
+    semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id", ondelete="CASCADE"),
+        ForeignKey("semesters.id", ondelete="CASCADE"),
         nullable=False,
     )
-    classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
-    campus_id_snapshot = Column(Integer, nullable=False)
-    campus_name_snapshot = Column(String, nullable=False)
-    classroom_name_snapshot = Column(String, nullable=False)
+    campus_id = Column(Integer, ForeignKey("campuses.id"), nullable=False)
+    name = Column(String, nullable=False)
     department = Column(String, nullable=False)
+    # 顯示順序：班名是「一二階／三階／十階」這種中文數字，字面排序與階段順序無關
+    # （字面排會排成 一二階 七階 三階 九階 五階…）。順序是園所自己的意思，
+    # 沒有可靠的推導方式，只能存下來。NULL 排在最後，沿用 id 當次序。
+    sort_order = Column(Integer, nullable=True)
 
-    academic_term = relationship("AcademicTerm", back_populates="classrooms")
-    classroom = relationship("Classroom", back_populates="academic_term_classrooms")
-    teachers = relationship(
-        "AcademicTermClassroomTeacher",
-        back_populates="term_classroom",
-        cascade="all, delete-orphan",
-        order_by="AcademicTermClassroomTeacher.id",
+    semester = relationship("Semester", back_populates="classrooms")
+    campus = relationship("Campus", back_populates="classrooms")
+    roster_members = relationship(
+        "ClassroomMember",
+        back_populates="classroom",
+        order_by="ClassroomMember.started_at",
     )
-    students = relationship(
-        "AcademicTermClassroomStudent",
-        back_populates="term_classroom",
-        cascade="all, delete-orphan",
-        order_by="AcademicTermClassroomStudent.id",
+    teacher_assignments = relationship(
+        "ClassroomTeacher",
+        back_populates="classroom",
+        order_by="ClassroomTeacher.started_at",
     )
     work_slots = relationship(
         "ClassPeriodWorkSlot",
-        back_populates="term_classroom",
+        back_populates="classroom",
         cascade="all, delete-orphan",
         order_by="ClassPeriodWorkSlot.id",
     )
-
-
-class AcademicTermClassroomTeacher(Base):
-    __tablename__ = "academic_term_classroom_teachers"
-    __table_args__ = (
-        CheckConstraint(
-            "duty IN ('lead', 'co_teacher')",
-            name="ck_academic_term_classroom_teachers_duty",
-        ),
-        UniqueConstraint(
-            "term_classroom_id",
-            "teacher_id",
-            name="ux_academic_term_classroom_teachers_term_teacher",
-        ),
+    projects = relationship(
+        "Project",
+        back_populates="classroom",
+        order_by="Project.created_at",
     )
 
-    id = Column(Integer, primary_key=True, index=True)
-    term_classroom_id = Column(
-        Integer,
-        ForeignKey("academic_term_classrooms.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    source_assignment_id = Column(
-        Integer,
-        ForeignKey("classroom_teacher_assignments.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    teacher_id = Column(
-        Integer,
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    teacher_name_snapshot = Column(String, nullable=False)
-    duty = Column(String, nullable=False)
-
-    term_classroom = relationship("AcademicTermClassroom", back_populates="teachers")
-    source_assignment = relationship(
-        "ClassroomTeacherAssignment",
-        back_populates="academic_term_teacher_snapshots",
-        foreign_keys=[source_assignment_id],
-    )
-    teacher = relationship("User", foreign_keys=[teacher_id])
-
-
-class AcademicTermClassroomStudent(Base):
-    __tablename__ = "academic_term_classroom_students"
-    __table_args__ = (
-        UniqueConstraint(
-            "term_classroom_id",
-            "roster_child_id_snapshot",
-            name="ux_academic_term_classroom_students_classroom_child",
-        ),
-        Index(
-            "ux_academic_term_classroom_students_term_child",
-            "academic_term_id",
-            "roster_child_id_snapshot",
-            unique=True,
-        ),
-        Index(
-            "idx_academic_term_classroom_students_child",
-            "roster_child_id_snapshot",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    academic_term_id = Column(
-        Integer,
-        ForeignKey("academic_terms.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    term_classroom_id = Column(
-        Integer,
-        ForeignKey("academic_term_classrooms.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    source_membership_id = Column(
-        Integer,
-        ForeignKey("class_roster_members.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    # 名冊 id 與姓名都保存為學期快照；孩子日後改名或區間結束不回寫正式學期。
-    roster_child_id_snapshot = Column(Integer, nullable=False)
-    student_name_snapshot = Column(String, nullable=False)
-
-    term_classroom = relationship(
-        "AcademicTermClassroom",
-        back_populates="students",
-    )
-    source_membership = relationship(
-        "ClassRosterMember",
-        back_populates="academic_term_student_snapshots",
-        foreign_keys=[source_membership_id],
-    )
+    @property
+    def is_current(self) -> bool:
+        """班級是否屬於目前正式學期：取代舊的班級啟用旗標。"""
+        return (
+            self.semester is not None
+            and self.semester.status in CURRENT_SEMESTER_STATUSES
+        )
 
 
 class ClassPeriodWorkSlot(Base):
     __tablename__ = "class_period_work_slots"
     __table_args__ = (
         UniqueConstraint(
-            "term_classroom_id",
-            "term_period_id",
+            "classroom_id",
+            "semester_period_id",
             name="ux_class_period_work_slots_classroom_period",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    term_classroom_id = Column(
+    classroom_id = Column(
         Integer,
-        ForeignKey("academic_term_classrooms.id", ondelete="CASCADE"),
+        ForeignKey("classrooms.id", ondelete="CASCADE"),
         nullable=False,
     )
-    term_period_id = Column(
+    semester_period_id = Column(
         Integer,
-        ForeignKey("academic_term_periods.id", ondelete="CASCADE"),
+        ForeignKey("semester_periods.id", ondelete="CASCADE"),
         nullable=False,
     )
     started_at = Column(DateTime, nullable=True)
 
-    term_classroom = relationship(
-        "AcademicTermClassroom",
+    classroom = relationship(
+        "Classroom",
         back_populates="work_slots",
     )
-    term_period = relationship("AcademicTermPeriod", back_populates="work_slots")
+    semester_period = relationship("SemesterPeriod", back_populates="work_slots")
     projects = relationship(
         "Project",
         back_populates="class_period_work_slot",
@@ -630,7 +534,9 @@ class Project(Base):
     template_revision = Column(Integer, nullable=False, default=1, server_default="1")
     # 專案負責人只供進度歸戶與稽核；授權一律由目前組織編制計算。
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    # classroom_id=NULL 只代表尚待管理員明確歸班的遷移資料；所有新相本必定有班級。
+    # 班級直接指向學期班級本體：權限判斷是每本相本、每次請求都要做的熱路徑，
+    # 不繞 work slot 推導。work slot 不可變，兩者不會漂移。
+    # NULL 只代表尚待歸班的遷移資料，那些相本維持 admin-only。
     classroom_id = Column(
         Integer,
         ForeignKey("classrooms.id", ondelete="SET NULL"),
@@ -658,10 +564,14 @@ class Project(Base):
     archive_expires_at = Column(DateTime, nullable=True)
     # 全班完成時間：非 NULL 代表老師已確認完成，內容鎖定（主管/admin 可退回）
     completed_at = Column(DateTime, nullable=True)
-    label_texts_json = Column(Text, nullable=False, default="{}")
+    # server_default 讓 create_all 產生的 DDL 與升級上來的資料庫一致；
+    # 值與 Python default 相同，寫入行為不變
+    label_texts_json = Column(
+        Text, nullable=False, default="{}", server_default=text("'{}'")
+    )
     template = relationship("Template", back_populates="projects")
     template_period = relationship("TemplatePeriod", back_populates="projects")
-    students = relationship("Student", back_populates="project", cascade="all, delete-orphan", order_by="Student.order_index")
+    students = relationship("ProjectStudent", back_populates="project", cascade="all, delete-orphan", order_by="ProjectStudent.order_index")
     owner = relationship("User", back_populates="owned_projects", foreign_keys=[owner_id])
     creator = relationship(
         "User",
@@ -669,7 +579,11 @@ class Project(Base):
         foreign_keys=[created_by_id],
         passive_deletes=True,
     )
-    classroom = relationship("Classroom", back_populates="projects")
+    classroom = relationship(
+        "Classroom",
+        back_populates="projects",
+        foreign_keys=[classroom_id],
+    )
     class_period_work_slot = relationship(
         "ClassPeriodWorkSlot",
         back_populates="projects",
@@ -763,9 +677,9 @@ class TermReclassificationPlan(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    target_academic_term_id = Column(
+    target_semester_id = Column(
         Integer,
-        ForeignKey("academic_terms.id"),
+        ForeignKey("semesters.id"),
         nullable=True,
         unique=True,
     )
@@ -812,8 +726,8 @@ class TermReclassificationPlan(Base):
     updated_by = relationship("User", foreign_keys=[updated_by_id])
     applied_by = relationship("User", foreign_keys=[applied_by_id])
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
-    target_academic_term = relationship(
-        "AcademicTerm",
+    target_semester = relationship(
+        "Semester",
         back_populates="reclassification_plan",
     )
     student_placements = relationship(
@@ -857,7 +771,7 @@ class TermStudentPlacement(Base):
     )
     source_membership_id = Column(
         Integer,
-        ForeignKey("class_roster_members.id"),
+        ForeignKey("classroom_members.id"),
         nullable=False,
     )
     roster_child_id_snapshot = Column(Integer, nullable=False)
@@ -869,16 +783,19 @@ class TermStudentPlacement(Base):
     outcome = Column(String, nullable=False)
     target_classroom_id = Column(
         Integer,
-        ForeignKey("classrooms.id"),
+        ForeignKey("classrooms.id", ondelete="CASCADE"),
         nullable=True,
     )
 
     plan = relationship("TermReclassificationPlan", back_populates="student_placements")
     source_membership = relationship(
-        "ClassRosterMember",
+        "ClassroomMember",
         back_populates="term_placements",
     )
-    target_classroom = relationship("Classroom", foreign_keys=[target_classroom_id])
+    target_classroom = relationship(
+        "Classroom",
+        foreign_keys=[target_classroom_id],
+    )
 
 
 class TermClassroomPlan(Base):
@@ -897,7 +814,11 @@ class TermClassroomPlan(Base):
         ForeignKey("term_reclassification_plans.id", ondelete="CASCADE"),
         nullable=False,
     )
-    classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
+    classroom_id = Column(
+        Integer,
+        ForeignKey("classrooms.id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
     plan = relationship("TermReclassificationPlan", back_populates="classroom_plans")
     classroom = relationship("Classroom")
@@ -944,21 +865,32 @@ class TermClassroomTeacherTarget(Base):
     teacher = relationship("User", foreign_keys=[teacher_id])
 
 
-class RosterChild(Base):
+class Student(Base):
     """園所層級的孩子名冊：跨專案識別「同一個孩子」，供學期彙整匯出分組使用。
 
     名冊項只由園所設定建立／改名；轉班、復學與新學期編班沿用同一 id。
     name 不設 UNIQUE，因為園所內可能有同名不同人。
     """
-    __tablename__ = "roster_children"
+    __tablename__ = "students"
+    __table_args__ = (
+        Index(
+            "ux_students_student_serial",
+            "student_serial",
+            unique=True,
+            sqlite_where=text("student_serial IS NOT NULL"),
+        ),
+    )
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, index=True)
     # 已歸班相本的相本稱呼唯一來源；所有既有與未來相本都即時引用。
     album_name = Column(String, nullable=True)
+    # 行政系統學號：與行政系統對帳的唯一鍵。姓名會打錯（2026-08 就更正過 31 筆），
+    # 學號不會。可為空——已離園、或從未在行政系統登記過的孩子沒有學號。
+    student_serial = Column(String, nullable=True)
     created_at = Column(DateTime, default=utc_now)
-    students = relationship("Student", back_populates="roster_child")
+    students = relationship("ProjectStudent", back_populates="roster_child")
     class_roster_members = relationship(
-        "ClassRosterMember",
+        "ClassroomMember",
         back_populates="roster_child",
     )
 
@@ -968,30 +900,30 @@ class RosterChild(Base):
         return self.album_name or self.name
 
 
-class Student(Base):
-    __tablename__ = "students"
+class ProjectStudent(Base):
+    __tablename__ = "project_students"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     name = Column(String, nullable=False)
-    # 只供未歸班舊相本相容；已歸班相本一律讀 RosterChild.album_name。
+    # 只供未歸班舊相本相容；已歸班相本一律讀 Student.album_name。
     album_name = Column(String, nullable=True)
     order_index = Column(Integer, default=0)
     pages_data_json = Column(Text, nullable=False, default="[]")
     output_filename = Column(String, nullable=True)
     # 未歸班舊專案可為 NULL／暫定證據；歸班後由 DB trigger 凍結正式身分。
-    roster_child_id = Column(Integer, ForeignKey("roster_children.id"), nullable=True)
+    roster_child_id = Column(Integer, ForeignKey("students.id"), nullable=True)
     # 單一學生相本完成時間：有效完成判斷一律走 project_access_service 的 predicate
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
     project = relationship("Project", back_populates="students")
-    roster_child = relationship("RosterChild", back_populates="students")
+    roster_child = relationship("Student", back_populates="students")
 
     @property
     def resolved_album_name(self) -> str | None:
         """依相本是否正式歸班，解析唯一可信的相本稱呼來源。"""
         if self.project is not None and self.project.classroom_id is not None:
-            # 已歸班資料即使 child link 異常，也不可回頭採用 Student 的舊稱呼。
+            # 已歸班資料即使 child link 異常，也不可回頭採用 ProjectStudent 的舊稱呼。
             return self.roster_child.album_name if self.roster_child is not None else None
         return self.album_name
 

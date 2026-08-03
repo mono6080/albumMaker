@@ -57,8 +57,11 @@ backend/rendered_*.png
 *.jpeg
 
 # Env
+# `.env` 與 `*.env` 擋不住 `.env.bak`／`.env.20260801` 這類備份或暫存副本，
+# 而它們裝的是同一組 SECRET_KEY 與 R2 金鑰——漏掉一次 `git add .` 就外洩。
 .env
 *.env
+.env.*
 !.env.example
 
 # OS

@@ -10,17 +10,18 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from database import User, get_db
 from services.organization_service import (
-    assign_project_to_classroom as assign_project_to_classroom_use_case,
     auto_fill_classroom_member_album_names as auto_fill_classroom_album_names_use_case,
     auto_fill_roster_child_album_name as auto_fill_roster_album_name_use_case,
     batch_add_classroom_members as batch_add_classroom_members_use_case,
     create_campus as create_campus_use_case,
     create_classroom as create_classroom_use_case,
+    delete_classroom as delete_classroom_use_case,
+    delete_draft_classroom_member as delete_draft_classroom_member_use_case,
     create_classroom_project as create_classroom_project_use_case,
     get_my_classrooms as get_my_classrooms_use_case,
     get_organization_overview as get_organization_overview_use_case,
-    get_project_classroom_migration_preview as get_project_migration_preview_use_case,
     replace_campus_supervisors as replace_campus_supervisors_use_case,
+    reorder_classrooms as reorder_classrooms_use_case,
     replace_classroom_teachers as replace_classroom_teachers_use_case,
     update_campus as update_campus_use_case,
     update_classroom as update_classroom_use_case,
@@ -32,7 +33,7 @@ from services.organization_term_service import (
     cancel_term_reclassification_plan as cancel_term_reclassification_plan_use_case,
     create_term_reclassification_plan as create_term_reclassification_plan_use_case,
     get_term_reclassification_plan as get_term_reclassification_plan_use_case,
-    list_academic_terms as list_academic_terms_use_case,
+    list_semesters as list_semesters_use_case,
     update_term_reclassification_plan as update_term_reclassification_plan_use_case,
     validate_term_reclassification_plan as validate_term_reclassification_plan_use_case,
 )
@@ -101,6 +102,13 @@ class ClassroomCreateBody(BaseModel):
     department: Literal["infant", "academy"]
     name: str = Field(..., min_length=1, max_length=100)
     is_active: bool = True
+    # 省略時建在目前學期；編班草稿要多開班時指定草稿的目標學期
+    semester_id: int | None = None
+
+
+class ClassroomOrderBody(BaseModel):
+    # 要求完整集合，所以上限跟一個學期可能的班數同量級即可
+    classroom_ids: list[int] = Field(..., max_length=500)
 
 
 class ClassroomUpdateBody(BaseModel):
@@ -110,7 +118,7 @@ class ClassroomUpdateBody(BaseModel):
     is_active: bool | None = None
 
 
-class ClassRosterMemberInput(BaseModel):
+class ClassroomMemberInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     album_name: str | None = Field(
         None,
@@ -119,10 +127,10 @@ class ClassRosterMemberInput(BaseModel):
 
 
 class ClassRosterBatchBody(BaseModel):
-    members: list[ClassRosterMemberInput] = Field(..., max_length=100)
+    members: list[ClassroomMemberInput] = Field(..., max_length=100)
 
 
-class ClassRosterMemberUpdateBody(BaseModel):
+class ClassroomMemberUpdateBody(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     album_name: str | None = Field(
         None,
@@ -235,41 +243,6 @@ def replace_campus_supervisors(
     )
 
 
-@router.get("/projects/{project_id}/classroom-migration-preview")
-def get_project_classroom_migration_preview(
-    project_id: int,
-    classroom_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_role("admin")),
-):
-    return get_project_migration_preview_use_case(
-        db,
-        project_id,
-        classroom_id,
-    )
-
-
-@router.put("/projects/{project_id}/classroom")
-def assign_project_to_classroom(
-    project_id: int,
-    body: ProjectClassroomAssignmentBody,
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(require_role("admin")),
-):
-    return assign_project_to_classroom_use_case(
-        db,
-        current_admin,
-        project_id,
-        classroom_id=body.classroom_id,
-        source_fingerprint=body.source_fingerprint,
-        seed_current_roster=body.seed_current_roster,
-        student_identity_decisions=[
-            decision.model_dump()
-            for decision in body.student_identity_decisions
-        ],
-    )
-
-
 @router.post("/classrooms", status_code=status.HTTP_201_CREATED)
 def create_classroom(
     body: ClassroomCreateBody,
@@ -277,6 +250,25 @@ def create_classroom(
     _: User = Depends(require_role("admin")),
 ):
     return create_classroom_use_case(db, **body.model_dump())
+
+
+@router.delete("/classrooms/{classroom_id}")
+def delete_classroom(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return delete_classroom_use_case(db, classroom_id)
+
+
+@router.put("/semesters/{semester_id}/classroom-order")
+def reorder_classrooms(
+    semester_id: int,
+    body: ClassroomOrderBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return reorder_classrooms_use_case(db, semester_id, body.classroom_ids)
 
 
 @router.patch("/classrooms/{classroom_id}")
@@ -318,12 +310,22 @@ def batch_add_classroom_members(
 def update_classroom_member(
     classroom_id: int,
     member_id: int,
-    body: ClassRosterMemberUpdateBody,
+    body: ClassroomMemberUpdateBody,
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin")),
 ):
     changes = body.model_dump(exclude_unset=True)
     return update_classroom_member_use_case(db, classroom_id, member_id, changes)
+
+
+@router.delete("/classrooms/{classroom_id}/members/{member_id}")
+def delete_draft_classroom_member(
+    classroom_id: int,
+    member_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+):
+    return delete_draft_classroom_member_use_case(db, classroom_id, member_id)
 
 
 @router.post("/classrooms/{classroom_id}/members/album-names/auto-fill")
@@ -335,7 +337,7 @@ def auto_fill_classroom_member_album_names(
     return auto_fill_classroom_album_names_use_case(db, classroom_id)
 
 
-@router.patch("/roster-children/{roster_child_id}/album-name")
+@router.patch("/students/{roster_child_id}/album-name")
 def update_roster_child_album_name(
     roster_child_id: int,
     body: RosterChildAlbumNameUpdateBody,
@@ -349,7 +351,7 @@ def update_roster_child_album_name(
     )
 
 
-@router.post("/roster-children/{roster_child_id}/album-name/auto-fill")
+@router.post("/students/{roster_child_id}/album-name/auto-fill")
 def auto_fill_roster_child_album_name(
     roster_child_id: int,
     db: Session = Depends(get_db),
@@ -387,12 +389,12 @@ def create_term_reclassification_plan(
     )
 
 
-@router.get("/academic-terms")
-def list_academic_terms(
+@router.get("/semesters")
+def list_semesters(
     db: Session = Depends(get_db),
     _: User = Depends(require_role("admin", "art_team")),
 ):
-    return list_academic_terms_use_case(db)
+    return list_semesters_use_case(db)
 
 
 @router.get("/term-reclassification-plans/{plan_id}")

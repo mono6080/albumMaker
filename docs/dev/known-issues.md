@@ -2,7 +2,7 @@
 
 > Owns：所有「已知但尚未處理」的程式碼落差（drift）、未定案設計問題與營運缺口。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-17。
+> 最後盤點：2026-07-31。
 
 ---
 
@@ -15,6 +15,45 @@
    記錄 method/path，但尚未配置 Sentry 或 log 掃描通知收件人。
 3. **外部 uptime 告警仍需部署端設定**：`/api/health` 已檢查 SQLite，Docker
    HEALTHCHECK 也已接上；仍需外部監控服務定期探測正式網域並設定通知。
+
+## 編班的操作缺口（2026-08-01 照行政系統實地演練 115 上時發現）
+
+演練方式：把正式副本升級後，照 adminProject 的 115 上目標狀態（37 班、378 續讀、
+87 離園、24 新生、48 筆編制）用真實瀏覽器操作一次。以下是**尚未處理**的部分；
+空班誤落離園與新生無法編入已修掉，行為由
+`frontend/tests/e2e/term-placement-board.spec.js` 釘住。
+
+1. **要退場的班必須先逐班清掉老師**：學生搬走後，班上仍掛著老師就移不掉
+   （`classroom_removal_blockers` 把編制算成佔用）。115 上有 7 個班要退場，就得開
+   7 次老師面板、把主教設成「不設定老師」並取消所有協同，才輪得到移除。
+2. **沒有帳號的老師無法編制**：老師面板只列現有使用者帳號。115 上有 1 位
+   （湖美校／四階A 嬰幼助教）沒有帳號，必須離開編班頁去建帳號再回來重新整理。
+3. **改名不會改部門，而且沒有警告**：班級的部門不可變更
+   （`classroom_scope_is_immutable`）。把嬰幼部的「銜接A」改名成「八階A」會得到一個
+   掛著學院部班名、實際仍是嬰幼部的班，工作格整學期都抓錯期別。**改名只能在同部門
+   內用**——跨部門一定要新建班級再把學生搬過去。
+4. **預設值與這所幼兒園的實務相反**：草稿預設「全部留在原班」，但這裡每學期整體升
+   一階，378 位續讀生裡只有 11 位真的留原班。
+5. **表單欄位的無障礙名稱被說明文字污染**：`FormField` 把 `hint` 一起包進
+   `<label>`，欄位名稱變成「標籤＋整段說明」，而且會互相污染（「結束日」的名稱裡
+   含「開始日」）。登入頁的 `<label>` 更是完全沒跟 input 綁定。應改用
+   `aria-describedby` 掛說明。
+
+## webkit 在 CI runner 上會 crash（2026-08-02）
+
+`organization-management.spec.js` 的「class staffing and new-term reclassification…」
+跑到最後一段（切換成老師身分再 `page.goto("/projects")`）時，在 GitHub runner 的 webkit
+上固定 `page.goto: Page crashed`。逐一排除過：
+
+- 不是斷言不成立——chromium 同一條全過
+- 不是隨機——三次重試都停在同一個導覽點
+- 不是 trace 錄製——改成 `on-first-retry` 之後仍舊
+- **不是資料累積**——改成每個 worker 獨立後端與資料庫之後，本機 webkit 123 條全過，
+  CI 上這一條仍舊崩潰
+
+目前在 CI 的 webkit 上跳過（chromium 完整覆蓋其契約）。**還沒排除的是「這是不是真的
+Safari 問題」**——如果是應用本身在切換使用者時吃掉太多記憶體，真實的 Safari 使用者也
+可能踩到。要查就從那次 crash 的 trace 開始。
 
 ## 開放設計問題
 
@@ -36,12 +75,21 @@
 - **PWA SW 與 SPA catch-all 的同名 race**：目前「先實體檔案、後 index.html」
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
-- **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`RosterChild.album_name`)
+- **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`Student.album_name`)
   修改會影響已標記完成(全班或個別)相本的稱呼顯示,但名冊寫入不經過專案
   內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
   明確不在該階段處理。下載端點的指紋補渲
   ([rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲))已讓
   下載產物自動跟上新稱呼;殘餘問題只剩「完成後名冊仍可改」的流程語意
+- **期中轉班造成的同期重複相本：做法已定，尚未實作**。孩子在原班已建立該期相本之後
+  才轉班，新班又建同一期相本時，他在兩本裡都有 `ProjectStudent` 快照，彙整匯出把那一格
+  判為 `duplicate`：不渲染、不納入 ZIP，只在說明欄列出「Project X, Y 同一期有重複相本，
+  未納入」——**少了東西的匯出沒有人會發現**。
+  2026-08-02 決定：兩本都留，由匯出者像處理 merge conflict 一樣選邊，未裁決就擋下匯出。
+  契約見
+  [academic-term-reporting-v1.md 的同期重複相本](../specs/academic-term-reporting-v1.md#同期重複相本由匯出者裁決決策-2026-08-02)。
+  在那之前的替代做法：轉班前先確認原班那一期的相本是否已經建立。
+  114 下有 4 人期中換班、115 上目前已有 3 人，不是罕見情境。
 - **權限矩陣的隱藏假設**：若未來引入「主管可代老師編輯專案」，
   `assert_project_writable` 要展開（現況見
   [api.md 的角色權限矩陣](api.md#角色權限矩陣)）

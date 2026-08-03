@@ -24,7 +24,7 @@ Layout JSON schema (per page):
   }
 }
 
-Student page data schema (pages_data_json is a list, one item per page):
+ProjectStudent page data schema (pages_data_json is a list, one item per page):
 [
   {
     "page_index": 0,

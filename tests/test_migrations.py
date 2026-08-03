@@ -5,6 +5,8 @@
 
 import json
 import sqlite3
+import sys
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -303,7 +305,7 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         ).scalar_one()
         connection.execute(
             text("""
-                INSERT INTO students (project_id, name, pages_data_json)
+                INSERT INTO project_students (project_id, name, pages_data_json)
                 VALUES (:project_id, 'Interrupted student', '[]')
             """),
             {"project_id": project_id},
@@ -340,6 +342,8 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         legacy_connection = _LegacyDropConnection(connection)
         migrations._drop_bubble_texts_json_column(legacy_connection)
         assert legacy_connection.intercepted
+        # 掛在 projects 的凍結 trigger 與那個查 projects 的 students trigger，
+        # 都必須撐過重建空窗；舊歸班流程的三個 trigger 已隨學期範圍班級退場。
         rebuilt_triggers = {
             row[0]
             for row in connection.execute(text("""
@@ -347,14 +351,16 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
                 FROM sqlite_master
                 WHERE type = 'trigger'
                   AND name IN (
-                      'trg_students_freeze_class_backed_identity',
-                      'trg_projects_require_identity_migration_ledger'
+                      'trg_project_students_freeze_class_backed_identity',
+                      'trg_projects_freeze_classroom_snapshots',
+                      'trg_projects_freeze_work_slot'
                   )
             """))
         }
         assert rebuilt_triggers == {
-            "trg_students_freeze_class_backed_identity",
-            "trg_projects_require_identity_migration_ledger",
+            "trg_project_students_freeze_class_backed_identity",
+            "trg_projects_freeze_classroom_snapshots",
+            "trg_projects_freeze_work_slot",
         }
 
     # fallback 完成後再跑完整序列，確認 interrupted state 已收斂且可冪等。
@@ -410,6 +416,285 @@ def test_interrupted_bubble_drop_preserves_modern_project_schema_and_relations()
         }
         assert {"templates", "template_periods", "users"} <= foreign_key_targets
         assert connection.execute(text(
-            "SELECT COUNT(*) FROM students WHERE project_id = :project_id"
+            "SELECT COUNT(*) FROM project_students WHERE project_id = :project_id"
         ), {"project_id": project_id}).scalar_one() == 1
         assert list(connection.execute(text("PRAGMA foreign_key_check"))) == []
+
+
+def _seed_legacy_rename_source(database_path):
+    """建出改名前的最小 schema：students 是相本學生，roster_children 是名冊。"""
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript("""
+            CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR);
+            CREATE TABLE students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                name VARCHAR NOT NULL
+            );
+            CREATE TABLE roster_children (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR NOT NULL
+            );
+            INSERT INTO projects (name) VALUES ('舊相本');
+            INSERT INTO students (project_id, name) VALUES (1, '相本裡的一份');
+            INSERT INTO roster_children (name) VALUES ('名冊上的孩子');
+        """)
+
+
+def test_table_rename_uses_column_marker_not_emptiness(tmp_path):
+    """`students` 這個名字在新舊結構都存在，只能用欄位分辨是哪一個。
+
+    全新資料庫的每張表都是空的；若用「空表＝create_all 搶先建的」判斷，就會把
+    名冊表當成待改名的相本學生表改名走，資料全部對不上。
+    """
+    import migrations
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-marker.db"
+    _seed_legacy_rename_source(database_path)
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
+            migrations._rename_tables_to_model_names(connection)
+            assert connection.execute(text(
+                "SELECT name FROM project_students"
+            )).scalar_one() == "相本裡的一份"
+            assert connection.execute(text(
+                "SELECT name FROM students"
+            )).scalar_one() == "名冊上的孩子"
+    finally:
+        engine.dispose()
+
+
+def test_table_rename_reclaims_empty_table_left_by_early_create_all(tmp_path):
+    """create_all 搶在改名之前跑過，會用新名字留下空表。
+
+    留著它，改名就會判定「目標已存在」而跳過——資料留在舊表、程式讀空表，
+    而且不會報錯。這是真的發生過的啟動失敗。
+    """
+    import migrations
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-early-create-all.db"
+    _seed_legacy_rename_source(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE project_students ("
+            "id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR)"
+        )
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
+            assert connection.execute(text(
+                "SELECT name FROM project_students"
+            )).scalar_one() == "相本裡的一份"
+            assert connection.execute(text(
+                "SELECT name FROM students"
+            )).scalar_one() == "名冊上的孩子"
+    finally:
+        engine.dispose()
+
+
+def test_table_rename_refuses_when_both_tables_hold_data(tmp_path):
+    """來源仍是舊表、目標卻已經有資料：不猜，直接中止。"""
+    import migrations
+    import pytest
+    from sqlalchemy import create_engine
+
+    database_path = tmp_path / "rename-conflict.db"
+    _seed_legacy_rename_source(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE project_students ("
+            "id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR)"
+        )
+        connection.execute(
+            "INSERT INTO project_students (project_id, name) VALUES (1, '來路不明')"
+        )
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            with pytest.raises(RuntimeError, match="無法判斷哪一份是真的"):
+                migrations._rename_tables_to_model_names(connection)
+    finally:
+        engine.dispose()
+
+
+# 改名前的名字**寫死在測試裡**，不從 migrations 的設定反推。用同一份設定同時
+# 產生起點與驗證，漏掉一條就會對稱地漏兩次——測試照樣綠，這正是要防的事。
+PRE_RENAME_COLUMNS = (
+    ("classrooms", "semester_id", "academic_term_id"),
+    ("semester_periods", "semester_id", "academic_term_id"),
+    ("class_period_work_slots", "semester_period_id", "term_period_id"),
+    ("term_reclassification_plans", "target_semester_id", "target_academic_term_id"),
+)
+
+# 反向順序：students（名冊）要先讓開，project_students 才回得去 students。
+PRE_RENAME_TABLES = (
+    ("students", "roster_children"),
+    ("project_students", "students"),
+    ("semester_periods", "academic_term_periods"),
+    ("semesters", "academic_terms"),
+    ("classroom_teachers", "classroom_teacher_assignments"),
+    ("classroom_members", "class_roster_members"),
+)
+
+
+def _reverse_rename_to_pre_rename_state(database_path):
+    """把 init_db() 建出的新結構倒回改名前的表名與欄位名。
+
+    欄位定義來自現行 ORM，比手寫整份舊 DDL 可靠；但名字是測試自己寫死的，所以
+    migration 少改一個欄位或少改一張表都會讓兩條路徑分歧。回傳實際倒回的表名。
+    """
+    reverted_tables: list[str] = []
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for table, current_column, legacy_column in PRE_RENAME_COLUMNS:
+            columns = {
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            if current_column in columns and legacy_column not in columns:
+                connection.execute(
+                    f"ALTER TABLE {table} "
+                    f"RENAME COLUMN {current_column} TO {legacy_column}"
+                )
+        for current_name, legacy_name in PRE_RENAME_TABLES:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if current_name in tables and legacy_name not in tables:
+                connection.execute(
+                    f"ALTER TABLE {current_name} RENAME TO {legacy_name}"
+                )
+                reverted_tables.append(legacy_name)
+        connection.commit()
+    finally:
+        connection.close()
+    return reverted_tables
+
+
+def _run_startup_sequence(database_path, monkeypatch):
+    """跑一次 main.py lifespan 的順序：改名 → init_db → migrations。
+
+    用 monkeypatch 換掉模組層 engine，而不是 reload 模組——reload 會把其他測試
+    正在用的 SessionLocal 換成另一個物件。
+    """
+    import database
+    import migrations
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{Path(database_path).as_posix()}")
+    try:
+        monkeypatch.setattr(database, "engine", engine)
+        monkeypatch.setattr(migrations, "engine", engine)
+        migrations.rename_tables_to_model_names()
+        database.init_db()
+        migrations.run_migrations()
+    finally:
+        engine.dispose()
+        monkeypatch.undo()
+
+
+def test_upgraded_and_fresh_databases_converge_to_the_same_schema(tmp_path, monkeypatch):
+    """從改名前的結構升級上來，表與欄位必須與全新建的一模一樣。
+
+    守的是一類不會報錯的失敗：欄位改名只改了值沒改欄位名、改名規則加了新的一條
+    卻沒有人跑過升級路徑。兩條路徑都會「成功」，只是長出不同的資料庫。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from compare_database_schema import diff_schemas, snapshot_schema
+
+    fresh_path = tmp_path / "fresh.db"
+    _run_startup_sequence(fresh_path, monkeypatch)
+    fresh = snapshot_schema(fresh_path)
+
+    upgraded_path = tmp_path / "upgraded.db"
+    _run_startup_sequence(upgraded_path, monkeypatch)
+    reverted_tables = _reverse_rename_to_pre_rename_state(upgraded_path)
+    # 沒有真的倒回舊結構，後面比的就是兩個相同的新資料庫——測試會空跑
+    assert set(reverted_tables) == {legacy for _, legacy in PRE_RENAME_TABLES}
+    _run_startup_sequence(upgraded_path, monkeypatch)
+    upgraded = snapshot_schema(upgraded_path)
+
+    # 索引與 trigger 的 drift 一樣要擋：唯一鍵只建在跑得到舊結構的 migration 裡、
+    # 或 trigger 只在其中一條路徑重建，都不會讓 migration 失敗，只會讓兩條路徑
+    # 長出不同的資料庫。丟掉非 tables: 的差異等於把這道防線關掉。
+    differences = diff_schemas(upgraded, fresh)
+    assert differences == [], (
+        "升級後與全新資料庫的 schema 不一致：\n" + "\n".join(differences)
+    )
+
+
+def test_rename_recovers_from_tables_renamed_but_columns_not(tmp_path, monkeypatch):
+    """「表已改名、欄位還沒」的中斷狀態必須能靠重啟收斂。
+
+    早期版本在沒有待改名的表時就直接 return，欄位改名整段跳過——部署卡在兩階段
+    之間時，semester_id 這類欄位會永久留著舊名。
+    """
+    import migrations
+
+    database_path = tmp_path / "interrupted-rename.db"
+    _run_startup_sequence(database_path, monkeypatch)
+    _reverse_rename_to_pre_rename_state(database_path)
+
+    # 只把表名改回新名，欄位維持舊名——正是中斷後的樣子
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for legacy_name, current_name in (
+            ("class_roster_members", "classroom_members"),
+            ("classroom_teacher_assignments", "classroom_teachers"),
+            ("academic_terms", "semesters"),
+            ("academic_term_periods", "semester_periods"),
+            ("students", "project_students"),
+            ("roster_children", "students"),
+        ):
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if legacy_name in tables and current_name not in tables:
+                connection.execute(
+                    f"ALTER TABLE {legacy_name} RENAME TO {current_name}"
+                )
+        connection.commit()
+        stranded = {
+            row[1] for row in connection.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "academic_term_id" in stranded, "起點必須是欄位還沒改的中斷狀態"
+    finally:
+        connection.close()
+
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        monkeypatch.setattr(migrations, "engine", engine)
+        migrations.rename_tables_to_model_names()
+    finally:
+        engine.dispose()
+        monkeypatch.undo()
+
+    connection = sqlite3.connect(str(database_path))
+    try:
+        recovered = {
+            row[1] for row in connection.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "semester_id" in recovered
+        assert "academic_term_id" not in recovered
+        work_slot_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(class_period_work_slots)")
+        }
+        assert "semester_period_id" in work_slot_columns
+        assert "term_period_id" not in work_slot_columns
+    finally:
+        connection.close()

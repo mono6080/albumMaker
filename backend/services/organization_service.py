@@ -1,12 +1,9 @@
 """分校、班級目前名單與每期相本快照 use cases。"""
 
-import hashlib
-import json
 from collections import Counter
-from datetime import datetime
 
 from fastapi import HTTPException
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from crud.organization_crud import (
@@ -14,27 +11,26 @@ from crud.organization_crud import (
     get_class_roster_member_or_404,
     get_classroom_or_404,
 )
-from crud.project_crud import get_project_or_404
 from crud.template_crud import get_template_or_404
 from crud.user_crud import get_user_or_404
 from database import (
-    AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomStudent,
-    AcademicTermClassroomTeacher,
-    AcademicTermPeriod,
+    CURRENT_SEMESTER_STATUSES,
+    Semester,
+    SemesterPeriod,
     Campus,
     ClassPeriodWorkSlot,
     Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomTeacher,
+    ClassroomMember,
     OrganizationSupervisorAssignment,
     Project,
-    RosterChild,
     Student,
+    ProjectStudent,
     Template,
     TemplatePeriod,
+    TermClassroomPlan,
     TermReclassificationPlan,
+    TermStudentPlacement,
     User,
     utc_now,
 )
@@ -91,7 +87,7 @@ def _validate_department(department: str) -> str:
     return department
 
 
-def _serialize_member(member: ClassRosterMember) -> dict:
+def _serialize_member(member: ClassroomMember) -> dict:
     return {
         "id": member.id,
         "classroom_id": member.classroom_id,
@@ -147,24 +143,24 @@ def _serialize_project(project: Project) -> dict:
 
 
 def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
-    term_classroom = work_slot.term_classroom
-    term_period = work_slot.term_period
+    classroom = work_slot.classroom
+    semester_period = work_slot.semester_period
     return {
         "id": work_slot.id,
-        "academic_term_id": term_classroom.academic_term_id,
-        "academic_term_label": term_classroom.academic_term.label,
-        "academic_term_status": term_classroom.academic_term.status,
-        "classroom_id": term_classroom.classroom_id,
-        "campus_id": term_classroom.campus_id_snapshot,
-        "campus_name": term_classroom.campus_name_snapshot,
-        "classroom_name": term_classroom.classroom_name_snapshot,
-        "department": term_classroom.department,
-        "term_period_id": term_period.id,
-        "template_period_id": term_period.template_period_id,
-        "period_name": term_period.period_name_snapshot,
-        "period_position": term_period.position,
+        "semester_id": classroom.semester_id,
+        "semester_label": classroom.semester.label,
+        "semester_status": classroom.semester.status,
+        "classroom_id": classroom.id,
+        "campus_id": classroom.campus_id,
+        "campus_name": classroom.campus.name,
+        "classroom_name": classroom.name,
+        "department": classroom.department,
+        "semester_period_id": semester_period.id,
+        "template_period_id": semester_period.template_period_id,
+        "period_name": semester_period.period_name_snapshot,
+        "period_position": semester_period.position,
         "template_ids": [
-            template.id for template in term_period.template_period.templates
+            template.id for template in semester_period.template_period.templates
         ],
         "started_at": work_slot.started_at,
         "can_create_project": work_slot.started_at is None,
@@ -174,7 +170,7 @@ def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
     }
 
 
-def _serialize_teacher_assignment(assignment: ClassroomTeacherAssignment) -> dict:
+def _serialize_teacher_assignment(assignment: ClassroomTeacher) -> dict:
     return {
         "id": assignment.id,
         "classroom_id": assignment.classroom_id,
@@ -250,9 +246,9 @@ def _serialize_classroom(classroom: Classroom) -> dict:
         "campus_id": classroom.campus_id,
         "department": classroom.department,
         "name": classroom.name,
-        "is_active": classroom.is_active,
-        "created_at": classroom.created_at,
-        "updated_at": classroom.updated_at,
+        "semester_id": classroom.semester_id,
+        "sort_order": classroom.sort_order,
+        "is_current": classroom.is_current,
         "current_teachers": [
             _serialize_teacher_assignment(assignment)
             for assignment in classroom.teacher_assignments
@@ -276,7 +272,12 @@ def _serialize_classroom(classroom: Classroom) -> dict:
     }
 
 
-def _serialize_campus(campus: Campus) -> dict:
+def _serialize_campus(campus: Campus, current_semester_id: int | None) -> dict:
+    """園所設定只呈現目前學期的班。
+
+    班級不跨學期，同一個分校會累積歷屆的班；編班草稿更會先把下學期的班長出來。
+    不過濾的話，同一個班名會同時以「本學期」和「已結束」出現兩次。
+    """
     return {
         "id": campus.id,
         "name": campus.name,
@@ -284,7 +285,11 @@ def _serialize_campus(campus: Campus) -> dict:
         "created_at": campus.created_at,
         "updated_at": campus.updated_at,
         "supervisor_scopes": _serialize_supervisor_scopes(campus),
-        "classrooms": [_serialize_classroom(classroom) for classroom in campus.classrooms],
+        "classrooms": [
+            _serialize_classroom(classroom)
+            for classroom in campus.classrooms
+            if classroom.semester_id == current_semester_id
+        ],
     }
 
 
@@ -294,8 +299,8 @@ def _organization_migration_status(db: Session) -> dict:
         Project.deleted_at.is_(None),
     ).count()
     pending_identity_student_count = (
-        db.query(Student.id)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent.id)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
             Project.classroom_id.is_(None),
             Project.deleted_at.is_(None),
@@ -312,9 +317,9 @@ def _organization_migration_status(db: Session) -> dict:
         SELECT COUNT(DISTINCT anomaly.student_id)
         FROM (
             SELECT student.id AS student_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            LEFT JOIN roster_children AS child
+            LEFT JOIN students AS child
                 ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND project.deleted_at IS NULL
@@ -323,14 +328,14 @@ def _organization_migration_status(db: Session) -> dict:
             UNION ALL
 
             SELECT student.id AS student_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
             WHERE project.classroom_id IS NOT NULL
               AND project.deleted_at IS NULL
               AND student.roster_child_id IS NOT NULL
               AND EXISTS (
                   SELECT 1
-                  FROM students AS sibling
+                  FROM project_students AS sibling
                   WHERE sibling.project_id = student.project_id
                     AND sibling.id != student.id
                     AND sibling.roster_child_id = student.roster_child_id
@@ -358,11 +363,11 @@ def get_organization_overview(db: Session) -> dict:
         .options(
             selectinload(Campus.classrooms)
             .selectinload(Classroom.roster_members)
-            .selectinload(ClassRosterMember.roster_child),
+            .selectinload(ClassroomMember.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.students)
-            .selectinload(Student.roster_child),
+            .selectinload(ProjectStudent.roster_child),
             selectinload(Campus.classrooms)
             .selectinload(Classroom.projects)
             .selectinload(Project.assignment_history),
@@ -420,27 +425,28 @@ def get_organization_overview(db: Session) -> dict:
         TermReclassificationPlan.status == "draft",
     ).first()
     current_term = (
-        db.query(AcademicTerm)
-        .filter(AcademicTerm.status.in_(("imported", "active")))
-        .order_by(AcademicTerm.id.desc())
+        db.query(Semester)
+        .filter(Semester.status.in_(("imported", "active")))
+        .order_by(Semester.id.desc())
         .first()
     )
+    current_semester_id = current_term.id if current_term is not None else None
     current_work_slots = (
         db.query(ClassPeriodWorkSlot)
         .join(
-            AcademicTermClassroom,
-            AcademicTermClassroom.id == ClassPeriodWorkSlot.term_classroom_id,
+            Classroom,
+            Classroom.id == ClassPeriodWorkSlot.classroom_id,
         )
         .options(
             selectinload(ClassPeriodWorkSlot.projects),
-            selectinload(ClassPeriodWorkSlot.term_classroom).selectinload(
-                AcademicTermClassroom.academic_term
+            selectinload(ClassPeriodWorkSlot.classroom).selectinload(
+                Classroom.semester
             ),
-            selectinload(ClassPeriodWorkSlot.term_period),
+            selectinload(ClassPeriodWorkSlot.semester_period),
         )
-        .filter(AcademicTermClassroom.academic_term_id == current_term.id)
+        .filter(Classroom.semester_id == current_term.id)
         .order_by(
-            AcademicTermClassroom.classroom_id,
+            Classroom.id,
             ClassPeriodWorkSlot.id,
         )
         .all()
@@ -448,7 +454,10 @@ def get_organization_overview(db: Session) -> dict:
         else []
     )
     return {
-        "campuses": [_serialize_campus(campus) for campus in campuses],
+        "campuses": [
+            _serialize_campus(campus, current_semester_id)
+            for campus in campuses
+        ],
         "unassigned_projects": [
             _serialize_project(project) for project in unassigned_projects
         ],
@@ -472,7 +481,7 @@ def get_organization_overview(db: Session) -> dict:
         ],
         "migration_status": _organization_migration_status(db),
         "draft_term_plan_id": draft_term_plan[0] if draft_term_plan else None,
-        "current_academic_term": (
+        "current_semester": (
             {
                 "id": current_term.id,
                 "label": current_term.label,
@@ -532,12 +541,12 @@ def replace_classroom_teachers(
 ) -> dict:
     with organization_write_transaction(db):
         classroom = get_classroom_or_404(classroom_id, db)
-        if teachers and (not classroom.is_active or not classroom.campus.is_active):
+        if teachers and (not classroom.is_current or not classroom.campus.is_active):
             raise HTTPException(status_code=409, detail="只能設定使用中的分校與班級")
         user_by_id = _validate_teacher_targets(db, teachers)
-        current_assignments = db.query(ClassroomTeacherAssignment).filter(
-            ClassroomTeacherAssignment.classroom_id == classroom_id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
+        current_assignments = db.query(ClassroomTeacher).filter(
+            ClassroomTeacher.classroom_id == classroom_id,
+            ClassroomTeacher.ended_at.is_(None),
         ).all()
         current_by_teacher_id = {
             assignment.teacher_id: assignment for assignment in current_assignments
@@ -559,7 +568,7 @@ def replace_classroom_teachers(
             if current is not None and current.duty == requested["duty"]:
                 continue
             teacher = user_by_id[teacher_id]
-            db.add(ClassroomTeacherAssignment(
+            db.add(ClassroomTeacher(
                 classroom_id=classroom_id,
                 teacher_id=teacher.id,
                 teacher_name_snapshot=teacher.display_name,
@@ -569,7 +578,6 @@ def replace_classroom_teachers(
                 started_by_name_snapshot=current_admin.display_name,
             ))
         db.flush()
-        _refresh_current_term_teacher_snapshot(db, classroom_id)
         db.commit()
     classroom = get_classroom_or_404(classroom_id, db)
     return {
@@ -719,11 +727,7 @@ def replace_campus_supervisors(
 
 
 def _serialize_scoped_classroom(classroom: Classroom) -> dict:
-    current_term_classrooms = [
-        term_classroom
-        for term_classroom in classroom.academic_term_classrooms
-        if term_classroom.academic_term.status in {"imported", "active"}
-    ]
+    current_term_classrooms = [classroom] if classroom.is_current else []
     return {
         "id": classroom.id,
         "campus_id": classroom.campus_id,
@@ -742,8 +746,8 @@ def _serialize_scoped_classroom(classroom: Classroom) -> dict:
         ],
         "work_slots": [
             _serialize_work_slot(work_slot)
-            for term_classroom in current_term_classrooms
-            for work_slot in term_classroom.work_slots
+            for classroom in current_term_classrooms
+            for work_slot in classroom.work_slots
         ],
     }
 
@@ -766,28 +770,34 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
         .options(
             selectinload(Classroom.teacher_assignments),
             selectinload(Classroom.roster_members).selectinload(
-                ClassRosterMember.roster_child
+                ClassroomMember.roster_child
             ),
             selectinload(Classroom.campus),
-            selectinload(Classroom.academic_term_classrooms).selectinload(
-                AcademicTermClassroom.academic_term
+            selectinload(Classroom.semester),
+            selectinload(Classroom.work_slots).selectinload(
+                ClassPeriodWorkSlot.projects
             ),
-            selectinload(Classroom.academic_term_classrooms)
-            .selectinload(AcademicTermClassroom.work_slots)
-            .selectinload(ClassPeriodWorkSlot.projects),
-            selectinload(Classroom.academic_term_classrooms)
-            .selectinload(AcademicTermClassroom.work_slots)
-            .selectinload(ClassPeriodWorkSlot.term_period)
-            .selectinload(AcademicTermPeriod.template_period)
+            selectinload(Classroom.work_slots)
+            .selectinload(ClassPeriodWorkSlot.semester_period)
+            .selectinload(SemesterPeriod.template_period)
             .selectinload(TemplatePeriod.templates),
         )
         .filter(
             Classroom.id.in_(organization_scope.classroom_ids),
-            Classroom.is_active.is_(True),
+            Classroom.semester_id.in_(
+                select(Semester.id).where(
+                    Semester.status.in_(CURRENT_SEMESTER_STATUSES)
+                )
+            ),
             Campus.is_active.is_(True),
         )
     )
-    classrooms = query.distinct().order_by(Campus.name, Classroom.name).all()
+    classrooms = query.distinct().order_by(
+        Campus.name,
+        Classroom.sort_order.is_(None),
+        Classroom.sort_order,
+        Classroom.id,
+    ).all()
     return {
         "classrooms": [
             _serialize_scoped_classroom(classroom) for classroom in classrooms
@@ -805,39 +815,35 @@ def create_campus(db: Session, name: str, is_active: bool) -> dict:
     db.add(campus)
     db.commit()
     db.refresh(campus)
-    return _serialize_campus(campus)
+    return _serialize_campus(campus, _current_semester_id(db))
 
 
 @organization_mutation
 def update_campus(db: Session, campus_id: int, changes: dict) -> dict:
     campus = get_campus_or_404(campus_id, db)
     if changes.get("is_active") is False:
-        has_active_classrooms = db.query(Classroom.id).filter(
-            Classroom.campus_id == campus_id,
-            Classroom.is_active.is_(True),
-        ).first()
         has_active_members = (
-            db.query(ClassRosterMember.id)
-            .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
+            db.query(ClassroomMember.id)
+            .join(Classroom, Classroom.id == ClassroomMember.classroom_id)
             .filter(
                 Classroom.campus_id == campus_id,
-                ClassRosterMember.ended_at.is_(None),
+                ClassroomMember.ended_at.is_(None),
             )
             .first()
         )
         has_active_teachers = (
-            db.query(ClassroomTeacherAssignment.id)
+            db.query(ClassroomTeacher.id)
             .join(
                 Classroom,
-                Classroom.id == ClassroomTeacherAssignment.classroom_id,
+                Classroom.id == ClassroomTeacher.classroom_id,
             )
             .filter(
                 Classroom.campus_id == campus_id,
-                ClassroomTeacherAssignment.ended_at.is_(None),
+                ClassroomTeacher.ended_at.is_(None),
             )
             .first()
         )
-        if has_active_classrooms or has_active_members or has_active_teachers:
+        if has_active_members or has_active_teachers:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -861,18 +867,26 @@ def update_campus(db: Session, campus_id: int, changes: dict) -> dict:
     campus.updated_at = utc_now()
     db.commit()
     db.refresh(campus)
-    return _serialize_campus(campus)
+    return _serialize_campus(campus, _current_semester_id(db))
 
 
 def _assert_classroom_name_available(
     db: Session,
     *,
+    semester_id: int,
     campus_id: int,
     department: str,
     name: str,
     excluded_classroom_id: int | None = None,
 ) -> None:
+    """同名檢查的範圍是**該班自己所屬的學期**；班名跨學期本來就會重複。
+
+    改名可能發生在草稿學期的班上（編班草稿先長出下學期的班），固定查目前學期會
+    兩頭錯：草稿裡的合法改名被目前學期的同名班擋成 409，草稿內真正的衝突反而
+    漏過檢查，最後撞 DB 約束變成 500。
+    """
     query = db.query(Classroom.id).filter(
+        Classroom.semester_id == semester_id,
         Classroom.campus_id == campus_id,
         Classroom.department == department,
         Classroom.name == name,
@@ -883,227 +897,96 @@ def _assert_classroom_name_available(
         raise HTTPException(status_code=409, detail="同分校與部門已有同名班級")
 
 
+def _current_semester_id(db: Session) -> int | None:
+    current_semester = _current_semester(db)
+    return current_semester.id if current_semester is not None else None
+
+
+def _current_semester(db: Session) -> Semester | None:
+    return (
+        db.query(Semester)
+        .filter(Semester.status.in_(CURRENT_SEMESTER_STATUSES))
+        .order_by(Semester.id.desc())
+        .first()
+    )
+
+
 def _ensure_current_term_classroom_grid(
     db: Session,
     classroom: Classroom,
-) -> AcademicTermClassroom | None:
-    if not classroom.is_active or not classroom.campus.is_active:
+) -> Classroom | None:
+    """替班級補上與其部門相符的期別工作格。
+
+    班級本身就屬於某個學期，所以不再需要另外產生學期快照——只剩工作格要補。
+    """
+    if not classroom.is_current or not classroom.campus.is_active:
         return None
-    current_term = (
-        db.query(AcademicTerm)
-        .filter(AcademicTerm.status.in_(("imported", "active")))
-        .order_by(AcademicTerm.id.desc())
-        .first()
-    )
-    if current_term is None:
-        return None
-    term_classroom = db.query(AcademicTermClassroom).filter(
-        AcademicTermClassroom.academic_term_id == current_term.id,
-        AcademicTermClassroom.classroom_id == classroom.id,
-    ).first()
-    if term_classroom is None:
-        term_classroom = AcademicTermClassroom(
-            academic_term_id=current_term.id,
-            classroom_id=classroom.id,
-            campus_id_snapshot=classroom.campus_id,
-            campus_name_snapshot=classroom.campus.name,
-            classroom_name_snapshot=classroom.name,
-            department=classroom.department,
-        )
-        db.add(term_classroom)
-        db.flush()
-    # term classroom 是該學期的校班／部門 authority；班級日後改名或移校
-    # 不得把同一正式學期的既有快照悄悄改成另一套 scope。
-    period_query = db.query(AcademicTermPeriod).filter(
-        AcademicTermPeriod.academic_term_id == current_term.id,
-        AcademicTermPeriod.department == term_classroom.department,
+    current_term = classroom.semester
+    period_query = db.query(SemesterPeriod).filter(
+        SemesterPeriod.semester_id == current_term.id,
+        SemesterPeriod.department == classroom.department,
     )
     if current_term.status == "imported":
         period_query = period_query.join(
             TemplatePeriod,
-            TemplatePeriod.id == AcademicTermPeriod.template_period_id,
+            TemplatePeriod.id == SemesterPeriod.template_period_id,
         ).filter(TemplatePeriod.status == "active")
-    for term_period in period_query.order_by(AcademicTermPeriod.position).all():
+    for semester_period in period_query.order_by(SemesterPeriod.position).all():
         if db.query(ClassPeriodWorkSlot.id).filter(
-            ClassPeriodWorkSlot.term_classroom_id == term_classroom.id,
-            ClassPeriodWorkSlot.term_period_id == term_period.id,
+            ClassPeriodWorkSlot.classroom_id == classroom.id,
+            ClassPeriodWorkSlot.semester_period_id == semester_period.id,
         ).first() is None:
             db.add(ClassPeriodWorkSlot(
-                term_classroom_id=term_classroom.id,
-                term_period_id=term_period.id,
+                classroom_id=classroom.id,
+                semester_period_id=semester_period.id,
             ))
-    return term_classroom
+    return classroom
 
 
-def _refresh_current_term_teacher_snapshot(
-    db: Session,
-    classroom_id: int,
-) -> None:
-    term_classroom = (
-        db.query(AcademicTermClassroom)
-        .join(AcademicTerm, AcademicTerm.id == AcademicTermClassroom.academic_term_id)
-        .filter(
-            AcademicTerm.status.in_(("imported", "active")),
-            AcademicTermClassroom.classroom_id == classroom_id,
+def _resolve_classroom_target_semester(db: Session, semester_id: int | None) -> Semester:
+    """班級可以建在目前學期，或建在編班草稿的目標學期。
+
+    後者是新學期要多開一個班時唯一的入口——草稿只會照目前的班一對一複製，
+    真正的新班得由管理員自己加。已結束或已取消的學期不能再長出班。
+    """
+    if semester_id is None:
+        current_term = _current_semester(db)
+        if current_term is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "no_current_semester",
+                    "message": "尚未建立目前正式學期，無法新增班級",
+                },
+            )
+        return current_term
+    semester = db.get(Semester, semester_id)
+    if semester is None:
+        raise HTTPException(status_code=404, detail="找不到學期")
+    if semester.status not in (*CURRENT_SEMESTER_STATUSES, "draft"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "semester_not_open_for_classrooms",
+                "message": "只能在目前學期或編班草稿的學期新增班級",
+            },
         )
-        .first()
-    )
-    if term_classroom is None:
-        return
-    existing_snapshot_count = db.query(AcademicTermClassroomTeacher.id).filter(
-        AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-    ).count()
-    if term_classroom.academic_term.status == "active":
-        # 正式學期中途新增的班級在建立時還沒有老師；只允許第一次編制補齊
-        # 顯示快照，已有快照後不再因日常換班老師改寫歷史。
-        if existing_snapshot_count:
-            return
-        has_started_slot = db.query(ClassPeriodWorkSlot.id).filter(
-            ClassPeriodWorkSlot.term_classroom_id == term_classroom.id,
-            ClassPeriodWorkSlot.started_at.isnot(None),
+    if semester.status == "draft":
+        # 草稿學期唯一的用途是承載編班計畫。沒有計畫的草稿學期建出來的班
+        # 不在園所總覽裡，也不會被任何套用流程處理，是永遠的孤兒。
+        has_plan = db.query(TermReclassificationPlan.id).filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
         ).first()
-        if has_started_slot:
-            return
-    else:
-        db.query(AcademicTermClassroomTeacher).filter(
-            AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-        ).delete(synchronize_session=False)
-    assignments = db.query(ClassroomTeacherAssignment).filter(
-        ClassroomTeacherAssignment.classroom_id == classroom_id,
-        ClassroomTeacherAssignment.ended_at.is_(None),
-        ClassroomTeacherAssignment.teacher_id.isnot(None),
-    ).all()
-    for assignment in assignments:
-        db.add(AcademicTermClassroomTeacher(
-            term_classroom_id=term_classroom.id,
-            source_assignment_id=assignment.id,
-            teacher_id=assignment.teacher_id,
-            teacher_name_snapshot=assignment.teacher_name_snapshot,
-            duty=assignment.duty,
-        ))
-
-
-def _sync_current_term_student_snapshots(
-    db: Session,
-    roster_child_ids: set[int],
-) -> None:
-    """同步目前學期最終名單；已關閉學期不回寫。"""
-    if not roster_child_ids:
-        return
-    current_term = (
-        db.query(AcademicTerm)
-        .filter(AcademicTerm.status.in_(("imported", "active")))
-        .order_by(AcademicTerm.id.desc())
-        .first()
-    )
-    if current_term is None:
-        return
-    active_memberships = (
-        db.query(ClassRosterMember)
-        .options(
-            selectinload(ClassRosterMember.roster_child),
-            selectinload(ClassRosterMember.classroom).selectinload(
-                Classroom.campus
-            ),
-        )
-        .filter(
-            ClassRosterMember.roster_child_id.in_(roster_child_ids),
-            ClassRosterMember.ended_at.is_(None),
-        )
-        .order_by(ClassRosterMember.id.desc())
-        .all()
-    )
-    for membership in active_memberships:
-        _ensure_current_term_classroom_grid(db, membership.classroom)
-    db.flush()
-    term_classrooms = (
-        db.query(AcademicTermClassroom)
-        .filter(AcademicTermClassroom.academic_term_id == current_term.id)
-        .order_by(AcademicTermClassroom.id)
-        .all()
-    )
-    if not term_classrooms:
-        return
-    term_classroom_by_classroom_id = {
-        term_classroom.classroom_id: term_classroom
-        for term_classroom in term_classrooms
-    }
-    existing_snapshots = (
-        db.query(AcademicTermClassroomStudent)
-        .filter(
-            AcademicTermClassroomStudent.academic_term_id == current_term.id,
-            AcademicTermClassroomStudent.roster_child_id_snapshot.in_(
-                roster_child_ids
-            ),
-        )
-        .all()
-    )
-    existing_by_child_id = {
-        snapshot.roster_child_id_snapshot: snapshot
-        for snapshot in existing_snapshots
-    }
-    child_by_id = {
-        child.id: child
-        for child in db.query(RosterChild)
-        .filter(RosterChild.id.in_(roster_child_ids))
-        .all()
-    }
-    membership_by_child_id = {
-        membership.roster_child_id: membership
-        for membership in active_memberships
-    }
-    for child_id, snapshot in existing_by_child_id.items():
-        snapshot.student_name_snapshot = child_by_id[child_id].name
-        membership = membership_by_child_id.get(child_id)
-        if membership is None:
-            continue
-        snapshot.term_classroom_id = term_classroom_by_classroom_id[
-            membership.classroom_id
-        ].id
-        snapshot.source_membership_id = membership.id
-
-    for child_id, membership in membership_by_child_id.items():
-        if child_id in existing_by_child_id:
-            continue
-        term_classroom = term_classroom_by_classroom_id[membership.classroom_id]
-        db.add(AcademicTermClassroomStudent(
-            academic_term_id=current_term.id,
-            term_classroom_id=term_classroom.id,
-            source_membership_id=membership.id,
-            roster_child_id_snapshot=child_id,
-            student_name_snapshot=membership.roster_child.name,
-        ))
-
-    missing_child_ids = roster_child_ids - set(existing_by_child_id) - set(
-        membership_by_child_id
-    )
-    if current_term.status != "imported" or not missing_child_ids:
-        return
-    project_students = (
-        db.query(Student, Project.classroom_id)
-        .join(Project, Project.id == Student.project_id)
-        .filter(
-            Project.deleted_at.is_(None),
-            Project.classroom_id.in_(term_classroom_by_classroom_id),
-            Student.roster_child_id.in_(missing_child_ids),
-        )
-        .order_by(Project.created_at.desc(), Project.id.desc(), Student.id.desc())
-        .all()
-    )
-    fallback_child_ids: set[int] = set()
-    for student, classroom_id in project_students:
-        child_id = student.roster_child_id
-        if child_id in fallback_child_ids:
-            continue
-        fallback_child_ids.add(child_id)
-        term_classroom = term_classroom_by_classroom_id[classroom_id]
-        db.add(AcademicTermClassroomStudent(
-            academic_term_id=current_term.id,
-            term_classroom_id=term_classroom.id,
-            source_membership_id=None,
-            roster_child_id_snapshot=child_id,
-            student_name_snapshot=student.name,
-        ))
+        if has_plan is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "draft_semester_has_no_plan",
+                    "message": "這個草稿學期沒有編班計畫，不能在裡面建立班級",
+                },
+            )
+    return semester
 
 
 @organization_mutation
@@ -1114,11 +997,32 @@ def create_classroom(
     department: str,
     name: str,
     is_active: bool,
+    semester_id: int | None = None,
 ) -> dict:
     campus = get_campus_or_404(campus_id, db)
     classroom_name = _normalize_organization_name(name, "班級")
     classroom_department = _validate_department(department)
-    if is_active and not campus.is_active:
+    if not is_active:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "classroom_has_no_active_flag",
+                "message": "班級沒有停用狀態；不屬於目前學期即為結束",
+            },
+        )
+    if not campus.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "active_classroom_requires_active_campus",
+                "message": "使用中的班級只能隸屬使用中的分校",
+            },
+        )
+    target_semester = _resolve_classroom_target_semester(db, semester_id)
+    # 進到鎖之後再確認一次：上面的檢查發生在 BEGIN IMMEDIATE 之前，
+    # 期間另一個 transaction 可能剛把這個分校停用。
+    db.refresh(campus)
+    if not campus.is_active:
         raise HTTPException(
             status_code=409,
             detail={
@@ -1128,57 +1032,295 @@ def create_classroom(
         )
     _assert_classroom_name_available(
         db,
+        semester_id=target_semester.id,
         campus_id=campus_id,
         department=classroom_department,
         name=classroom_name,
     )
     classroom = Classroom(
+        semester_id=target_semester.id,
         campus_id=campus_id,
         department=classroom_department,
         name=classroom_name,
-        is_active=is_active,
     )
     db.add(classroom)
     db.flush()
+    # 草稿學期的工作格在套用時才建；只有目前學期需要立刻補格
     _ensure_current_term_classroom_grid(db, classroom)
+    _ensure_draft_plan_covers_classroom(db, classroom, target_semester)
     db.commit()
     db.refresh(classroom)
     return _serialize_classroom(classroom)
 
 
+def _ensure_draft_plan_covers_classroom(
+    db: Session,
+    classroom: Classroom,
+    semester: Semester,
+) -> None:
+    """新學期多開的班也要進編班計畫，否則它永遠編不到老師。
+
+    老師編制是逐 `TermClassroomPlan` 送出的，而計畫只在建立草稿的那一刻照目前的班
+    長出 plan 列。少了這一步，後加的班在老師編制頁面根本不會出現，套用後成為無人
+    帶班的空班——而且整個過程不會報錯。
+    """
+    if semester.status != "draft":
+        return
+    plan = (
+        db.query(TermReclassificationPlan)
+        .filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
+        )
+        .first()
+    )
+    if plan is None:
+        return
+    db.add(TermClassroomPlan(plan_id=plan.id, classroom_id=classroom.id))
+    db.flush()
+
+
+def roster_editable(db: Session, classroom: Classroom) -> bool:
+    """這個班的名單能不能動。
+
+    目前學期的班當然可以。草稿學期的班在**有編班草稿**時也可以——新生（名冊裡還沒有
+    的孩子）只有這條路能進新學期：套用時只處理 placement，不會碰已經在班上的成員，
+    所以他們會原封不動留在新學期。少了這條，新生得等套用完才能補建，那段期間沒有班、
+    也沒有相本。
+    """
+    if classroom.is_current:
+        return True
+    semester = classroom.semester
+    if semester is None or semester.status != "draft":
+        return False
+    return (
+        db.query(TermReclassificationPlan.id)
+        .filter(
+            TermReclassificationPlan.target_semester_id == semester.id,
+            TermReclassificationPlan.status == "draft",
+        )
+        .first()
+        is not None
+    )
+
+
+def delete_draft_classroom_member(
+    db: Session,
+    classroom_id: int,
+    member_id: int,
+) -> dict:
+    """把草稿學期班級上的新生整列刪掉——只有草稿學期可以這樣做。
+
+    為什麼是真的刪、不是把區間結束掉：這位新生從來沒有在任何一個學期在籍過，沒有歷史
+    要保留。而且 `classroom_members` 對 `classrooms` 的外鍵沒有 CASCADE、移除班級又會
+    數所有成員列（含已結束的），留著空殼會讓那個班永遠刪不掉。名冊項也一起收回——
+    `batch_add_classroom_members` 每次都新建一筆，留著的話再加一次就是重複的孩子。
+    """
+    classroom = get_classroom_or_404(classroom_id, db)
+    semester = classroom.semester
+    if semester is None or semester.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "member_not_in_draft_semester",
+                "message": "只有草稿學期的新生可以直接移除",
+            },
+        )
+    member = get_class_roster_member_or_404(member_id, classroom_id, db)
+    placements = db.query(TermStudentPlacement.id).filter(
+        TermStudentPlacement.source_membership_id == member.id
+    ).count()
+    if placements:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "member_is_a_placement_source",
+                "message": "這一列是編班計畫的來源名單，不可直接移除",
+            },
+        )
+    roster_child_id = int(member.roster_child_id)
+    with organization_write_transaction(db):
+        db.delete(member)
+        db.flush()
+        still_enrolled = db.query(ClassroomMember.id).filter(
+            ClassroomMember.roster_child_id == roster_child_id
+        ).count()
+        linked_projects = db.query(ProjectStudent.id).filter(
+            ProjectStudent.roster_child_id == roster_child_id
+        ).count()
+        if not still_enrolled and not linked_projects:
+            child = db.get(Student, roster_child_id)
+            if child is not None:
+                db.delete(child)
+        db.commit()
+    return {"deleted_member_id": member_id}
+
+
+def blocked_classroom_ids(db: Session, classroom_ids: list[int]) -> set[int]:
+    """一次算出「不能移除」的班級集合。
+
+    逐班呼叫 `classroom_removal_blockers` 要五個 COUNT，38 班就是 190 次查詢；
+    序列化整份編班計畫時每次都跑一遍，不划算。這裡改成五個 IN 查詢。
+    """
+    if not classroom_ids:
+        return set()
+    blocked: set[int] = set()
+    for model, column in (
+        (ClassroomMember, ClassroomMember.classroom_id),
+        (ClassroomTeacher, ClassroomTeacher.classroom_id),
+        (ClassPeriodWorkSlot, ClassPeriodWorkSlot.classroom_id),
+        (Project, Project.classroom_id),
+        (TermStudentPlacement, TermStudentPlacement.target_classroom_id),
+    ):
+        blocked.update(
+            row[0]
+            for row in db.query(column).filter(column.in_(classroom_ids)).distinct()
+            if row[0] is not None
+        )
+    return blocked
+
+
+def classroom_removal_blockers(db: Session, classroom_id: int) -> dict[str, int]:
+    """回傳擋住移除的東西與筆數；空 dict 代表可以移除。
+
+    前端的移除按鈕也讀這個結果（經由計畫序列化的 `can_remove`），規則只住在這裡一份。
+    """
+    blockers = {
+        "members": db.query(ClassroomMember.id).filter(
+            ClassroomMember.classroom_id == classroom_id
+        ).count(),
+        "teachers": db.query(ClassroomTeacher.id).filter(
+            ClassroomTeacher.classroom_id == classroom_id
+        ).count(),
+        "work_slots": db.query(ClassPeriodWorkSlot.id).filter(
+            ClassPeriodWorkSlot.classroom_id == classroom_id
+        ).count(),
+        "projects": db.query(Project.id).filter(
+            Project.classroom_id == classroom_id
+        ).count(),
+        "placements": db.query(TermStudentPlacement.id).filter(
+            TermStudentPlacement.target_classroom_id == classroom_id
+        ).count(),
+    }
+    return {key: count for key, count in blockers.items() if count}
+
+
+@organization_mutation
+def reorder_classrooms(db: Session, semester_id: int, classroom_ids: list[int]) -> dict:
+    """重排一個學期內班級的顯示順序。
+
+    要求送出**該學期完整的班級 id 集合**：只送一部分的話，沒送到的班要排哪裡沒有答案，
+    與其自己猜不如拒絕。已結束或已取消的學期不可重排——那是歷史。
+    """
+    semester = db.get(Semester, semester_id)
+    if semester is None:
+        raise HTTPException(status_code=404, detail="找不到學期")
+    if semester.status not in (*CURRENT_SEMESTER_STATUSES, "draft"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "semester_not_open_for_classrooms",
+                "message": "只能重排目前學期或編班草稿學期的班級順序",
+            },
+        )
+    if len(classroom_ids) != len(set(classroom_ids)):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "duplicate_classroom_id", "message": "班級 id 不可重複"},
+        )
+    classrooms = {
+        classroom.id: classroom
+        for classroom in db.query(Classroom).filter(
+            Classroom.semester_id == semester_id
+        )
+    }
+    if set(classroom_ids) != set(classrooms):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "incomplete_classroom_order",
+                "message": "必須送出這個學期完整的班級順序",
+            },
+        )
+    for position, classroom_id in enumerate(classroom_ids):
+        classrooms[classroom_id].sort_order = position
+    db.commit()
+    return {"semester_id": semester_id, "classroom_ids": classroom_ids}
+
+
+@organization_mutation
+def delete_classroom(db: Session, classroom_id: int) -> dict:
+    """移除編班草稿裡多開的班。
+
+    只限草稿學期，而且必須沒有人編進去：一旦有名冊、編制、工作格或相本，刪掉就會
+    連帶抹掉那些歸屬。目前學期與已結束學期的班一律不可刪——班是歷史的一部分。
+
+    草稿的 `TermClassroomPlan` 不算佔用。草稿學期的班**每一個**都有 plan 列（建立
+    草稿時一對一長出來的），把它當擋門等於一個班都刪不掉，包括這學期收掉、下學期
+    不再開的班。真正該擋的是 `placements`——有學生指著它才是有人編進去。
+    """
+    classroom = get_classroom_or_404(classroom_id, db)
+    semester = classroom.semester
+    if semester is None or semester.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "classroom_not_in_draft_semester",
+                "message": "只能移除編班草稿學期裡的班級",
+            },
+        )
+    occupied = classroom_removal_blockers(db, classroom_id)
+    if occupied:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "classroom_not_empty",
+                "message": "班級仍有學生、老師或相本，不可移除",
+                "counts": occupied,
+            },
+        )
+    # plan 列的 FK 是 ON DELETE CASCADE，但這裡明寫比較不依賴 pragma 狀態
+    db.query(TermClassroomPlan).filter(
+        TermClassroomPlan.classroom_id == classroom_id
+    ).delete(synchronize_session=False)
+    db.delete(classroom)
+    db.commit()
+    return {"deleted_classroom_id": classroom_id}
+
+
 @organization_mutation
 def update_classroom(db: Session, classroom_id: int, changes: dict) -> dict:
     classroom = get_classroom_or_404(classroom_id, db)
-    if "is_active" in changes and changes["is_active"] is None:
-        raise HTTPException(status_code=422, detail="is_active 不可為空")
-    target_is_active = changes.get("is_active", classroom.is_active)
-    if target_is_active is False and classroom.is_active:
-        has_active_members = db.query(ClassRosterMember.id).filter(
-            ClassRosterMember.classroom_id == classroom_id,
-            ClassRosterMember.ended_at.is_(None),
-        ).first()
-        has_active_teachers = db.query(ClassroomTeacherAssignment.id).filter(
-            ClassroomTeacherAssignment.classroom_id == classroom_id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
-        ).first()
-        if has_active_members or has_active_teachers:
+    # 班級是學期範圍的實體，校別與部門就是它的身分——中途搬校或換部門等於換成
+    # 另一個班，必須結束原班、在目標校建新班並轉移成員，不能就地改寫。
+    if "is_active" in changes:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "classroom_has_no_active_flag",
+                "message": "班級沒有停用狀態；不屬於目前學期即為結束",
+            },
+        )
+    for field, current_value in (
+        ("campus_id", classroom.campus_id),
+        ("department", classroom.department),
+    ):
+        if field in changes and changes[field] != current_value:
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "code": "classroom_has_active_roster_or_teachers",
-                    "message": "請先清空目前學生名單與老師編制再停用班級",
+                    "code": "classroom_scope_is_immutable",
+                    "message": "班級的分校與部門不可變更；請結束原班並在目標分校建立新班",
                 },
             )
-    campus_id = changes.get("campus_id", classroom.campus_id)
-    department = _validate_department(
-        changes.get("department", classroom.department)
-    )
+    campus_id = classroom.campus_id
+    department = classroom.department
     name = _normalize_organization_name(
         changes.get("name", classroom.name),
         "班級",
     )
     campus = get_campus_or_404(campus_id, db)
-    if target_is_active and not campus.is_active:
+    if not campus.is_active:
         raise HTTPException(
             status_code=409,
             detail={
@@ -1188,17 +1330,13 @@ def update_classroom(db: Session, classroom_id: int, changes: dict) -> dict:
         )
     _assert_classroom_name_available(
         db,
+        semester_id=classroom.semester_id,
         campus_id=campus_id,
         department=department,
         name=name,
         excluded_classroom_id=classroom_id,
     )
-    classroom.campus_id = campus_id
-    classroom.department = department
     classroom.name = name
-    if "is_active" in changes:
-        classroom.is_active = changes["is_active"]
-    classroom.updated_at = utc_now()
     db.flush()
     _ensure_current_term_classroom_grid(db, classroom)
     db.commit()
@@ -1213,28 +1351,28 @@ def batch_add_classroom_members(
     members: list[dict],
 ) -> dict:
     classroom = get_classroom_or_404(classroom_id, db)
-    if not classroom.is_active or not classroom.campus.is_active:
+    if not roster_editable(db, classroom) or not classroom.campus.is_active:
         raise HTTPException(status_code=409, detail="只能編輯使用中的分校與班級")
     validate_student_batch_size(len(members))
     normalized_names = [normalize_student_name(item["name"]) for item in members]
     normalized_album_names = [
         normalize_student_album_name(item.get("album_name")) for item in members
     ]
-    created_members: list[ClassRosterMember] = []
+    created_members: list[ClassroomMember] = []
     skipped_names: list[str] = []
     names_seen: set[str] = set()
-    active_members = db.query(ClassRosterMember).options(
-        selectinload(ClassRosterMember.roster_child)
+    active_members = db.query(ClassroomMember).options(
+        selectinload(ClassroomMember.roster_child)
     ).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
     ).all()
     active_count = len(active_members)
     existing_effective_album_names = [
         str(member.roster_child.effective_album_name)
         for member in active_members
     ]
-    created_children: list[RosterChild] = []
+    created_children: list[Student] = []
 
     for member_name, album_name in zip(
         normalized_names,
@@ -1248,24 +1386,24 @@ def batch_add_classroom_members(
             skipped_names.append(member_name)
             continue
         names_seen.add(normalized_identity)
-        active_membership = db.query(ClassRosterMember).join(
-            RosterChild,
-            RosterChild.id == ClassRosterMember.roster_child_id,
+        active_membership = db.query(ClassroomMember).join(
+            Student,
+            Student.id == ClassroomMember.roster_child_id,
         ).filter(
-            ClassRosterMember.classroom_id == classroom_id,
-            ClassRosterMember.ended_at.is_(None),
-            RosterChild.name == normalized_identity,
+            ClassroomMember.classroom_id == classroom_id,
+            ClassroomMember.ended_at.is_(None),
+            Student.name == normalized_identity,
         ).first()
         if active_membership:
             skipped_names.append(member_name)
             continue
-        roster_child = RosterChild(
+        roster_child = Student(
             name=normalized_identity,
             album_name=album_name,
         )
         db.add(roster_child)
         db.flush()
-        member = ClassRosterMember(
+        member = ClassroomMember(
             classroom_id=classroom_id,
             roster_child_id=roster_child.id,
         )
@@ -1295,10 +1433,6 @@ def batch_add_classroom_members(
     ):
         child.album_name = album_name
     db.flush()
-    _sync_current_term_student_snapshots(
-        db,
-        {int(member.roster_child_id) for member in created_members},
-    )
     db.commit()
     for member in created_members:
         db.refresh(member)
@@ -1314,12 +1448,12 @@ def _assert_child_has_no_active_membership(
     *,
     excluded_member_id: int | None = None,
 ) -> None:
-    query = db.query(ClassRosterMember).filter(
-        ClassRosterMember.roster_child_id == roster_child_id,
-        ClassRosterMember.ended_at.is_(None),
+    query = db.query(ClassroomMember).filter(
+        ClassroomMember.roster_child_id == roster_child_id,
+        ClassroomMember.ended_at.is_(None),
     )
     if excluded_member_id is not None:
-        query = query.filter(ClassRosterMember.id != excluded_member_id)
+        query = query.filter(ClassroomMember.id != excluded_member_id)
     active_membership = query.first()
     if active_membership:
         raise HTTPException(
@@ -1338,14 +1472,14 @@ def _assert_active_name_available(
     roster_child_id: int,
     child_name: str,
 ) -> None:
-    conflict = db.query(ClassRosterMember.id).join(
-        RosterChild,
-        RosterChild.id == ClassRosterMember.roster_child_id,
+    conflict = db.query(ClassroomMember.id).join(
+        Student,
+        Student.id == ClassroomMember.roster_child_id,
     ).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
-        ClassRosterMember.roster_child_id != roster_child_id,
-        RosterChild.name == child_name,
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
+        ClassroomMember.roster_child_id != roster_child_id,
+        Student.name == child_name,
     ).first()
     if conflict:
         raise HTTPException(
@@ -1358,16 +1492,16 @@ def _assert_active_name_available(
 
 
 def _assert_classroom_capacity(db: Session, classroom_id: int) -> None:
-    active_count = db.query(ClassRosterMember.id).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
+    active_count = db.query(ClassroomMember.id).filter(
+        ClassroomMember.classroom_id == classroom_id,
+        ClassroomMember.ended_at.is_(None),
     ).count()
     assert_project_student_capacity(active_count, 1)
 
 
 def _set_roster_child_album_name(
     db: Session,
-    roster_child: RosterChild,
+    roster_child: Student,
     raw_album_name: str | None,
 ) -> bool:
     """更新名冊唯一稱呼來源，並讓所有已歸班相本的舊輸出失效。"""
@@ -1376,10 +1510,10 @@ def _set_roster_child_album_name(
         return False
 
     affected_students = (
-        db.query(Student)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
-            Student.roster_child_id == roster_child.id,
+            ProjectStudent.roster_child_id == roster_child.id,
             Project.classroom_id.isnot(None),
         )
         .all()
@@ -1407,10 +1541,10 @@ def _assigned_project_ids_for_roster_child(
     return sorted({
         int(project_id)
         for (project_id,) in (
-            db.query(Student.project_id)
-            .join(Project, Project.id == Student.project_id)
+            db.query(ProjectStudent.project_id)
+            .join(Project, Project.id == ProjectStudent.project_id)
             .filter(
-                Student.roster_child_id == roster_child_id,
+                ProjectStudent.roster_child_id == roster_child_id,
                 Project.classroom_id.isnot(None),
             )
             .all()
@@ -1420,7 +1554,7 @@ def _assigned_project_ids_for_roster_child(
 
 def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
     """依目前班級與所有已歸班相本，推導不會碰撞的中央稱呼。"""
-    roster_children = db.query(RosterChild).order_by(RosterChild.id).all()
+    roster_children = db.query(Student).order_by(Student.id).all()
     candidate_by_child_id = {
         int(roster_child.id): suggest_automatic_album_name(str(roster_child.name))
         for roster_child in roster_children
@@ -1444,16 +1578,16 @@ def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
 
     for classroom_id, child_id, child_name in (
         db.query(
-            ClassRosterMember.classroom_id,
-            RosterChild.id,
-            RosterChild.name,
+            ClassroomMember.classroom_id,
+            Student.id,
+            Student.name,
         )
         .join(
-            RosterChild,
-            RosterChild.id == ClassRosterMember.roster_child_id,
+            Student,
+            Student.id == ClassroomMember.roster_child_id,
         )
-        .filter(ClassRosterMember.ended_at.is_(None))
-        .order_by(ClassRosterMember.classroom_id, ClassRosterMember.id)
+        .filter(ClassroomMember.ended_at.is_(None))
+        .order_by(ClassroomMember.classroom_id, ClassroomMember.id)
         .all()
     ):
         collision_scopes.setdefault(("classroom", int(classroom_id)), []).append(
@@ -1461,13 +1595,13 @@ def _automatic_roster_album_names(db: Session) -> dict[int, str | None]:
         )
 
     for project_id, child_id, student_name in (
-        db.query(Student.project_id, Student.roster_child_id, Student.name)
-        .join(Project, Project.id == Student.project_id)
+        db.query(ProjectStudent.project_id, ProjectStudent.roster_child_id, ProjectStudent.name)
+        .join(Project, Project.id == ProjectStudent.project_id)
         .filter(
             Project.classroom_id.isnot(None),
-            Student.roster_child_id.isnot(None),
+            ProjectStudent.roster_child_id.isnot(None),
         )
-        .order_by(Student.project_id, Student.order_index, Student.id)
+        .order_by(ProjectStudent.project_id, ProjectStudent.order_index, ProjectStudent.id)
         .all()
     ):
         collision_scopes.setdefault(("project", int(project_id)), []).append(
@@ -1510,9 +1644,9 @@ def _auto_fill_roster_children(
     roster_child_ids: list[int],
 ) -> dict[str, int]:
     roster_children = (
-        db.query(RosterChild)
-        .filter(RosterChild.id.in_(sorted(set(roster_child_ids))))
-        .order_by(RosterChild.id)
+        db.query(Student)
+        .filter(Student.id.in_(sorted(set(roster_child_ids))))
+        .order_by(Student.id)
         .all()
         if roster_child_ids
         else []
@@ -1543,13 +1677,13 @@ def auto_fill_roster_child_album_name(
     with organization_acl_lock:
         db.rollback()
         db.expire_all()
-        roster_child = db.get(RosterChild, roster_child_id)
+        roster_child = db.get(Student, roster_child_id)
         if roster_child is None:
             raise HTTPException(status_code=404, detail="Roster child not found")
         project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
         with lock_project_content_writes(project_ids):
             with organization_write_transaction(db):
-                if db.get(RosterChild, roster_child_id) is None:
+                if db.get(Student, roster_child_id) is None:
                     raise HTTPException(status_code=404, detail="Roster child not found")
                 result = _auto_fill_roster_children(db, [roster_child_id])
                 db.commit()
@@ -1567,9 +1701,9 @@ def auto_fill_classroom_member_album_names(
         get_classroom_or_404(classroom_id, db)
         child_ids = [
             int(child_id)
-            for (child_id,) in db.query(ClassRosterMember.roster_child_id).filter(
-                ClassRosterMember.classroom_id == classroom_id,
-                ClassRosterMember.ended_at.is_(None),
+            for (child_id,) in db.query(ClassroomMember.roster_child_id).filter(
+                ClassroomMember.classroom_id == classroom_id,
+                ClassroomMember.ended_at.is_(None),
             ).all()
         ]
         project_ids = sorted({
@@ -1594,13 +1728,13 @@ def update_roster_child_album_name(
     with organization_acl_lock:
         db.rollback()
         db.expire_all()
-        roster_child = db.get(RosterChild, roster_child_id)
+        roster_child = db.get(Student, roster_child_id)
         if roster_child is None:
             raise HTTPException(status_code=404, detail="Roster child not found")
         project_ids = _assigned_project_ids_for_roster_child(db, roster_child_id)
         with lock_project_content_writes(project_ids):
             with organization_write_transaction(db):
-                roster_child = db.get(RosterChild, roster_child_id)
+                roster_child = db.get(Student, roster_child_id)
                 if roster_child is None:
                     raise HTTPException(status_code=404, detail="Roster child not found")
                 _set_roster_child_album_name(db, roster_child, album_name)
@@ -1629,9 +1763,9 @@ def _update_classroom_member_in_transaction(
         normalized_identity = normalize_child_name(child_name)
         if not normalized_identity:
             raise HTTPException(status_code=422, detail="學生姓名不可空白")
-        active_membership = db.query(ClassRosterMember).filter(
-            ClassRosterMember.roster_child_id == member.roster_child_id,
-            ClassRosterMember.ended_at.is_(None),
+        active_membership = db.query(ClassroomMember).filter(
+            ClassroomMember.roster_child_id == member.roster_child_id,
+            ClassroomMember.ended_at.is_(None),
         ).first()
         if active_membership:
             _assert_active_name_available(
@@ -1664,7 +1798,7 @@ def _update_classroom_member_in_transaction(
         if target_classroom_id == classroom_id:
             raise HTTPException(status_code=422, detail="目標班級不可與原班級相同")
         target_classroom = get_classroom_or_404(target_classroom_id, db)
-        if not target_classroom.is_active or not target_classroom.campus.is_active:
+        if not target_classroom.is_current or not target_classroom.campus.is_active:
             raise HTTPException(status_code=409, detail="只能轉入使用中的分校與班級")
         _assert_child_has_no_active_membership(
             db,
@@ -1681,7 +1815,7 @@ def _update_classroom_member_in_transaction(
         member.ended_at = now
         member.end_reason = "transfer"
         db.flush()
-        transferred_member = ClassRosterMember(
+        transferred_member = ClassroomMember(
             classroom_id=target_classroom_id,
             roster_child_id=member.roster_child_id,
             started_at=now,
@@ -1691,7 +1825,7 @@ def _update_classroom_member_in_transaction(
         member.ended_at = now
         member.end_reason = changes.get("end_reason") or "departed"
     elif status == "active" and member.ended_at is not None:
-        if not member.classroom.is_active or not member.classroom.campus.is_active:
+        if not member.classroom.is_current or not member.classroom.campus.is_active:
             raise HTTPException(status_code=409, detail="只能恢復到使用中的分校與班級")
         _assert_child_has_no_active_membership(db, member.roster_child_id)
         _assert_classroom_capacity(db, classroom_id)
@@ -1701,7 +1835,7 @@ def _update_classroom_member_in_transaction(
             roster_child_id=member.roster_child_id,
             child_name=member.roster_child.name,
         )
-        transferred_member = ClassRosterMember(
+        transferred_member = ClassroomMember(
             classroom_id=classroom_id,
             roster_child_id=member.roster_child_id,
             started_at=now,
@@ -1709,7 +1843,6 @@ def _update_classroom_member_in_transaction(
         db.add(transferred_member)
 
     db.flush()
-    _sync_current_term_student_snapshots(db, {int(member.roster_child_id)})
     db.commit()
     if transferred_member is not None:
         db.refresh(transferred_member)
@@ -1754,908 +1887,6 @@ def update_classroom_member(
                 )
 
 
-def _migration_error(
-    status_code: int,
-    code: str,
-    message: str,
-    **details,
-) -> HTTPException:
-    return HTTPException(
-        status_code=status_code,
-        detail={"code": code, "message": message, **details},
-    )
-
-
-def _canonical_datetime(value: datetime | None) -> str | None:
-    return value.isoformat(timespec="microseconds") if value is not None else None
-
-
-def _assert_project_migration_target(
-    project: Project,
-    classroom: Classroom,
-) -> None:
-    if project.deleted_at is not None:
-        raise _migration_error(
-            409,
-            "archived_project_migration_forbidden",
-            "封存中的相本不可執行歸班遷移，請先還原相本",
-        )
-    if project.classroom_id is not None:
-        raise _migration_error(
-            409,
-            "project_already_assigned",
-            "相本已歸入班級，學生身分快照不可再遷移",
-        )
-    if not classroom.is_active or not classroom.campus.is_active:
-        raise _migration_error(
-            409,
-            "inactive_project_migration_target",
-            "只能歸入使用中的分校與班級",
-        )
-    if project.department is not None and project.department != classroom.department:
-        raise _migration_error(
-            422,
-            "project_classroom_department_mismatch",
-            "相本與目標班級部門不一致",
-            project_department=project.department,
-            classroom_department=classroom.department,
-        )
-
-
-def _build_established_identity_candidates(
-    db: Session,
-    target_classroom_id: int,
-    students: list[Student],
-) -> tuple[list[dict], dict[int, list[int]]]:
-    membership_rows = (
-        db.query(
-            ClassRosterMember.roster_child_id,
-            ClassRosterMember.id,
-            ClassRosterMember.classroom_id,
-            ClassRosterMember.started_at,
-            ClassRosterMember.ended_at,
-            ClassRosterMember.end_reason,
-            Classroom.name,
-            Classroom.department,
-            Campus.id,
-            Campus.name,
-        )
-        .join(Classroom, Classroom.id == ClassRosterMember.classroom_id)
-        .join(Campus, Campus.id == Classroom.campus_id)
-        .order_by(ClassRosterMember.id)
-        .all()
-    )
-    project_rows = (
-        db.query(
-            Student.roster_child_id,
-            Project.id,
-            Project.name,
-            Student.id,
-            Project.classroom_id,
-            Project.deleted_at,
-            Classroom.name,
-            Classroom.department,
-            Campus.id,
-            Campus.name,
-            Project.template_period_id,
-            TemplatePeriod.name,
-        )
-        .join(Project, Project.id == Student.project_id)
-        .join(Classroom, Classroom.id == Project.classroom_id)
-        .join(Campus, Campus.id == Classroom.campus_id)
-        .outerjoin(
-            TemplatePeriod,
-            TemplatePeriod.id == Project.template_period_id,
-        )
-        .filter(
-            Project.classroom_id.isnot(None),
-            Student.roster_child_id.isnot(None),
-        )
-        .order_by(Project.id, Student.id)
-        .all()
-    )
-    established_ids = {
-        row[0] for row in membership_rows
-    } | {
-        row[0] for row in project_rows
-    }
-    if not established_ids:
-        return [], {int(student.id): [] for student in students}
-
-    children = (
-        db.query(RosterChild)
-        .filter(RosterChild.id.in_(established_ids))
-        .order_by(RosterChild.name, RosterChild.id)
-        .all()
-    )
-    target_memberships: dict[int, list[dict]] = {}
-    other_memberships: dict[int, list[dict]] = {}
-    for (
-        child_id,
-        member_id,
-        classroom_id,
-        started_at,
-        ended_at,
-        end_reason,
-        classroom_name,
-        department,
-        campus_id,
-        campus_name,
-    ) in membership_rows:
-        is_target_classroom = classroom_id == target_classroom_id
-        evidence = {
-            "kind": (
-                "target_membership"
-                if is_target_classroom
-                else "same_name_membership"
-            ),
-            "membership_id": member_id,
-            "campus_id": campus_id,
-            "campus_name": campus_name,
-            "classroom_id": classroom_id,
-            "classroom_name": classroom_name,
-            "department": department,
-            "status": "ended" if ended_at is not None else "active",
-            "started_at": _canonical_datetime(started_at),
-            "ended_at": _canonical_datetime(ended_at),
-            "end_reason": end_reason,
-        }
-        evidence_by_child = (
-            target_memberships if is_target_classroom else other_memberships
-        )
-        evidence_by_child.setdefault(child_id, []).append(evidence)
-    target_projects: dict[int, list[dict]] = {}
-    other_projects: dict[int, list[dict]] = {}
-    for (
-        child_id,
-        project_id,
-        project_name,
-        student_id,
-        classroom_id,
-        deleted_at,
-        classroom_name,
-        department,
-        campus_id,
-        campus_name,
-        period_id,
-        period_name,
-    ) in project_rows:
-        is_target_classroom = classroom_id == target_classroom_id
-        evidence = {
-            "kind": (
-                "target_project"
-                if is_target_classroom
-                else "same_name_project"
-            ),
-            "project_id": project_id,
-            "project_name": project_name,
-            "student_id": student_id,
-            "campus_id": campus_id,
-            "campus_name": campus_name,
-            "classroom_id": classroom_id,
-            "classroom_name": classroom_name,
-            "department": department,
-            "period_id": period_id,
-            "period_name": period_name,
-            "status": "archived" if deleted_at is not None else "active",
-        }
-        evidence_by_child = target_projects if is_target_classroom else other_projects
-        evidence_by_child.setdefault(child_id, []).append(evidence)
-
-    source_ids_by_name: dict[str, list[int]] = {}
-    for student in students:
-        source_ids_by_name.setdefault(
-            normalize_child_name(student.name),
-            [],
-        ).append(student.id)
-    loaded_child_ids = {child.id for child in children}
-    target_child_ids = (
-        set(target_memberships) | set(target_projects)
-    ) & loaded_child_ids
-    candidates: list[dict] = []
-    candidate_ids_by_normalized_name: dict[str, list[int]] = {}
-    for child in children:
-        normalized_name = normalize_child_name(child.name)
-        matching_student_ids = source_ids_by_name.get(normalized_name, [])
-        if child.id not in target_child_ids and not matching_student_ids:
-            continue
-        evidence = [
-            *target_memberships.get(child.id, []),
-            *target_projects.get(child.id, []),
-            *other_memberships.get(child.id, []),
-            *other_projects.get(child.id, []),
-        ]
-        if matching_student_ids:
-            evidence.append({
-                "kind": "same_name_established",
-                "student_ids": sorted(matching_student_ids),
-            })
-            candidate_ids_by_normalized_name.setdefault(
-                normalized_name,
-                [],
-            ).append(child.id)
-        candidates.append({
-            "roster_child_id": child.id,
-            "name": child.name,
-            "album_name": child.album_name,
-            "effective_album_name": child.effective_album_name,
-            "evidence": evidence,
-        })
-
-    candidates.sort(key=lambda row: (row["name"], row["roster_child_id"]))
-    allowed_by_student = {
-        student.id: sorted(
-            target_child_ids
-            | set(candidate_ids_by_normalized_name.get(
-                normalize_child_name(student.name),
-                [],
-            ))
-        )
-        for student in students
-    }
-    return candidates, allowed_by_student
-
-
-def _build_project_classroom_migration_preview(
-    db: Session,
-    project_id: int,
-    classroom_id: int,
-) -> dict:
-    project = get_project_or_404(project_id, db, include_archived=True)
-    classroom = get_classroom_or_404(classroom_id, db)
-    _assert_project_migration_target(project, classroom)
-    students = sorted(
-        project.students,
-        key=lambda student: (student.order_index, student.id),
-    )
-    if not students:
-        raise _migration_error(
-            422,
-            "empty_legacy_project_migration_forbidden",
-            "空相本沒有可核對的學生快照，請封存後從班級目前名單重新建立",
-        )
-    original_child_ids = {
-        student.roster_child_id
-        for student in students
-        if student.roster_child_id is not None
-    }
-    original_children = {
-        child.id: child
-        for child in (
-            db.query(RosterChild)
-            .filter(RosterChild.id.in_(original_child_ids))
-            .all()
-            if original_child_ids
-            else []
-        )
-    }
-    candidates, allowed_by_student = _build_established_identity_candidates(
-        db,
-        classroom_id,
-        students,
-    )
-    active_roster_count = db.query(ClassRosterMember.id).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
-    ).count()
-    student_rows = []
-    for student in students:
-        original_child = original_children.get(student.roster_child_id)
-        student_rows.append({
-            "student_id": student.id,
-            "name": student.name,
-            "album_name": student.album_name,
-            "effective_album_name": student.effective_album_name,
-            "order_index": student.order_index,
-            "original_roster_child": (
-                {
-                    "id": student.roster_child_id,
-                    "name": original_child.name if original_child else None,
-                }
-                if student.roster_child_id is not None
-                else None
-            ),
-            "allowed_existing_roster_child_ids": allowed_by_student[student.id],
-        })
-    target_row = {
-        "id": classroom.id,
-        "campus_id": classroom.campus_id,
-        "campus_name": classroom.campus.name,
-        "name": classroom.name,
-        "department": classroom.department,
-        "active_roster_count": active_roster_count,
-        "seed_allowed": active_roster_count == 0,
-    }
-    fingerprint_input = {
-        "project": {
-            "id": project.id,
-            "name": project.name,
-            "department": project.department,
-            "classroom_id": project.classroom_id,
-            "updated_at": _canonical_datetime(project.updated_at),
-        },
-        "target_classroom": target_row,
-        "students": student_rows,
-        "established_candidates": candidates,
-    }
-    source_fingerprint = hashlib.sha256(json.dumps(
-        fingerprint_input,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
-    return {
-        "source_fingerprint": source_fingerprint,
-        "target_classroom": target_row,
-        "students": student_rows,
-        "established_candidates": candidates,
-    }
-
-
-def get_project_classroom_migration_preview(
-    db: Session,
-    project_id: int,
-    classroom_id: int,
-) -> dict:
-    return _build_project_classroom_migration_preview(
-        db,
-        project_id,
-        classroom_id,
-    )
-
-
-def _ensure_legacy_project_work_slot(
-    db: Session,
-    project: Project,
-    classroom: Classroom,
-) -> ClassPeriodWorkSlot:
-    """為人工歸班的有效舊相本建立或沿用正式學期工作格。"""
-    if project.template_period is None:
-        raise _migration_error(
-            422,
-            "project_period_required",
-            "相本缺少期別，無法建立工作格",
-        )
-    term_period = db.query(AcademicTermPeriod).filter(
-        AcademicTermPeriod.template_period_id == project.template_period_id
-    ).first()
-    if term_period is None:
-        current_term = (
-            db.query(AcademicTerm)
-            .filter(AcademicTerm.status.in_(("imported", "active")))
-            .order_by(AcademicTerm.id.desc())
-            .first()
-        )
-        if current_term is None:
-            raise _migration_error(
-                409,
-                "current_academic_term_required",
-                "目前沒有可接收舊相本的正式學期",
-            )
-        last_period = (
-            db.query(AcademicTermPeriod)
-            .filter(AcademicTermPeriod.academic_term_id == current_term.id)
-            .order_by(AcademicTermPeriod.position.desc())
-            .first()
-        )
-        term_period = AcademicTermPeriod(
-            academic_term_id=current_term.id,
-            template_period_id=project.template_period.id,
-            period_name_snapshot=project.template_period.name,
-            department=project.template_period.department,
-            position=(last_period.position + 1 if last_period is not None else 0),
-        )
-        db.add(term_period)
-        db.flush()
-
-    term_classroom = db.query(AcademicTermClassroom).filter(
-        AcademicTermClassroom.academic_term_id == term_period.academic_term_id,
-        AcademicTermClassroom.classroom_id == classroom.id,
-    ).first()
-    if term_classroom is None:
-        term_classroom = AcademicTermClassroom(
-            academic_term_id=term_period.academic_term_id,
-            classroom_id=classroom.id,
-            campus_id_snapshot=classroom.campus_id,
-            campus_name_snapshot=classroom.campus.name,
-            classroom_name_snapshot=classroom.name,
-            department=classroom.department,
-        )
-        db.add(term_classroom)
-        db.flush()
-        active_assignments = db.query(ClassroomTeacherAssignment).filter(
-            ClassroomTeacherAssignment.classroom_id == classroom.id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
-            ClassroomTeacherAssignment.teacher_id.isnot(None),
-        ).all()
-        for assignment in active_assignments:
-            db.add(AcademicTermClassroomTeacher(
-                term_classroom_id=term_classroom.id,
-                source_assignment_id=assignment.id,
-                teacher_id=assignment.teacher_id,
-                teacher_name_snapshot=assignment.teacher_name_snapshot,
-                duty=assignment.duty,
-            ))
-
-    work_slot = db.query(ClassPeriodWorkSlot).filter(
-        ClassPeriodWorkSlot.term_classroom_id == term_classroom.id,
-        ClassPeriodWorkSlot.term_period_id == term_period.id,
-    ).first()
-    if work_slot is None:
-        work_slot = ClassPeriodWorkSlot(
-            term_classroom_id=term_classroom.id,
-            term_period_id=term_period.id,
-        )
-        db.add(work_slot)
-        db.flush()
-    if work_slot.started_at is None:
-        work_slot.started_at = project.created_at or utc_now()
-    return work_slot
-
-
-def _validate_identity_decisions(
-    students: list[Student],
-    decisions: list[dict],
-) -> dict[int, dict]:
-    student_ids = {student.id for student in students}
-    decision_ids = [decision["student_id"] for decision in decisions]
-    duplicate_ids = sorted(
-        student_id
-        for student_id, count in Counter(decision_ids).items()
-        if count > 1
-    )
-    if duplicate_ids:
-        raise _migration_error(
-            422,
-            "duplicate_identity_decision",
-            "同一位相本學生只能有一筆身分決策",
-            student_ids=duplicate_ids,
-        )
-    unknown_ids = sorted(set(decision_ids) - student_ids)
-    if unknown_ids:
-        raise _migration_error(
-            422,
-            "unknown_identity_decision",
-            "身分決策包含不屬於此相本的學生",
-            student_ids=unknown_ids,
-        )
-    missing_ids = sorted(student_ids - set(decision_ids))
-    if missing_ids:
-        raise _migration_error(
-            422,
-            "identity_decisions_incomplete",
-            "必須逐一核對相本內所有學生",
-            student_ids=missing_ids,
-        )
-    return {decision["student_id"]: decision for decision in decisions}
-
-
-def _preflight_resolved_roster_seed(
-    db: Session,
-    classroom_id: int,
-    resolved_children: list[RosterChild],
-) -> None:
-    if db.query(ClassRosterMember.id).filter(
-        ClassRosterMember.classroom_id == classroom_id,
-        ClassRosterMember.ended_at.is_(None),
-    ).first():
-        raise _migration_error(
-            409,
-            "target_classroom_roster_not_empty",
-            "只有目前名單為空的班級可由舊相本建立名單",
-        )
-    assert_project_student_capacity(0, len(resolved_children))
-    normalized_names = [
-        normalize_child_name(child.name) for child in resolved_children
-    ]
-    duplicate_names = sorted(
-        name for name, count in Counter(normalized_names).items() if count > 1
-    )
-    if duplicate_names:
-        raise _migration_error(
-            409,
-            "duplicate_seed_roster_name",
-            "目前名單不可包含同名學生",
-            names=duplicate_names,
-        )
-    child_ids = [child.id for child in resolved_children]
-    active_memberships = (
-        db.query(ClassRosterMember)
-        .filter(
-            ClassRosterMember.roster_child_id.in_(child_ids),
-            ClassRosterMember.ended_at.is_(None),
-        )
-        .all()
-        if child_ids
-        else []
-    )
-    if active_memberships:
-        raise _migration_error(
-            409,
-            "project_child_already_active",
-            "學生目前已在其他班級名單中",
-            roster_child_ids=sorted({
-                membership.roster_child_id for membership in active_memberships
-            }),
-            classroom_ids=sorted({
-                membership.classroom_id for membership in active_memberships
-            }),
-        )
-
-
-def _assign_project_to_classroom_in_transaction(
-    db: Session,
-    current_admin: User,
-    project_id: int,
-    *,
-    classroom_id: int,
-    source_fingerprint: str,
-    seed_current_roster: bool,
-    student_identity_decisions: list[dict],
-) -> dict:
-    with organization_write_transaction(db):
-        admin = get_user_or_404(current_admin.id, db)
-        preview = _build_project_classroom_migration_preview(
-            db,
-            project_id,
-            classroom_id,
-        )
-        if preview["source_fingerprint"] != source_fingerprint:
-            raise _migration_error(
-                409,
-                "stale_project_classroom_migration_preview",
-                "相本學生、目標班級或可用身分已變更，請重新預覽",
-            )
-        project = get_project_or_404(project_id, db)
-        classroom = get_classroom_or_404(classroom_id, db)
-        students = sorted(
-            project.students,
-            key=lambda student: (student.order_index, student.id),
-        )
-        decisions_by_student_id = _validate_identity_decisions(
-            students,
-            student_identity_decisions,
-        )
-        allowed_by_student_id = {
-            row["student_id"]: set(row["allowed_existing_roster_child_ids"])
-            for row in preview["students"]
-        }
-        candidate_by_id = {
-            row["roster_child_id"]: row
-            for row in preview["established_candidates"]
-        }
-        original_identity_rows = {
-            student.id: {
-                "roster_child_id": student.roster_child_id,
-                "roster_child_name": (
-                    student.roster_child.name
-                    if student.roster_child is not None
-                    else None
-                ),
-            }
-            for student in students
-        }
-
-        existing_child_by_student_id: dict[int, RosterChild] = {}
-        create_name_by_student_id: dict[int, str] = {}
-        for student in students:
-            decision = decisions_by_student_id[student.id]
-            if decision["action"] == "existing":
-                child_id = decision["roster_child_id"]
-                if child_id not in allowed_by_student_id[student.id]:
-                    raise _migration_error(
-                        422,
-                        "provisional_identity_not_allowed",
-                        "只能選擇預覽列出的已確立學生身分",
-                        student_id=student.id,
-                        roster_child_id=child_id,
-                    )
-                child = db.get(RosterChild, child_id)
-                if child is None or child_id not in candidate_by_id:
-                    raise _migration_error(
-                        409,
-                        "stale_project_classroom_migration_preview",
-                        "可用學生身分已變更，請重新預覽",
-                    )
-                existing_child_by_student_id[student.id] = child
-            else:
-                snapshot_name = normalize_student_name(student.name)
-                normalized_name = normalize_child_name(snapshot_name)
-                if not normalized_name:
-                    raise _migration_error(
-                        422,
-                        "invalid_student_snapshot_name",
-                        "舊相本學生姓名無法建立名冊身分",
-                        student_id=student.id,
-                    )
-                create_name_by_student_id[student.id] = normalized_name
-
-        existing_ids = [
-            child.id for child in existing_child_by_student_id.values()
-        ]
-        duplicate_existing_ids = sorted(
-            child_id
-            for child_id, count in Counter(existing_ids).items()
-            if count > 1
-        )
-        if duplicate_existing_ids:
-            raise _migration_error(
-                422,
-                "duplicate_resolved_roster_child",
-                "同一相本內兩位學生不可解析成同一個名冊身分",
-                roster_child_ids=duplicate_existing_ids,
-            )
-
-        # seed 的所有衝突先用既有 child 與待建立姓名完整驗證；新 child 尚未寫入。
-        if seed_current_roster:
-            if preview["target_classroom"]["active_roster_count"]:
-                raise _migration_error(
-                    409,
-                    "target_classroom_roster_not_empty",
-                    "只有目前名單為空的班級可由舊相本建立名單",
-                )
-            assert_project_student_capacity(0, len(students))
-            seed_names = [
-                (
-                    existing_child_by_student_id[student.id].name
-                    if student.id in existing_child_by_student_id
-                    else create_name_by_student_id[student.id]
-                )
-                for student in students
-            ]
-            duplicate_names = sorted(
-                name for name, count in Counter(
-                    normalize_child_name(name) for name in seed_names
-                ).items() if count > 1
-            )
-            if duplicate_names:
-                raise _migration_error(
-                    409,
-                    "duplicate_seed_roster_name",
-                    "目前名單不可包含同名學生",
-                    names=duplicate_names,
-                )
-            existing_seed_children = list(
-                existing_child_by_student_id.values()
-            )
-            _preflight_resolved_roster_seed(
-                db,
-                classroom_id,
-                existing_seed_children,
-            )
-
-        resolved_child_by_student_id = dict(existing_child_by_student_id)
-        created_children: list[RosterChild] = []
-        for student in students:
-            if student.id not in create_name_by_student_id:
-                continue
-            child = RosterChild(
-                name=create_name_by_student_id[student.id],
-                album_name=normalize_student_album_name(student.album_name),
-            )
-            db.add(child)
-            db.flush()
-            resolved_child_by_student_id[student.id] = child
-            created_children.append(child)
-
-        created_children_without_album_name = [
-            child for child in created_children if child.album_name is None
-        ]
-        protected_effective_album_names: list[str] = []
-        for student in students:
-            child = resolved_child_by_student_id[student.id]
-            if child in created_children_without_album_name:
-                continue
-            # Project 內的空白中央稱呼回退該期 Student.name 快照，不能拿
-            # RosterChild.name 現值代替；seed 時還要同時保護目前班級 scope。
-            protected_effective_album_names.append(
-                str(child.album_name or student.name)
-            )
-            if seed_current_roster:
-                protected_effective_album_names.append(
-                    str(child.album_name or child.name)
-                )
-        automatic_album_names = assign_automatic_album_names(
-            [str(child.name) for child in created_children_without_album_name],
-            protected_effective_album_names,
-        )
-        for child, album_name in zip(
-            created_children_without_album_name,
-            automatic_album_names,
-            strict=True,
-        ):
-            child.album_name = album_name
-
-        resolved_ids = [
-            resolved_child_by_student_id[student.id].id for student in students
-        ]
-        if len(resolved_ids) != len(set(resolved_ids)):
-            raise _migration_error(
-                422,
-                "duplicate_resolved_roster_child",
-                "同一相本內兩位學生不可解析成同一個名冊身分",
-            )
-        for student in students:
-            student.roster_child_id = resolved_child_by_student_id[student.id].id
-            # 歸班後 authority 改讀 RosterChild；舊輸出必須重新產生。
-            student.album_name = None
-            student.output_filename = None
-            student.updated_at = utc_now()
-        db.flush()
-
-        applied_at = utc_now()
-        seeded_members: list[ClassRosterMember] = []
-        seeded_member_by_student_id: dict[int, ClassRosterMember] = {}
-        if seed_current_roster:
-            seeded_members = [
-                ClassRosterMember(
-                    classroom_id=classroom.id,
-                    roster_child_id=resolved_child_by_student_id[student.id].id,
-                    started_at=applied_at,
-                )
-                for student in students
-            ]
-            db.add_all(seeded_members)
-            db.flush()
-            seeded_member_by_student_id = {
-                student.id: member
-                for student, member in zip(students, seeded_members, strict=True)
-            }
-
-        migration_id = db.execute(text(f"""
-            INSERT INTO {LEGACY_PROJECT_CLASSROOM_MIGRATION_TABLE} (
-                project_id_snapshot, project_name_snapshot,
-                project_department_snapshot,
-                target_campus_id_snapshot, target_campus_name_snapshot,
-                target_classroom_id_snapshot, target_classroom_name_snapshot,
-                target_department_snapshot, source_fingerprint,
-                student_count, seeded_member_count,
-                applied_by_id_snapshot, applied_by_name_snapshot, applied_at
-            ) VALUES (
-                :project_id, :project_name, :project_department,
-                :campus_id, :campus_name, :classroom_id, :classroom_name,
-                :target_department, :source_fingerprint,
-                :student_count, :seeded_member_count,
-                :admin_id, :admin_name, :applied_at
-            )
-            RETURNING id
-        """), {
-            "project_id": project.id,
-            "project_name": project.name,
-            "project_department": project.department,
-            "campus_id": classroom.campus_id,
-            "campus_name": classroom.campus.name,
-            "classroom_id": classroom.id,
-            "classroom_name": classroom.name,
-            "target_department": classroom.department,
-            "source_fingerprint": source_fingerprint,
-            "student_count": len(students),
-            "seeded_member_count": len(seeded_members),
-            "admin_id": admin.id,
-            "admin_name": admin.display_name,
-            "applied_at": applied_at,
-        }).scalar_one()
-        if students:
-            db.execute(text(f"""
-                INSERT INTO {LEGACY_STUDENT_IDENTITY_RESOLUTION_TABLE} (
-                    migration_id, project_id_snapshot,
-                    student_id_snapshot, student_name_snapshot,
-                    student_order_index_snapshot, student_created_at_snapshot,
-                    original_roster_child_id_snapshot,
-                    original_roster_child_name_snapshot,
-                    resolution_action,
-                    resolved_roster_child_id_snapshot,
-                    resolved_roster_child_name_snapshot,
-                    seeded_current_roster,
-                    class_roster_member_id_snapshot,
-                    source_fingerprint,
-                    applied_by_id_snapshot, applied_by_name_snapshot, resolved_at
-                ) VALUES (
-                    :migration_id, :project_id,
-                    :student_id, :student_name,
-                    :student_order_index, :student_created_at,
-                    :original_child_id, :original_child_name,
-                    :resolution_action,
-                    :resolved_child_id, :resolved_child_name,
-                    :seeded_current_roster,
-                    :membership_id,
-                    :source_fingerprint,
-                    :admin_id, :admin_name, :resolved_at
-                )
-            """), [
-                {
-                    "migration_id": migration_id,
-                    "project_id": project.id,
-                    "student_id": student.id,
-                    "student_name": student.name,
-                    "student_order_index": student.order_index,
-                    "student_created_at": student.created_at,
-                    "original_child_id": original_identity_rows[student.id][
-                        "roster_child_id"
-                    ],
-                    "original_child_name": original_identity_rows[student.id][
-                        "roster_child_name"
-                    ],
-                    "resolution_action": decisions_by_student_id[student.id][
-                        "action"
-                    ],
-                    "resolved_child_id": resolved_child_by_student_id[student.id].id,
-                    "resolved_child_name": resolved_child_by_student_id[student.id].name,
-                    "seeded_current_roster": seed_current_roster,
-                    "membership_id": (
-                        seeded_member_by_student_id[student.id].id
-                        if seed_current_roster
-                        else None
-                    ),
-                    "source_fingerprint": source_fingerprint,
-                    "admin_id": admin.id,
-                    "admin_name": admin.display_name,
-                    "resolved_at": applied_at,
-                }
-                for student in students
-            ])
-
-        work_slot = _ensure_legacy_project_work_slot(db, project, classroom)
-        # Transition trigger 會驗證上方完整 ledger 與目前 Student resolved id。
-        project.classroom_id = classroom.id
-        project.department = classroom.department
-        project.campus_id_snapshot = classroom.campus_id
-        project.campus_name_snapshot = classroom.campus.name
-        project.classroom_name_snapshot = classroom.name
-        project.class_period_work_slot_id = work_slot.id
-        project.updated_at = applied_at
-        db.flush()
-        _sync_current_term_student_snapshots(db, set(resolved_ids))
-        db.commit()
-        db.refresh(project)
-        for member in seeded_members:
-            db.refresh(member)
-    return {
-        "project": _serialize_project(project),
-        "seeded_members": [_serialize_member(member) for member in seeded_members],
-        "identity_resolutions": [
-            {
-                "student_id": student.id,
-                "action": decisions_by_student_id[student.id]["action"],
-                "original_roster_child_id": original_identity_rows[student.id][
-                    "roster_child_id"
-                ],
-                "resolved_roster_child_id": resolved_child_by_student_id[student.id].id,
-                "seeded_current_roster": seed_current_roster,
-            }
-            for student in students
-        ],
-        "migration_status": _organization_migration_status(db),
-    }
-
-
-def assign_project_to_classroom(
-    db: Session,
-    current_admin: User,
-    project_id: int,
-    *,
-    classroom_id: int,
-    source_fingerprint: str,
-    seed_current_roster: bool,
-    student_identity_decisions: list[dict],
-) -> dict:
-    """依 organization→project→DB 鎖序切換舊相本的名冊 authority。"""
-    with organization_acl_lock:
-        db.rollback()
-        db.expire_all()
-        get_project_or_404(project_id, db)
-        with lock_project_content_writes([project_id]):
-            return _assign_project_to_classroom_in_transaction(
-                db,
-                current_admin,
-                project_id,
-                classroom_id=classroom_id,
-                source_fingerprint=source_fingerprint,
-                seed_current_roster=seed_current_roster,
-                student_identity_decisions=student_identity_decisions,
-            )
-
-
 def create_classroom_project(
     db: Session,
     current_user: User,
@@ -2676,11 +1907,11 @@ def create_classroom_project(
             work_slot = (
                 db.query(ClassPeriodWorkSlot)
                 .options(
-                    selectinload(ClassPeriodWorkSlot.term_classroom).selectinload(
-                        AcademicTermClassroom.academic_term
+                    selectinload(ClassPeriodWorkSlot.classroom).selectinload(
+                        Classroom.semester
                     ),
-                    selectinload(ClassPeriodWorkSlot.term_period).selectinload(
-                        AcademicTermPeriod.template_period
+                    selectinload(ClassPeriodWorkSlot.semester_period).selectinload(
+                        SemesterPeriod.template_period
                     ),
                 )
                 .filter(ClassPeriodWorkSlot.id == work_slot_id)
@@ -2688,9 +1919,9 @@ def create_classroom_project(
             )
             if work_slot is None:
                 raise HTTPException(status_code=404, detail="找不到班級期別工作格")
-            term_classroom = work_slot.term_classroom
-            term_period = work_slot.term_period
-            if term_classroom.classroom_id != classroom_id:
+            classroom = work_slot.classroom
+            semester_period = work_slot.semester_period
+            if classroom.id != classroom_id:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -2698,7 +1929,7 @@ def create_classroom_project(
                         "message": "工作格不屬於指定班級",
                     },
                 )
-            if term_classroom.academic_term.status not in {"imported", "active"}:
+            if classroom.semester.status not in {"imported", "active"}:
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -2706,7 +1937,7 @@ def create_classroom_project(
                         "message": "只能在目前正式學期建立相本",
                     },
                 )
-            if term_period.template_period_id != template.period_id:
+            if semester_period.template_period_id != template.period_id:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -2714,7 +1945,7 @@ def create_classroom_project(
                         "message": "工作格期別與模板期別不一致",
                     },
                 )
-            if term_period.department != term_classroom.department:
+            if semester_period.department != classroom.department:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -2730,19 +1961,19 @@ def create_classroom_project(
                         "message": "此班級期別已建立相本",
                     },
                 )
-            if not classroom.is_active or not classroom.campus.is_active:
+            if not classroom.is_current or not classroom.campus.is_active:
                 raise HTTPException(
                     status_code=409,
                     detail="只能為使用中的分校與班級建立相本",
                 )
             active_assignments = (
-                db.query(ClassroomTeacherAssignment)
-                .options(selectinload(ClassroomTeacherAssignment.teacher))
+                db.query(ClassroomTeacher)
+                .options(selectinload(ClassroomTeacher.teacher))
                 .filter(
-                    ClassroomTeacherAssignment.classroom_id == classroom_id,
-                    ClassroomTeacherAssignment.ended_at.is_(None),
+                    ClassroomTeacher.classroom_id == classroom_id,
+                    ClassroomTeacher.ended_at.is_(None),
                 )
-                .order_by(ClassroomTeacherAssignment.id)
+                .order_by(ClassroomTeacher.id)
                 .all()
             )
             lead_assignments = [
@@ -2790,20 +2021,20 @@ def create_classroom_project(
             if (
                 template.period is None
                 or template.period.status != "active"
-                or template.period.department != term_classroom.department
+                or template.period.department != classroom.department
             ):
                 raise HTTPException(
                     status_code=400,
                     detail="只能使用同部門且使用中的期別模板建立相本",
                 )
             active_members = (
-                db.query(ClassRosterMember)
-                .options(selectinload(ClassRosterMember.roster_child))
+                db.query(ClassroomMember)
+                .options(selectinload(ClassroomMember.roster_child))
                 .filter(
-                    ClassRosterMember.classroom_id == classroom_id,
-                    ClassRosterMember.ended_at.is_(None),
+                    ClassroomMember.classroom_id == classroom_id,
+                    ClassroomMember.ended_at.is_(None),
                 )
-                .order_by(ClassRosterMember.started_at, ClassRosterMember.id)
+                .order_by(ClassroomMember.started_at, ClassroomMember.id)
                 .all()
             )
             if not active_members:
@@ -2835,18 +2066,18 @@ def create_classroom_project(
                 creator,
                 owner,
                 name=project_name,
-                department=term_classroom.department,
+                department=classroom.department,
                 template_period_id=template.period.id,
                 classroom_id=classroom_id,
                 class_period_work_slot_id=work_slot.id,
-                campus_id_snapshot=term_classroom.campus_id_snapshot,
-                campus_name_snapshot=term_classroom.campus_name_snapshot,
-                classroom_name_snapshot=term_classroom.classroom_name_snapshot,
+                campus_id_snapshot=classroom.campus_id,
+                campus_name_snapshot=classroom.campus.name,
+                classroom_name_snapshot=classroom.name,
             )
             work_slot.started_at = utc_now()
             db.flush()
             for order_index, member in enumerate(active_members):
-                db.add(Student(
+                db.add(ProjectStudent(
                     project_id=project.id,
                     name=member.roster_child.name,
                     album_name=None,
@@ -2855,10 +2086,6 @@ def create_classroom_project(
                     roster_child_id=member.roster_child_id,
                 ))
             db.flush()
-            _sync_current_term_student_snapshots(
-                db,
-                {int(member.roster_child_id) for member in active_members},
-            )
             db.commit()
             db.refresh(project)
             return _serialize_project(project)

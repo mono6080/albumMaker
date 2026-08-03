@@ -38,7 +38,8 @@
 | 學期進度檢視 | 全部 | — | 校／部門 scope（唯讀） | 校／部門 scope（唯讀） | — |
 | 使用者管理 | ✓ | — | — | — | — |
 | 園所設定／編班／相本遷移與轉交 | ✓ | — | — | — | — |
-| 自己範圍的目前班級（唯讀） | ✓ | — | 任教班級 ∪ 主管 scope | 任教班級 ∪ 主管 scope | — |
+| 自己範圍的班級相本（唯讀） | ✓ | — | 目前 ∪ 曾任教班級 ∪ 主管 scope | 目前 ∪ 曾任教班級 ∪ 主管 scope | — |
+| 班級相本製作（`can_edit`） | ✓ | — | 只有目前任教班級 | 只有目前任教班級 | — |
 | 登入 | ✓ | ✓ | ✓ | ✓ | 拒絕 |
 
 - 前端旗標集中在 `hooks/usePermissions.js`（`canManageTemplates` /
@@ -51,7 +52,7 @@
 - 非 admin 下載 PDF 時 `mode` 一律強制降為 `screen`
 
 `teacher`／`supervisor` 是可參與園所編制的操作帳號族群，不是互斥職務。一個帳號可在不改
-`User.role` 的情況下同時具有 `ClassroomTeacherAssignment` 與
+`User.role` 的情況下同時具有 `ClassroomTeacher` 與
 `OrganizationSupervisorAssignment`：active 任教區間授予該班讀寫與主教建立權，active
 主管區間授予範圍讀取、退回完成與主管報表權。沒有對應 active 指派就沒有該項能力；
 `admin`、`art_team`、`none` 的既有語意不受此規則擴張。
@@ -94,7 +95,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/departments` | 固定部門清單 |
-| GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別）；建立可帶 `academic_term_id` 接到草稿或目前正式學期 |
+| GET / POST / PATCH | `/periods`、`/periods/{id}` | 期別查詢 / 建立 / 更新（狀態屬期別）；建立可帶 `semester_id` 接到草稿或目前正式學期 |
 | GET / POST | `/` | 模板摘要清單 / 建立（可複製既有模板） |
 | GET / PATCH / DELETE | `/{id}` | 詳情（含頁面）/ 改名或移動期別 / 刪除 |
 | PUT | `/{id}/pages` | 原子儲存完整頁面快照；必帶 `expected_revision` + `expected_page_ids`。既有專案遇結構變更先回 409 影響摘要／`change_hash`，確認重送後同 transaction 依 page id 搬移內容 |
@@ -112,82 +113,51 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 |------|------|------|
 | GET | `/overview` | admin：園所結構、編制、名單、相本、待遷移狀態，以及目前正式學期的 `work_slots`／可用模板；owner 只從該班目前老師選擇 |
 | GET | `/my-classrooms` | admin 全部；`teacher\|supervisor` 回目前任教班級與 active 主管 scope 聯集，每班含目前正式學期 `work_slots`，另回 `permissions.can_view_supervisor_reports`；其他角色 403 |
-| GET | `/academic-terms` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
+| GET | `/semesters` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
 | POST / PATCH | `/campuses`、`/campuses/{id}` | 建立／更新分校；旗下仍有目前學生或老師時不可停用 |
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
-| POST / PATCH | `/classrooms`、`/classrooms/{id}` | 建立／更新班級（分校、`infant\|academy` 部門、名稱、啟用狀態） |
+| POST | `/classrooms` | 建立班級（分校、`infant\|academy` 部門、名稱）。省略 `semester_id` 建在目前正式學期；帶編班草稿的目標學期則建在草稿裡（並自動補進計畫），該草稿學期必須仍有 draft 計畫，否則回 409 `draft_semester_has_no_plan` |
+| PATCH | `/classrooms/{id}` | 只能改班名；改分校或部門回 409 `classroom_scope_is_immutable`，送 `is_active` 回 422 `classroom_has_no_active_flag` |
+| DELETE | `/classrooms/{id}` | admin 移除**編班草稿學期**的班；已有名冊、編制、工作格、相本或 placement 指著它時回 409 `classroom_not_empty` 並附 `counts`；目前／已結束學期的班一律回 409 `classroom_not_in_draft_semester` |
+| PUT | `/semesters/{id}/classroom-order` | admin 重排該學期班級的顯示順序；body `classroom_ids` 必須是**該學期完整的集合**，缺漏回 422 `incomplete_classroom_order`、重複回 422 `duplicate_classroom_id`；已結束或已取消的學期回 409 |
 | PUT | `/classrooms/{id}/teachers` | admin 以完整集合原子替換目前老師；非空集合恰有一位 `lead`，其餘為 `co_teacher`，歷史區間保留 |
-| POST | `/classrooms/{id}/members/batch` | 批次加入目前名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班 |
+| POST | `/classrooms/{id}/members/batch` | 批次加入名單；每筆可帶中央 `album_name`，省略時保守自動推導；單批與班級目前名單各最多 100 人，同一孩子不可同時在兩班。除了目前學期的班，**編班草稿學期的班**也收（新生的唯一入口，見下）；其餘學期回 409 |
 | PATCH | `/classrooms/{id}/members/{member_id}` | 改完整姓名或中央 `album_name`、標記離園、建立回班區間，或以 `target_classroom_id` 轉班 |
+| DELETE | `/classrooms/{id}/members/{member_id}` | admin 把**草稿學期**的新生整列刪掉（連同該筆名冊項，若它已無其他 membership 與相本引用）；其他學期回 409 `member_not_in_draft_semester`，是 placement 來源的名單列回 409 `member_is_a_placement_source` |
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
-| PATCH | `/roster-children/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
-| POST | `/roster-children/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
+| PATCH | `/students/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
+| POST | `/students/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
 | POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
-| GET | `/projects/{project_id}/classroom-migration-preview?classroom_id=…` | admin 讀取固定 Student 快照、目標班狀態、established identity options 與 `source_fingerprint`；零寫入且不按姓名預選 decision |
-| PUT | `/projects/{project_id}/classroom` | admin 以完整 `student_identity_decisions` 顯式解析每位 Student 並歸班；可在空班以 `seed_current_roster` 全量建立目前名單 |
-| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 AcademicTerm |
-| POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子切換目前編制、產生學期快照／工作格並啟用目標學期；或取消且不動目前狀態 |
+| POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班（含 `sort_order` 與 `can_remove`——後者由後端算，前端據此決定移除鍵能不能按），`classroom_id` 一律指它們。在草稿學期新增班級會自動補進計畫，該班才編得到老師。payload 另有 `new_students`：草稿期間直接編進目標班的新生，他們沒有來源名單列因此不是 placement，套用時不會被動到 |
+| POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
-相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本讀寫權。
-未歸班 Project 保持 admin-only，管理員在 overview 逐本選班，
-系統不從 owner、名稱、舊主管關係或 provisional child link 推測。歸班 request shape 為：
+相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**（`ended_at IS NULL` 的指派）；
+**讀取**只要在該學期班級有過任何一筆指派即可，所以學期轉換不會讓老師看不到自己去年
+做的相本，而接手同名班的新老師也不會拿到上一屆的相本——班不跨學期，兩者是不同的班。
+見 [term-scoped-classroom-v1](../specs/term-scoped-classroom-v1.md#權限契約)。
+未歸班 Project 保持 admin-only（能力矩陣不變，admin 仍可編輯與封存）。班級改為學期
+範圍實體後歸班流程已退場——那些相本
+一律等封存到期由既有清理流程移除，系統不從 owner、名稱或舊主管關係推測班級。
 
 名冊 `album_name` 最多 100 字，首尾空白會移除，空字串或 `null` 代表清除。它跟隨
-`RosterChild` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
+`Student` 跨轉班與新學期沿用，是所有已歸班既有與未來相本的唯一稱呼來源；修改後
 相關學生輸出指標會失效，必須重新渲染。完整姓名與成員集合仍維持各期快照。
 自動推導與跨班／跨既有相本碰撞規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 
-preview response 固定回 `source_fingerprint`、`target_classroom`（含目前名單數與
-`seed_allowed`）、`students`（固定快照、original provisional evidence、
-`allowed_existing_roster_child_ids`）及 `established_candidates`。candidate 的 evidence 可標示
-`target_membership`／`same_name_membership`（分校、部門、班級、membership id、目前在班或
-已結束狀態與區間時間）、`target_project`／`same_name_project`（分校、部門、班級、相本
-id／名稱／active-or-archived 狀態及可取得的期別 id／名稱），以及只說明姓名命中的
-`same_name_established`。非目標班的同名候選必須帶至少一筆實際 membership 或 class-backed
-Project 來源，不能只回模糊的全園同名標籤；target evidence 也帶同一組校班脈絡。evidence
-只解釋為何可供人工核對，不代表已選擇 action，也不得讓後端或前端自動確認。
-
-候選與 evidence 以穩定 id 排序並納入 `source_fingerprint`；同一狀態重開 preview 會得到相同
-fingerprint。補充來源脈絡不改變可選集合：每位 Student 仍只允許目標班的 established ids，
-加上全園與該 Student 正規化姓名相同的 established ids。
-
-```json
-{
-  "classroom_id": 12,
-  "seed_current_roster": true,
-  "source_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "confirmed_all": true,
-  "student_identity_decisions": [
-    {"student_id": 101, "action": "create_new"},
-    {"student_id": 102, "action": "existing", "roster_child_id": 55}
-  ]
-}
-```
-
-`source_fingerprint` 必須原樣帶回 preview 所提供的 64 字元 opaque SHA-256 hex。
-沒有任何 Student 快照的 legacy Project 在 preview 即回 422
-`empty_legacy_project_migration_forbidden`，不建立 ledger、工作格連結或班級權限。
-
-decision 集合必須與 Project Student 集合完全相等，`confirmed_all` 必須為 `true`；apply
-會在 transaction 內重算 preview fingerprint，不符回 409 且零寫入。`existing` 只接受
-established identity，`create_new` 一律建立新 id，不保存 provisional id。seed 是
-all-or-none：`true` 只接受空的目前名單並建立解析後全體成員，`false` 完全不動名單。完整交易與 freeze 契約見
-[園所名單與相本權限規格](../specs/organization-roster-management-v1.md#migration)。
-
 `migration_status` 固定包含：
 
 - `unassigned_project_count`：active 且未歸班的 Project 數。
-- `pending_identity_student_count`：上述 Project 的 Student 數；即使舊 link 非 NULL 仍待決策。
-- `archived_identity_resolution_count`：已寫入稽核 ledger 的 legacy Student resolution 數；
+- `pending_identity_student_count`：上述 Project 的 ProjectStudent 數；即使舊 link 非 NULL 仍待決策。
+- `archived_identity_resolution_count`：已寫入稽核 ledger 的 legacy ProjectStudent resolution 數；
   只供稽核，不影響完成判定。
 - `assigned_identity_anomaly_count`：active class-backed Project 中 child link 缺失／無效，或與
-  同 Project 另一位 Student 共用 child id 的 Student 數。
+  同 Project 另一位 ProjectStudent 共用 child id 的 ProjectStudent 數。
 - `archived_teacher_supervisor_link_count`：已封存的舊逐人主管關係數；不影響完成判定，
   也不會自動轉成校／部門 scope 或任何 ACL。
 - `is_complete`：`unassigned_project_count` 與 `assigned_identity_anomaly_count` 皆為 0；此時
-  active 待決策 Student 必然也是 0。兩種歷史 ledger count 不影響完成判定。
+  active 待決策 ProjectStudent 必然也是 0。兩種歷史 ledger count 不影響完成判定。
 
 ### 專案 `/api/projects`
 
@@ -205,7 +175,7 @@ all-or-none：`true` 只接受空的目前名單並建立解析後全體成員�
 | GET | `/{id}/assignment-history` | admin 查詢完整負責人轉交時間線 |
 | POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
 | POST | `/{id}/students/{sid}/album-name/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
-| PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `Student.album_name`；已歸班回 409，必須改園所名冊中央值 |
+| PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `ProjectStudent.album_name`；已歸班回 409，必須改園所名冊中央值 |
 | PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全班；`student_ids`（JSON 陣列 form 欄位）可選，只套用到指定學生 |
@@ -254,13 +224,13 @@ payload 含已完成學生整批 422；共用照片指定名單含已完成學�
 負數或超界索引不寫資料。三種文字寫入只接受字串或
 `{"text": string|null, "text_align": "left|center|right"}` entry，shape 錯誤回 422。
 
-Project 的學生集合與 `Student.name` 沒有 runtime 新增、複製、刪除或改名端點；新相本
-只在班級端點建立時從目前名單產生快照；舊相本只有在未歸班時可由 admin 歸班流程解析
-identity，成功後同樣凍結。preview 與 apply 以外沒有 link／merge／split 入口。
+Project 的學生集合與 `ProjectStudent.name` 沒有 runtime 新增、複製、刪除或改名端點；新相本
+只在班級端點建立時從目前名單產生快照。歸班流程已退場，未歸班舊相本不再有解析 identity
+的入口；系統完全沒有 link／merge／split 端點。
 完整 authority 與跨期語意見 [data-model.md 的班級名單與每期快照](data-model.md#班級名單組織權限每期快照與相本遷移)。
 學生 detail／editor response 同時回傳 `name`、解析後的 `album_name` 與
-`effective_album_name`。已歸班相本動態讀 `RosterChild.album_name`；未歸班 Project 即使有
-provisional child link 仍讀 legacy `Student.album_name`。來源、回退與輸出失效規則見
+`effective_album_name`。已歸班相本動態讀 `Student.album_name`；未歸班 Project 即使有
+provisional child link 仍讀 legacy `ProjectStudent.album_name`。來源、回退與輸出失效規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 班級目前名單與由它建立的 Project 快照最多 100 位學生；姓名最多 100 字，批次加入
 目前名單最多 100 筆。容量在 organization 名單寫入與相本建立時 preflight，超限回 422
@@ -270,17 +240,17 @@ provisional child link 仍讀 legacy `Student.album_name`。來源、回退與�
 
 園所目前名單的穩定身分規則見
 [data-model.md 的孩子名冊](data-model.md#孩子名冊rosterchild園所設定是唯一-authority)。
-此 API 只讀取名冊身分作彙整，沒有 Student link、RosterChild merge 或 split mutation。
+此 API 只讀取名冊身分作彙整，沒有 ProjectStudent link、Student merge 或 split mutation。
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | `/academic-terms` | 回可報表的 `imported\|active\|closed` 學期與 ordered 期別；非 admin 只回主管 snapshot scope 內實際可見的部門期別 |
-| GET | `/semester-export?academic_term_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
-| POST | `/semester-export/render-missing` | body 必帶 `academic_term_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
+| GET | `/semesters` | 回可報表的 `imported\|active\|closed` 學期與 ordered 期別；非 admin 只回主管 snapshot scope 內實際可見的部門期別 |
+| GET | `/semester-export?semester_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
+| POST | `/semester-export/render-missing` | body 必帶 `semester_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
 | GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
-| GET | `/teacher-progress?academic_term_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
-| GET | `/teacher-overview/export?academic_term_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
-| GET | `/semester-export/download?academic_term_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
+| GET | `/teacher-progress?semester_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
+| GET | `/teacher-overview/export?semester_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
+| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
 
 主管呼叫 `/semester-export` 時，`period_ids` 必須全部屬於該學期且位於其主管 snapshot scope
 實際可見的部門；不存在、跨學期或超出部門 scope 一律回 404，不回傳部分期別 metadata。

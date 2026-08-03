@@ -28,12 +28,160 @@ LEGACY_STUDENT_IDENTITY_RESOLUTION_TABLE = (
 LEGACY_PROJECT_IDENTITY_QUARANTINE_TABLE = (
     "legacy_project_identity_quarantines"
 )
-ACADEMIC_TERM_REPORTING_MIGRATION_KEY = "organization-reporting-v1"
+SEMESTER_REPORTING_MIGRATION_KEY = "organization-reporting-v1"
+
+
+def _assert_sqlite_can_rewrite_references(connection):
+    """改名 migration 依賴 SQLite 自動改寫 FK 與 trigger 內的表名參照。
+
+    3.25 起才會改寫，`legacy_alter_table` 打開時會退回舊行為。任一條不成立時改名
+    **不會報錯**，只留下指向舊表名的 FK 與 trigger——所以在這裡先擋下來，而不是照做。
+    """
+    version = connection.execute(text("SELECT sqlite_version()")).scalar_one()
+    version_info = tuple(int(part) for part in version.split("."))
+    if version_info < (3, 25, 0):
+        raise RuntimeError(
+            f"SQLite {version} 不會在改名時改寫 FK 與 trigger 參照，需要 3.25 以上"
+        )
+    if connection.execute(text("PRAGMA legacy_alter_table")).scalar_one():
+        raise RuntimeError(
+            "PRAGMA legacy_alter_table 已開啟，改名會留下指向舊表名的參照"
+        )
+
+
+# 順序有意義：students 必須先讓位給 project_students，roster_children 才接得到
+# students 這個名字。
+#
+# 第三個欄位是「來源表的識別欄位」：`students` 這個名字在新舊結構都存在——舊的是
+# 相本學生（有 project_id），新的是名冊（沒有）。只靠表名或「表是不是空的」都分辨
+# 不出來，全新資料庫會因此把名冊表改名走。其餘表名在新結構不存在，無歧義。
+TABLE_RENAMES = (
+    ("class_roster_members", "classroom_members", None),
+    ("classroom_teacher_assignments", "classroom_teachers", None),
+    ("academic_terms", "semesters", None),
+    ("academic_term_periods", "semester_periods", None),
+    ("students", "project_students", "project_id"),
+    ("roster_children", "students", None),
+)
+
+# 索引與 trigger 名不隨 ALTER TABLE RENAME 改變，舊名留著會與新名重複。
+LEGACY_RENAMED_OBJECTS = (
+    ("trigger", "trg_students_freeze_class_backed_identity"),
+    ("index", "ix_students_roster_child_id"),
+    ("index", "ix_roster_children_name"),
+    ("index", "idx_students_project_id"),
+    ("index", "ix_roster_children_id"),
+    # 改名前建在相本學生上，改名後這個名字屬於名冊表，必須重建而不是沿用
+    ("index", "ix_students_id"),
+)
+
+# 欄位改名跟著表名走。三張學期快照表在這一步還在（稍後才 drop），欄位一樣要改，
+# 否則後續歷史 migration 的 SQL 找不到欄位。
+COLUMN_RENAMES = (
+    ("classrooms", "academic_term_id", "semester_id"),
+    ("semester_periods", "academic_term_id", "semester_id"),
+    ("class_period_work_slots", "term_period_id", "semester_period_id"),
+    ("term_reclassification_plans", "target_academic_term_id", "target_semester_id"),
+    ("academic_term_classrooms", "academic_term_id", "semester_id"),
+    ("academic_term_classroom_students", "academic_term_id", "semester_id"),
+)
+
+
+def _rename_tables_to_model_names(connection):
+    """表名與欄位名對齊 model 命名（ClassroomMember／ClassroomTeacher／Semester）。
+
+    改名排在所有 migration 之前：舊資料庫先改名，後續歷史 migration 一律對著新名字
+    跑，行為不變；全新資料庫由 init_db() 直接建出新名字，這步是 no-op。
+    """
+    def existing_tables() -> set[str]:
+        return {
+            row[0]
+            for row in connection.execute(text(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ))
+        }
+
+    def table_columns(table: str) -> set[str]:
+        return {
+            row[1]
+            for row in connection.execute(text(f"PRAGMA table_info({table})"))
+        }
+
+    def is_legacy_source(table: str, marker_column: str | None) -> bool:
+        """這張表是不是「還沒改名的舊表」。"""
+        if marker_column is None:
+            return True
+        return marker_column in table_columns(table)
+
+    tables = existing_tables()
+    pending_tables = [
+        (old, new, marker)
+        for old, new, marker in TABLE_RENAMES
+        if old in tables and is_legacy_source(old, marker)
+    ]
+    # 欄位改名要獨立判斷：表全部改完就 return 的話，「表已改名、欄位還沒」的
+    # 中斷狀態永遠不會收斂——重啟也修不回來。
+    pending_columns = [
+        (table, old_column, new_column)
+        for table, old_column, new_column in COLUMN_RENAMES
+        if table in tables
+        and old_column in table_columns(table)
+        and new_column not in table_columns(table)
+    ]
+    if not pending_tables and not pending_columns:
+        return
+    _assert_sqlite_can_rewrite_references(connection)
+    # 逐個執行並重讀表清單：students → project_students 完成之後，
+    # roster_children → students 的目標名才會空出來。
+    for old_name, new_name, marker_column in TABLE_RENAMES:
+        tables = existing_tables()
+        if old_name not in tables or not is_legacy_source(old_name, marker_column):
+            continue
+        if new_name in tables:
+            # 目標表存在但來源仍是舊表，只有一種成因：改名之前有人跑過 create_all，
+            # 用新名字建了一張空表。留著它會讓改名被跳過——資料留在舊表、程式讀
+            # 空表，而且不會報錯。有資料就不動，交給人判斷。
+            if connection.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM {new_name})"
+            )).scalar_one():
+                raise RuntimeError(
+                    f"{old_name} 尚未改名，但 {new_name} 已存在且有資料——"
+                    "無法判斷哪一份是真的，請人工確認後再啟動"
+                )
+            connection.execute(text(f"DROP TABLE {new_name}"))
+        connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {new_name}"))
+    for object_type, object_name in LEGACY_RENAMED_OBJECTS:
+        connection.execute(text(f"DROP {object_type.upper()} IF EXISTS {object_name}"))
+    tables = existing_tables()
+    for table, old_column, new_column in COLUMN_RENAMES:
+        if table not in tables:
+            continue
+        columns = {
+            row[1]
+            for row in connection.execute(text(f"PRAGMA table_info({table})"))
+        }
+        if old_column in columns and new_column not in columns:
+            connection.execute(text(
+                f"ALTER TABLE {table} RENAME COLUMN {old_column} TO {new_column}"
+            ))
+    connection.commit()
+
+
+def rename_tables_to_model_names():
+    """表名改名，必須在 `init_db()` 之前呼叫。
+
+    `create_all` 只看表存不存在。改名還沒發生時它會用新名字建出空表，接著改名
+    步驟就會判定「目標已存在」而跳過——資料留在舊表、程式讀空表，且不會報錯。
+    所以改名要先於建表，run_migrations() 裡再跑一次（冪等）只是保險。
+    """
+    with engine.connect() as connection:
+        _rename_tables_to_model_names(connection)
 
 
 def run_migrations():
     """執行所有待遷移的 schema 變更，已存在的欄位或資料表會自動跳過。"""
     with engine.connect() as connection:
+        _rename_tables_to_model_names(connection)
         _add_bubble_texts_json_column(connection)
         _add_users_table(connection)
         _add_user_preferences_columns(connection)
@@ -53,7 +201,7 @@ def run_migrations():
         _add_template_page_layout_migration_backups_table(connection)
         _migrate_photo_slots_to_content_box(connection)
         _remove_empty_text_bubbles_from_template_pages(connection)
-        _add_roster_children_and_backfill(connection)
+        _add_students_and_backfill(connection)
         _add_project_completed_at_column(connection)
         _add_template_revision_tracking(connection)
         _add_student_album_name_column(connection)
@@ -65,20 +213,634 @@ def run_migrations():
         _add_legacy_project_identity_migration_schema(connection)
         _retire_active_project_editor_assignments(connection)
         _archive_legacy_teacher_supervisor_links(connection)
-        _add_academic_term_reporting_schema(connection)
+        _add_semester_reporting_schema(connection)
         _add_roster_child_album_name_column(connection)
         _migrate_assigned_album_names_to_roster_authority(connection)
         _add_student_completed_at_column(connection)
+        _migrate_classrooms_to_term_scope(connection)
+        _retire_legacy_project_classroom_triggers(connection)
+        _rebuild_term_plan_classroom_foreign_keys(connection)
+        _add_term_scoped_classroom_indexes(connection)
+        _add_term_scoped_classroom_freeze_triggers(connection)
+        _add_student_serial_column(connection)
+        _add_classroom_sort_order_column(connection)
 
 
-def _add_academic_term_reporting_schema(connection):
-    """加入正式學期、班級期別工作格，並遷移仍有效的已歸班相本。"""
+def _retire_legacy_project_classroom_triggers(connection):
+    """移除舊相本歸班的 trigger：歸班流程已退場，班級由編班流程指派。
+
+    ledger 表保留為 append-only 稽核資料，只是執行期不再有 trigger 依賴它。
+    """
+    for trigger_name in (
+        "trg_projects_reject_empty_identity_migration",
+        "trg_projects_require_identity_migration_ledger",
+        "trg_projects_freeze_assigned_classroom",
+    ):
+        connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+    connection.commit()
+
+
+def _rebuild_term_plan_classroom_foreign_keys(connection):
+    """把編班計畫兩張子表的 classroom FK 補上 ON DELETE CASCADE。
+
+    舊 DDL 建的是 NO ACTION，與 ORM 不同：刪掉學期會連帶刪班，計畫列卻擋在那裡
+    或留成孤兒。SQLite 不能改 FK，只能整張重建。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    rebuilds = (
+        (
+            "term_classroom_plans",
+            """
+            CREATE TABLE term_classroom_plans_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL
+                    REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
+                classroom_id INTEGER NOT NULL
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                CONSTRAINT ux_term_classroom_plans_plan_classroom
+                    UNIQUE (plan_id, classroom_id)
+            )
+            """,
+            "id, plan_id, classroom_id",
+        ),
+        (
+            "term_student_placements",
+            """
+            CREATE TABLE term_student_placements_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL
+                    REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
+                source_membership_id INTEGER NOT NULL
+                    REFERENCES classroom_members(id),
+                roster_child_id_snapshot INTEGER NOT NULL,
+                student_name_snapshot VARCHAR NOT NULL,
+                source_campus_id_snapshot INTEGER NOT NULL,
+                source_campus_name_snapshot VARCHAR NOT NULL,
+                source_classroom_id_snapshot INTEGER NOT NULL,
+                source_classroom_name_snapshot VARCHAR NOT NULL,
+                outcome VARCHAR NOT NULL,
+                target_classroom_id INTEGER
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                CONSTRAINT ck_term_student_placements_outcome
+                    CHECK (outcome IN ('classroom', 'departed')),
+                CONSTRAINT ck_term_student_placements_target
+                    CHECK (
+                        (outcome = 'classroom' AND target_classroom_id IS NOT NULL)
+                        OR (outcome = 'departed' AND target_classroom_id IS NULL)
+                    ),
+                CONSTRAINT ux_term_student_placements_plan_member
+                    UNIQUE (plan_id, source_membership_id)
+            )
+            """,
+            "id, plan_id, source_membership_id, roster_child_id_snapshot, "
+            "student_name_snapshot, source_campus_id_snapshot, "
+            "source_campus_name_snapshot, source_classroom_id_snapshot, "
+            "source_classroom_name_snapshot, outcome, target_classroom_id",
+        ),
+    )
+    pending = [
+        (table, create_sql, columns)
+        for table, create_sql, columns in rebuilds
+        if any(
+            row[2] == "classrooms" and row[6] != "CASCADE"
+            for row in connection.execute(text(f"PRAGMA foreign_key_list({table})"))
+        )
+    ]
+    if not pending:
+        return
+    connection.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        for table, create_sql, columns in pending:
+            connection.execute(text(f"DROP TABLE IF EXISTS {table}_new"))
+            connection.execute(text(create_sql))
+            connection.execute(text(
+                f"INSERT INTO {table}_new ({columns}) SELECT {columns} FROM {table}"
+            ))
+            connection.execute(text(f"DROP TABLE {table}"))
+            connection.execute(text(f"ALTER TABLE {table}_new RENAME TO {table}"))
+        connection.commit()
+    except Exception:
+        # 先 rollback 再切回 pragma：SQLite 在 active transaction 內會忽略切換
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _add_term_scoped_classroom_indexes(connection):
+    """學期範圍班級結構的索引，新舊資料庫共用同一份清單。
+
+    組織相關的索引原本建在只跑得到舊結構的 migration 裡，全新資料庫因此少了
+    `ux_classroom_members_active_child` 這類唯一鍵。集中在這裡無守衛執行，讓
+    init_db() 建出的資料庫與升級上來的資料庫收斂到同一組索引。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    # 舊名索引與 ORM 定義重複，語意相同只是命名還帶著已移除的表名
+    for legacy_index in (
+        "ux_academic_term_classrooms_term_scope_name",
+        "idx_academic_term_classrooms_scope",
+        "idx_term_classroom_teacher_targets_plan_id",
+        # 表名改名前建立的索引，名字仍帶舊表名
+        "idx_class_roster_members_classroom_id",
+        "idx_class_roster_members_roster_child_id",
+        "ux_class_roster_active_child",
+        "idx_classroom_teacher_assignments_classroom_id",
+        "idx_classroom_teacher_assignments_teacher_id",
+        "idx_classroom_teacher_assignments_started_by_id",
+        "idx_classroom_teacher_assignments_ended_by_id",
+        "ix_class_roster_members_id",
+        "ix_classroom_teacher_assignments_id",
+        "idx_academic_term_periods_term_id",
+        "ix_academic_term_periods_id",
+        "ix_academic_terms_id",
+        "ux_academic_terms_current",
+        "ux_academic_terms_migration_key",
+        "ux_term_plans_target_academic_term",
+    ):
+        connection.execute(text(f"DROP INDEX IF EXISTS {legacy_index}"))
+    index_statements = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_campuses_name ON campuses(name)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_term_scope_name "
+        "ON classrooms(semester_id, campus_id, department, name)",
+        "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
+        "ON classrooms(semester_id, campus_id, department)",
+        "CREATE INDEX IF NOT EXISTS idx_classrooms_campus_id ON classrooms(campus_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_classroom_id "
+        "ON classroom_members(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_roster_child_id "
+        "ON classroom_members(roster_child_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_members_active_child "
+        "ON classroom_members(roster_child_id) WHERE ended_at IS NULL",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_classroom_id "
+        "ON classroom_teachers(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_teacher_id "
+        "ON classroom_teachers(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_started_by_id "
+        "ON classroom_teachers(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_ended_by_id "
+        "ON classroom_teachers(ended_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_classroom_id "
+        "ON projects(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_created_by_id "
+        "ON projects(created_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_class_period_work_slot_id "
+        "ON projects(class_period_work_slot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_project_id "
+        "ON project_assignment_history(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_from_owner_id "
+        "ON project_assignment_history(from_owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_to_owner_id "
+        "ON project_assignment_history(to_owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_assignment_history_changed_by_id "
+        "ON project_assignment_history(changed_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_project_id "
+        "ON project_editor_assignments(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_user_id "
+        "ON project_editor_assignments(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_started_by_id "
+        "ON project_editor_assignments(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_ended_by_id "
+        "ON project_editor_assignments(ended_by_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_semesters_migration_key "
+        "ON semesters(migration_key) WHERE migration_key IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_semester_periods_term_id "
+        "ON semester_periods(semester_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_created_by_id "
+        "ON term_reclassification_plans(created_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_updated_by_id "
+        "ON term_reclassification_plans(updated_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_applied_by_id "
+        "ON term_reclassification_plans(applied_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_reclassification_plans_cancelled_by_id "
+        "ON term_reclassification_plans(cancelled_by_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_term_plans_target_semester "
+        "ON term_reclassification_plans(target_semester_id) "
+        "WHERE target_semester_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_plan_id "
+        "ON term_student_placements(plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_source_membership_id "
+        "ON term_student_placements(source_membership_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_student_placements_target_classroom_id "
+        "ON term_student_placements(target_classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_plans_plan_id "
+        "ON term_classroom_plans(plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_plans_classroom_id "
+        "ON term_classroom_plans(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS "
+        "idx_term_classroom_teacher_targets_classroom_plan_id "
+        "ON term_classroom_teacher_targets(classroom_plan_id)",
+        "CREATE INDEX IF NOT EXISTS idx_term_classroom_teacher_targets_teacher_id "
+        "ON term_classroom_teacher_targets(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS ix_class_period_work_slots_id "
+        "ON class_period_work_slots(id)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_id ON projects(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classrooms_id ON classrooms(id)",
+        "CREATE INDEX IF NOT EXISTS ix_term_classroom_plans_id "
+        "ON term_classroom_plans(id)",
+        "CREATE INDEX IF NOT EXISTS ix_term_student_placements_id "
+        "ON term_student_placements(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classroom_members_id ON classroom_members(id)",
+        "CREATE INDEX IF NOT EXISTS ix_classroom_teachers_id ON classroom_teachers(id)",
+        "CREATE INDEX IF NOT EXISTS ix_semesters_id ON semesters(id)",
+        "CREATE INDEX IF NOT EXISTS ix_semester_periods_id ON semester_periods(id)",
+        "CREATE INDEX IF NOT EXISTS ix_project_students_id ON project_students(id)",
+        "CREATE INDEX IF NOT EXISTS ix_students_id ON students(id)",
+        "CREATE INDEX IF NOT EXISTS ix_students_name ON students(name)",
+    )
+    for statement in index_statements:
+        connection.execute(text(statement))
+    connection.commit()
+
+
+def _add_term_scoped_classroom_freeze_triggers(connection):
+    """學期範圍班級結構的不可變保證。
+
+    兩組來源：
+    - 相本快照與工作格：判斷條件由 `classroom_id` 改為 `class_period_work_slot_id`
+      （見 docs/specs/term-scoped-classroom-v1.md 的 Trigger 調整）。
+    - 已結束學期的名冊與編制：接手已移除的兩張學期快照表原本的凍結保證——
+      班本身就只活一個學期，學期一關，那學期的成員與編制就是歷史。
+    """
+    if not _is_term_scoped_classroom_schema(connection):
+        return
+    for trigger_name in (
+        "trg_projects_freeze_classroom_snapshots",
+        "trg_projects_freeze_work_slot",
+        "trg_work_slots_freeze_identity",
+        "trg_work_slots_freeze_started_at",
+    ):
+        connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS academic_terms (
+        CREATE TRIGGER trg_projects_freeze_classroom_snapshots
+        BEFORE UPDATE OF campus_id_snapshot, campus_name_snapshot,
+                         classroom_name_snapshot, department ON projects
+        WHEN OLD.class_period_work_slot_id IS NOT NULL AND (
+            NEW.campus_id_snapshot IS NOT OLD.campus_id_snapshot
+            OR NEW.campus_name_snapshot IS NOT OLD.campus_name_snapshot
+            OR NEW.classroom_name_snapshot IS NOT OLD.classroom_name_snapshot
+            OR NEW.department IS NOT OLD.department
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'class-backed project snapshots are immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_projects_freeze_work_slot
+        BEFORE UPDATE OF class_period_work_slot_id ON projects
+        WHEN OLD.class_period_work_slot_id IS NOT NULL
+         AND NEW.class_period_work_slot_id IS NOT OLD.class_period_work_slot_id
+        BEGIN
+            SELECT RAISE(ABORT, 'project work slot is immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_work_slots_freeze_identity
+        BEFORE UPDATE OF classroom_id, semester_period_id
+        ON class_period_work_slots
+        WHEN NEW.classroom_id IS NOT OLD.classroom_id
+          OR NEW.semester_period_id IS NOT OLD.semester_period_id
+        BEGIN
+            SELECT RAISE(ABORT, 'work slot identity is immutable');
+        END
+    """))
+    connection.execute(text("""
+        CREATE TRIGGER trg_work_slots_freeze_started_at
+        BEFORE UPDATE OF started_at ON class_period_work_slots
+        WHEN OLD.started_at IS NOT NULL
+         AND NEW.started_at IS NOT OLD.started_at
+        BEGIN
+            SELECT RAISE(ABORT, 'started work slot cannot be reset');
+        END
+    """))
+    for table, trigger_prefix, subject in (
+        ("classroom_members", "trg_classroom_members", "roster members"),
+        (
+            "classroom_teachers",
+            "trg_classroom_teachers",
+            "teacher assignments",
+        ),
+    ):
+        # 先卸下舊定義：早期版本的 UPDATE trigger 只檢查 OLD，
+        # CREATE TRIGGER IF NOT EXISTS 不會把它換掉。
+        for operation in ("insert", "update", "delete"):
+            connection.execute(text(
+                f"DROP TRIGGER IF EXISTS "
+                f"{trigger_prefix}_freeze_closed_term_{operation}"
+            ))
+        # UPDATE 兩邊都要看：只檢查 OLD 的話，active 班的成員可以被「更新」到
+        # 已結束學期的班，等於繞過凍結把資料塞進歷史。
+        for operation, row_aliases in (
+            ("INSERT", ("NEW",)),
+            ("UPDATE", ("OLD", "NEW")),
+            ("DELETE", ("OLD",)),
+        ):
+            guard = " OR ".join(
+                f"""EXISTS (
+                    SELECT 1
+                    FROM classrooms
+                    JOIN semesters AS term
+                      ON term.id = classrooms.semester_id
+                    WHERE classrooms.id = {row_alias}.classroom_id
+                      AND term.status = 'closed'
+                )"""
+                for row_alias in row_aliases
+            )
+            connection.execute(text(f"""
+                CREATE TRIGGER IF NOT EXISTS
+                {trigger_prefix}_freeze_closed_term_{operation.lower()}
+                BEFORE {operation} ON {table}
+                WHEN {guard}
+                BEGIN
+                    SELECT RAISE(ABORT, 'closed term {subject} are immutable');
+                END
+            """))
+    connection.commit()
+
+
+def _is_term_scoped_classroom_schema(connection) -> bool:
+    """資料庫是否已是學期範圍班級結構。
+
+    只適用於舊「長期班級 + 學期快照」結構的歷史 migration 一律以此提前返回：
+    全新資料庫由 init_db() 直接建出新結構，那些步驟無事可做，硬跑會把已移除的
+    快照表重建回來。
+    """
+    classroom_columns = {
+        row[1] for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    return bool(classroom_columns) and "semester_id" in classroom_columns
+
+
+def _cancel_draft_term_plans(connection):
+    """作廢既有編班草稿，連同它持有的目標學期。
+
+    草稿的 source fingerprint 以舊結構算出，套用時必然判定為已變更。目標學期要
+    一起取消——留著會變成孤兒 draft 學期，之後建立期別時系統會要求「指定學期」，
+    而那個選項是一份已經作廢的草稿。
+    """
+    connection.execute(text(
+        "UPDATE semesters SET status = 'cancelled' "
+        "WHERE status = 'draft' AND id IN ("
+        "    SELECT target_semester_id FROM term_reclassification_plans "
+        "    WHERE status = 'draft' AND target_semester_id IS NOT NULL"
+        ")"
+    ))
+    connection.execute(text(
+        "UPDATE term_reclassification_plans SET status = 'cancelled' "
+        "WHERE status = 'draft'"
+    ))
+
+
+def _assert_term_scope_migration_preconditions(connection):
+    """規格明列的破壞性前提：任何一項不成立就中止，不猜也不部分套用。
+
+    這些檢查跑完之後舊快照表就會被刪除，屆時再發現不一致已經無從比對——
+    ACL 與報表會分裂成兩套歸戶，而且不會有任何錯誤訊息。
+    """
+    drifted = list(connection.execute(text("""
+        SELECT term_classroom.classroom_id
+        FROM academic_term_classrooms AS term_classroom
+        JOIN classrooms ON classrooms.id = term_classroom.classroom_id
+        WHERE term_classroom.classroom_name_snapshot IS NOT classrooms.name
+           OR term_classroom.department IS NOT classrooms.department
+           OR term_classroom.campus_id_snapshot IS NOT classrooms.campus_id
+    """)))
+    if drifted:
+        raise RuntimeError(
+            f"{len(drifted)} 個班的學期快照與班級現值不符（班級 "
+            f"{[row[0] for row in drifted][:5]}），無法併入學期範圍；"
+            "請先確認名稱、部門與分校一致"
+        )
+
+    mismatched = list(connection.execute(text("""
+        SELECT projects.id
+        FROM projects
+        JOIN class_period_work_slots AS slot
+          ON slot.id = projects.class_period_work_slot_id
+        JOIN academic_term_classrooms AS term_classroom
+          ON term_classroom.id = slot.term_classroom_id
+        WHERE projects.classroom_id IS NOT NULL
+          AND projects.classroom_id IS NOT term_classroom.classroom_id
+    """)))
+    if mismatched:
+        raise RuntimeError(
+            f"{len(mismatched)} 本相本的 classroom_id 與工作格推出的班不一致"
+            f"（相本 {[row[0] for row in mismatched][:5]}），無法併入學期範圍"
+        )
+
+    slotless = list(connection.execute(text("""
+        SELECT id FROM projects
+        WHERE deleted_at IS NULL
+          AND classroom_id IS NOT NULL
+          AND class_period_work_slot_id IS NULL
+    """)))
+    if slotless:
+        raise RuntimeError(
+            f"{len(slotless)} 本未封存的已歸班相本沒有工作格"
+            f"（相本 {[row[0] for row in slotless][:5]}），無法併入學期範圍"
+        )
+
+
+def _migrate_classrooms_to_term_scope(connection):
+    """把長期班級併入學期班級，讓一個班只活一個學期。
+
+    現況是 classrooms 與 academic_term_classrooms 一對一且欄位完全一致（見
+    docs/specs/term-scoped-classroom-v1.md 的前提驗證），所以 classrooms.id 原封
+    保留、只補上 semester_id；引用班級的 classroom_id 欄位一律不動。
+
+    兩張學期快照表（學生／老師）隨之移除：班本身就只活一個學期，成員與編制的
+    live 表就是那個學期的紀錄。
+    """
+    classroom_columns = {
+        row[1] for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    if not classroom_columns or "semester_id" in classroom_columns:
+        return
+
+    term_classroom_rows = list(connection.execute(text(
+        "SELECT id, semester_id, classroom_id FROM academic_term_classrooms"
+    )))
+    classroom_ids = [row[0] for row in connection.execute(text(
+        "SELECT id FROM classrooms"
+    ))]
+    term_by_classroom = {row[2]: row[1] for row in term_classroom_rows}
+    missing = sorted(set(classroom_ids) - set(term_by_classroom))
+    if missing:
+        raise RuntimeError(
+            f"班級 {missing} 沒有對應的學期班級，無法併入學期範圍；"
+            "請先確認每個班都屬於某個正式學期"
+        )
+    duplicated = len(term_classroom_rows) != len(term_by_classroom)
+    if duplicated:
+        raise RuntimeError("同一個班對應到多個學期，無法一對一併入")
+
+    _assert_term_scope_migration_preconditions(connection)
+
+    connection.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        # 整張重建而不是 ADD COLUMN：`ALTER TABLE ADD COLUMN` 只能建出 nullable、
+        # 沒有 ON DELETE 的欄位，與 ORM 要求的 NOT NULL / CASCADE 不同——升級上來的
+        # 資料庫會因此允許沒有學期的班級，唯一鍵也擋不住它。順帶把 is_active 與
+        # 時間戳欄位一次去掉，不必事後 DROP COLUMN。
+        connection.execute(text("DROP TABLE IF EXISTS classrooms_new"))
+        connection.execute(text("""
+            CREATE TABLE classrooms_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                semester_id INTEGER NOT NULL
+                    REFERENCES semesters(id) ON DELETE CASCADE,
+                campus_id INTEGER NOT NULL REFERENCES campuses(id),
+                name VARCHAR NOT NULL,
+                department VARCHAR NOT NULL,
+                CONSTRAINT ux_classrooms_term_scope_name
+                    UNIQUE (semester_id, campus_id, department, name)
+            )
+        """))
+        for classroom_id, semester_id in term_by_classroom.items():
+            connection.execute(
+                text(
+                    "INSERT INTO classrooms_new "
+                    "(id, semester_id, campus_id, name, department) "
+                    "SELECT id, :term, campus_id, name, department "
+                    "FROM classrooms WHERE id = :classroom"
+                ),
+                {"term": semester_id, "classroom": classroom_id},
+            )
+        moved = connection.execute(text(
+            "SELECT COUNT(*) FROM classrooms_new"
+        )).scalar_one()
+        if moved != len(classroom_ids):
+            raise RuntimeError(
+                f"班級搬遷筆數不符：{moved} / {len(classroom_ids)}"
+            )
+        connection.execute(text("DROP TABLE classrooms"))
+        connection.execute(text("ALTER TABLE classrooms_new RENAME TO classrooms"))
+
+        # 工作格改指 classrooms.id（原本指 academic_term_classrooms.id）。
+        # 兩張表的 id 值域重疊，逐筆 UPDATE 會把前一輪改好的列再改一次，
+        # 所以必須一次 join 對應完。
+        connection.execute(text("""
+            UPDATE class_period_work_slots
+            SET term_classroom_id = (
+                SELECT term_classroom.classroom_id
+                FROM academic_term_classrooms AS term_classroom
+                WHERE term_classroom.id = class_period_work_slots.term_classroom_id
+            )
+        """))
+        orphan_slots = connection.execute(text(
+            "SELECT COUNT(*) FROM class_period_work_slots "
+            "WHERE term_classroom_id IS NULL"
+        )).scalar_one()
+        if orphan_slots:
+            raise RuntimeError(
+                f"{orphan_slots} 個工作格對應不到班級，無法併入學期範圍"
+            )
+        # 整張重建：欄位改名之外，FK 目標也要從即將移除的 academic_term_classrooms
+        # 換成 classrooms，兩者都不是 RENAME COLUMN 做得到的。
+        connection.execute(text("DROP TABLE IF EXISTS class_period_work_slots_new"))
+        connection.execute(text("""
+            CREATE TABLE class_period_work_slots_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                classroom_id INTEGER NOT NULL
+                    REFERENCES classrooms(id) ON DELETE CASCADE,
+                semester_period_id INTEGER NOT NULL
+                    REFERENCES semester_periods(id) ON DELETE CASCADE,
+                started_at DATETIME,
+                CONSTRAINT ux_class_period_work_slots_classroom_period
+                    UNIQUE (classroom_id, semester_period_id)
+            )
+        """))
+        connection.execute(text(
+            "INSERT INTO class_period_work_slots_new "
+            "(id, classroom_id, semester_period_id, started_at) "
+            "SELECT id, term_classroom_id, semester_period_id, started_at "
+            "FROM class_period_work_slots"
+        ))
+        connection.execute(text("DROP TABLE class_period_work_slots"))
+        connection.execute(text(
+            "ALTER TABLE class_period_work_slots_new "
+            "RENAME TO class_period_work_slots"
+        ))
+
+        # 依賴被移除欄位／表的 trigger 必須先卸下，SQLite 不允許帶著它們改結構
+        for trigger_name in (
+            "trg_projects_reject_empty_identity_migration",
+            "trg_projects_require_identity_migration_ledger",
+            "trg_projects_freeze_assigned_classroom",
+            "trg_academic_term_students_match_term_insert",
+            "trg_academic_term_students_match_term_update",
+            "trg_academic_term_students_freeze_insert",
+            "trg_academic_term_students_freeze_update",
+            "trg_academic_term_students_freeze_delete",
+        ):
+            connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+
+        for index_name in (
+            "ux_classrooms_scope_name",
+            "ux_academic_term_classrooms_term_classroom",
+            "idx_academic_term_classrooms_scope",
+        ):
+            connection.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_students"))
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classroom_teachers"))
+        connection.execute(text("DROP TABLE IF EXISTS academic_term_classrooms"))
+
+        # 唯一鍵已隨重建的表一起建立；這裡只補查詢用的複合索引
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_classrooms_term_scope "
+            "ON classrooms(semester_id, campus_id, department)"
+        ))
+
+        _cancel_draft_term_plans(connection)
+
+        # 外鍵檢查必須在 commit 之前：這一段已經 drop 掉兩張快照表與 mapping 表，
+        # commit 之後就沒有回頭路，而重跑又會因為 classrooms 已有 semester_id 而
+        # 直接判定完成——帶著 FK drift 繼續啟動。
+        # `foreign_keys=OFF` 期間 SQLite 不會即時擋，但 PRAGMA foreign_key_check
+        # 仍會掃出違反，所以在這裡查得到。
+        violations = list(connection.execute(text("PRAGMA foreign_key_check")))
+        if violations:
+            raise RuntimeError(f"學期範圍班級遷移後外鍵不一致：{violations[:5]}")
+
+        connection.commit()
+    except Exception:
+        # 先 rollback 再切回 pragma：SQLite 在 active transaction 內會忽略
+        # foreign_keys 的切換，順序反了等於沒切回來。
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _add_semester_reporting_schema(connection):
+    """加入正式學期、班級期別工作格，並遷移仍有效的已歸班相本。
+
+    學期範圍班級的資料庫只跑得到「建立正式學期」那一段；已移除的學期快照表
+    相關 DDL 與回填一律跳過。
+    """
+    # 舊版曾以 status 本身建 unique index，會允許 imported 與 active 各一筆。
+    # 先重建為常數 expression index，讓所有 current 狀態共用唯一鍵；
+    # 這與班級結構無關，新舊資料庫都要做，所以排在守衛之前。
+    if connection.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'semesters'"
+    )).first():
+        connection.execute(text("DROP INDEX IF EXISTS ux_semesters_current"))
+        connection.execute(text(
+            "CREATE UNIQUE INDEX ux_semesters_current "
+            "ON semesters((1)) WHERE status IN ('imported', 'active')"
+        ))
+        connection.commit()
+    legacy_schema = not _is_term_scoped_classroom_schema(connection)
+    if not legacy_schema:
+        _backfill_imported_semester(connection)
+        return
+    connection.execute(text("""
+        CREATE TABLE IF NOT EXISTS semesters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             label VARCHAR NOT NULL,
             status VARCHAR NOT NULL
-                CONSTRAINT ck_academic_terms_status
+                CONSTRAINT ck_semesters_status
                 CHECK (status IN (
                     'imported', 'draft', 'active', 'closed', 'cancelled'
                 )),
@@ -100,33 +862,33 @@ def _add_academic_term_reporting_schema(connection):
         )
     """))
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS academic_term_periods (
+        CREATE TABLE IF NOT EXISTS semester_periods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            academic_term_id INTEGER NOT NULL
-                REFERENCES academic_terms(id) ON DELETE CASCADE,
+            semester_id INTEGER NOT NULL
+                REFERENCES semesters(id) ON DELETE CASCADE,
             template_period_id INTEGER NOT NULL REFERENCES template_periods(id),
             period_name_snapshot VARCHAR NOT NULL,
             department VARCHAR NOT NULL,
             position INTEGER NOT NULL
-                CONSTRAINT ck_academic_term_periods_position CHECK (position >= 0),
-            CONSTRAINT ux_academic_term_periods_term_position
-                UNIQUE (academic_term_id, position),
-            CONSTRAINT ux_academic_term_periods_template_period
+                CONSTRAINT ck_semester_periods_position CHECK (position >= 0),
+            CONSTRAINT ux_semester_periods_term_position
+                UNIQUE (semester_id, position),
+            CONSTRAINT ux_semester_periods_template_period
                 UNIQUE (template_period_id)
         )
     """))
     connection.execute(text("""
         CREATE TABLE IF NOT EXISTS academic_term_classrooms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            academic_term_id INTEGER NOT NULL
-                REFERENCES academic_terms(id) ON DELETE CASCADE,
+            semester_id INTEGER NOT NULL
+                REFERENCES semesters(id) ON DELETE CASCADE,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
             campus_id_snapshot INTEGER NOT NULL,
             campus_name_snapshot VARCHAR NOT NULL,
             classroom_name_snapshot VARCHAR NOT NULL,
             department VARCHAR NOT NULL,
             CONSTRAINT ux_academic_term_classrooms_term_classroom
-                UNIQUE (academic_term_id, classroom_id)
+                UNIQUE (semester_id, classroom_id)
         )
     """))
     connection.execute(text("""
@@ -135,7 +897,7 @@ def _add_academic_term_reporting_schema(connection):
             term_classroom_id INTEGER NOT NULL
                 REFERENCES academic_term_classrooms(id) ON DELETE CASCADE,
             source_assignment_id INTEGER
-                REFERENCES classroom_teacher_assignments(id) ON DELETE SET NULL,
+                REFERENCES classroom_teachers(id) ON DELETE SET NULL,
             teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             teacher_name_snapshot VARCHAR NOT NULL,
             duty VARCHAR NOT NULL
@@ -148,12 +910,12 @@ def _add_academic_term_reporting_schema(connection):
     connection.execute(text("""
         CREATE TABLE IF NOT EXISTS academic_term_classroom_students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            academic_term_id INTEGER NOT NULL
-                REFERENCES academic_terms(id) ON DELETE CASCADE,
+            semester_id INTEGER NOT NULL
+                REFERENCES semesters(id) ON DELETE CASCADE,
             term_classroom_id INTEGER NOT NULL
                 REFERENCES academic_term_classrooms(id) ON DELETE CASCADE,
             source_membership_id INTEGER
-                REFERENCES class_roster_members(id) ON DELETE SET NULL,
+                REFERENCES classroom_members(id) ON DELETE SET NULL,
             roster_child_id_snapshot INTEGER NOT NULL,
             student_name_snapshot VARCHAR NOT NULL,
             CONSTRAINT ux_academic_term_classroom_students_classroom_child
@@ -176,27 +938,27 @@ def _add_academic_term_reporting_schema(connection):
             "PRAGMA table_info(academic_term_classroom_students)"
         ))
     }
-    if "academic_term_id" not in student_snapshot_columns:
+    if "semester_id" not in student_snapshot_columns:
         connection.execute(text(
             "ALTER TABLE academic_term_classroom_students "
-            "ADD COLUMN academic_term_id INTEGER REFERENCES academic_terms(id)"
+            "ADD COLUMN semester_id INTEGER REFERENCES semesters(id)"
         ))
     connection.execute(text("""
         UPDATE academic_term_classroom_students
-        SET academic_term_id = (
-            SELECT term_classroom.academic_term_id
+        SET semester_id = (
+            SELECT term_classroom.semester_id
             FROM academic_term_classrooms AS term_classroom
             WHERE term_classroom.id =
                       academic_term_classroom_students.term_classroom_id
         )
-        WHERE academic_term_id IS NULL
+        WHERE semester_id IS NULL
     """))
     missing_snapshot_term_ids = [
         row[0]
         for row in connection.execute(text("""
             SELECT id
             FROM academic_term_classroom_students
-            WHERE academic_term_id IS NULL
+            WHERE semester_id IS NULL
             ORDER BY id
         """))
     ]
@@ -210,11 +972,11 @@ def _add_academic_term_reporting_schema(connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             term_classroom_id INTEGER NOT NULL
                 REFERENCES academic_term_classrooms(id) ON DELETE CASCADE,
-            term_period_id INTEGER NOT NULL
-                REFERENCES academic_term_periods(id) ON DELETE CASCADE,
+            semester_period_id INTEGER NOT NULL
+                REFERENCES semester_periods(id) ON DELETE CASCADE,
             started_at DATETIME,
             CONSTRAINT ux_class_period_work_slots_classroom_period
-                UNIQUE (term_classroom_id, term_period_id)
+                UNIQUE (term_classroom_id, semester_period_id)
         )
     """))
 
@@ -237,24 +999,24 @@ def _add_academic_term_reporting_schema(connection):
             "PRAGMA table_info(term_reclassification_plans)"
         ))
     }
-    if "target_academic_term_id" not in plan_columns:
+    if "target_semester_id" not in plan_columns:
         connection.execute(text(
             "ALTER TABLE term_reclassification_plans "
-            "ADD COLUMN target_academic_term_id INTEGER "
-            "REFERENCES academic_terms(id)"
+            "ADD COLUMN target_semester_id INTEGER "
+            "REFERENCES semesters(id)"
         ))
 
     index_statements = (
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_academic_terms_migration_key "
-        "ON academic_terms(migration_key) WHERE migration_key IS NOT NULL",
-        "CREATE INDEX IF NOT EXISTS idx_academic_term_periods_term_id "
-        "ON academic_term_periods(academic_term_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_semesters_migration_key "
+        "ON semesters(migration_key) WHERE migration_key IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_semester_periods_term_id "
+        "ON semester_periods(semester_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classrooms_term_id "
-        "ON academic_term_classrooms(academic_term_id)",
+        "ON academic_term_classrooms(semester_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classrooms_classroom_id "
         "ON academic_term_classrooms(classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classrooms_scope "
-        "ON academic_term_classrooms(academic_term_id, campus_id_snapshot, department)",
+        "ON academic_term_classrooms(semester_id, campus_id_snapshot, department)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_teachers_classroom "
         "ON academic_term_classroom_teachers(term_classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_teachers_assignment "
@@ -264,41 +1026,34 @@ def _add_academic_term_reporting_schema(connection):
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_students_classroom "
         "ON academic_term_classroom_students(term_classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_students_term "
-        "ON academic_term_classroom_students(academic_term_id)",
+        "ON academic_term_classroom_students(semester_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_students_membership "
         "ON academic_term_classroom_students(source_membership_id)",
         "CREATE INDEX IF NOT EXISTS idx_academic_term_classroom_students_child "
         "ON academic_term_classroom_students(roster_child_id_snapshot)",
         "CREATE INDEX IF NOT EXISTS idx_class_period_work_slots_term_classroom "
         "ON class_period_work_slots(term_classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_period_work_slots_term_period "
-        "ON class_period_work_slots(term_period_id)",
+        "CREATE INDEX IF NOT EXISTS idx_class_period_work_slots_semester_period "
+        "ON class_period_work_slots(semester_period_id)",
         "CREATE INDEX IF NOT EXISTS idx_projects_class_period_work_slot_id "
         "ON projects(class_period_work_slot_id)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_term_plans_target_academic_term "
-        "ON term_reclassification_plans(target_academic_term_id) "
-        "WHERE target_academic_term_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_term_plans_target_semester "
+        "ON term_reclassification_plans(target_semester_id) "
+        "WHERE target_semester_id IS NOT NULL",
     )
-    # 舊版曾以 status 本身建 unique index，會允許 imported 與 active 各一筆。
-    # 先重建為常數 expression index，讓所有 current 狀態共用唯一鍵。
-    connection.execute(text("DROP INDEX IF EXISTS ux_academic_terms_current"))
-    connection.execute(text(
-        "CREATE UNIQUE INDEX ux_academic_terms_current "
-        "ON academic_terms((1)) WHERE status IN ('imported', 'active')"
-    ))
     for statement in index_statements:
         connection.execute(text(statement))
     connection.commit()
 
     _backfill_project_campus_id_snapshots(connection)
-    _backfill_imported_academic_term(connection)
+    _backfill_imported_semester(connection)
     connection.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS "
         "ux_academic_term_classroom_students_term_child "
         "ON academic_term_classroom_students("
-        "academic_term_id, roster_child_id_snapshot)"
+        "semester_id, roster_child_id_snapshot)"
     ))
-    _add_academic_term_reporting_freeze_triggers(connection)
+    _add_semester_reporting_freeze_triggers(connection)
     connection.commit()
 
 
@@ -367,11 +1122,11 @@ def _backfill_project_campus_id_snapshots(connection):
     connection.commit()
 
 
-def _backfill_imported_academic_term(connection):
+def _backfill_imported_semester(connection):
     """把有效相本與目前 active 期別建立成唯一 imported term 工作格。"""
     connection.execute(
         text("""
-            INSERT OR IGNORE INTO academic_terms (
+            INSERT OR IGNORE INTO semesters (
                 label, status, migration_key, created_at,
                 created_by_name_snapshot
             ) VALUES (
@@ -379,15 +1134,15 @@ def _backfill_imported_academic_term(connection):
                 CURRENT_TIMESTAMP, '系統遷移'
             )
         """),
-        {"migration_key": ACADEMIC_TERM_REPORTING_MIGRATION_KEY},
+        {"migration_key": SEMESTER_REPORTING_MIGRATION_KEY},
     )
     imported_term = connection.execute(
         text("""
             SELECT id, status
-            FROM academic_terms
+            FROM semesters
             WHERE migration_key = :migration_key
         """),
-        {"migration_key": ACADEMIC_TERM_REPORTING_MIGRATION_KEY},
+        {"migration_key": SEMESTER_REPORTING_MIGRATION_KEY},
     ).one()
     imported_term_id, imported_status = imported_term
     if imported_status != "imported":
@@ -397,8 +1152,8 @@ def _backfill_imported_academic_term(connection):
     next_position = connection.execute(
         text("""
             SELECT COALESCE(MAX(position), -1) + 1
-            FROM academic_term_periods
-            WHERE academic_term_id = :term_id
+            FROM semester_periods
+            WHERE semester_id = :term_id
         """),
         {"term_id": imported_term_id},
     ).scalar_one()
@@ -418,8 +1173,8 @@ def _backfill_imported_academic_term(connection):
     for period_id, period_name, department in period_rows:
         existing_term_id = connection.execute(
             text("""
-                SELECT academic_term_id
-                FROM academic_term_periods
+                SELECT semester_id
+                FROM semester_periods
                 WHERE template_period_id = :period_id
             """),
             {"period_id": period_id},
@@ -428,8 +1183,8 @@ def _backfill_imported_academic_term(connection):
             continue
         connection.execute(
             text("""
-                INSERT INTO academic_term_periods (
-                    academic_term_id, template_period_id,
+                INSERT INTO semester_periods (
+                    semester_id, template_period_id,
                     period_name_snapshot, department, position
                 ) VALUES (
                     :term_id, :period_id, :period_name, :department, :position
@@ -445,10 +1200,14 @@ def _backfill_imported_academic_term(connection):
         )
         next_position += 1
 
+    # 班級與工作格的回填只適用於舊結構；學期範圍班級由編班流程建立
+    if _is_term_scoped_classroom_schema(connection):
+        connection.commit()
+        return
     connection.execute(
         text("""
             INSERT OR IGNORE INTO academic_term_classrooms (
-                academic_term_id, classroom_id,
+                semester_id, classroom_id,
                 campus_id_snapshot, campus_name_snapshot,
                 classroom_name_snapshot, department
             )
@@ -468,16 +1227,16 @@ def _backfill_imported_academic_term(connection):
                     AND EXISTS (
                         SELECT 1
                         FROM template_periods AS period
-                        JOIN academic_term_periods AS term_period
-                          ON term_period.template_period_id = period.id
-                        WHERE term_period.academic_term_id = :term_id
+                        JOIN semester_periods AS semester_period
+                          ON semester_period.template_period_id = period.id
+                        WHERE semester_period.semester_id = :term_id
                           AND period.status = 'active'
-                          AND term_period.department = classroom.department
+                          AND semester_period.department = classroom.department
                     )
                 )
                OR EXISTS (
                     SELECT 1
-                    FROM class_roster_members AS member
+                    FROM classroom_members AS member
                     WHERE member.classroom_id = classroom.id
                       AND member.ended_at IS NULL
                 )
@@ -493,9 +1252,9 @@ def _backfill_imported_academic_term(connection):
             SELECT term_classroom.id, assignment.id, assignment.teacher_id,
                    assignment.teacher_name_snapshot, assignment.duty
             FROM academic_term_classrooms AS term_classroom
-            JOIN classroom_teacher_assignments AS assignment
+            JOIN classroom_teachers AS assignment
               ON assignment.classroom_id = term_classroom.classroom_id
-            WHERE term_classroom.academic_term_id = :term_id
+            WHERE term_classroom.semester_id = :term_id
               AND assignment.ended_at IS NULL
               AND assignment.teacher_id IS NOT NULL
         """),
@@ -503,31 +1262,31 @@ def _backfill_imported_academic_term(connection):
     )
 
     actual_slot_rows = list(connection.execute(text("""
-        SELECT term_classroom.id, term_period.id,
+        SELECT term_classroom.id, semester_period.id,
                MIN(COALESCE(project.created_at, CURRENT_TIMESTAMP))
         FROM projects AS project
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = project.classroom_id
-        JOIN academic_term_periods AS term_period
-          ON term_period.template_period_id = project.template_period_id
+        JOIN semester_periods AS semester_period
+          ON semester_period.template_period_id = project.template_period_id
         WHERE project.deleted_at IS NULL
           AND project.classroom_id IS NOT NULL
-          AND term_classroom.academic_term_id = :term_id
-          AND term_period.academic_term_id = :term_id
-        GROUP BY term_classroom.id, term_period.id
+          AND term_classroom.semester_id = :term_id
+          AND semester_period.semester_id = :term_id
+        GROUP BY term_classroom.id, semester_period.id
     """), {"term_id": imported_term_id}))
-    for term_classroom_id, term_period_id, started_at in actual_slot_rows:
+    for term_classroom_id, semester_period_id, started_at in actual_slot_rows:
         connection.execute(
             text("""
                 INSERT OR IGNORE INTO class_period_work_slots (
-                    term_classroom_id, term_period_id, started_at
+                    term_classroom_id, semester_period_id, started_at
                 ) VALUES (
-                    :term_classroom_id, :term_period_id, :started_at
+                    :term_classroom_id, :semester_period_id, :started_at
                 )
             """),
             {
                 "term_classroom_id": term_classroom_id,
-                "term_period_id": term_period_id,
+                "semester_period_id": semester_period_id,
                 "started_at": started_at,
             },
         )
@@ -536,11 +1295,11 @@ def _backfill_imported_academic_term(connection):
                 UPDATE class_period_work_slots
                 SET started_at = COALESCE(started_at, :started_at)
                 WHERE term_classroom_id = :term_classroom_id
-                  AND term_period_id = :term_period_id
+                  AND semester_period_id = :semester_period_id
             """),
             {
                 "term_classroom_id": term_classroom_id,
-                "term_period_id": term_period_id,
+                "semester_period_id": semester_period_id,
                 "started_at": started_at,
             },
         )
@@ -548,19 +1307,19 @@ def _backfill_imported_academic_term(connection):
     connection.execute(
         text("""
             INSERT OR IGNORE INTO class_period_work_slots (
-                term_classroom_id, term_period_id, started_at
+                term_classroom_id, semester_period_id, started_at
             )
-            SELECT term_classroom.id, term_period.id, NULL
+            SELECT term_classroom.id, semester_period.id, NULL
             FROM academic_term_classrooms AS term_classroom
             JOIN classrooms AS classroom
               ON classroom.id = term_classroom.classroom_id
             JOIN campuses AS campus ON campus.id = classroom.campus_id
-            JOIN academic_term_periods AS term_period
-              ON term_period.academic_term_id = term_classroom.academic_term_id
-             AND term_period.department = term_classroom.department
+            JOIN semester_periods AS semester_period
+              ON semester_period.semester_id = term_classroom.semester_id
+             AND semester_period.department = term_classroom.department
             JOIN template_periods AS period
-              ON period.id = term_period.template_period_id
-            WHERE term_classroom.academic_term_id = :term_id
+              ON period.id = semester_period.template_period_id
+            WHERE term_classroom.semester_id = :term_id
               AND classroom.is_active = 1
               AND campus.is_active = 1
               AND period.status = 'active'
@@ -575,11 +1334,11 @@ def _backfill_imported_academic_term(connection):
                 FROM class_period_work_slots AS slot
                 JOIN academic_term_classrooms AS term_classroom
                   ON term_classroom.id = slot.term_classroom_id
-                JOIN academic_term_periods AS term_period
-                  ON term_period.id = slot.term_period_id
-                WHERE term_classroom.academic_term_id = :term_id
+                JOIN semester_periods AS semester_period
+                  ON semester_period.id = slot.semester_period_id
+                WHERE term_classroom.semester_id = :term_id
                   AND term_classroom.classroom_id = projects.classroom_id
-                  AND term_period.template_period_id = projects.template_period_id
+                  AND semester_period.template_period_id = projects.template_period_id
             )
             WHERE projects.deleted_at IS NULL
               AND projects.classroom_id IS NOT NULL
@@ -607,7 +1366,7 @@ def _backfill_imported_academic_term(connection):
         connection,
         imported_term_id,
     )
-    _sync_imported_academic_term_student_snapshots(
+    _sync_imported_semester_student_snapshots(
         connection,
         imported_term_id,
     )
@@ -630,7 +1389,7 @@ def _assert_imported_project_scope_snapshots_match(
               ON term_classroom.id = slot.term_classroom_id
             WHERE project.deleted_at IS NULL
               AND project.classroom_id IS NOT NULL
-              AND term_classroom.academic_term_id = :term_id
+              AND term_classroom.semester_id = :term_id
               AND (
                     project.classroom_id IS NOT term_classroom.classroom_id
                  OR project.campus_id_snapshot IS NOT
@@ -651,7 +1410,7 @@ def _assert_imported_project_scope_snapshots_match(
         )
 
 
-def _sync_imported_academic_term_student_snapshots(
+def _sync_imported_semester_student_snapshots(
     connection,
     imported_term_id: int,
 ) -> None:
@@ -675,22 +1434,22 @@ def _sync_imported_academic_term_student_snapshots(
             source_membership_id, student_name_snapshot
         )
         SELECT student.roster_child_id, term_classroom.id, NULL, student.name
-        FROM students AS student
+        FROM project_students AS student
         JOIN projects AS project ON project.id = student.project_id
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = project.classroom_id
-        WHERE term_classroom.academic_term_id = :term_id
+        WHERE term_classroom.semester_id = :term_id
           AND project.deleted_at IS NULL
           AND student.roster_child_id IS NOT NULL
           AND NOT EXISTS (
                 SELECT 1
-                FROM students AS candidate
+                FROM project_students AS candidate
                 JOIN projects AS candidate_project
                   ON candidate_project.id = candidate.project_id
                 JOIN academic_term_classrooms AS candidate_classroom
                   ON candidate_classroom.classroom_id =
                         candidate_project.classroom_id
-                WHERE candidate_classroom.academic_term_id = :term_id
+                WHERE candidate_classroom.semester_id = :term_id
                   AND candidate_project.deleted_at IS NULL
                   AND candidate.roster_child_id = student.roster_child_id
                   AND (
@@ -719,22 +1478,22 @@ def _sync_imported_academic_term_student_snapshots(
         )
         SELECT member.roster_child_id, term_classroom.id,
                member.id, child.name
-        FROM class_roster_members AS member
-        JOIN roster_children AS child ON child.id = member.roster_child_id
+        FROM classroom_members AS member
+        JOIN students AS child ON child.id = member.roster_child_id
         JOIN academic_term_classrooms AS term_classroom
           ON term_classroom.classroom_id = member.classroom_id
-        WHERE term_classroom.academic_term_id = :term_id
+        WHERE term_classroom.semester_id = :term_id
           AND member.ended_at IS NULL
     """), {"term_id": imported_term_id})
 
     # 舊版曾只限制每班唯一；建立整學期 unique index 前先收旂。
     connection.execute(text("""
         DELETE FROM academic_term_classroom_students
-        WHERE academic_term_id = :term_id
+        WHERE semester_id = :term_id
           AND id NOT IN (
                 SELECT MIN(id)
                 FROM academic_term_classroom_students
-                WHERE academic_term_id = :term_id
+                WHERE semester_id = :term_id
                 GROUP BY roster_child_id_snapshot
             )
     """), {"term_id": imported_term_id})
@@ -759,7 +1518,7 @@ def _sync_imported_academic_term_student_snapshots(
                 WHERE desired.roster_child_id_snapshot =
                     academic_term_classroom_students.roster_child_id_snapshot
             )
-        WHERE academic_term_id = :term_id
+        WHERE semester_id = :term_id
           AND EXISTS (
                 SELECT 1
                 FROM temp_imported_term_student_snapshot_desired AS desired
@@ -771,7 +1530,7 @@ def _sync_imported_academic_term_student_snapshots(
 
     connection.execute(text("""
         INSERT INTO academic_term_classroom_students (
-            academic_term_id, term_classroom_id, source_membership_id,
+            semester_id, term_classroom_id, source_membership_id,
             roster_child_id_snapshot, student_name_snapshot
         )
         SELECT :term_id, desired.term_classroom_id,
@@ -782,7 +1541,7 @@ def _sync_imported_academic_term_student_snapshots(
         WHERE NOT EXISTS (
             SELECT 1
             FROM academic_term_classroom_students AS snapshot
-            WHERE snapshot.academic_term_id = :term_id
+            WHERE snapshot.semester_id = :term_id
               AND snapshot.roster_child_id_snapshot =
                     desired.roster_child_id_snapshot
         )
@@ -792,8 +1551,10 @@ def _sync_imported_academic_term_student_snapshots(
     ))
 
 
-def _add_academic_term_reporting_freeze_triggers(connection):
+def _add_semester_reporting_freeze_triggers(connection):
     """凍結已歸班 Project 快照、工作格 identity 與已開始時間。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     for trigger_name in (
         "trg_academic_term_students_match_term_insert",
         "trg_academic_term_students_match_term_update",
@@ -805,11 +1566,11 @@ def _add_academic_term_reporting_freeze_triggers(connection):
     connection.execute(text("""
         CREATE TRIGGER trg_academic_term_students_match_term_insert
         BEFORE INSERT ON academic_term_classroom_students
-        WHEN NEW.academic_term_id IS NULL OR NOT EXISTS (
+        WHEN NEW.semester_id IS NULL OR NOT EXISTS (
             SELECT 1
             FROM academic_term_classrooms AS term_classroom
             WHERE term_classroom.id = NEW.term_classroom_id
-              AND term_classroom.academic_term_id = NEW.academic_term_id
+              AND term_classroom.semester_id = NEW.semester_id
         )
         BEGIN
             SELECT RAISE(ABORT, 'student snapshot term must match classroom term');
@@ -817,13 +1578,13 @@ def _add_academic_term_reporting_freeze_triggers(connection):
     """))
     connection.execute(text("""
         CREATE TRIGGER trg_academic_term_students_match_term_update
-        BEFORE UPDATE OF academic_term_id, term_classroom_id
+        BEFORE UPDATE OF semester_id, term_classroom_id
         ON academic_term_classroom_students
-        WHEN NEW.academic_term_id IS NULL OR NOT EXISTS (
+        WHEN NEW.semester_id IS NULL OR NOT EXISTS (
             SELECT 1
             FROM academic_term_classrooms AS term_classroom
             WHERE term_classroom.id = NEW.term_classroom_id
-              AND term_classroom.academic_term_id = NEW.academic_term_id
+              AND term_classroom.semester_id = NEW.semester_id
         )
         BEGIN
             SELECT RAISE(ABORT, 'student snapshot term must match classroom term');
@@ -835,8 +1596,8 @@ def _add_academic_term_reporting_freeze_triggers(connection):
         WHEN EXISTS (
             SELECT 1
             FROM academic_term_classrooms AS term_classroom
-            JOIN academic_terms AS term
-              ON term.id = term_classroom.academic_term_id
+            JOIN semesters AS term
+              ON term.id = term_classroom.semester_id
             WHERE term_classroom.id = NEW.term_classroom_id
               AND term.status = 'closed'
         )
@@ -850,8 +1611,8 @@ def _add_academic_term_reporting_freeze_triggers(connection):
         WHEN EXISTS (
             SELECT 1
             FROM academic_term_classrooms AS term_classroom
-            JOIN academic_terms AS term
-              ON term.id = term_classroom.academic_term_id
+            JOIN semesters AS term
+              ON term.id = term_classroom.semester_id
             WHERE term_classroom.id = OLD.term_classroom_id
               AND term.status = 'closed'
         )
@@ -865,8 +1626,8 @@ def _add_academic_term_reporting_freeze_triggers(connection):
         WHEN EXISTS (
             SELECT 1
             FROM academic_term_classrooms AS term_classroom
-            JOIN academic_terms AS term
-              ON term.id = term_classroom.academic_term_id
+            JOIN semesters AS term
+              ON term.id = term_classroom.semester_id
             WHERE term_classroom.id = OLD.term_classroom_id
               AND term.status = 'closed'
         )
@@ -910,10 +1671,10 @@ def _add_academic_term_reporting_freeze_triggers(connection):
     """))
     connection.execute(text("""
         CREATE TRIGGER IF NOT EXISTS trg_work_slots_freeze_identity
-        BEFORE UPDATE OF term_classroom_id, term_period_id
+        BEFORE UPDATE OF term_classroom_id, semester_period_id
         ON class_period_work_slots
         WHEN NEW.term_classroom_id IS NOT OLD.term_classroom_id
-          OR NEW.term_period_id IS NOT OLD.term_period_id
+          OR NEW.semester_period_id IS NOT OLD.semester_period_id
         BEGIN
             SELECT RAISE(ABORT, 'work slot identity is immutable');
         END
@@ -931,6 +1692,8 @@ def _add_academic_term_reporting_freeze_triggers(connection):
 
 def _add_organization_structure(connection):
     """加入分校、班級目前名單與可追溯的專案負責人轉交資料。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     connection.execute(text("""
         CREATE TABLE IF NOT EXISTS campuses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -952,10 +1715,10 @@ def _add_organization_structure(connection):
         )
     """))
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS class_roster_members (
+        CREATE TABLE IF NOT EXISTS classroom_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
-            roster_child_id INTEGER NOT NULL REFERENCES roster_children(id),
+            roster_child_id INTEGER NOT NULL REFERENCES students(id),
             started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             ended_at DATETIME,
             end_reason TEXT
@@ -1007,32 +1770,40 @@ def _add_organization_structure(connection):
         ))
     member_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(class_roster_members)"))
+        for row in connection.execute(text("PRAGMA table_info(classroom_members)"))
     }
     if "end_reason" not in member_columns:
         connection.execute(text(
-            "ALTER TABLE class_roster_members ADD COLUMN end_reason TEXT"
+            "ALTER TABLE classroom_members ADD COLUMN end_reason TEXT"
         ))
 
     # 中間版本的索引只限制同班重複，仍可能同時在兩班；只在舊定義存在時重建。
-    active_member_index_sql = connection.execute(text("""
-        SELECT sql FROM sqlite_master
-        WHERE type = 'index' AND name = 'ux_class_roster_active_child'
-    """)).scalar()
-    if active_member_index_sql and "classroom_id" in active_member_index_sql.lower():
-        connection.execute(text("DROP INDEX ux_class_roster_active_child"))
+    # 索引名不隨 ALTER TABLE RENAME 改變，所以舊名與新名都要檢查。
+    for index_name in (
+        "ux_class_roster_active_child",
+        "ux_classroom_members_active_child",
+    ):
+        active_member_index_sql = connection.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'index' AND name = :index_name"
+            ),
+            {"index_name": index_name},
+        ).scalar()
+        if active_member_index_sql and "classroom_id" in active_member_index_sql.lower():
+            connection.execute(text(f"DROP INDEX {index_name}"))
 
     index_statements = (
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_campuses_name ON campuses(name)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classrooms_scope_name "
         "ON classrooms(campus_id, department, name)",
         "CREATE INDEX IF NOT EXISTS idx_classrooms_campus_id ON classrooms(campus_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_classroom_id "
-        "ON class_roster_members(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_class_roster_members_roster_child_id "
-        "ON class_roster_members(roster_child_id)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_class_roster_active_child "
-        "ON class_roster_members(roster_child_id) "
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_classroom_id "
+        "ON classroom_members(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_members_roster_child_id "
+        "ON classroom_members(roster_child_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_members_active_child "
+        "ON classroom_members(roster_child_id) "
         "WHERE ended_at IS NULL",
         "CREATE INDEX IF NOT EXISTS idx_projects_classroom_id ON projects(classroom_id)",
         "CREATE INDEX IF NOT EXISTS idx_projects_created_by_id ON projects(created_by_id)",
@@ -1052,6 +1823,8 @@ def _add_organization_structure(connection):
 
 def _add_organization_access_and_reclassification_schema(connection):
     """加入班級老師、專案協作者、名稱快照與新學期編班草稿 schema。"""
+    if _is_term_scoped_classroom_schema(connection):
+        return
     project_columns = {
         row[1]
         for row in connection.execute(text("PRAGMA table_info(projects)"))
@@ -1086,13 +1859,13 @@ def _add_organization_access_and_reclassification_schema(connection):
         """))
 
     connection.execute(text("""
-        CREATE TABLE IF NOT EXISTS classroom_teacher_assignments (
+        CREATE TABLE IF NOT EXISTS classroom_teachers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
             teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             teacher_name_snapshot VARCHAR NOT NULL,
             duty VARCHAR NOT NULL
-                CONSTRAINT ck_classroom_teacher_assignments_duty
+                CONSTRAINT ck_classroom_teachers_duty
                 CHECK (duty IN ('lead', 'co_teacher')),
             started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             ended_at DATETIME,
@@ -1151,7 +1924,7 @@ def _add_organization_access_and_reclassification_schema(connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plan_id INTEGER NOT NULL
                 REFERENCES term_reclassification_plans(id) ON DELETE CASCADE,
-            source_membership_id INTEGER NOT NULL REFERENCES class_roster_members(id),
+            source_membership_id INTEGER NOT NULL REFERENCES classroom_members(id),
             roster_child_id_snapshot INTEGER NOT NULL,
             student_name_snapshot VARCHAR NOT NULL,
             source_campus_id_snapshot INTEGER NOT NULL,
@@ -1196,19 +1969,19 @@ def _add_organization_access_and_reclassification_schema(connection):
     """))
 
     index_statements = (
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_classroom_id "
-        "ON classroom_teacher_assignments(classroom_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_teacher_id "
-        "ON classroom_teacher_assignments(teacher_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_started_by_id "
-        "ON classroom_teacher_assignments(started_by_id)",
-        "CREATE INDEX IF NOT EXISTS idx_classroom_teacher_assignments_ended_by_id "
-        "ON classroom_teacher_assignments(ended_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_classroom_id "
+        "ON classroom_teachers(classroom_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_teacher_id "
+        "ON classroom_teachers(teacher_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_started_by_id "
+        "ON classroom_teachers(started_by_id)",
+        "CREATE INDEX IF NOT EXISTS idx_classroom_teachers_ended_by_id "
+        "ON classroom_teachers(ended_by_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_teacher_active "
-        "ON classroom_teacher_assignments(classroom_id, teacher_id) "
+        "ON classroom_teachers(classroom_id, teacher_id) "
         "WHERE ended_at IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_classroom_teacher_active_lead "
-        "ON classroom_teacher_assignments(classroom_id) "
+        "ON classroom_teachers(classroom_id) "
         "WHERE ended_at IS NULL AND duty = 'lead'",
         "CREATE INDEX IF NOT EXISTS idx_project_editor_assignments_project_id "
         "ON project_editor_assignments(project_id)",
@@ -1357,12 +2130,12 @@ def _quarantine_class_backed_identity_anomalies(connection):
         project_quarantine_updates += ", class_period_work_slot_id = NULL"
 
     anomalous_projects = list(connection.execute(text("""
-        WITH duplicate_students AS (
+        WITH duplicate_project_students AS (
             SELECT student.id
-            FROM students AS student
+            FROM project_students AS student
             JOIN (
                 SELECT project_id, roster_child_id
-                FROM students
+                FROM project_students
                 WHERE roster_child_id IS NOT NULL
                 GROUP BY project_id, roster_child_id
                 HAVING COUNT(*) > 1
@@ -1390,10 +2163,10 @@ def _quarantine_class_backed_identity_anomalies(connection):
                       OR duplicate_student.id IS NOT NULL
                     THEN 1 ELSE 0
                 END) AS anomalous_student_count
-            FROM students AS student
-            LEFT JOIN roster_children AS roster_child
+            FROM project_students AS student
+            LEFT JOIN students AS roster_child
               ON roster_child.id = student.roster_child_id
-            LEFT JOIN duplicate_students AS duplicate_student
+            LEFT JOIN duplicate_project_students AS duplicate_student
               ON duplicate_student.id = student.id
             GROUP BY student.project_id
         )
@@ -1575,8 +2348,8 @@ def _add_legacy_project_identity_migration_schema(connection):
         """))
 
     connection.execute(text(f"""
-        CREATE TRIGGER IF NOT EXISTS trg_students_freeze_class_backed_identity
-        BEFORE UPDATE OF name, roster_child_id, project_id ON students
+        CREATE TRIGGER IF NOT EXISTS trg_project_students_freeze_class_backed_identity
+        BEFORE UPDATE OF name, roster_child_id, project_id ON project_students
         WHEN (
             NEW.name IS NOT OLD.name
             OR NEW.roster_child_id IS NOT OLD.roster_child_id
@@ -1603,8 +2376,8 @@ def _add_legacy_project_identity_migration_schema(connection):
         WHEN OLD.classroom_id IS NULL
           AND NEW.classroom_id IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM students
-              WHERE students.project_id = OLD.id
+              SELECT 1 FROM project_students
+              WHERE project_students.project_id = OLD.id
           )
         BEGIN
             SELECT RAISE(
@@ -1624,8 +2397,8 @@ def _add_legacy_project_identity_migration_schema(connection):
                 WHERE migration.project_id_snapshot = OLD.id
                   AND migration.target_classroom_id_snapshot = NEW.classroom_id
                   AND migration.student_count = (
-                      SELECT COUNT(*) FROM students
-                      WHERE students.project_id = OLD.id
+                      SELECT COUNT(*) FROM project_students
+                      WHERE project_students.project_id = OLD.id
                   )
                   AND migration.student_count = (
                       SELECT COUNT(*)
@@ -1635,7 +2408,7 @@ def _add_legacy_project_identity_migration_schema(connection):
                   )
                   AND NOT EXISTS (
                       SELECT 1
-                      FROM students AS student
+                      FROM project_students AS student
                       WHERE student.project_id = OLD.id
                         AND NOT EXISTS (
                             SELECT 1
@@ -1674,10 +2447,10 @@ def _add_student_album_name_column(connection):
     """為學生加入可選相本稱呼；既有資料以 NULL 沿用名冊姓名。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "album_name" not in existing_columns:
-        connection.execute(text("ALTER TABLE students ADD COLUMN album_name VARCHAR"))
+        connection.execute(text("ALTER TABLE project_students ADD COLUMN album_name VARCHAR"))
         connection.commit()
 
 
@@ -1685,13 +2458,52 @@ def _add_roster_child_album_name_column(connection):
     """為園所孩子名冊加入已歸班相本共用的可選稱呼。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(roster_children)"))
+        for row in connection.execute(text("PRAGMA table_info(students)"))
     }
     if "album_name" not in existing_columns:
         connection.execute(text(
-            "ALTER TABLE roster_children ADD COLUMN album_name VARCHAR"
+            "ALTER TABLE students ADD COLUMN album_name VARCHAR"
         ))
         connection.commit()
+
+
+def _add_classroom_sort_order_column(connection):
+    """為班級加入顯示順序。
+
+    班名是「一二階／三階／十階」這種中文數字，字面排序排出來是
+    一二階 七階 三階 九階 五階…，與階段順序無關。順序是園所自己的意思，
+    推導不出來，只能存。既有資料留 NULL，排序時退回 id。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+    }
+    if "sort_order" not in existing_columns:
+        connection.execute(text(
+            "ALTER TABLE classrooms ADD COLUMN sort_order INTEGER"
+        ))
+        connection.commit()
+
+
+def _add_student_serial_column(connection):
+    """為名冊加入行政系統學號，並以 partial unique index 擋重複。
+
+    唯一性只能在「有值」時要求：沒有學號的孩子（已離園、或未在行政系統登記）留 NULL，
+    SQLite 的一般 UNIQUE 對多個 NULL 本來就放行，但寫成 partial index 才與 ORM 一致。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(students)"))
+    }
+    if "student_serial" not in existing_columns:
+        connection.execute(text(
+            "ALTER TABLE students ADD COLUMN student_serial VARCHAR"
+        ))
+    connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_students_student_serial "
+        "ON students(student_serial) WHERE student_serial IS NOT NULL"
+    ))
+    connection.commit()
 
 
 def _migrate_assigned_album_names_to_roster_authority(connection):
@@ -1718,9 +2530,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         int(row[0])
         for row in connection.execute(text("""
             SELECT DISTINCT student.roster_child_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            JOIN roster_children AS child ON child.id = student.roster_child_id
+            JOIN students AS child ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND child.album_name IS NULL
               AND LENGTH(TRIM(student.album_name)) > 100
@@ -1737,9 +2549,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         int(row[0])
         for row in connection.execute(text("""
             SELECT student.roster_child_id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            JOIN roster_children AS child ON child.id = student.roster_child_id
+            JOIN students AS child ON child.id = student.roster_child_id
             WHERE project.classroom_id IS NOT NULL
               AND child.album_name IS NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
@@ -1757,21 +2569,21 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
 
     # 只有同一孩子所有明確舊值一致時才自動升格；provisional link 不參與。
     connection.execute(text("""
-        UPDATE roster_children
+        UPDATE students
         SET album_name = (
             SELECT MIN(TRIM(student.album_name))
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            WHERE student.roster_child_id = roster_children.id
+            WHERE student.roster_child_id = students.id
               AND project.classroom_id IS NOT NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
         )
         WHERE album_name IS NULL
           AND EXISTS (
             SELECT 1
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
-            WHERE student.roster_child_id = roster_children.id
+            WHERE student.roster_child_id = students.id
               AND project.classroom_id IS NOT NULL
               AND NULLIF(TRIM(student.album_name), '') IS NOT NULL
           )
@@ -1780,9 +2592,9 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
     # 以舊／新 runtime 真正會送進渲染器的字串比較；包含既有中央值、缺 child link
     # 及帶空白的歷史 raw 值，不能只檢查本次 backfill 的孩子。
     changed_student_filter = """
-        FROM students AS student
+        FROM project_students AS student
         JOIN projects AS project ON project.id = student.project_id
-        LEFT JOIN roster_children AS child ON child.id = student.roster_child_id
+        LEFT JOIN students AS child ON child.id = student.roster_child_id
         WHERE project.classroom_id IS NOT NULL
           AND CASE
                   WHEN student.album_name IS NOT NULL
@@ -1801,19 +2613,19 @@ def _migrate_assigned_album_names_to_roster_authority(connection):
         WHERE id IN (SELECT project.id {changed_student_filter})
     """))
     connection.execute(text(f"""
-        UPDATE students
+        UPDATE project_students
         SET output_filename = NULL,
             updated_at = CURRENT_TIMESTAMP
         WHERE id IN (SELECT student.id {changed_student_filter})
     """))
 
-    # Student.album_name 從此只保留給未歸班舊相本，避免形成第二份真相。
+    # ProjectStudent.album_name 從此只保留給未歸班舊相本，避免形成第二份真相。
     connection.execute(text("""
-        UPDATE students
+        UPDATE project_students
         SET album_name = NULL
         WHERE id IN (
             SELECT student.id
-            FROM students AS student
+            FROM project_students AS student
             JOIN projects AS project ON project.id = student.project_id
             WHERE project.classroom_id IS NOT NULL
               AND student.album_name IS NOT NULL
@@ -1910,10 +2722,10 @@ def _add_student_completed_at_column(connection):
     """新增學生「個別完成」時間戳；既有已全班完成的專案不回填學生時間戳。"""
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "completed_at" not in existing_columns:
-        connection.execute(text("ALTER TABLE students ADD COLUMN completed_at DATETIME"))
+        connection.execute(text("ALTER TABLE project_students ADD COLUMN completed_at DATETIME"))
         connection.commit()
 
 
@@ -2094,7 +2906,7 @@ def _add_foreign_key_indexes(connection):
     }
     indexes_to_create = [
         ("idx_projects_owner_id",         "CREATE INDEX idx_projects_owner_id ON projects(owner_id)"),
-        ("idx_students_project_id",        "CREATE INDEX idx_students_project_id ON students(project_id)"),
+        ("idx_project_students_project_id",        "CREATE INDEX idx_project_students_project_id ON project_students(project_id)"),
         ("idx_project_comments_project_id","CREATE INDEX idx_project_comments_project_id ON project_comments(project_id)"),
         ("idx_project_comments_author_id", "CREATE INDEX idx_project_comments_author_id ON project_comments(author_id)"),
         ("idx_template_pages_template_id", "CREATE INDEX idx_template_pages_template_id ON template_pages(template_id)"),
@@ -2128,10 +2940,10 @@ def _add_template_page_unique_constraint(connection):
 
 
 def _add_timestamp_columns(connection):
-    """為 projects、students 補 updated_at；為 students 補 created_at。"""
+    """為 projects、project_students 補 updated_at；為 project_students 補 created_at。"""
     tables_columns = {
         "projects":  ["updated_at"],
-        "students":  ["created_at", "updated_at"],
+        "project_students":  ["created_at", "updated_at"],
     }
     for table, columns in tables_columns.items():
         existing = {
@@ -2202,7 +3014,7 @@ def _drop_bubble_texts_json_column(connection):
         SELECT sql
         FROM sqlite_master
         WHERE type = 'trigger'
-          AND name = 'trg_students_freeze_class_backed_identity'
+          AND name = 'trg_project_students_freeze_class_backed_identity'
           AND sql IS NOT NULL
     """)).scalar_one_or_none()
     kept_columns = [
@@ -2234,10 +3046,10 @@ def _drop_bubble_texts_json_column(connection):
             f"SELECT {quoted_columns} FROM projects"
         ))
         if external_project_trigger_sql is not None:
-            # 此 trigger 掛在 students，卻查詢 projects；重建空窗必須先移除，
+            # 此 trigger 掛在 project_students，卻查詢 projects；重建空窗必須先移除，
             # 否則 SQLite 會因 schema 內仍引用已刪除的 main.projects 而拒絕 rename。
             connection.execute(text(
-                "DROP TRIGGER trg_students_freeze_class_backed_identity"
+                "DROP TRIGGER trg_project_students_freeze_class_backed_identity"
             ))
         connection.execute(text("DROP TABLE projects"))
         connection.execute(text("ALTER TABLE projects_new RENAME TO projects"))
@@ -2877,38 +3689,38 @@ def _drop_users_supervisor_id_column(connection):
             connection.commit()
 
 
-def _add_roster_children_and_backfill(connection):
-    """只建立名冊 schema；舊 Student 身分一律等待管理員顯式遷移。
+def _add_students_and_backfill(connection):
+    """只建立名冊 schema；舊 ProjectStudent 身分一律等待管理員顯式遷移。
 
     舊版已寫入的 non-NULL link 原樣保存為 provisional evidence；fresh legacy
-    Student 保持 NULL，絕不依姓名建立或共用 RosterChild。
+    ProjectStudent 保持 NULL，絕不依姓名建立或共用 Student。
     """
     existing_tables = {
         row[0]
         for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
     }
-    if "roster_children" not in existing_tables:
+    if "students" not in existing_tables:
         connection.execute(text("""
-            CREATE TABLE roster_children (
+            CREATE TABLE students (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """))
         connection.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_roster_children_name ON roster_children (name)"
+            "CREATE INDEX IF NOT EXISTS ix_students_name ON students (name)"
         ))
     existing_columns = {
         row[1]
-        for row in connection.execute(text("PRAGMA table_info(students)"))
+        for row in connection.execute(text("PRAGMA table_info(project_students)"))
     }
     if "roster_child_id" not in existing_columns:
         connection.execute(text(
-            "ALTER TABLE students ADD COLUMN roster_child_id INTEGER "
-            "REFERENCES roster_children(id)"
+            "ALTER TABLE project_students ADD COLUMN roster_child_id INTEGER "
+            "REFERENCES students(id)"
         ))
     connection.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_students_roster_child_id ON students (roster_child_id)"
+        "CREATE INDEX IF NOT EXISTS ix_project_students_roster_child_id ON project_students (roster_child_id)"
     ))
 
     connection.commit()

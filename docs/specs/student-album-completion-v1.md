@@ -17,7 +17,7 @@
 
 ## Scope
 
-- `students.completed_at` 欄位與冪等 migration。
+- `project_students.completed_at` 欄位與冪等 migration。
 - 標記/退回單一學生完成的端點與權限。
 - 個別內容鎖、全班文字硬鎖、下載閘門的分層規則。
 - 全員完成自動成立全班完成;退回的層級語意。
@@ -26,7 +26,7 @@
 
 ## Domain Model
 
-`students` 新增:
+`project_students` 新增:
 
 - `completed_at`(DateTime, nullable)——非 NULL 代表該生相本已標記完成。
 

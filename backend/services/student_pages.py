@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
-from database import Student
+from database import ProjectStudent
 from services.file_service import delete_photo_thumbnails, get_photo_key
 
 # ── 寫鎖 ─────────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ def page_has_photo(pages_data: list, page_index: int, slot_id: int) -> bool:
 
 def mutate_student_pages(
     db,
-    student: Student,
+    student: ProjectStudent,
     mutate,
     *,
     page_indices,
@@ -161,7 +161,7 @@ def mutate_student_pages(
 
 def apply_photo_to_page(
     pages_data: list,
-    student: Student,
+    student: ProjectStudent,
     project_id: int,
     page_index: int,
     slot_id: int,

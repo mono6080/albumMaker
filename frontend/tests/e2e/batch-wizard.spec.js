@@ -1,5 +1,5 @@
 // 批次照片精靈 e2e：依檔名整批匯入走完三步、多 chunk 上傳全數成功
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   createProject,
   createTemplateWithLayout,

@@ -1,12 +1,13 @@
 """專案建立者與目前負責人的轉交稽核 use cases。"""
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from crud.project_crud import get_project_or_404
 from crud.user_crud import get_user_or_404
 from database import (
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     Project,
     ProjectAssignmentHistory,
     User,
@@ -90,15 +91,24 @@ def assign_project_owner(
                     status_code=409,
                     detail="請先把相本歸入班級，再轉交進度負責人",
                 )
-            active_teacher = db.query(ClassroomTeacherAssignment.id).filter(
-                ClassroomTeacherAssignment.classroom_id == project.classroom_id,
-                ClassroomTeacherAssignment.teacher_id == target_owner.id,
-                ClassroomTeacherAssignment.ended_at.is_(None),
+            # 學期切換後，該班的編制全部有 ended_at。若只認「目前編制」，那些跨過學期
+            # 界線還沒完成的相本就再也轉交不出去——而那正是最需要換人接手的時候
+            # （原老師離職、請假）。與製作權同一條規則：學期輪替結束的編制仍算數，
+            # 被管理員換掉的（assignment_replaced）不算。
+            staffing_conditions = [ClassroomTeacher.ended_at.is_(None)]
+            if project.completed_at is None:
+                staffing_conditions.append(
+                    ClassroomTeacher.end_reason == "term_reassignment"
+                )
+            eligible_teacher = db.query(ClassroomTeacher.id).filter(
+                ClassroomTeacher.classroom_id == project.classroom_id,
+                ClassroomTeacher.teacher_id == target_owner.id,
+                or_(*staffing_conditions),
             ).first()
-            if target_owner.role not in {"teacher", "supervisor"} or active_teacher is None:
+            if target_owner.role not in {"teacher", "supervisor"} or eligible_teacher is None:
                 raise HTTPException(
                     status_code=422,
-                    detail="進度負責人必須是該班目前老師",
+                    detail="進度負責人必須是該班目前老師，或該班上一學期、相本尚未完成時的老師",
                 )
             history = record_project_owner_transfer(
                 db,

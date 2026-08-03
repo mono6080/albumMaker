@@ -1,5 +1,5 @@
 // 學生照片 e2e：上傳、預覽快取、mapping、縮圖、裁切
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   redPng,
   bluePng,

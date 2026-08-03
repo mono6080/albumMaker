@@ -8,18 +8,18 @@ from sqlalchemy.orm import Query, Session, joinedload
 from sqlalchemy.sql.elements import ColumnElement
 
 from database import (
-    AcademicTerm,
-    AcademicTermClassroom,
+    CURRENT_SEMESTER_STATUSES,
+    Semester,
     Campus,
     Classroom,
-    ClassroomTeacherAssignment,
+    ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
     User,
 )
 
 
-REPORTING_TERM_STATUSES = ("imported", "active", "closed")
+REPORTING_SEMESTER_STATUSES = ("imported", "active", "closed")
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,14 @@ class OrganizationReadScope:
 
     viewer_role: str
     classroom_ids: tuple[int, ...]
+    # 目前正式學期仍在編制的班級：製作權的唯一來源
     teacher_classroom_ids: tuple[int, ...] = ()
+    # 曾經或現在被指派的所有學期班級：讀取權。不進 classroom_ids，
+    # 「我的班級」與建立相本仍只看目前學期
+    teacher_readable_classroom_ids: tuple[int, ...] = ()
+    # 目前編制，加上「只因為學期輪替而結束」的編制：讓老師做完自己開始、
+    # 但跨過學期界線還沒完成的相本。被管理員移出班級（assignment_replaced）不算。
+    teacher_carryover_classroom_ids: tuple[int, ...] = ()
     supervisor_classroom_ids: tuple[int, ...] = ()
     has_supervisor_assignment: bool = False
     supervisor_scope_keys: tuple[SupervisorScopeKey, ...] = ()
@@ -46,11 +53,22 @@ class OrganizationReadScope:
         return self.viewer_role == "admin"
 
 
-def _active_classroom_query(db: Session) -> Query:
+def _current_term_classroom_query(db: Session) -> Query:
+    """目前正式學期、且分校仍啟用的班級。
+
+    班級是學期範圍的實體，「目前」由學期狀態決定，沒有班級自己的啟用旗標。
+    """
     return (
         db.query(Classroom.id)
         .join(Campus, Campus.id == Classroom.campus_id)
-        .filter(Classroom.is_active.is_(True), Campus.is_active.is_(True))
+        .join(
+            Semester,
+            Semester.id == Classroom.semester_id,
+        )
+        .filter(
+            Semester.status.in_(CURRENT_SEMESTER_STATUSES),
+            Campus.is_active.is_(True),
+        )
     )
 
 
@@ -114,25 +132,84 @@ def _load_supervisor_classroom_ids(
     )
     if not conditions:
         return ()
-    rows = _active_classroom_query(db).filter(or_(*conditions)).all()
+    rows = _current_term_classroom_query(db).filter(or_(*conditions)).all()
     return tuple(sorted(row[0] for row in rows))
 
 
 def _load_teacher_classroom_ids(db: Session, teacher_id: int) -> tuple[int, ...]:
+    """目前正式學期仍在編制的班級：製作權的唯一來源。"""
     rows = (
-        _active_classroom_query(db)
+        _current_term_classroom_query(db)
         .join(
-            ClassroomTeacherAssignment,
-            ClassroomTeacherAssignment.classroom_id == Classroom.id,
+            ClassroomTeacher,
+            ClassroomTeacher.classroom_id
+            == Classroom.id,
         )
         .filter(
-            ClassroomTeacherAssignment.teacher_id == teacher_id,
-            ClassroomTeacherAssignment.ended_at.is_(None),
+            ClassroomTeacher.teacher_id == teacher_id,
+            ClassroomTeacher.ended_at.is_(None),
         )
         .distinct()
         .all()
     )
     return tuple(sorted(row[0] for row in rows))
+
+
+def _load_teacher_readable_classroom_ids(
+    db: Session,
+    teacher_id: int,
+) -> tuple[int, ...]:
+    """曾經或現在被指派的所有學期班級：老師調班後仍讀得到自己做過的相本。
+
+    不篩學期狀態也不篩 `ended_at`——班級是學期範圍的實體，「我帶過的那一班」
+    天然只包含老師在場的那個學期，不會誤放上一屆。能不能改仍由目前編制決定。
+    """
+    rows = (
+        db.query(ClassroomTeacher.classroom_id)
+        .filter(ClassroomTeacher.teacher_id == teacher_id)
+        .distinct()
+        .all()
+    )
+    return tuple(sorted(row[0] for row in rows))
+
+
+def _load_teacher_carryover_classroom_ids(
+    db: Session,
+    teacher_id: int,
+) -> tuple[int, ...]:
+    """目前在編制、或編制只因為學期輪替而結束的班級。
+
+    學期在日曆上結束時相本通常還沒做完——2026-08 首次切換學期時，114 下有 40 本仍在
+    製作、當天還有人在編。製作權若只看目前學期的編制，那些相本會在套用編班的瞬間
+    對老師變成唯讀。
+
+    但「被移出班級」必須仍然擋得住，所以認的是結束原因而不是「曾經任教」：
+    `term_reassignment` 是學期輪替帶來的，`assignment_replaced` 是有人刻意把她換掉。
+    """
+    rows = (
+        db.query(ClassroomTeacher.classroom_id)
+        .filter(
+            ClassroomTeacher.teacher_id == teacher_id,
+            or_(
+                ClassroomTeacher.ended_at.is_(None),
+                ClassroomTeacher.end_reason == "term_reassignment",
+            ),
+        )
+        .distinct()
+        .all()
+    )
+    return tuple(sorted(row[0] for row in rows))
+
+
+def project_in_teacher_carryover_scope(
+    project: Project,
+    scope: OrganizationReadScope,
+) -> bool:
+    """相本所屬班級是否在「目前編制或僅因學期輪替而結束」的範圍內。"""
+    return (
+        project.classroom_id is not None
+        and project.classroom_id in scope.teacher_carryover_classroom_ids
+    )
 
 
 def has_active_organization_supervisor_assignment(
@@ -153,15 +230,21 @@ def build_organization_read_scope(
     """把目前有效的任教與主管設定展開成班級集合。"""
     if current_user.role == "admin":
         classroom_ids = tuple(
-            sorted(row[0] for row in _active_classroom_query(db).all())
+            sorted(row[0] for row in _current_term_classroom_query(db).all())
         )
         return OrganizationReadScope(
-            "admin",
-            classroom_ids,
+            viewer_role="admin",
+            classroom_ids=classroom_ids,
             has_supervisor_assignment=True,
         )
     if current_user.role in {"teacher", "supervisor"}:
         teacher_classroom_ids = _load_teacher_classroom_ids(db, current_user.id)
+        teacher_readable_classroom_ids = _load_teacher_readable_classroom_ids(
+            db, current_user.id
+        )
+        teacher_carryover_classroom_ids = _load_teacher_carryover_classroom_ids(
+            db, current_user.id
+        )
         supervisor_scope_keys = _load_supervisor_scope_keys(db, current_user.id)
         supervisor_classroom_ids = _load_supervisor_classroom_ids(
             db, supervisor_scope_keys
@@ -170,15 +253,18 @@ def build_organization_read_scope(
         classroom_ids = tuple(sorted(
             set(teacher_classroom_ids) | set(supervisor_classroom_ids)
         ))
+        # 一律具名：這個 dataclass 的欄位中間插過新項目，位置參數會靜靜地錯位
         return OrganizationReadScope(
-            current_user.role,
-            classroom_ids,
-            teacher_classroom_ids,
-            supervisor_classroom_ids,
-            has_supervisor_assignment,
-            supervisor_scope_keys,
+            viewer_role=current_user.role,
+            classroom_ids=classroom_ids,
+            teacher_classroom_ids=teacher_classroom_ids,
+            teacher_readable_classroom_ids=teacher_readable_classroom_ids,
+            teacher_carryover_classroom_ids=teacher_carryover_classroom_ids,
+            supervisor_classroom_ids=supervisor_classroom_ids,
+            has_supervisor_assignment=has_supervisor_assignment,
+            supervisor_scope_keys=supervisor_scope_keys,
         )
-    return OrganizationReadScope(current_user.role, ())
+    return OrganizationReadScope(viewer_role=current_user.role, classroom_ids=())
 
 
 def build_organization_supervisor_scope(
@@ -198,8 +284,8 @@ def build_organization_supervisor_scope(
         supervisor_scope_keys,
     )
     return OrganizationReadScope(
-        current_user.role,
-        supervisor_classroom_ids,
+        viewer_role=current_user.role,
+        classroom_ids=supervisor_classroom_ids,
         supervisor_classroom_ids=supervisor_classroom_ids,
         has_supervisor_assignment=True,
         supervisor_scope_keys=supervisor_scope_keys,
@@ -230,8 +316,8 @@ def apply_project_read_scope(query: Query, scope: OrganizationReadScope) -> Quer
     if scope.is_admin:
         return query
     teacher_condition = (
-        Project.classroom_id.in_(scope.teacher_classroom_ids)
-        if scope.teacher_classroom_ids
+        Project.classroom_id.in_(scope.teacher_readable_classroom_ids)
+        if scope.teacher_readable_classroom_ids
         else false()
     )
     supervisor_condition = and_(
@@ -253,28 +339,28 @@ def apply_term_classroom_report_scope(
     if scope.is_admin:
         return query
     return query.filter(_snapshot_scope_condition(
-        AcademicTermClassroom.campus_id_snapshot,
-        AcademicTermClassroom.department,
+        Classroom.campus_id,
+        Classroom.department,
         scope,
     ))
 
 
-def load_reporting_term_or_404(
+def load_reporting_semester_or_404(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     scope: OrganizationReadScope | None = None,
-) -> AcademicTerm:
+) -> Semester:
     """載入正式報表學期，並避免主管以 direct ID 枚舉 scope 外 metadata。"""
-    term = db.query(AcademicTerm).filter(
-        AcademicTerm.id == academic_term_id,
-        AcademicTerm.status.in_(REPORTING_TERM_STATUSES),
+    term = db.query(Semester).filter(
+        Semester.id == semester_id,
+        Semester.status.in_(REPORTING_SEMESTER_STATUSES),
     ).first()
     if term is None:
         raise HTTPException(status_code=404, detail="找不到學期")
     if scope is not None and not scope.is_admin:
         scoped_term_classroom = apply_term_classroom_report_scope(
-            db.query(AcademicTermClassroom.id).filter(
-                AcademicTermClassroom.academic_term_id == academic_term_id,
+            db.query(Classroom.id).filter(
+                Classroom.semester_id == semester_id,
             ),
             scope,
         ).first()
@@ -286,27 +372,27 @@ def load_reporting_term_or_404(
 def load_current_scope_teacher_assignments(
     db: Session,
     scope: OrganizationReadScope,
-) -> list[ClassroomTeacherAssignment]:
+) -> list[ClassroomTeacher]:
     """載入 scope 內有效班級的目前老師編制，供進度與班級視圖共用。"""
     if not scope.classroom_ids:
         return []
     return (
-        db.query(ClassroomTeacherAssignment)
+        db.query(ClassroomTeacher)
         .options(
-            joinedload(ClassroomTeacherAssignment.teacher),
-            joinedload(ClassroomTeacherAssignment.classroom).joinedload(
+            joinedload(ClassroomTeacher.teacher),
+            joinedload(ClassroomTeacher.classroom).joinedload(
                 Classroom.campus
             ),
         )
         .filter(
-            ClassroomTeacherAssignment.classroom_id.in_(scope.classroom_ids),
-            ClassroomTeacherAssignment.teacher_id.isnot(None),
-            ClassroomTeacherAssignment.ended_at.is_(None),
+            ClassroomTeacher.classroom_id.in_(scope.classroom_ids),
+            ClassroomTeacher.teacher_id.isnot(None),
+            ClassroomTeacher.ended_at.is_(None),
         )
         .order_by(
-            ClassroomTeacherAssignment.classroom_id,
-            ClassroomTeacherAssignment.duty,
-            ClassroomTeacherAssignment.id,
+            ClassroomTeacher.classroom_id,
+            ClassroomTeacher.duty,
+            ClassroomTeacher.id,
         )
         .all()
     )
@@ -316,17 +402,28 @@ def project_in_read_scope(project: Project, scope: OrganizationReadScope) -> boo
     """單筆 object policy 使用的同一套 scope 判斷。"""
     if scope.is_admin:
         return True
-    return project_in_teacher_scope(project, scope) or project_in_supervisor_scope(
-        project,
-        scope,
+    return (
+        project_in_readable_teacher_scope(project, scope)
+        or project_in_supervisor_scope(project, scope)
     )
 
 
 def project_in_teacher_scope(project: Project, scope: OrganizationReadScope) -> bool:
-    """判斷專案是否屬於使用者目前任教班級。"""
+    """判斷專案是否屬於使用者目前任教班級（製作權的唯一來源）。"""
     return (
         project.classroom_id is not None
         and project.classroom_id in scope.teacher_classroom_ids
+    )
+
+
+def project_in_readable_teacher_scope(
+    project: Project,
+    scope: OrganizationReadScope,
+) -> bool:
+    """判斷專案是否屬於使用者曾經或現在任教的班級：讀得到，製作權另判。"""
+    return (
+        project.classroom_id is not None
+        and project.classroom_id in scope.teacher_readable_classroom_ids
     )
 
 

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from crud.template_crud import get_period_or_404
 from database import (
-    AcademicTerm,
-    AcademicTermPeriod,
+    Semester,
+    SemesterPeriod,
     Template,
     TemplatePage,
     TemplatePeriod,
@@ -38,7 +38,7 @@ def _count_template_photo_slots(template: Template) -> int:
 
 
 def _serialize_period(period: TemplatePeriod) -> dict:
-    term_period = period.academic_term_period
+    semester_period = period.semester_period
     return {
         "id": period.id,
         "department": period.department,
@@ -48,12 +48,12 @@ def _serialize_period(period: TemplatePeriod) -> dict:
         "status_label": period_status_label(period.status),
         "created_at": period.created_at,
         "template_count": len(period.templates),
-        "academic_term_id": (
-            term_period.academic_term_id if term_period is not None else None
+        "semester_id": (
+            semester_period.semester_id if semester_period is not None else None
         ),
-        "academic_term_period_id": term_period.id if term_period is not None else None,
-        "academic_term_position": (
-            term_period.position if term_period is not None else None
+        "semester_period_id": semester_period.id if semester_period is not None else None,
+        "semester_position": (
+            semester_period.position if semester_period is not None else None
         ),
     }
 
@@ -105,15 +105,15 @@ def _resolve_template_period(period_id: int | None, db: Session) -> TemplatePeri
     current_period_query = (
         db.query(TemplatePeriod)
         .join(
-            AcademicTermPeriod,
-            AcademicTermPeriod.template_period_id == TemplatePeriod.id,
+            SemesterPeriod,
+            SemesterPeriod.template_period_id == TemplatePeriod.id,
         )
         .join(
-            AcademicTerm,
-            AcademicTerm.id == AcademicTermPeriod.academic_term_id,
+            Semester,
+            Semester.id == SemesterPeriod.semester_id,
         )
         .filter(
-            AcademicTerm.status.in_(("imported", "active")),
+            Semester.status.in_(("imported", "active")),
             TemplatePeriod.status == "active",
         )
     )
@@ -122,7 +122,7 @@ def _resolve_template_period(period_id: int | None, db: Session) -> TemplatePeri
             TemplatePeriod.department == DEFAULT_TEMPLATE_PERIOD_DEPARTMENT,
             TemplatePeriod.name == DEFAULT_TEMPLATE_PERIOD_NAME,
         )
-        .order_by(AcademicTermPeriod.position, TemplatePeriod.id)
+        .order_by(SemesterPeriod.position, TemplatePeriod.id)
         .first()
     )
     if default_period:
@@ -130,7 +130,7 @@ def _resolve_template_period(period_id: int | None, db: Session) -> TemplatePeri
 
     current_period = (
         current_period_query
-        .order_by(AcademicTermPeriod.position, TemplatePeriod.id)
+        .order_by(SemesterPeriod.position, TemplatePeriod.id)
         .first()
     )
     if current_period:

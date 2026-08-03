@@ -23,10 +23,10 @@ from tests.helpers import (
 )
 
 from database import (
-    AcademicTerm,
+    Semester,
     Project,
     SessionLocal,
-    Student,
+    ProjectStudent,
     Template,
     engine,
 )
@@ -179,7 +179,7 @@ def create_unassigned_migration_project(
         )
         db.add(project)
         db.flush()
-        db.add(Student(project_id=project.id, name=student_name, order_index=0))
+        db.add(ProjectStudent(project_id=project.id, name=student_name, order_index=0))
         db.commit()
         return project.id
     finally:
@@ -223,7 +223,7 @@ def add_students(client: TestClient, project_id: int, names: list[str]) -> dict[
 def roster_child_id_of(student_id: int) -> int | None:
     db = SessionLocal()
     try:
-        return db.query(Student).filter(Student.id == student_id).one().roster_child_id
+        return db.query(ProjectStudent).filter(ProjectStudent.id == student_id).one().roster_child_id
     finally:
         db.close()
 
@@ -234,8 +234,8 @@ def assigned_identity_anomaly_count(client: TestClient) -> int:
     return overview.json()["migration_status"]["assigned_identity_anomaly_count"]
 
 
-def reporting_term_id(client: TestClient, period_ids: list[int]) -> int:
-    response = client.get("/api/roster/academic-terms")
+def reporting_semester_id(client: TestClient, period_ids: list[int]) -> int:
+    response = client.get("/api/roster/semesters")
     assert_status(response, 200)
     requested_ids = set(period_ids)
     return next(
@@ -251,7 +251,7 @@ def get_semester_preview(client: TestClient, period_ids: list[int]):
     return client.get(
         "/api/roster/semester-export",
         params={
-            "academic_term_id": reporting_term_id(client, period_ids),
+            "semester_id": reporting_semester_id(client, period_ids),
             "period_ids": period_ids,
         },
     )
@@ -361,9 +361,9 @@ def test_semester_preview_reports_legacy_identity_anomaly_without_candidates():
 
         db = SessionLocal()
         try:
-            db.query(Student).filter(Student.project_id == project).delete()
+            db.query(ProjectStudent).filter(ProjectStudent.project_id == project).delete()
             # 直接種入 migration 前既存的異常快照；正式流程不可再把已歸班身分改回 NULL。
-            student = Student(
+            student = ProjectStudent(
                 project_id=project,
                 name="舊資料學生",
                 order_index=0,
@@ -399,19 +399,19 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
 
         db = SessionLocal()
         try:
-            db.query(Student).filter(Student.project_id == project_id).delete()
+            db.query(ProjectStudent).filter(ProjectStudent.project_id == project_id).delete()
             db.commit()
         finally:
             db.close()
 
         raw_connection = engine.raw_connection()
         cursor = raw_connection.cursor()
-        cursor.execute("SELECT COALESCE(MAX(id), 0) + 1000000 FROM roster_children")
+        cursor.execute("SELECT COALESCE(MAX(id), 0) + 1000000 FROM students")
         invalid_child_id = cursor.fetchone()[0]
         cursor.execute("PRAGMA foreign_keys = OFF")
         cursor.execute(
             """
-            INSERT INTO students (
+            INSERT INTO project_students (
                 project_id, name, order_index, pages_data_json, roster_child_id
             ) VALUES (?, ?, ?, ?, ?)
             """,
@@ -420,7 +420,7 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
         student_id = cursor.lastrowid
         output_key = get_student_pdf_key(project_id, student_id)
         cursor.execute(
-            "UPDATE students SET output_filename = ? WHERE id = ?",
+            "UPDATE project_students SET output_filename = ? WHERE id = ?",
             (output_key, student_id),
         )
         raw_connection.commit()
@@ -446,7 +446,7 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
             download = client.get(
                 "/api/roster/semester-export/download",
                 params={
-                    "academic_term_id": reporting_term_id(client, [period["id"]]),
+                    "semester_id": reporting_semester_id(client, [period["id"]]),
                     "period_ids": [period["id"]],
                     "mode": "print",
                 },
@@ -460,7 +460,7 @@ def test_semester_export_lists_invalid_child_fk_without_grouping_or_download(
         finally:
             db = SessionLocal()
             try:
-                db.query(Student).filter(Student.id == student_id).delete()
+                db.query(ProjectStudent).filter(ProjectStudent.id == student_id).delete()
                 db.commit()
             finally:
                 db.close()
@@ -484,8 +484,8 @@ def test_duplicate_child_identity_is_listed_and_skipped_by_missing_render(
 
         db = SessionLocal()
         try:
-            source_student = db.get(Student, student_ids["重複來源"])
-            duplicate_student = Student(
+            source_student = db.get(ProjectStudent, student_ids["重複來源"])
+            duplicate_student = ProjectStudent(
                 project_id=project_id,
                 name="重複影本",
                 order_index=2,
@@ -540,7 +540,7 @@ def test_duplicate_child_identity_is_listed_and_skipped_by_missing_render(
             try:
                 result = semester_render_service.render_missing_semester_albums(
                     render_db,
-                    reporting_term_id(client, [period["id"]]),
+                    reporting_semester_id(client, [period["id"]]),
                     [period["id"]],
                 )
             finally:
@@ -550,7 +550,7 @@ def test_duplicate_child_identity_is_listed_and_skipped_by_missing_render(
         finally:
             db = SessionLocal()
             try:
-                db.query(Student).filter(Student.id == duplicate_student_id).delete()
+                db.query(ProjectStudent).filter(ProjectStudent.id == duplicate_student_id).delete()
                 db.commit()
             finally:
                 db.close()
@@ -560,13 +560,13 @@ def test_roster_read_endpoints_require_admin():
     with started_client() as client:
         login(client)
         teacher, teacher_password = create_user(client, "teacher")
-        academic_term_id = reporting_term_id(client, [1])
+        semester_id = reporting_semester_id(client, [1])
 
         client.cookies.clear()
         login(client, teacher["username"], teacher_password)
         preview = client.get(
             "/api/roster/semester-export",
-            params={"academic_term_id": academic_term_id, "period_ids": [1]},
+            params={"semester_id": semester_id, "period_ids": [1]},
         )
         assert_status(preview, 403)
 
@@ -618,7 +618,7 @@ def test_supervisor_scoped_preview_and_no_export():
         # 主管：只看得到園所 scope 內的班級專案。
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
         preview = get_semester_preview(client, [period["id"]])
         assert_status(preview, 200)
         child_names = {group["name"] for group in preview_children(preview.json())}
@@ -633,7 +633,7 @@ def test_supervisor_scoped_preview_and_no_export():
         download = client.get(
             "/api/roster/semester-export/download",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period["id"]],
             },
         )
@@ -641,7 +641,7 @@ def test_supervisor_scoped_preview_and_no_export():
         render_missing = client.post(
             "/api/roster/semester-export/render-missing",
             json={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period["id"]],
             },
         )
@@ -703,8 +703,8 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
         )
         db = SessionLocal()
         try:
-            current_term = db.query(AcademicTerm).filter(
-                AcademicTerm.status.in_(("imported", "active"))
+            current_term = db.query(Semester).filter(
+                Semester.status.in_(("imported", "active"))
             ).one()
             current_term.status = "active"
             db.commit()
@@ -728,7 +728,7 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
             campus_a_infant_id,
             infant_template_id,
         )
-        # 專案仍歸建立當時 owner；正式學期老師快照也不因中途換班改寫。
+        # 專案仍歸建立當時 owner；學期中途換老師時，兩位都是這個班本學期的老師。
         set_classroom_teachers(client, campus_a_infant_id, [teachers[4]["id"]])
         add_classroom_members(client, campus_b_academy_id, ["部門外學生"])
         hidden_project_id = create_classroom_project(
@@ -753,10 +753,10 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
         }
 
         period_ids = [infant_period["id"], academy_period["id"]]
-        academic_term_id = reporting_term_id(client, period_ids)
+        semester_id = reporting_semester_id(client, period_ids)
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         classroom_rows = {
@@ -777,9 +777,9 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
         assert hidden_project_id not in scoped_project_ids
         assert legacy_project_id not in scoped_project_ids
         assert {
-            teacher["user_id"]
+            teacher["user_id"]: teacher["ended_at"] is None
             for teacher in classroom_rows[campus_a_infant_id]["teachers"]
-        } == {teachers[0]["id"]}
+        } == {teachers[0]["id"]: False, teachers[4]["id"]: True}
         assert all(
             not slot["projects"]
             for classroom_id in (campus_a_academy_id, campus_b_infant_id)
@@ -794,7 +794,7 @@ def test_supervisor_reporting_uses_union_of_organization_scopes_only():
 
         workbook_response = client.get(
             "/api/roster/teacher-overview/export",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(workbook_response, 200)
         workbook = load_workbook(BytesIO(workbook_response.content))
@@ -819,12 +819,12 @@ def test_teacher_overview_excel_export():
         student_names = [unique_name("excel_student_a"), unique_name("excel_student_b")]
         add_classroom_members(client, classroom_id, student_names)
         create_classroom_project(client, classroom_id, template_id)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         export = client.get(
             "/api/roster/teacher-overview/export",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "campus_id": campus_id,
                 "classroom_id": classroom_id,
             },
@@ -900,10 +900,10 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         # 主管視角：只看到園所 scope 的目前老師（含還沒開工的），看不到 admin 專案。
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         classroom = progress.json()["classrooms"][0]
@@ -942,7 +942,7 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         login(client)
         admin_progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(admin_progress, 200)
         admin_teacher_ids = {
@@ -959,7 +959,7 @@ def test_teacher_progress_includes_idle_teachers_and_photo_counts(monkeypatch, t
         login(client, managed_teacher["username"], teacher_password)
         forbidden = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(forbidden, 403)
 
@@ -1071,7 +1071,7 @@ def start_and_wait_render_job(client: TestClient, period_ids: list[int], timeout
     start = client.post(
         "/api/roster/semester-export/render-missing",
         json={
-            "academic_term_id": reporting_term_id(client, period_ids),
+            "semester_id": reporting_semester_id(client, period_ids),
             "period_ids": period_ids,
         },
     )
@@ -1176,10 +1176,10 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
         # 管轄主管視角：老師進度看得到 completed_at；退回後恢復可編輯
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         teacher_projects = {
@@ -1601,7 +1601,7 @@ def test_render_missing_keeps_partial_success_and_progress_after_one_failure(
             ["第一位失敗", "第二位成功"],
         )
         student_ids = add_students(client, project_id, ["第一位失敗", "第二位成功"])
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
     rendered_students = []
 
@@ -1621,7 +1621,7 @@ def test_render_missing_keeps_partial_success_and_progress_after_one_failure(
     try:
         result = semester_render_service.render_missing_semester_albums(
             db,
-            academic_term_id,
+            semester_id,
             [period["id"]],
             progress_callback=lambda done, total: progress.append((done, total)),
         )
@@ -1683,7 +1683,7 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
             json={"skip": True},
         )
         assert_status(skip_response, 200)
-        academic_term_id = reporting_term_id(
+        semester_id = reporting_semester_id(
             client,
             [period_a["id"], period_b["id"]],
         )
@@ -1691,7 +1691,7 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         download = client.get(
             "/api/roster/semester-export/download",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period_a["id"], period_b["id"]],
                 "mode": "print",
             },
@@ -1722,7 +1722,7 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         filtered = client.get(
             "/api/roster/semester-export/download",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period_a["id"], period_b["id"]],
                 "mode": "print",
                 "roster_child_ids": [hua_child_id],
@@ -1822,12 +1822,12 @@ def test_semester_export_zip_paths_cannot_escape_with_database_names(monkeypatch
     monkeypatch.setattr(
         semester_export_service,
         "build_semester_export_preview",
-        lambda db, academic_term_id, period_ids: preview,
+        lambda db, semester_id, period_ids: preview,
     )
     monkeypatch.setattr(
         semester_export_service,
         "load_export_projects",
-        lambda db, academic_term_id, period_ids: projects,
+        lambda db, semester_id, period_ids: projects,
     )
     monkeypatch.setattr(semester_export_service, "get_storage", lambda: object())
     monkeypatch.setattr(

@@ -1,5 +1,5 @@
 // 模板編輯器 e2e：畫布元素放置與 PIL 渲染 parity
-import { expect, test } from "@playwright/test";
+import { expect, skipNonBrowserSensitive, test } from "./fixtures.js";
 import {
   loginViaUi,
   loginViaApi,
@@ -165,7 +165,8 @@ test("sticker upload on the active page updates the canvas immediately", async (
 });
 
 
-test("pending sticker upload cannot replace the newly selected page layout", async ({ page }) => {
+test("pending sticker upload cannot replace the newly selected page layout", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const firstText = { id: 911, value: "貼圖上傳來源頁" };
   const secondText = { id: 912, value: "貼圖回應期間的目前頁" };
   await loginViaApi(page);
@@ -227,7 +228,8 @@ test("pending sticker upload cannot replace the newly selected page layout", asy
 });
 
 
-test("pending sticker upload merges with text saved while its request was pending", async ({ page }) => {
+test("pending sticker upload merges with text saved while its request was pending", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const textId = 915;
   const originalText = "貼圖上傳前的文字";
   const savedText = "貼圖回應前已儲存的最新版";
@@ -289,7 +291,8 @@ test("pending sticker upload merges with text saved while its request was pendin
 });
 
 
-test("pending background upload updates only its original page", async ({ page }) => {
+test("pending background upload updates only its original page", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const firstText = { id: 921, value: "背景上傳來源頁" };
   const secondText = { id: 922, value: "背景回應期間的目前頁" };
   await loginViaApi(page);
@@ -633,7 +636,8 @@ test("select mode shows hover outlines for the current direct canvas object", as
 });
 
 
-test("continuous property typing is restored as one undo transaction", async ({ page }) => {
+test("continuous property typing is restored as one undo transaction", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const text = {
     id: 707,
     x: 180,
@@ -829,7 +833,8 @@ test("cut is restored by one undo and remains available for paste", async ({ pag
 });
 
 
-test("page edits and structural mutations stay local until reload or save", async ({ page }) => {
+test("page edits and structural mutations stay local until reload or save", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const firstText = { id: 1001, value: "伺服器第一頁" };
   const secondText = { id: 1002, value: "伺服器第二頁" };
   const localFirstText = "只留在前端的第一頁草稿";
@@ -904,7 +909,8 @@ test("page edits and structural mutations stay local until reload or save", asyn
 });
 
 
-test("explicit save atomically persists mixed page changes and new-page content", async ({ page }) => {
+test("explicit save atomically persists mixed page changes and new-page content", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const firstText = { id: 1101, value: "第一頁原始內容" };
   const secondText = { id: 1102, value: "第二頁將刪除" };
   const savedFirstText = "第一頁原子儲存後內容";
@@ -982,7 +988,8 @@ test("explicit save atomically persists mixed page changes and new-page content"
 });
 
 
-test("failed page snapshot keeps every draft and retries without duplicate pages", async ({ page }) => {
+test("failed page snapshot keeps every draft and retries without duplicate pages", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const firstText = { id: 1151, value: "失敗測試原始第一頁" };
   const secondText = { id: 1152, value: "失敗測試原始第二頁" };
   const retainedFirstText = "失敗後仍保留的第一頁修改";
@@ -1057,7 +1064,8 @@ test("failed page snapshot keeps every draft and retries without duplicate pages
 });
 
 
-test("deleting the final page stays local and can be explicitly saved from the empty state", async ({ page }) => {
+test("deleting the final page stays local and can be explicitly saved from the empty state", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   await loginViaApi(page);
   const { templateId, pageId } = await createTemplateWithLayout(
     page,
@@ -1090,7 +1098,8 @@ test("deleting the final page stays local and can be explicitly saved from the e
 });
 
 
-test("manual save persists edits made while an earlier request is in flight", async ({ page }) => {
+test("manual save persists edits made while an earlier request is in flight", async ({ page, browserName }) => {
+  skipNonBrowserSensitive(browserName);
   const text = {
     id: 1201,
     x: 140,

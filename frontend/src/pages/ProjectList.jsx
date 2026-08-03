@@ -277,7 +277,7 @@ export default function ProjectList() {
   const getCreatableWorkSlots = useCallback((classroom) => (
     (classroom.work_slots ?? []).filter(workSlot => (
       workSlot.can_create_project
-      && ["imported", "active"].includes(workSlot.academic_term_status)
+      && ["imported", "active"].includes(workSlot.semester_status)
       && workSlot.template_ids.some(templateId => availableTemplateById.has(templateId))
     ))
   ), [availableTemplateById]);
@@ -294,11 +294,12 @@ export default function ProjectList() {
     });
   }, [availableTemplateById, getCreatableWorkSlots]);
   const hasTeacherWorkflow = isTeacher || teacherAssignedClassrooms.length > 0;
-  const supervisorOnlyProjects = useMemo(
+  // 目前班級以外仍讀得到的相本：曾任教班級與主管範圍都落在這裡，一律唯讀
+  const readOnlyProjects = useMemo(
     () => getProjectsOutsideClassrooms(projects, teacherAssignedClassrooms),
     [projects, teacherAssignedClassrooms],
   );
-  const visibleSupervisorOnlyProjects = useMemo(
+  const visibleReadOnlyProjects = useMemo(
     () => getProjectsOutsideClassrooms(filteredProjects, teacherAssignedClassrooms),
     [filteredProjects, teacherAssignedClassrooms],
   );
@@ -556,7 +557,7 @@ export default function ProjectList() {
                 {getCreatableWorkSlots(classProjectDraft.classroom)
                   .map(workSlot => (
                     <option key={workSlot.id} value={workSlot.id}>
-                      {workSlot.academic_term_label}／{workSlot.period_name}
+                      {workSlot.semester_label}／{workSlot.period_name}
                     </option>
                   ))}
               </select>
@@ -862,17 +863,21 @@ export default function ProjectList() {
             );
           })}
 
-          {canViewReports && supervisorOnlyProjects.length > 0 && (
+          {readOnlyProjects.length > 0 && (
             <section className="space-y-3">
               <div>
-                <h2 className="font-semibold text-gray-800">主管檢視範圍</h2>
+                <h2 className="font-semibold text-gray-800">
+                  {canViewReports ? "帶過的班級與主管檢視範圍" : "我帶過的班級"}
+                </h2>
                 <p className="mt-0.5 text-xs text-gray-500">
-                  以下相本來自你的校／部門主管範圍；只有同時列入該班老師編制的相本可以製作。
+                  以下相本來自你曾任教的班級{canViewReports ? "與校／部門主管範圍" : ""}。
+                  學期換過去之後，這裡<strong>還沒完成的相本仍然可以繼續製作</strong>；
+                  已標記完成的、以及不是你帶過的班，都只能查看與下載。
                 </p>
               </div>
-              {visibleSupervisorOnlyProjects.length > 0 ? (
+              {visibleReadOnlyProjects.length > 0 ? (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {visibleSupervisorOnlyProjects.map(project => (
+                  {visibleReadOnlyProjects.map(project => (
                     <ProjectCard
                       key={project.id}
                       project={project}
@@ -891,7 +896,7 @@ export default function ProjectList() {
                 </div>
               ) : (
                 <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-4 py-7 text-center text-sm text-gray-400">
-                  沒有符合目前搜尋的主管範圍相本
+                  沒有符合目前搜尋的相本
                 </div>
               )}
             </section>

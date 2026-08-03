@@ -65,24 +65,19 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
     使用者批次匯入、刪除的 transaction 邊界
   - `test_student_input_limits.py`：班級目前名單的姓名、中央相本稱呼、單批與總量上限，
-    以及已歸班 Project Student 不接受相本內稱呼 mutation
+    以及已歸班 ProjectStudent 不接受相本內稱呼 mutation
     （數值見 [api.md 的園所端點](api.md#園所管理-apiorganization)）
-  - `test_student_album_name.py`：`RosterChild.album_name` 單一來源、名冊建立與園所設定單筆／
-    整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 Student 值忽略與輸出失效契約
+  - `test_student_album_name.py`：`Student.album_name` 單一來源、名冊建立與園所設定單筆／
+    整班保守自動推導、跨目前班級與既有相本的 fixed-point 碰撞、舊 ProjectStudent 值忽略與輸出失效契約
   - `test_student_album_name_candidates.py`：未歸班 legacy 相本稱呼候選的保守規則、碰撞／完成專案
     review flag、報告 hash、全量 preflight、crash reconciliation 與同 manifest apply 鎖
   - `test_organization.py` / `test_organization_schema_migrations.py`：分校／班級學生與老師
-    區間、校／部門主管、fresh legacy Student link 保持 NULL、姓名推定 link 不在 startup
+    區間、校／部門主管、fresh legacy ProjectStudent link 保持 NULL、姓名推定 link 不在 startup
     自動拆合、class-backed identity anomaly（含封存相本）整本隔離與 append-only audit、
     identity resolution ledger／freeze trigger、名冊稱呼的既有／未來 Project 共用 authority、
     舊 editor 結束、schema constraint 與 migration 冪等
-  - `test_organization_project_migration.py`：歸班 preview 零寫入且不按姓名預選、decision 集合
-    必須完整、`source_fingerprint` stale 與 `confirmed_all` gate、`existing` 只收 established
-    identity、同名候選的校／部門／班級、membership active／ended 與歷史相本期別 evidence、
-    `create_new` 不 preserve provisional、seed all-or-none，以及兩層 ledger／Student link／
-    membership／Project snapshot 的單一 transaction rollback
   - `test_organization_term.py`：編班完整目標、revision/fingerprint、validate 零寫入、
-    stale/invalid rollback、同時間原子套用，以及既有 Project/Student/ACL invariant
+    stale/invalid rollback、同時間原子套用，以及既有 Project/ProjectStudent/ACL invariant
   - `test_project_acl_lifecycle.py`：目前班級老師與校／部門主管 object policy、owner 不授權、
     未歸班 admin-only、generic create route 不存在、歷史 editor 不進 response／生命週期、
     角色停權與刪帳 audited cleanup
@@ -105,10 +100,50 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
   Ctrl/Cmd+G、固定 typography、isolation 內 undo，以及分析建立／重設普通文字框、不改 topology、
   invalid-link 修復與跨頁 stale response guard。
   `tests/e2e/organization-management.spec.js` 覆蓋校／部門主管、老師編制、班級相本，以及
-  舊相本 preview 後逐位 explicit identity decision、空班全量 seed、跨期沿用 established id、
-  新學期學生／老師差異與 teacher 班級導向工作流中不存在通用建立入口；歸班 UI 預設未決定，
-  不得自動套用同名候選。`organization-migration-wizard.spec.js` 另驗證同名既有候選顯示
-  校／部門／班級、名單狀態與歷史相本期別，並以這些來源區分同名不同人。
+  跨期沿用 established id、新學期學生／老師差異，以及 teacher 班級導向工作流中不存在
+  通用建立入口；編班的學生編排走**看板**（點卡片選取 → 點目標班級標題搬動、
+  卡片 × 標記離園、每欄的「調整老師」開編制對話框），舊的逐班展開 + 每位學生一個下拉
+  已不存在。舊相本歸班流程（preview → 逐位 explicit identity decision）已隨端點退場，
+  `organization-migration-wizard.spec.js` 與 `test_organization_project_migration.py`
+  一併移除。
+  **Konva 的命中判定要等命中畫布**：`stage.getIntersection()` 讀的是另一張延後重繪的
+  「命中畫布」。剛改動過 Transformer（例如 resize 提交）就立刻按錨點，在慢的機器上會
+  遇到「座標正確、`visible()` 為真，但 `getIntersection` 回傳 null」，點擊於是落到 Stage、
+  手勢完全不發生。要按畫布上的錨點之前，先 poll
+  `stage.getIntersection(anchor.getAbsolutePosition()) === anchor`——比加固定延遲精確，
+  快的機器也不會白等。
+
+  **e2e 只留「非它不可」的**：跑第二顆瀏覽器引擎只在畫布渲染與幾何、觸控手勢、縮圖與
+  裁切版面這些地方買得到訊號，所以 webkit 只跑
+  `template-editor`／`template-editor-mobile`／`illustrator-groups`／`editor-multi-transform`／
+  `student-photos`／`mobile-student-edit`／`term-placement-board`；純表單 CRUD 只跑 chromium。
+  即使在上述檔案裡，行為與引擎無關的那幾條（草稿保留、儲存對帳、undo 合併——規則已由
+  `utils/layoutHistoryModel` 的單元測試釘住）也用 `skipNonBrowserSensitive(browserName)`
+  標成 chromium-only。
+  壓力／效能測試（`preview-switching`、`preview-interrupt-recovery`）靠大量固定等待製造
+  真實時序，本質上就是慢，預設不跑；動到預覽、頁面切換或渲染排程時用
+  `npm run test:e2e:soak` 手動跑。
+  2026-08 依這套規則整理後：**126 條 14 分鐘 → 96 條 2.8 分鐘**（工作量 653s → 約 250s）。
+
+  **競態邏輯往下搬**：「最後一個請求才算數」（連續切換選項時，晚回來的舊回應不可以蓋掉
+  新選擇）抽在 `src/utils/latestRequest.js`，由 `tests/unit/latest-request.test.mjs` 用
+  可控 promise 精確排出交錯順序來驗；`TeacherOverview` 與 `SemesterExport` 都用它。
+  這類錯只會做錯不會報錯，但在瀏覽器裡得靠攔截網路人工延遲才能重現，慢又不穩——
+  規則抽成純模組之後，e2e 只留「畫面有沒有接對」，競態本身由單元測試釘死。
+
+  **pytest 平行**：`python -m pytest -q -n auto`（需要 `pytest-xdist`）。每個 worker
+  有自己的資料庫與 uploads 目錄——`tests/conftest.py` 依 `PYTEST_XDIST_WORKER` 命名並
+  **強制覆寫** `DATABASE_URL`，不能用 `setdefault`：xdist 的 worker 會繼承 controller 的
+  環境變數，沿用 setdefault 會讓四個 worker 全部指向同一份資料庫（實測 363 個 error）。
+  本機 309 秒 → 108 秒。不加 `-n` 的序列模式行為不變。
+
+  **e2e 的隔離與平行**：每個 Playwright worker 有自己的一組後端與 vite
+  （port `8765+i` 與 `5173+i`、資料庫 `.tmp/e2e/w{i}/e2e.db`），由
+  `frontend/tests/e2e/fixtures.js` 依 `parallelIndex` 決定 baseURL。所有 spec 必須
+  `import { test, expect } from "./fixtures.js"`，不能直接從 `@playwright/test` 取，
+  否則會連到別的 worker 的後端。worker 數由 `E2E_WORKERS` 控制（預設 2）。
+  共用單一資料庫的舊做法會讓後跑的測試面對前面所有測試累積的資料，症狀是「單獨跑會過、
+  跑全套會掛」與 webkit 在 CI 上崩潰；改成隔離後兩者都消失，整套時間也從 14 分鐘降到 5 分鐘。
   `tests/unit/photo-save.test.mjs` 覆蓋照片 single-flight、stale response、revision pause/resume 與卸載重掛；
   `tests/e2e/student-photos.spec.js` 驗證延遲上傳期間繼續移動仍收斂到最後狀態，
   `tests/e2e/template-editor-mobile.spec.js` 驗證 pinch 不重 render 畫布父層且不污染 dirty/undo/save。
@@ -158,8 +193,8 @@ python scripts/suggest_student_album_names.py --scope active
 [2026-07 正式切換 runbook](production-cutover-202607.md)。舊標題保留為連結，
 避免值班人員誤用本檔過時的片段命令。
 
-相本稱呼腳本只對**未歸班 legacy Project** 中 `Student.album_name IS NULL` 的學生產生候選；
-已歸班相本改由園所設定的 `RosterChild.album_name` 管理，報告產生會排除，apply 前若相本
+相本稱呼腳本只對**未歸班 legacy Project** 中 `ProjectStudent.album_name IS NULL` 的學生產生候選；
+已歸班相本改由園所設定的 `Student.album_name` 管理，報告產生會排除，apply 前若相本
 已被歸班也會整批阻擋。新學生規則見
 [data-model.md 的相本稱呼](data-model.md#相本稱呼與姓名變數)。
 純漢字二至三字姓名可列候選；單字、四字以上與混合姓名保持未設定並列人工

@@ -46,7 +46,6 @@ import {
 import CompositionTextarea from "../components/CompositionTextarea";
 import ConfirmModal from "../components/ConfirmModal";
 import FormModal from "../components/FormModal";
-import LegacyProjectMigrationModal from "../components/LegacyProjectMigrationModal";
 import {
   Badge,
   Button,
@@ -195,7 +194,6 @@ export default function OrganizationManagement() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [activeView, setActiveView] = useState("active");
   const [formModal, setFormModal] = useState(null);
-  const [migrationProject, setMigrationProject] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAutoFillingClassroomAlbumNames, setIsAutoFillingClassroomAlbumNames] = useState(false);
@@ -318,7 +316,7 @@ export default function OrganizationManagement() {
   const leadTeacher = currentTeachers.find(teacher => teacher.duty === "lead") ?? null;
   const createProjectDisabledReasons = selectedClassroom ? [
     ...(!selectedCampus?.is_active ? ["分校已停用"] : []),
-    ...(!selectedClassroom.is_active ? ["班級已停用"] : []),
+    ...(!selectedClassroom.is_current ? ["班級屬於已結束的學期"] : []),
     ...(activeMembers.length === 0 ? ["目前名單沒有學生"] : []),
     ...(creatableWorkSlots.length === 0 ? ["目前學期沒有可建立且已有模板的期別工作格"] : []),
     ...(!leadTeacher ? ["尚未設定主教"] : []),
@@ -379,18 +377,13 @@ export default function OrganizationManagement() {
           campus_id: Number(formModal.campusId),
           name,
           department: formModal.department,
-          is_active: formModal.isActive,
         });
         setSelectedCampusId(response.data.campus_id);
         setSelectedClassroomId(response.data.id);
         toast.success("班級已建立");
       } else {
-        response = await updateClassroom(formModal.id, {
-          campus_id: Number(formModal.campusId),
-          name,
-          department: formModal.department,
-          is_active: formModal.isActive,
-        });
+        // 分校與部門不可變更，只送班名
+        response = await updateClassroom(formModal.id, { name });
         setSelectedCampusId(response.data.campus_id);
         setSelectedClassroomId(response.data.id);
         toast.success("班級已更新");
@@ -853,32 +846,42 @@ export default function OrganizationManagement() {
         {formModal?.type === "structure" && (
           <form className="space-y-4" onSubmit={handleStructureSubmit}>
             {formModal.kind === "classroom" && (
-              <>
-                <FormField label="所屬分校">
-                  <select
-                    required
-                    value={formModal.campusId}
-                    onChange={event => setFormModal(current => ({ ...current, campusId: event.target.value }))}
-                    className={fieldControlClass}
-                  >
-                    {campuses.map(campus => (
-                      <option key={campus.id} value={campus.id}>{campus.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="部門">
-                  <select
-                    required
-                    value={formModal.department}
-                    onChange={event => setFormModal(current => ({ ...current, department: event.target.value }))}
-                    className={fieldControlClass}
-                  >
-                    {DEPARTMENT_OPTIONS.slice(1).map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </FormField>
-              </>
+              // 班級的身分是「學期 × 分校 × 部門 × 班名」，建立後只有班名可改
+              formModal.mode === "create" ? (
+                <>
+                  <FormField label="所屬分校">
+                    <select
+                      required
+                      value={formModal.campusId}
+                      onChange={event => setFormModal(current => ({ ...current, campusId: event.target.value }))}
+                      className={fieldControlClass}
+                    >
+                      {campuses.map(campus => (
+                        <option key={campus.id} value={campus.id}>{campus.name}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                  <FormField label="部門">
+                    <select
+                      required
+                      value={formModal.department}
+                      onChange={event => setFormModal(current => ({ ...current, department: event.target.value }))}
+                      className={fieldControlClass}
+                    >
+                      {DEPARTMENT_OPTIONS.slice(1).map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                </>
+              ) : (
+                <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                  {campuses.find(campus => campus.id === Number(formModal.campusId))?.name ?? "—"}
+                  ／
+                  {DEPARTMENT_OPTIONS.find(option => option.value === formModal.department)?.label ?? formModal.department}
+                  ：分校與部門是班級身分的一部分，建立後不可變更
+                </p>
+              )
             )}
             <FormField label={`${formModal.kind === "campus" ? "分校" : "班級"}名稱`}>
               <input
@@ -889,14 +892,16 @@ export default function OrganizationManagement() {
                 className={fieldControlClass}
               />
             </FormField>
-            <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={formModal.isActive}
-                onChange={event => setFormModal(current => ({ ...current, isActive: event.target.checked }))}
-              />
-              啟用此{formModal.kind === "campus" ? "分校" : "班級"}
-            </label>
+            {formModal.kind === "campus" && (
+              <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={formModal.isActive}
+                  onChange={event => setFormModal(current => ({ ...current, isActive: event.target.checked }))}
+                />
+                啟用此分校
+              </label>
+            )}
             <div className="flex justify-end gap-2">
               <Button onClick={closeFormModal} disabled={isSubmitting}>取消</Button>
               <Button type="submit" variant="primary" disabled={isSubmitting}>
@@ -1139,7 +1144,7 @@ export default function OrganizationManagement() {
                 {allClassrooms
                   .filter(classroom => (
                     classroom.id !== formModal.classroomId
-                    && classroom.is_active
+                    && classroom.is_current
                     && classroom.campusIsActive
                   ))
                   .map(classroom => (
@@ -1203,7 +1208,7 @@ export default function OrganizationManagement() {
                 <option value="">請選擇尚未開始的期別工作格</option>
                 {creatableWorkSlots.map(workSlot => (
                   <option key={workSlot.id} value={workSlot.id}>
-                    {workSlot.academic_term_label}／{workSlot.period_name}
+                    {workSlot.semester_label}／{workSlot.period_name}
                   </option>
                 ))}
               </select>
@@ -1308,17 +1313,6 @@ export default function OrganizationManagement() {
         )}
       </FormModal>
 
-      <LegacyProjectMigrationModal
-        isOpen={migrationProject !== null}
-        project={migrationProject}
-        classrooms={allClassrooms}
-        onClose={() => setMigrationProject(null)}
-        onMigrated={async () => {
-          setMigrationProject(null);
-          await loadOverview();
-        }}
-      />
-
       <PageHeader
         icon={School}
         title="園所設定"
@@ -1399,18 +1393,13 @@ export default function OrganizationManagement() {
                 <h2 className={`font-semibold ${hasAssignedIdentityAnomalies ? "text-red-900" : "text-amber-900"}`}>
                   {hasAssignedIdentityAnomalies
                     ? `已有 ${migrationStatus.assigned_identity_anomaly_count} 位已歸班學生身分異常`
-                    : `尚有 ${migrationStatus.unassigned_project_count} 本舊相本待歸班`}
+                    : `尚有 ${migrationStatus.unassigned_project_count} 本未歸班舊相本`}
                 </h2>
                 <p className={`mt-1 text-sm leading-6 ${hasAssignedIdentityAnomalies ? "text-red-700" : "text-amber-700"}`}>
                   {hasAssignedIdentityAnomalies
                     ? "已歸班相本仍有缺少或重複的學生身分，遷移尚未完成，請先停止學期彙整並檢查資料。"
-                    : "請逐本選擇班級並核對學生身分；完成前，未歸班相本只供管理員處理。"}
+                    : "班級改為學期範圍實體後歸班流程已退場；這些相本仍只有管理員看得到，屆封存期由既有清理流程移除。"}
                 </p>
-                {migrationStatus.pending_identity_student_count > 0 && (
-                  <p className={`mt-2 text-sm font-medium ${hasAssignedIdentityAnomalies ? "text-red-800" : "text-amber-800"}`}>
-                    共 {migrationStatus.pending_identity_student_count} 位學生待逐筆核對身分。
-                  </p>
-                )}
                 {migrationStatus.archived_teacher_supervisor_link_count > 0 && (
                   <p className="mt-2 text-xs leading-5 text-slate-600">
                     舊逐人主管關係已封存、未自動轉權限，請依校／部門設定
@@ -1426,7 +1415,7 @@ export default function OrganizationManagement() {
             </div>
             {unassignedProjects.length > 0 && (
               <Button as="a" href="#unassigned-projects" size="sm" variant="primary" className="flex-shrink-0">
-                查看待歸班相本
+                查看未歸班相本
               </Button>
             )}
           </div>
@@ -1499,7 +1488,7 @@ export default function OrganizationManagement() {
                   ) : visibleSelectedCampusClassrooms.map(classroom => (
                     <option key={classroom.id} value={classroom.id}>
                       {classroom.name}（{DEPARTMENT_LABELS[classroom.department]}）
-                      {classroom.is_active ? "" : "（停用）"}
+                      {classroom.is_current ? "" : "（已結束）"}
                     </option>
                   ))}
                 </select>
@@ -1605,9 +1594,9 @@ export default function OrganizationManagement() {
                           <span className={`text-xs ${selectedClassroom?.id === classroom.id ? "text-indigo-100" : "text-gray-500"}`}>
                             {DEPARTMENT_LABELS[classroom.department]}
                           </span>
-                          {!classroom.is_active && (
+                          {!classroom.is_current && (
                             <span className={`text-xs ${selectedClassroom?.id === classroom.id ? "text-indigo-100" : "text-gray-500"}`}>
-                              停用
+                              已結束
                             </span>
                           )}
                         </button>
@@ -1622,7 +1611,6 @@ export default function OrganizationManagement() {
                             campusId: String(classroom.campus_id),
                             department: classroom.department,
                             name: classroom.name,
-                            isActive: classroom.is_active,
                           })}
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -1665,8 +1653,8 @@ export default function OrganizationManagement() {
                       <div className="mb-1 flex flex-wrap items-center gap-2">
                         <h2 className="truncate text-xl font-bold text-gray-900">{selectedClassroom.name}</h2>
                         <Badge tone="info">{DEPARTMENT_LABELS[selectedClassroom.department]}</Badge>
-                        <Badge tone={selectedClassroom.is_active ? "success" : "archive"}>
-                          {selectedClassroom.is_active ? "使用中" : "已停用"}
+                        <Badge tone={selectedClassroom.is_current ? "success" : "archive"}>
+                          {selectedClassroom.is_current ? "本學期" : "已結束"}
                         </Badge>
                       </div>
                       <p className="text-sm text-gray-500">
@@ -1676,7 +1664,7 @@ export default function OrganizationManagement() {
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
-                        disabled={!selectedCampus.is_active || !selectedClassroom.is_active}
+                        disabled={!selectedCampus.is_active || !selectedClassroom.is_current}
                         onClick={() => setFormModal({
                           type: "teachers",
                           leadTeacherId: String(leadTeacher?.teacher_id ?? ""),
@@ -1690,7 +1678,7 @@ export default function OrganizationManagement() {
                       </Button>
                       <Button
                         size="sm"
-                        disabled={!selectedCampus.is_active || !selectedClassroom.is_active}
+                        disabled={!selectedCampus.is_active || !selectedClassroom.is_current}
                         onClick={() => setFormModal({ type: "members", names: "" })}
                       >
                         <UserPlus className="h-4 w-4" />
@@ -1762,7 +1750,7 @@ export default function OrganizationManagement() {
                             || autoFillingRosterChildId !== null
                             || unsetActiveMemberAlbumNameCount === 0
                             || !selectedCampus?.is_active
-                            || !selectedClassroom?.is_active
+                            || !selectedClassroom?.is_current
                           }
                           onClick={handleAutoFillClassroomAlbumNames}
                         >
@@ -1819,7 +1807,7 @@ export default function OrganizationManagement() {
                                 })}
                                 disabled={allClassrooms.every(classroom => (
                                   classroom.id === selectedClassroom.id
-                                  || !classroom.is_active
+                                  || !classroom.is_current
                                   || !classroom.campusIsActive
                                 ))}
                               >
@@ -2174,18 +2162,14 @@ export default function OrganizationManagement() {
           <div className="mb-3">
             <h2 className="font-semibold text-gray-900">未歸班相本</h2>
             <p className="mt-0.5 text-xs leading-5 text-gray-500">
-              這些相本未從班級目前名單建立（包含班級資料上線前的舊相本）；本頁不猜測或自動指定班級。
+              這些相本未從班級目前名單建立（包含班級資料上線前的舊相本）。班級改為學期範圍實體後，
+              歸班流程已退場——這些相本仍只有管理員看得到，屆封存期由既有清理流程移除。
             </p>
           </div>
           <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
             {unassignedProjects.map(project => {
               const isHistoryExpanded = expandedHistoryProjectId === project.id;
               const historyEntries = historyByProjectId[project.id] ?? project.assignment_history;
-              const migrationClassrooms = allClassrooms.filter(classroom => (
-                classroom.is_active
-                && classroom.campusIsActive
-                && (!project.department || classroom.department === project.department)
-              ));
               return (
                 <div
                   key={project.id}
@@ -2208,15 +2192,6 @@ export default function OrganizationManagement() {
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={migrationClassrooms.length === 0}
-                        onClick={() => setMigrationProject(project)}
-                      >
-                        <Building2 className="h-3.5 w-3.5" />
-                        歸入班級
-                      </Button>
                       <Button as={Link} to={`/projects/${project.id}/review`} size="sm">
                         查看相本
                         <ExternalLink className="h-3.5 w-3.5" />

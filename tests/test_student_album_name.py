@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import create_engine, text
 
-from database import ClassRosterMember, Project, RosterChild, SessionLocal, Student
+from database import ClassroomMember, Project, Student, SessionLocal, ProjectStudent
 from services.output_keys import get_student_pdf_key
 from services.student_album_name_policy import (
     assign_automatic_album_names,
@@ -54,7 +54,7 @@ def test_automatic_album_name_policy_is_conservative_and_blocks_collisions():
 
 def test_assigned_student_with_missing_child_never_reads_legacy_alias():
     project = Project(classroom_id=1)
-    student = Student(name="既有完整姓名", album_name="相本內舊稱呼")
+    student = ProjectStudent(name="既有完整姓名", album_name="相本內舊稱呼")
     student.project = project
 
     assert student.resolved_album_name is None
@@ -97,12 +97,12 @@ def test_roster_creation_stores_automatic_names_before_project_creation():
 
         db = SessionLocal()
         try:
-            db_students = db.query(Student).filter(Student.project_id == project_id).all()
+            db_students = db.query(ProjectStudent).filter(ProjectStudent.project_id == project_id).all()
             assert all(student.album_name is None for student in db_students)
             roster_by_name = {
                 child.name: child
-                for child in db.query(RosterChild).filter(
-                    RosterChild.id.in_({student.roster_child_id for student in db_students})
+                for child in db.query(Student).filter(
+                    Student.id.in_({student.roster_child_id for student in db_students})
                 )
             }
             assert roster_by_name["李小華"].album_name == "小華"
@@ -125,7 +125,7 @@ def test_assigned_project_ignores_raw_student_alias_and_rejects_second_authority
 
         db = SessionLocal()
         try:
-            db.get(Student, student["id"]).album_name = "相本內舊值"
+            db.get(ProjectStudent, student["id"]).album_name = "相本內舊值"
             db.commit()
         finally:
             db.close()
@@ -161,7 +161,7 @@ def test_roster_alias_change_updates_all_existing_projects_and_invalidates_outpu
         db = SessionLocal()
         try:
             first_project = db.get(Project, first_project_id)
-            first_db_student = db.get(Student, first_student["id"])
+            first_db_student = db.get(ProjectStudent, first_student["id"])
             roster_child_id = int(first_db_student.roster_child_id)
             second_project = Project(
                 name=unique_name("central_alias_second"),
@@ -181,7 +181,7 @@ def test_roster_alias_change_updates_all_existing_projects_and_invalidates_outpu
             )
             db.add(second_project)
             db.flush()
-            second_student = Student(
+            second_student = ProjectStudent(
                 project_id=second_project.id,
                 name="王小明舊快照",
                 album_name="相本內舊值",
@@ -205,7 +205,7 @@ def test_roster_alias_change_updates_all_existing_projects_and_invalidates_outpu
             db.close()
 
         update = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={"album_name": "  明明  "},
         )
         assert_status(update, 200)
@@ -220,8 +220,8 @@ def test_roster_alias_change_updates_all_existing_projects_and_invalidates_outpu
 
         db = SessionLocal()
         try:
-            assert db.get(Student, first_student["id"]).output_filename is None
-            second_db_student = db.get(Student, second_student_id)
+            assert db.get(ProjectStudent, first_student["id"]).output_filename is None
+            second_db_student = db.get(ProjectStudent, second_student_id)
             assert second_db_student.output_filename is None
             assert second_db_student.album_name == "相本內舊值"
             assert db.get(Project, first_project_id).updated_at > old_timestamp
@@ -230,7 +230,7 @@ def test_roster_alias_change_updates_all_existing_projects_and_invalidates_outpu
             db.close()
 
         clear = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={"album_name": None},
         )
         assert_status(clear, 200)
@@ -264,20 +264,20 @@ def test_roster_auto_fill_updates_only_safe_blank_names_across_existing_projects
             classroom_id = int(project.classroom_id)
             students = {
                 student.name: student
-                for student in db.query(Student).filter(
-                    Student.project_id == project_id,
+                for student in db.query(ProjectStudent).filter(
+                    ProjectStudent.project_id == project_id,
                 )
             }
             roster_children = {
-                name: db.get(RosterChild, student.roster_child_id)
+                name: db.get(Student, student.roster_child_id)
                 for name, student in students.items()
             }
             for name in ("李小華", "周美玲"):
                 roster_children[name].album_name = None
             roster_children["趙志豪"].album_name = "人工稱呼"
             for name in ("李小華", "王小明", "歐陽明", "趙志豪", "周美玲"):
-                membership = db.query(ClassRosterMember).filter(
-                    ClassRosterMember.roster_child_id == roster_children[name].id,
+                membership = db.query(ClassroomMember).filter(
+                    ClassroomMember.roster_child_id == roster_children[name].id,
                 ).one()
                 membership.ended_at = None
                 membership.end_reason = None
@@ -312,8 +312,8 @@ def test_roster_auto_fill_updates_only_safe_blank_names_across_existing_projects
 
         db = SessionLocal()
         try:
-            assert db.get(Student, target_student_id).output_filename is None
-            assert db.get(Student, target_student_id).updated_at > old_timestamp
+            assert db.get(ProjectStudent, target_student_id).output_filename is None
+            assert db.get(ProjectStudent, target_student_id).updated_at > old_timestamp
             assert db.get(Project, project_id).updated_at > old_timestamp
         finally:
             db.close()
@@ -325,26 +325,26 @@ def test_roster_auto_fill_updates_only_safe_blank_names_across_existing_projects
         assert repeated.json() == {"updated": 0, "unresolved": 2}
 
         collision = client.post(
-            "/api/organization/roster-children/"
+            "/api/organization/students/"
             f"{child_ids['陳小明']}/album-name/auto-fill",
         )
         assert_status(collision, 200)
         assert collision.json() == {"updated": 0, "unresolved": 1}
 
         preserved = client.post(
-            "/api/organization/roster-children/"
+            "/api/organization/students/"
             f"{child_ids['趙志豪']}/album-name/auto-fill",
         )
         assert_status(preserved, 200)
         assert preserved.json() == {"updated": 0, "unresolved": 0}
 
         cleared = client.patch(
-            f"/api/organization/roster-children/{child_ids['周美玲']}/album-name",
+            f"/api/organization/students/{child_ids['周美玲']}/album-name",
             json={"album_name": None},
         )
         assert_status(cleared, 200)
         single = client.post(
-            "/api/organization/roster-children/"
+            "/api/organization/students/"
             f"{child_ids['周美玲']}/album-name/auto-fill",
         )
         assert_status(single, 200)
@@ -357,7 +357,7 @@ def test_roster_auto_fill_updates_only_safe_blank_names_across_existing_projects
             f"/api/organization/classrooms/{classroom_id}/members/album-names/auto-fill",
         ), 403)
         assert_status(client.post(
-            "/api/organization/roster-children/"
+            "/api/organization/students/"
             f"{child_ids['周美玲']}/album-name/auto-fill",
         ), 403)
 
@@ -375,22 +375,22 @@ def test_roster_album_name_input_limit_preserves_existing_value():
         student = next(iter(_project_students(client, project_id).values()))
         db = SessionLocal()
         try:
-            roster_child_id = db.get(Student, student["id"]).roster_child_id
+            roster_child_id = db.get(ProjectStudent, student["id"]).roster_child_id
         finally:
             db.close()
 
         missing = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={},
         )
         assert_status(missing, 422)
         accepted = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={"album_name": "來源相本名"},
         )
         assert_status(accepted, 200)
         rejected = client.patch(
-            f"/api/organization/roster-children/{roster_child_id}/album-name",
+            f"/api/organization/students/{roster_child_id}/album-name",
             json={"album_name": "名" * (STUDENT_ALBUM_NAME_MAX_LENGTH + 1)},
         )
         assert_status(rejected, 422)
@@ -410,7 +410,7 @@ def test_album_name_migration_is_idempotent_and_preserves_legacy_rows(
     try:
         Base.metadata.create_all(bind=legacy_engine)
         with legacy_engine.begin() as connection:
-            connection.execute(text("ALTER TABLE students DROP COLUMN album_name"))
+            connection.execute(text("ALTER TABLE project_students DROP COLUMN album_name"))
             template_id = connection.execute(text(
                 "INSERT INTO templates (name) VALUES ('既有模板') RETURNING id"
             )).scalar_one()
@@ -423,7 +423,7 @@ def test_album_name_migration_is_idempotent_and_preserves_legacy_rows(
             ).scalar_one()
             connection.execute(
                 text("""
-                    INSERT INTO students (project_id, name, pages_data_json)
+                    INSERT INTO project_students (project_id, name, pages_data_json)
                     VALUES (:project_id, '既有學生', '[]')
                 """),
                 {"project_id": project_id},
@@ -435,10 +435,10 @@ def test_album_name_migration_is_idempotent_and_preserves_legacy_rows(
         with legacy_engine.connect() as connection:
             columns = {
                 row[1]
-                for row in connection.execute(text("PRAGMA table_info(students)"))
+                for row in connection.execute(text("PRAGMA table_info(project_students)"))
             }
             preserved = connection.execute(text(
-                "SELECT name, album_name FROM students WHERE id = 1"
+                "SELECT name, album_name FROM project_students WHERE id = 1"
             )).one()
 
         assert "album_name" in columns

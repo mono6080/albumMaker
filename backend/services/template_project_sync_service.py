@@ -19,7 +19,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
-from database import Project, Student, Template, TemplatePage, TemplateProjectSyncBackup, utc_now
+from database import Project, ProjectStudent, Template, TemplatePage, TemplateProjectSyncBackup, utc_now
 from services.layout_group_traversal import iter_layout_render_elements, layout_for_render_fingerprint
 from services.layout_group_validation import canonical_id
 from services.student_pages import lock_student_page_writes
@@ -39,7 +39,7 @@ class TemplatePageDelta:
 
 @dataclass
 class StudentSyncState:
-    student: Student
+    student: ProjectStudent
     raw_pages_json: str | None
     entries_by_page_id: dict[int, dict] = field(default_factory=dict)
     old_indices: dict[int, int] = field(default_factory=dict)

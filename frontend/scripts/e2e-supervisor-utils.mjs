@@ -3,10 +3,15 @@ import { createConnection, createServer } from "node:net";
 
 export const E2E_SUPERVISOR_READY_MESSAGE = "e2e-supervisor-ready-v1";
 
-export const E2E_FIXED_SERVERS = Object.freeze([
-  Object.freeze({ name: "backend", host: "127.0.0.1", port: 8765 }),
-  Object.freeze({ name: "vite", host: "127.0.0.1", port: 5173 }),
-]);
+export const E2E_WORKERS = Math.max(1, Number(process.env.E2E_WORKERS ?? 2));
+
+// 每個 worker 一組 (backend, vite)，port 依序往上長
+export const E2E_FIXED_SERVERS = Object.freeze(
+  Array.from({ length: E2E_WORKERS }, (_unused, index) => ([
+    Object.freeze({ name: `backend${index}`, host: "127.0.0.1", port: 8765 + index }),
+    Object.freeze({ name: `vite${index}`, host: "127.0.0.1", port: 5173 + index }),
+  ])).flat(),
+);
 
 function hasListeningServer({ host, port }, timeoutMs = 1_000) {
   return new Promise(resolveListening => {

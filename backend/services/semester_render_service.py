@@ -4,7 +4,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from database import Project, Student
+from database import Project, ProjectStudent
 from services.request_limiter import album_render_limiter
 from services.semester_export_service import (
     classify_project_student_identity_anomalies,
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def render_missing_semester_albums(
     db: Session,
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int],
     roster_child_ids: list[int] | None = None,
     progress_callback=None,
@@ -30,16 +30,16 @@ def render_missing_semester_albums(
     selected_child_ids = (
         set(roster_child_ids) if roster_child_ids is not None else None
     )
-    projects = load_export_projects(db, academic_term_id, period_ids)
+    projects = load_export_projects(db, semester_id, period_ids)
     output_keys_by_project = load_output_keys_by_project(get_storage(), projects)
 
     candidates_by_child_period: dict[
         tuple[int, int],
-        list[tuple[Project, Student]],
+        list[tuple[Project, ProjectStudent]],
     ] = {}
     for project in projects:
         identity_anomalies = classify_project_student_identity_anomalies(project)
-        term_period_id = project.class_period_work_slot.term_period_id
+        semester_period_id = project.class_period_work_slot.semester_period_id
         for student in project.students:
             if student.id in identity_anomalies:
                 continue
@@ -49,7 +49,7 @@ def render_missing_semester_albums(
             ):
                 continue
             candidates_by_child_period.setdefault(
-                (student.roster_child_id, term_period_id),
+                (student.roster_child_id, semester_period_id),
                 [],
             ).append((project, student))
 

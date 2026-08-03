@@ -10,11 +10,12 @@ from fastapi import HTTPException
 from database import (
     Campus,
     Classroom,
-    ClassroomTeacherAssignment,
+    ClassroomMember,
+    ClassroomTeacher,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
+    SessionLocal,
+    ProjectStudent,
     Template,
     TemplatePage,
     TemplatePeriod,
@@ -39,7 +40,7 @@ from services.output_keys import (
 from services.storage import LocalStorageAdapter
 from services.student_pages import lock_student_page_writes
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
-from tests.helpers import login, started_client, unique_name
+from tests.helpers import current_semester_id, login, started_client, unique_name
 
 
 _SCHEMA_READY = False
@@ -88,7 +89,7 @@ def _seed_render_target() -> dict:
         )
         db.add(project)
         db.flush()
-        student = Student(
+        student = ProjectStudent(
             project_id=project.id,
             name=unique_name("student"),
             order_index=0,
@@ -115,9 +116,9 @@ def _add_colliding_student(
 ) -> int:
     db = SessionLocal()
     try:
-        first_student = db.get(Student, seeded["student_id"])
+        first_student = db.get(ProjectStudent, seeded["student_id"])
         first_student.name = first_name
-        second_student = Student(
+        second_student = ProjectStudent(
             project_id=seeded["project_id"],
             name=second_name,
             order_index=1,
@@ -154,8 +155,8 @@ def _seed_legacy_collision_outputs(
 
     db = SessionLocal()
     try:
-        db.get(Student, seeded["student_id"]).output_filename = first_print_key
-        db.get(Student, second_student_id).output_filename = second_print_key
+        db.get(ProjectStudent, seeded["student_id"]).output_filename = first_print_key
+        db.get(ProjectStudent, second_student_id).output_filename = second_print_key
         db.commit()
     finally:
         db.close()
@@ -199,7 +200,7 @@ def _run_render(
     db = SessionLocal()
     try:
         project = db.get(Project, project_id)
-        student = db.get(Student, student_id)
+        student = db.get(ProjectStudent, student_id)
         result["value"] = student_render_service.render_and_save_student_album(
             project,
             student,
@@ -233,13 +234,14 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
         db.add_all([admin, teacher, campus])
         db.flush()
         classroom = Classroom(
+            semester_id=current_semester_id(db),
             campus_id=campus.id,
             department="infant",
             name=unique_name("render_classroom"),
         )
         db.add(classroom)
         db.flush()
-        db.add(ClassroomTeacherAssignment(
+        db.add(ClassroomTeacher(
             classroom_id=classroom.id,
             teacher_id=teacher.id,
             teacher_name_snapshot=teacher.display_name,
@@ -248,23 +250,78 @@ def _attach_render_teacher_scope(seeded: dict) -> dict[str, int]:
             started_by_name_snapshot=admin.display_name,
         ))
         db.commit()
-        preview = organization_service.get_project_classroom_migration_preview(
-            db,
-            seeded["project_id"],
-            cast(int, classroom.id),
+        # 舊相本歸班機制已退場，直接把相本掛到班級與工作格
+        from database import SemesterPeriod, ClassPeriodWorkSlot, Project
+        from services.organization_service import _ensure_current_term_classroom_grid
+
+        _ensure_current_term_classroom_grid(db, classroom)
+        db.flush()
+        project = db.get(Project, seeded["project_id"])
+        work_slot = (
+            db.query(ClassPeriodWorkSlot)
+            .join(
+                SemesterPeriod,
+                SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
+            )
+            .filter(
+                ClassPeriodWorkSlot.classroom_id == classroom.id,
+                SemesterPeriod.template_period_id == project.template_period_id,
+            )
+            .first()
         )
-        organization_service.assign_project_to_classroom(
-            db,
-            admin,
-            seeded["project_id"],
-            classroom_id=cast(int, classroom.id),
-            source_fingerprint=preview["source_fingerprint"],
-            seed_current_roster=False,
-            student_identity_decisions=[{
-                "student_id": seeded["student_id"],
-                "action": "create_new",
-            }],
-        )
+        if work_slot is None:
+            semester_period = (
+                db.query(SemesterPeriod)
+                .filter(
+                    SemesterPeriod.semester_id == classroom.semester_id,
+                    SemesterPeriod.template_period_id
+                    == project.template_period_id,
+                )
+                .first()
+            )
+            if semester_period is None:
+                semester_period = SemesterPeriod(
+                    semester_id=classroom.semester_id,
+                    template_period_id=project.template_period_id,
+                    period_name_snapshot="render_guard_period",
+                    department=classroom.department,
+                    position=(
+                        db.query(SemesterPeriod)
+                        .filter(
+                            SemesterPeriod.semester_id
+                            == classroom.semester_id
+                        )
+                        .count()
+                    ),
+                )
+                db.add(semester_period)
+                db.flush()
+            work_slot = ClassPeriodWorkSlot(
+                classroom_id=classroom.id,
+                semester_period_id=semester_period.id,
+            )
+            db.add(work_slot)
+            db.flush()
+        work_slot.started_at = work_slot.started_at or utc_now()
+        # 已歸班的相本學生一定對應到班上的名冊孩子；要趕在相本歸班前接上，
+        # 之後 trg_students_freeze_class_backed_identity 就不允許再改 identity。
+        student = db.get(ProjectStudent, seeded["student_id"])
+        roster_child = Student(name=student.name)
+        db.add(roster_child)
+        db.flush()
+        db.add(ClassroomMember(
+            classroom_id=classroom.id,
+            roster_child_id=roster_child.id,
+        ))
+        student.roster_child_id = roster_child.id
+        db.flush()
+        project.classroom_id = classroom.id
+        project.class_period_work_slot_id = work_slot.id
+        project.campus_id_snapshot = campus.id
+        project.campus_name_snapshot = campus.name
+        project.classroom_name_snapshot = classroom.name
+        project.department = classroom.department
+        db.commit()
         return {
             "admin_id": cast(int, admin.id),
             "teacher_id": cast(int, teacher.id),
@@ -278,7 +335,7 @@ def test_album_name_is_captured_in_render_cas_token():
     seeded = _seed_render_target()
     db = SessionLocal()
     try:
-        student = db.get(Student, seeded["student_id"])
+        student = db.get(ProjectStudent, seeded["student_id"])
         student.album_name = "原本稱呼"
         db.commit()
 
@@ -289,7 +346,7 @@ def test_album_name_is_captured_in_render_cas_token():
         )
         assert captured["album_name"] == "原本稱呼"
 
-        student = db.get(Student, seeded["student_id"])
+        student = db.get(ProjectStudent, seeded["student_id"])
         student.album_name = "渲染途中改名"
         db.commit()
 
@@ -392,7 +449,7 @@ def test_archived_project_during_render_cannot_publish(monkeypatch, tmp_path):
 
     db = SessionLocal()
     try:
-        assert db.get(Student, seeded["student_id"]).output_filename is None
+        assert db.get(ProjectStudent, seeded["student_id"]).output_filename is None
     finally:
         db.close()
     assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
@@ -446,7 +503,7 @@ def test_teacher_removed_during_render_cannot_publish(monkeypatch, tmp_path):
 
     db = SessionLocal()
     try:
-        assert db.get(Student, seeded["student_id"]).output_filename is None
+        assert db.get(ProjectStudent, seeded["student_id"]).output_filename is None
     finally:
         db.close()
     assert storage.list_keys(get_project_output_prefix(seeded["project_id"])) == []
@@ -468,7 +525,7 @@ def test_assigned_album_name_write_is_rejected_before_mutation():
             )
         assert error.value.status_code == 409
         assert error.value.detail["code"] == "roster_album_name_authority"
-        assert db.get(Student, seeded["student_id"]).album_name is None
+        assert db.get(ProjectStudent, seeded["student_id"]).album_name is None
     finally:
         db.close()
 
@@ -478,8 +535,8 @@ def test_roster_album_name_is_captured_in_assigned_render_cas_token():
     _attach_render_teacher_scope(seeded)
     db = SessionLocal()
     try:
-        student = db.get(Student, seeded["student_id"])
-        roster_child = db.get(RosterChild, student.roster_child_id)
+        student = db.get(ProjectStudent, seeded["student_id"])
+        roster_child = db.get(Student, student.roster_child_id)
         roster_child.album_name = "園所原稱呼"
         db.commit()
 
@@ -490,7 +547,7 @@ def test_roster_album_name_is_captured_in_assigned_render_cas_token():
         )
         assert captured["album_name"] == "園所原稱呼"
 
-        roster_child = db.get(RosterChild, student.roster_child_id)
+        roster_child = db.get(Student, student.roster_child_id)
         roster_child.album_name = "園所新稱呼"
         db.commit()
 
@@ -550,7 +607,7 @@ def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(mo
 
     db = SessionLocal()
     try:
-        student = db.get(Student, seeded["student_id"])
+        student = db.get(ProjectStudent, seeded["student_id"])
         student.output_filename = print_key
         db.commit()
     finally:
@@ -586,7 +643,7 @@ def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(mo
             ):
                 template = sync_db.get(Template, seeded["template_id"])
                 project = sync_db.get(Project, seeded["project_id"])
-                student = sync_db.get(Student, seeded["student_id"])
+                student = sync_db.get(ProjectStudent, seeded["student_id"])
                 template.revision = 2
                 project.template_revision = 2
                 student.output_filename = None
@@ -613,7 +670,7 @@ def test_template_sync_can_finish_during_render_and_old_render_cannot_publish(mo
 
     db = SessionLocal()
     try:
-        assert db.get(Student, seeded["student_id"]).output_filename is None
+        assert db.get(ProjectStudent, seeded["student_id"]).output_filename is None
     finally:
         db.close()
     assert storage.get_bytes(print_key) == b"previous-print-pdf"
@@ -786,8 +843,8 @@ def test_first_canonical_render_preserves_legacy_key_referenced_by_sibling(
     assert storage.get_bytes(legacy_keys["second_image"]) == b"second-image"
     db = SessionLocal()
     try:
-        first_student = db.get(Student, seeded["student_id"])
-        second_student = db.get(Student, second_student_id)
+        first_student = db.get(ProjectStudent, seeded["student_id"])
+        second_student = db.get(ProjectStudent, second_student_id)
         assert first_student.output_filename == get_student_pdf_key(
             seeded["project_id"],
             seeded["student_id"],
@@ -944,7 +1001,7 @@ def test_identity_text_mutation_waits_for_publish_then_invalidates_canonical_out
     db = SessionLocal()
     try:
         project = db.get(Project, seeded["project_id"])
-        student = db.get(Student, seeded["student_id"])
+        student = db.get(ProjectStudent, seeded["student_id"])
         if mutation == "project_rename":
             assert project.name == "改名後專案"
             assert student.output_filename is None
@@ -986,7 +1043,7 @@ def test_rename_stays_successful_when_output_cleanup_fails(
     db = SessionLocal()
     try:
         project = db.get(Project, seeded["project_id"])
-        student = db.get(Student, seeded["student_id"])
+        student = db.get(ProjectStudent, seeded["student_id"])
         if mutation == "project_rename":
             assert project.name == "清理失敗後的專案"
         else:

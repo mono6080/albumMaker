@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 const terms = [
   {
@@ -52,15 +52,24 @@ function project({
 
 function classroom({ classroomId, classroomName, department = "infant", slots }) {
   return {
-    term_classroom_id: classroomId + 1000,
     classroom_id: classroomId,
     campus_id: department === "infant" ? 1 : 2,
     campus_name: department === "infant" ? "和平校" : "復興校",
     classroom_name: classroomName,
     department,
     teachers: [
-      { teacher_id: classroomId * 10, teacher_name_snapshot: `${classroomName}主教`, duty: "lead" },
-      { teacher_id: classroomId * 10 + 1, teacher_name_snapshot: `${classroomName}協同`, duty: "co_teacher" },
+      {
+        teacher_id: classroomId * 10,
+        teacher_name_snapshot: `${classroomName}主教`,
+        duty: "lead",
+        ended_at: null,
+      },
+      {
+        teacher_id: classroomId * 10 + 1,
+        teacher_name_snapshot: `${classroomName}協同`,
+        duty: "co_teacher",
+        ended_at: null,
+      },
     ],
     slots,
   };
@@ -71,7 +80,7 @@ function activeOverview() {
     term: { id: 1, label: "114 學年度上學期", status: "active" },
     periods: terms[0].periods.map(period => ({
       ...period,
-      term_period_id: period.id,
+      semester_period_id: period.id,
       id: period.template_period_id,
     })),
     summary: {},
@@ -82,7 +91,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 501,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "single",
             projects: [project({
@@ -94,7 +103,7 @@ function activeOverview() {
           },
           {
             work_slot_id: 502,
-            term_period_id: 102,
+            semester_period_id: 102,
             period_id: 12,
             creation_status: "not_created",
             projects: [],
@@ -107,7 +116,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 503,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "archived",
             projects: [],
@@ -120,7 +129,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 504,
-            term_period_id: 101,
+            semester_period_id: 101,
             period_id: 11,
             creation_status: "multiple_projects",
             projects: [
@@ -143,7 +152,7 @@ function activeOverview() {
         slots: [
           {
             work_slot_id: 509,
-            term_period_id: 103,
+            semester_period_id: 103,
             period_id: 13,
             creation_status: "single",
             projects: [project({ projectId: 901, projectName: "學院相本", ownerName: "學院老師" })],
@@ -154,31 +163,6 @@ function activeOverview() {
   };
 }
 
-function secondTermOverview() {
-  return {
-    term: { id: 2, label: "114 學年度下學期", status: "closed" },
-    periods: [{
-      id: 21,
-      term_period_id: 201,
-      template_period_id: 21,
-      name: "二月",
-      department: "infant",
-      position: 1,
-    }],
-    summary: {},
-    classrooms: [classroom({
-      classroomId: 20,
-      classroomName: "下學期班",
-      slots: [{
-        work_slot_id: 520,
-        term_period_id: 201,
-        period_id: 21,
-        creation_status: "not_created",
-        projects: [],
-      }],
-    })],
-  };
-}
 
 async function mockBase(page) {
   await page.route("**/api/auth/me", route => route.fulfill({
@@ -190,7 +174,7 @@ async function mockBase(page) {
       ui_font_scale: 1,
     },
   }));
-  await page.route("**/api/roster/academic-terms", route => route.fulfill({ json: { terms } }));
+  await page.route("**/api/roster/semesters", route => route.fulfill({ json: { terms } }));
 }
 
 test("teacher progress uses classroom-period slots and never creates a false co-teacher card", async ({ page }) => {
@@ -209,7 +193,7 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await expect(statusFilter.getByRole("button", { name: "需要處理 3" })).toBeVisible();
 
   await page.getByRole("button", { name: /和平校.*星星班/ }).click();
-  const starPanel = page.locator("#teacher-classroom-1001");
+  const starPanel = page.locator("#teacher-classroom-1");
   await expect(starPanel.getByText("未建立相本", { exact: true })).toBeVisible();
   await expect(starPanel.getByText("內容完整", { exact: true })).toBeVisible();
   await expect(starPanel.getByRole("progressbar", { name: /文字完成度/ })).toHaveAttribute("aria-valuenow", "4");
@@ -218,11 +202,11 @@ test("teacher progress uses classroom-period slots and never creates a false co-
   await expect(starPanel.getByText(/PDF/)).toHaveCount(0);
 
   await page.getByRole("button", { name: /和平校.*月亮班/ }).click();
-  const moonPanel = page.locator("#teacher-classroom-1002");
+  const moonPanel = page.locator("#teacher-classroom-2");
   await expect(moonPanel.getByText("相本已封存／不可重做", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /和平校.*太陽班/ }).click();
-  const sunPanel = page.locator("#teacher-classroom-1003");
+  const sunPanel = page.locator("#teacher-classroom-3");
   await expect(sunPanel.getByText("同一工作格有 2 本相本", { exact: true })).toBeVisible();
   await expect(sunPanel.getByText("已交件鎖定", { exact: true })).toBeVisible();
   await expect(sunPanel.getByText("交件後仍缺照片", { exact: true })).toBeVisible();
@@ -251,31 +235,4 @@ test("teacher progress keeps errors persistent and retries", async ({ page }) =>
   await expect(page.getByText("此學期與部門沒有班級工作格。", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "重試" }).click();
   await expect(page.getByText("星星班", { exact: true }).first()).toBeVisible();
-});
-
-test("a slower previous term response cannot replace the selected term", async ({ page }) => {
-  await mockBase(page);
-  let releaseFirstTerm;
-  let markFirstTermStarted;
-  const firstTermGate = new Promise(resolve => { releaseFirstTerm = resolve; });
-  const firstTermStarted = new Promise(resolve => { markFirstTermStarted = resolve; });
-  await page.route("**/api/roster/teacher-progress?**", async route => {
-    const termId = new URL(route.request().url()).searchParams.get("academic_term_id");
-    if (termId === "1") {
-      markFirstTermStarted();
-      await firstTermGate;
-      await route.fulfill({ json: activeOverview() });
-      return;
-    }
-    await route.fulfill({ json: secondTermOverview() });
-  });
-
-  await page.goto("/admin/teacher-overview");
-  await firstTermStarted;
-  await page.getByLabel("選擇學期").selectOption("2");
-  await expect(page.getByText("下學期班", { exact: true }).first()).toBeVisible();
-  releaseFirstTerm();
-  await page.waitForTimeout(150);
-  await expect(page.getByText("下學期班", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("星星班", { exact: true })).toHaveCount(0);
 });

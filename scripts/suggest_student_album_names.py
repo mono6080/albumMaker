@@ -181,30 +181,32 @@ def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
 def _load_students(database_path: Path, scope: str) -> list[dict[str, Any]]:
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
-        if "album_name" not in _column_names(connection, "students"):
-            raise RuntimeError("students.album_name 尚未建立，請先執行資料庫 migration")
+        if "album_name" not in _column_names(connection, "project_students"):
+            raise RuntimeError(
+                "project_students.album_name 尚未建立，請先執行資料庫 migration"
+            )
         project_columns = _column_names(connection, "projects")
         filters = []
         if "classroom_id" in project_columns:
-            # 已歸班相本改由 RosterChild 單一管理，本腳本只處理未歸班 legacy。
+            # 已歸班相本改由 Student 單一管理，本腳本只處理未歸班 legacy。
             filters.append("projects.classroom_id IS NULL")
         if scope == "active":
             filters.append("projects.deleted_at IS NULL")
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
         rows = connection.execute(
-            f"""SELECT students.id AS student_id,
-                       students.project_id AS project_id,
-                       students.name AS full_name,
-                       students.album_name AS current_album_name,
-                       students.created_at AS student_created_at,
-                       students.output_filename AS output_filename,
+            f"""SELECT project_students.id AS student_id,
+                       project_students.project_id AS project_id,
+                       project_students.name AS full_name,
+                       project_students.album_name AS current_album_name,
+                       project_students.created_at AS student_created_at,
+                       project_students.output_filename AS output_filename,
                        projects.name AS project_name,
                        projects.deleted_at AS project_deleted_at,
                        projects.completed_at AS project_completed_at
-                FROM students
-                JOIN projects ON projects.id = students.project_id
+                FROM project_students
+                JOIN projects ON projects.id = project_students.project_id
                 {where_clause}
-                ORDER BY projects.id, students.order_index, students.id"""
+                ORDER BY projects.id, project_students.order_index, project_students.id"""
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -431,18 +433,18 @@ def _load_current_student_rows(
     for student_plan in student_plans:
         student_id = int(student_plan["student_id"])
         current_row = connection.execute(
-            f"""SELECT students.id AS student_id,
-                      students.project_id AS project_id,
-                      students.name AS full_name,
-                      students.album_name AS album_name,
-                      students.created_at AS student_created_at,
-                      students.output_filename AS output_filename,
+            f"""SELECT project_students.id AS student_id,
+                      project_students.project_id AS project_id,
+                      project_students.name AS full_name,
+                      project_students.album_name AS album_name,
+                      project_students.created_at AS student_created_at,
+                      project_students.output_filename AS output_filename,
                       {classroom_id_select}
                       projects.deleted_at AS project_deleted_at,
                       projects.completed_at AS project_completed_at
-               FROM students
-               JOIN projects ON projects.id = students.project_id
-               WHERE students.id = ?""",
+               FROM project_students
+               JOIN projects ON projects.id = project_students.project_id
+               WHERE project_students.id = ?""",
             (student_id,),
         ).fetchone()
         if current_row is None:
@@ -500,7 +502,7 @@ def _protected_outputs_by_project(
     protected_outputs: dict[int, set[str]] = defaultdict(set)
     for project_id in project_ids:
         rows = connection.execute(
-            """SELECT id, output_filename FROM students
+            """SELECT id, output_filename FROM project_students
                WHERE project_id = ? AND output_filename IS NOT NULL""",
             (project_id,),
         ).fetchall()
@@ -646,7 +648,7 @@ def _update_students_in_transaction(
         project_id = int(student_plan["project_id"])
         project_ids.add(project_id)
         connection.execute(
-            """UPDATE students
+            """UPDATE project_students
                SET album_name = ?, output_filename = NULL,
                    updated_at = CURRENT_TIMESTAMP
                WHERE id = ?""",
@@ -672,8 +674,8 @@ def _apply_or_reconcile_database(
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     try:
-        if "album_name" not in _column_names(connection, "students"):
-            raise ApplyPreflightError("students.album_name 尚未建立")
+        if "album_name" not in _column_names(connection, "project_students"):
+            raise ApplyPreflightError("project_students.album_name 尚未建立")
         connection.execute("BEGIN IMMEDIATE")
 
         # manifest 的檔案鎖與 SQLite 鎖是兩個資源；即使呼叫端曾讀過，仍在

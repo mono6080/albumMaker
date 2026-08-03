@@ -2,7 +2,7 @@
 // （模擬正式環境慢渲染下，切頁 abort 進行中的 img 載入再切回的情境；
 //  Chromium 對中斷載入的同 URL 圖片有 dedup 怪癖，守住 PagePreview 的
 //  元素重用與 pending watchdog 防線）
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   loginViaApi,
   createTemplateWithLayout,

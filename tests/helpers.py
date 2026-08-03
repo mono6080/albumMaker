@@ -442,3 +442,15 @@ def create_project_for_owner(
     assert_status(response, 201)
     _end_fixture_roster_members(client, classroom_id, member_ids)
     return response.json()["id"]
+
+
+def current_semester_id(db) -> int:
+    """目前正式學期 id：班級是學期範圍實體，測試建班一律要指定。"""
+    from database import Semester
+
+    return (
+        db.query(Semester.id)
+        .filter(Semester.status.in_(("imported", "active")))
+        .order_by(Semester.id.desc())
+        .scalar()
+    )

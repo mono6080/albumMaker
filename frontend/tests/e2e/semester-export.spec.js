@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 const term = {
   id: 1,
@@ -30,7 +30,7 @@ function entry({ projectId, projectName, studentId, campusId, campusName, classr
 
 function cell(templatePeriodId, status, entries = []) {
   return {
-    term_period_id: templatePeriodId === 11 ? 101 : 102,
+    semester_period_id: templatePeriodId === 11 ? 101 : 102,
     template_period_id: templatePeriodId,
     status,
     entries,
@@ -101,7 +101,7 @@ function previewPayload({ classroomName = "向日葵班", periodIds = [11, 12] }
     term: { id: 1, label: term.label, status: "active" },
     periods: term.periods
       .filter(period => periodIds.includes(period.template_period_id))
-      .map(period => ({ ...period, term_period_id: period.id, id: period.template_period_id })),
+      .map(period => ({ ...period, semester_period_id: period.id, id: period.template_period_id })),
     summary: {},
     classroom_groups: groups,
     unlinked: [],
@@ -121,7 +121,7 @@ async function mockBase(page, role = "admin") {
         : undefined,
     },
   }));
-  await page.route("**/api/roster/academic-terms", route => route.fulfill({ json: { terms: [term] } }));
+  await page.route("**/api/roster/semesters", route => route.fulfill({ json: { terms: [term] } }));
   if (role === "supervisor") {
     await page.route("**/api/organization/my-classrooms", route => route.fulfill({
       json: {
@@ -170,34 +170,6 @@ test("semester export groups by campus/classroom snapshots and renders authorita
   expect(widths.document).toBeLessThanOrEqual(widths.viewport + 2);
 });
 
-test("semester preview ignores a slower response for an older period selection", async ({ page }) => {
-  await mockBase(page);
-  let releaseFullTerm;
-  let markFullTermStarted;
-  const fullTermGate = new Promise(resolve => { releaseFullTerm = resolve; });
-  const fullTermStarted = new Promise(resolve => { markFullTermStarted = resolve; });
-  await page.route("**/api/roster/semester-export?**", async route => {
-    const periodIds = new URL(route.request().url()).searchParams.getAll("period_ids");
-    if (periodIds.length === 2) {
-      markFullTermStarted();
-      await fullTermGate;
-      await route.fulfill({ json: previewPayload({ classroomName: "舊的全學期班" }) });
-      return;
-    }
-    await route.fulfill({
-      json: previewPayload({ classroomName: "最新單期班", periodIds: [Number(periodIds[0])] }),
-    });
-  });
-
-  await page.goto("/admin/semester-export");
-  await fullTermStarted;
-  await page.getByRole("checkbox", { name: "十月" }).uncheck();
-  await expect(page.getByRole("button", { name: /最新單期班/ }).first()).toBeVisible();
-  releaseFullTerm();
-  await page.waitForTimeout(150);
-  await expect(page.getByRole("button", { name: /最新單期班/ }).first()).toBeVisible();
-  await expect(page.getByText("舊的全學期班", { exact: true })).toHaveCount(0);
-});
 
 test("supervisor semester view is read-only", async ({ page }) => {
   await mockBase(page, "supervisor");

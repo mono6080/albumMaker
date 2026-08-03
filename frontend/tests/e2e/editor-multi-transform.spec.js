@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 import {
   createTemplateWithLayout,
@@ -189,6 +189,17 @@ test("multi-selection resize and rotate preserve live geometry through commit", 
     y: selectionCenter.y
       + rotateVector.x * Math.sin(rotateRadians) + rotateVector.y * Math.cos(rotateRadians),
   };
+  // Konva 的命中判定讀的是另一張「命中畫布」，而它在前一步 resize 之後是**延後重繪**的。
+  // 直接按下去，在慢的機器上會發生：錨點座標正確、也 visible，但 getIntersection 回傳
+  // null，於是點擊落到 Stage 上，旋轉完全不會發生（CI 的 webkit 三次重試都是這樣）。
+  // 等命中畫布真的認得這個錨點，比加固定延遲精確，也不會在快的機器上白等。
+  await expect.poll(async () => page.evaluate((ids) => {
+    const stage = window.Konva.stages.find(c => ids.every(id => c.findOne(`#text-${id}`)));
+    const rotater = stage?.findOne("Transformer")?.findOne(".rotater");
+    if (!rotater) return false;
+    return stage.getIntersection(rotater.getAbsolutePosition()) === rotater;
+  }, textIds)).toBe(true);
+
   await page.mouse.move(
     canvasBox.x + committedResize.rotater.x,
     canvasBox.y + committedResize.rotater.y,

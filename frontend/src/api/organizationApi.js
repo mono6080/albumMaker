@@ -24,6 +24,16 @@ export const createClassroom = (params) =>
 export const updateClassroom = (classroomId, params) =>
   apiClient.patch(`/organization/classrooms/${classroomId}`, params);
 
+/** 重排一個學期內班級的顯示順序；必須送出該學期完整的班級集合。 */
+export const reorderClassrooms = (semesterId, classroomIds) =>
+  apiClient.put(`/organization/semesters/${semesterId}/classroom-order`, {
+    classroom_ids: classroomIds,
+  });
+
+/** 移除編班草稿學期裡尚未使用的班級。 */
+export const deleteClassroom = (classroomId) =>
+  apiClient.delete(`/organization/classrooms/${classroomId}`);
+
 /** 以完整清單更新班級目前老師編制；未列入者結束本次任教區間。 */
 export const updateClassroomTeachers = (classroomId, teachers) =>
   apiClient.put(`/organization/classrooms/${classroomId}/teachers`, { teachers });
@@ -40,33 +50,27 @@ export const batchAddClassroomMembers = (classroomId, members) =>
 export const updateClassroomMember = (classroomId, memberId, params) =>
   apiClient.patch(`/organization/classrooms/${classroomId}/members/${memberId}`, params);
 
+/** 移除草稿學期班級上的新生：整列刪掉，不是把在班區間結束掉。 */
+export const deleteDraftClassroomMember = (classroomId, memberId) =>
+  apiClient.delete(`/organization/classrooms/${classroomId}/members/${memberId}`);
+
 /** 自動填入班級目前名單中尚未設定的園所相本稱呼。 */
 export const autoFillClassroomMemberAlbumNames = (classroomId) =>
   apiClient.post(`/organization/classrooms/${classroomId}/members/album-names/auto-fill`);
 
 /** 更新園所孩子身分的中央相本稱呼，供沒有名單區間的既有相本學生使用。 */
 export const updateRosterChildAlbumName = (rosterChildId, albumName) =>
-  apiClient.patch(`/organization/roster-children/${rosterChildId}/album-name`, {
+  apiClient.patch(`/organization/students/${rosterChildId}/album-name`, {
     album_name: albumName?.trim() || null,
   });
 
 /** 只在園所孩子身分尚未設定稱呼時，自動填入可安全判斷的稱呼。 */
 export const autoFillRosterChildAlbumName = (rosterChildId) =>
-  apiClient.post(`/organization/roster-children/${rosterChildId}/album-name/auto-fill`);
+  apiClient.post(`/organization/students/${rosterChildId}/album-name/auto-fill`);
 
 /** 以目前在班名單建立新一期相本快照。 */
 export const createClassroomProject = (classroomId, params) =>
   apiClient.post(`/organization/classrooms/${classroomId}/projects`, params);
-
-/** 將未歸班舊相本明確歸入班級，並可選擇用相本學生建立空白目前名單。 */
-export const assignProjectToClassroom = (projectId, params) =>
-  apiClient.put(`/organization/projects/${projectId}/classroom`, params);
-
-/** 取得舊相本歸班前的學生身分候選與來源資料指紋。 */
-export const fetchProjectClassroomMigrationPreview = (projectId, classroomId) =>
-  apiClient.get(`/organization/projects/${projectId}/classroom-migration-preview`, {
-    params: { classroom_id: classroomId },
-  });
 
 /** 轉交相本並留下負責人異動紀錄。 */
 export const assignProjectOwner = (projectId, params) =>
@@ -86,8 +90,8 @@ export const createTermReclassificationPlan = (label, options = {}) =>
   });
 
 /** 取得園所正式學期主檔（管理介面使用）。 */
-export const fetchAcademicTerms = () =>
-  apiClient.get("/organization/academic-terms");
+export const fetchSemesters = () =>
+  apiClient.get("/organization/semesters");
 
 /** 取得指定的新學期編班草稿或已套用結果。 */
 export const fetchTermReclassificationPlan = (planId) =>

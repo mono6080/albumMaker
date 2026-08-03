@@ -1,6 +1,6 @@
 // 預覽中斷恢復 regression：慢速下載中切頁（body 傳輸中被中斷）再切回，
 // 量測恢復時間——守住 keeper 背景收尾與 watchdog 防線（CDP throttle，僅 chromium）
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import {
   loginViaApi,
   createTemplateWithLayout,

@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt
           # 鎖定版本避免工具升版無預警讓 CI 轉紅（2026-05 mypy 升版曾造成一個月紅燈）
-          python -m pip install pytest==9.0.3 httpx ruff==0.15.12 mypy==1.20.2
+          python -m pip install pytest==9.0.3 pytest-xdist==3.6.1 httpx ruff==0.15.12 mypy==1.20.2
 
       - name: Ruff
         run: python -m ruff check backend tests
@@ -40,14 +40,90 @@ jobs:
       - name: Mypy
         run: python -m mypy backend tests
 
+      # 每個 worker 有自己的資料庫與 uploads（見 tests/conftest.py），平行是安全的。
+      # 本機實測 309 秒 → 108 秒。
       - name: Pytest
-        run: python -m pytest -q
+        run: python -m pytest -q -n auto
 
   frontend:
+    # 與瀏覽器無關的檢查只跑一次。render parity 會自己啟動 chromium
+    # （scripts/check_text_raster_parity.mjs），所以這個 job 要裝 chromium。
     name: Frontend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # render parity 是拿瀏覽器畫布跟 PIL 的輸出逐像素比對，所以這個 job 也要後端相依
+      - name: Set up Python for render parity
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Install backend dependencies for render parity
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r ../backend/requirements.txt
+
+      # 快取 key 只該綁 playwright 版本。綁 package-lock 的話，任何一個無關的相依變動
+      # （今天加一個 npm script 就中了）都會讓快取失效，webkit 得重抓 59 秒。
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Frontend unit tests
+        run: npm run test:unit
+
+      - name: Render parity
+        run: npm run test:render-parity
+
+      - name: Build
+        run: npm run build
+
+      - name: Bundle budget
+        run: npm run test:bundle-budget
+
+  e2e:
+    # 每個瀏覽器一台 runner。整套 e2e 共用同一個後端與同一份 .tmp/e2e/e2e.db 且從不
+    # 重置，兩個 project 在同一台機器上接著跑時，後跑的那個要面對前面全部測試累積下來
+    # 的資料——organization-management 的兩條在 webkit 因此從 30 秒漲到 3 分鐘而逾時。
+    # 拆成 matrix 之後兩邊各有乾淨的資料庫，牆鐘時間也砍半。
+    name: E2E (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
     env:
       SECRET_KEY: e2e-secret-do-not-use
+      # 每個 worker 一套後端與資料庫，資料不互相污染，時間也砍半
+      E2E_WORKERS: "2"
     defaults:
       run:
         working-directory: frontend
@@ -76,23 +152,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r ../backend/requirements.txt
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium webkit
+      # 快取 key 只該綁 playwright 版本。綁 package-lock 的話，任何一個無關的相依變動
+      # （今天加一個 npm script 就中了）都會讓快取失效，webkit 得重抓 59 秒。
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
 
-      - name: ESLint
-        run: npm run lint
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ steps.playwright.outputs.version }}
 
-      - name: Frontend unit tests
-        run: npm run test:unit
-
-      - name: Render parity
-        run: npm run test:render-parity
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Browser E2E
-        run: npm run test:e2e
-
-      - name: Build
-        run: npm run build
-
-      - name: Bundle budget
-        run: npm run test:bundle-budget
+        run: npm run test:e2e -- --project=${{ matrix.browser }}

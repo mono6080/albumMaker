@@ -7,18 +7,11 @@ from uuid import uuid4
 from sqlalchemy import create_engine, text
 
 from database import (
-    AcademicTerm,
-    AcademicTermClassroom,
-    AcademicTermClassroomTeacher,
-    Campus,
-    Classroom,
-    ClassroomTeacherAssignment,
-    ClassRosterMember,
+    ClassroomMember,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
-    User,
+    SessionLocal,
+    ProjectStudent,
 )
 from services import organization_service
 from tests.helpers import (
@@ -159,7 +152,8 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
         assert_status(target_campus_response, 201)
         target_campus_id = target_campus_response.json()["id"]
         moved_classroom_name = unique_name("moved-classroom")
-        update_response = client.patch(
+        # 班級的分校與部門是它的身分，中途不可變更；只有改名允許
+        blocked_move = client.patch(
             f"/api/organization/classrooms/{classroom_id}",
             json={
                 "campus_id": target_campus_id,
@@ -167,7 +161,8 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
                 "name": moved_classroom_name,
             },
         )
-        assert_status(update_response, 200)
+        assert_status(blocked_move, 409)
+        assert blocked_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
 
         lead_teacher = _create_teacher(client)
         _replace_teachers(
@@ -183,94 +178,19 @@ def test_current_term_project_keeps_term_classroom_scope_after_classroom_move():
             lead_teacher["id"],
         )
 
+        # 相本建立後才改名：快照必須維持建立當下的班名
+        rename_response = client.patch(
+            f"/api/organization/classrooms/{classroom_id}",
+            json={"name": moved_classroom_name},
+        )
+        assert_status(rename_response, 200)
+
         assert project["campus_id"] == source_campus_id
         assert project["campus_name"] == source_campus["name"]
         assert project["classroom_name"] == source_classroom["name"]
         assert project["department"] == "infant"
         assert project["campus_id"] != target_campus_id
         assert project["classroom_name"] != moved_classroom_name
-
-
-def test_active_term_new_classroom_teacher_snapshot_is_filled_once():
-    db = SessionLocal()
-    try:
-        current_term = db.query(AcademicTerm).filter(
-            AcademicTerm.status.in_(("imported", "active"))
-        ).one()
-        current_term.status = "active"
-        first_teacher = User(
-            username=unique_name("active-term-teacher"),
-            display_name="正式學期第一位老師",
-            hashed_password="unused",
-            role="teacher",
-        )
-        second_teacher = User(
-            username=unique_name("active-term-teacher"),
-            display_name="正式學期後續老師",
-            hashed_password="unused",
-            role="teacher",
-        )
-        campus = Campus(name=unique_name("active-term-campus"))
-        db.add_all([first_teacher, second_teacher, campus])
-        db.flush()
-        classroom = Classroom(
-            campus_id=campus.id,
-            department="infant",
-            name=unique_name("active-term-classroom"),
-        )
-        db.add(classroom)
-        db.flush()
-        term_classroom = AcademicTermClassroom(
-            academic_term_id=current_term.id,
-            classroom_id=classroom.id,
-            campus_id_snapshot=campus.id,
-            campus_name_snapshot=campus.name,
-            classroom_name_snapshot=classroom.name,
-            department=classroom.department,
-        )
-        db.add(term_classroom)
-        db.flush()
-        first_assignment = ClassroomTeacherAssignment(
-            classroom_id=classroom.id,
-            teacher_id=first_teacher.id,
-            teacher_name_snapshot=first_teacher.display_name,
-            duty="lead",
-            started_by_name_snapshot="測試管理員",
-        )
-        db.add(first_assignment)
-        db.flush()
-
-        organization_service._refresh_current_term_teacher_snapshot(
-            db,
-            classroom.id,
-        )
-        db.flush()
-        snapshot = db.query(AcademicTermClassroomTeacher).filter(
-            AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-        ).one()
-        assert snapshot.teacher_id == first_teacher.id
-
-        first_assignment.ended_at = first_assignment.started_at
-        db.add(ClassroomTeacherAssignment(
-            classroom_id=classroom.id,
-            teacher_id=second_teacher.id,
-            teacher_name_snapshot=second_teacher.display_name,
-            duty="lead",
-            started_by_name_snapshot="測試管理員",
-        ))
-        db.flush()
-        organization_service._refresh_current_term_teacher_snapshot(
-            db,
-            classroom.id,
-        )
-        db.flush()
-        snapshots = db.query(AcademicTermClassroomTeacher).filter(
-            AcademicTermClassroomTeacher.term_classroom_id == term_classroom.id
-        ).all()
-        assert [row.teacher_id for row in snapshots] == [first_teacher.id]
-    finally:
-        db.rollback()
-        db.close()
 
 
 def test_class_roster_changes_only_affect_future_project_snapshots():
@@ -414,20 +334,12 @@ def test_class_roster_changes_only_affect_future_project_snapshots():
             f"/api/organization/classrooms/{classroom_a_id}/members/{restored_member['id']}",
             json={"status": "ended", "end_reason": "departed"},
         ), 200)
+        # 班級沒有停用狀態；不屬於目前學期即為結束
         assert_status(client.patch(
             f"/api/organization/classrooms/{classroom_a_id}",
             json={"is_active": False},
-        ), 409)
+        ), 422)
         _replace_teachers(client, classroom_a_id, [])
-        assert_status(client.patch(
-            f"/api/organization/classrooms/{classroom_a_id}",
-            json={"is_active": False},
-        ), 200)
-        blocked_restore = client.patch(
-            f"/api/organization/classrooms/{classroom_a_id}/members/{restored_member['id']}",
-            json={"status": "active"},
-        )
-        assert_status(blocked_restore, 409)
         assert_status(
             client.patch(
                 f"/api/organization/classrooms/{classroom_b_id}/members/"
@@ -588,7 +500,6 @@ def test_roster_album_name_is_admin_managed_and_updates_existing_and_future_proj
 def test_classroom_project_locks_organization_then_template_before_db_write(
     monkeypatch,
 ):
-    import services.organization_service as organization_service
     from services.organization_lock import organization_acl_lock
 
     events: list[str] = []
@@ -829,15 +740,15 @@ def test_project_snapshot_is_immutable_and_blocks_duplicate_current_roster():
 
         db = SessionLocal()
         try:
-            assert db.get(Student, student_id) is not None
-            assert db.get(RosterChild, member["roster_child_id"]) is not None
-            assert db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == member["roster_child_id"]
+            assert db.get(ProjectStudent, student_id) is not None
+            assert db.get(Student, member["roster_child_id"]) is not None
+            assert db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == member["roster_child_id"]
             ).count() == 1
-            duplicate_child = RosterChild(name="林小美")
+            duplicate_child = Student(name="林小美")
             db.add(duplicate_child)
             db.flush()
-            db.add(ClassRosterMember(
+            db.add(ClassroomMember(
                 classroom_id=classroom_id,
                 roster_child_id=duplicate_child.id,
             ))
@@ -876,8 +787,8 @@ def test_project_snapshot_is_immutable_and_blocks_duplicate_current_roster():
         db = SessionLocal()
         try:
             assert db.query(Project).count() == project_count
-            duplicate_membership = db.query(ClassRosterMember).filter(
-                ClassRosterMember.roster_child_id == duplicate_child_id
+            duplicate_membership = db.query(ClassroomMember).filter(
+                ClassroomMember.roster_child_id == duplicate_child_id
             ).one()
             duplicate_membership.ended_at = duplicate_membership.started_at
             duplicate_membership.end_reason = "departed"
@@ -920,20 +831,9 @@ def test_campus_cannot_be_disabled_with_active_classrooms_or_assignments():
         )
         assert_status(active_teacher_response, 409)
 
+        # 班級隨學期結束，所以「旗下還有班級」不再是停用分校的阻擋條件；
+        # 只要沒有在籍成員與在職編制就能停用。
         _replace_teachers(client, classroom_id, [])
-        active_classroom_response = client.patch(
-            f"/api/organization/campuses/{campus_id}",
-            json={"is_active": False},
-        )
-        assert_status(active_classroom_response, 409)
-
-        assert_status(
-            client.patch(
-                f"/api/organization/classrooms/{classroom_id}",
-                json={"is_active": False},
-            ),
-            200,
-        )
         disabled_response = client.patch(
             f"/api/organization/campuses/{campus_id}",
             json={"is_active": False},
@@ -966,7 +866,8 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
             "active_classroom_requires_active_campus"
         )
 
-        inactive_classroom_response = client.post(
+        # 班級沒有停用狀態：不屬於目前學期即為結束，所以建立時不接受 is_active=False
+        rejected_inactive = client.post(
             "/api/organization/classrooms",
             json={
                 "campus_id": inactive_campus_id,
@@ -975,13 +876,10 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
                 "is_active": False,
             },
         )
-        assert_status(inactive_classroom_response, 201)
-        inactive_classroom_id = inactive_classroom_response.json()["id"]
-        blocked_activation = client.patch(
-            f"/api/organization/classrooms/{inactive_classroom_id}",
-            json={"is_active": True},
+        assert_status(rejected_inactive, 422)
+        assert rejected_inactive.json()["detail"]["code"] == (
+            "classroom_has_no_active_flag"
         )
-        assert_status(blocked_activation, 409)
 
         active_campus_id, active_classroom_id = _create_campus_and_classroom(client)
         lead_teacher = _create_teacher(client)
@@ -996,9 +894,7 @@ def test_active_classroom_cannot_be_created_or_moved_under_inactive_campus():
             json={"campus_id": inactive_campus_id},
         )
         assert_status(blocked_move, 409)
-        assert blocked_move.json()["detail"]["code"] == (
-            "active_classroom_requires_active_campus"
-        )
+        assert blocked_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
 
         overview = client.get("/api/organization/overview")
         assert_status(overview, 200)
@@ -1079,6 +975,8 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         connection.exec_driver_sql("INSERT INTO projects (id, owner_id) VALUES (1, NULL)")
 
     with migration_engine.connect() as connection:
+        # 改名排在所有 migration 之前，legacy 中間狀態也一樣先改名再修結構
+        migrations._rename_tables_to_model_names(connection)
         migrations._add_organization_structure(connection)
         migrations._add_organization_structure(connection)
         classroom_columns = {
@@ -1086,7 +984,7 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         }
         member_columns = {
             row[1]
-            for row in connection.execute(text("PRAGMA table_info(class_roster_members)"))
+            for row in connection.execute(text("PRAGMA table_info(classroom_members)"))
         }
         project_columns = {
             row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
@@ -1096,7 +994,7 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         assert {"classroom_id", "created_by_id", "created_by_name"} <= project_columns
         index_sql = connection.execute(text(
             "SELECT sql FROM sqlite_master "
-            "WHERE type='index' AND name='ux_class_roster_active_child'"
+            "WHERE type='index' AND name='ux_classroom_members_active_child'"
         )).scalar_one()
         assert "(roster_child_id)" in index_sql
         assert "classroom_id" not in index_sql
@@ -1107,3 +1005,61 @@ def test_organization_migration_repairs_intermediate_schema_idempotently():
         assert connection.execute(text(
             "SELECT COUNT(*) FROM project_assignment_history WHERE project_id = 1"
         )).scalar_one() == 0
+
+
+def test_classroom_order_is_stored_and_requires_the_complete_set():
+    """班級順序只能存下來，推導不出來。
+
+    班名是「一二階／三階／十階」這種中文數字，字面排序會排成
+    一二階 七階 三階 九階 五階…，與階段順序無關。排序是園所自己的意思。
+    """
+    with started_client() as client:
+        login(client)
+        campus = client.post("/api/organization/campuses", json={"name": unique_name("排序校")})
+        assert_status(campus, 201)
+        campus_id = campus.json()["id"]
+        ids = []
+        for name in ("十階A", "一二階A", "三階A"):
+            created = client.post(
+                "/api/organization/classrooms",
+                json={"campus_id": campus_id, "department": "infant", "name": unique_name(name)},
+            )
+            assert_status(created, 201)
+            ids.append(created.json()["id"])
+        semester_id = client.get("/api/organization/semesters").json()[0]["id"]
+
+        def listed_ids():
+            overview = client.get("/api/organization/overview").json()
+            rooms = next(
+                campus_row["classrooms"]
+                for campus_row in overview["campuses"]
+                if campus_row["id"] == campus_id
+            )
+            return [room["id"] for room in rooms]
+
+        # 沒設過順序時退回 id
+        assert listed_ids() == ids
+
+        desired = [ids[1], ids[2], ids[0]]
+        reordered = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": desired},
+        )
+        assert_status(reordered, 200)
+        assert listed_ids() == desired
+
+        # 只送一部分會被拒絕：沒送到的班要排哪裡沒有答案
+        partial = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": desired[:2]},
+        )
+        assert_status(partial, 422)
+        assert partial.json()["detail"]["code"] == "incomplete_classroom_order"
+        assert listed_ids() == desired
+
+        duplicated = client.put(
+            f"/api/organization/semesters/{semester_id}/classroom-order",
+            json={"classroom_ids": [desired[0], desired[0], desired[1]]},
+        )
+        assert_status(duplicated, 422)
+        assert duplicated.json()["detail"]["code"] == "duplicate_classroom_id"

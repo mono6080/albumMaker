@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { apiClient } from "../../src/api/authApi.js";
 import {
   applyTermReclassificationPlan,
-  assignProjectToClassroom,
   assignProjectOwner,
   autoFillClassroomMemberAlbumNames,
   autoFillRosterChildAlbumName,
@@ -14,9 +13,8 @@ import {
   createClassroomProject,
   createTermReclassificationPlan,
   fetchMyClassrooms,
-  fetchAcademicTerms,
+  fetchSemesters,
   fetchOrganizationOverview,
-  fetchProjectClassroomMigrationPreview,
   fetchProjectAssignmentHistory,
   fetchTermReclassificationPlan,
   updateCampus,
@@ -60,7 +58,7 @@ test("organization API calls keep admin route and payload contracts stable", asy
       { teacher_id: 14, duty: "co_teacher" },
     ]);
     await fetchMyClassrooms();
-    await fetchAcademicTerms();
+    await fetchSemesters();
     await batchAddClassroomMembers(5, [{ name: "王小明" }]);
     await autoFillClassroomMemberAlbumNames(5);
     await updateClassroomMember(5, 7, { name: "王小明", album_name: "小明" });
@@ -73,17 +71,6 @@ test("organization API calls keep admin route and payload contracts stable", asy
       template_id: 11,
       owner_id: 12,
       work_slot_id: 19,
-    });
-    await fetchProjectClassroomMigrationPreview(13, 5);
-    await assignProjectToClassroom(13, {
-      classroom_id: 5,
-      source_fingerprint: "preview-sha256",
-      confirmed_all: true,
-      seed_current_roster: true,
-      student_identity_decisions: [
-        { student_id: 21, action: "create_new" },
-        { student_id: 22, action: "existing", roster_child_id: 31 },
-      ],
     });
     await assignProjectOwner(13, { owner_id: 14, reason: "改由新老師負責" });
     await fetchProjectAssignmentHistory(13);
@@ -123,12 +110,12 @@ test("organization API calls keep admin route and payload contracts stable", asy
       { teacher_id: 14, duty: "co_teacher" },
     ] }],
     ["get", "/organization/my-classrooms"],
-    ["get", "/organization/academic-terms"],
+    ["get", "/organization/semesters"],
     ["post", "/organization/classrooms/5/members/batch", { members: [{ name: "王小明" }] }],
     ["post", "/organization/classrooms/5/members/album-names/auto-fill"],
     ["patch", "/organization/classrooms/5/members/7", { name: "王小明", album_name: "小明" }],
-    ["patch", "/organization/roster-children/17/album-name", { album_name: "明明" }],
-    ["post", "/organization/roster-children/17/album-name/auto-fill"],
+    ["patch", "/organization/students/17/album-name", { album_name: "明明" }],
+    ["post", "/organization/students/17/album-name/auto-fill"],
     ["patch", "/organization/classrooms/5/members/8", { status: "ended", end_reason: "departed" }],
     ["patch", "/organization/classrooms/5/members/9", { target_classroom_id: 6 }],
     ["post", "/organization/classrooms/5/projects", {
@@ -136,19 +123,6 @@ test("organization API calls keep admin route and payload contracts stable", asy
       template_id: 11,
       owner_id: 12,
       work_slot_id: 19,
-    }],
-    ["get", "/organization/projects/13/classroom-migration-preview", {
-      params: { classroom_id: 5 },
-    }],
-    ["put", "/organization/projects/13/classroom", {
-      classroom_id: 5,
-      source_fingerprint: "preview-sha256",
-      confirmed_all: true,
-      seed_current_roster: true,
-      student_identity_decisions: [
-        { student_id: 21, action: "create_new" },
-        { student_id: 22, action: "existing", roster_child_id: 31 },
-      ],
     }],
     ["post", "/projects/13/assignment", { owner_id: 14, reason: "改由新老師負責" }],
     ["get", "/projects/13/assignment-history"],

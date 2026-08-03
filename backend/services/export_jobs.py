@@ -43,7 +43,7 @@ def _render_job_public_state(job: dict) -> dict:
     """回傳可回給前端的欄位（過濾內部計時欄位）。"""
     return {
         "job_id": job["job_id"],
-        "academic_term_id": job["academic_term_id"],
+        "semester_id": job["semester_id"],
         "period_ids": list(job["period_ids"]),
         "roster_child_ids": (
             list(job["roster_child_ids"])
@@ -59,7 +59,7 @@ def _render_job_public_state(job: dict) -> dict:
 
 
 def start_render_missing_job(
-    academic_term_id: int,
+    semester_id: int,
     period_ids: list[int],
     roster_child_ids: list[int] | None,
 ) -> dict:
@@ -70,7 +70,7 @@ def start_render_missing_job(
     """
     job = {
         "job_id": uuid.uuid4().hex,
-        "academic_term_id": academic_term_id,
+        "semester_id": semester_id,
         "period_ids": tuple(period_ids),
         "roster_child_ids": (
             tuple(roster_child_ids) if roster_child_ids is not None else None
@@ -110,7 +110,7 @@ def start_render_missing_job(
         try:
             result = render_missing_semester_albums(
                 db,
-                academic_term_id,
+                semester_id,
                 period_ids,
                 roster_child_ids,
                 progress_callback=update_progress,

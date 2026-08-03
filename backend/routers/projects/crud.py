@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import Classroom, Project, ProjectComment, Student, User, get_db, utc_now
+from database import Classroom, Project, ProjectComment, ProjectStudent, User, get_db, utc_now
 from services.organization_scope_service import OrganizationReadScope
 from services.project_access_service import (
     apply_project_read_scope,
@@ -166,10 +166,10 @@ def get_student_editor_detail(
     assert_project_readable(project, current_user, db, organization_scope)
     student = get_student_or_404(student_id, project_id, db)
     student_summaries = (
-        db.query(Student)
-        .options(joinedload(Student.roster_child))
-        .filter(Student.project_id == project_id)
-        .order_by(Student.order_index)
+        db.query(ProjectStudent)
+        .options(joinedload(ProjectStudent.roster_child))
+        .filter(ProjectStudent.project_id == project_id)
+        .order_by(ProjectStudent.order_index)
         .all()
     )
     return {
@@ -289,8 +289,8 @@ def _visible_projects_query(
 ):
     """依角色回傳可見專案查詢，呼叫端再決定 active/archive 篩選。"""
     student_count = (
-        db.query(func.count(Student.id))
-        .filter(Student.project_id == Project.id)
+        db.query(func.count(ProjectStudent.id))
+        .filter(ProjectStudent.project_id == Project.id)
         .correlate(Project)
         .scalar_subquery()
     )

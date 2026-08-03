@@ -31,9 +31,9 @@ owner 只表示負責人，不能再兼任班級或權限來源。
 
 ## Domain Model
 
-### AcademicTerm
+### Semester
 
-`academic_terms` 是整園學期主檔：
+`semesters` 是整園學期主檔：
 
 - `id`, `label`, `status`（`imported|draft|active|closed|cancelled`）
 - `migration_key`（nullable；既有資料匯入用唯一標記）
@@ -42,48 +42,33 @@ owner 只表示負責人，不能再兼任班級或權限來源。
 
 同一時間最多一筆 `active`；`draft` 由新學期編班草稿持有。
 
-### AcademicTermPeriod
+### SemesterPeriod
 
-`academic_term_periods` 把既有 `TemplatePeriod` 納入一個學期：
+`semester_periods` 把既有 `TemplatePeriod` 納入一個學期：
 
-- `academic_term_id`, `template_period_id`
+- `semester_id`, `template_period_id`
 - `period_name_snapshot`, `department`, `position`
-- 同一 TemplatePeriod 只能屬於一個 AcademicTerm；同學期 position 唯一。
+- 同一 TemplatePeriod 只能屬於一個 Semester；同學期 position 唯一。
 
 Project 仍保留 `template_period_id`，但報表的學期與順序只讀本表。
 
-### AcademicTermClassroom
+### Classroom（學期班級）
 
-`academic_term_classrooms` 保存學期班級範圍：
+班級本體就是學期範圍實體，沒有另一層快照。結構與不可變保證的 SSOT 在
+[term-scoped-classroom-v1](term-scoped-classroom-v1.md)；本規格只依賴三件事：
 
-- `academic_term_id`, `classroom_id`
-- `campus_id_snapshot`, `campus_name_snapshot`
-- `classroom_name_snapshot`, `department`
-- 同學期同班唯一。
-
-`academic_term_classroom_teachers` 保存該學期顯示用老師快照：
-
-- `term_classroom_id`, `source_assignment_id`
-- `teacher_id`, `teacher_name_snapshot`, `duty`
-
-老師快照只供歷史報表顯示；ACL 永遠讀目前有效的園所老師／主管指派。
-
-`academic_term_classroom_students` 是學期最終班級名單快照：
-
-- `academic_term_id`, `term_classroom_id`, `source_membership_id`（nullable）
-- `roster_child_id_snapshot`, `student_name_snapshot`
-- `academic_term_id` 必須與 term classroom 相同；同一孩子每學期只能落在一班。
-
-`imported|active` 學期隨目前名單維護最終快照：新增／回班會加入、
-改名會更新、轉班會移到目標班，離園則保留最後所在班。學期轉為
-`closed` 後由 DB trigger 凍結。`Student` 仍保存每本相本建立當時的
-姓名與 Project 班級，不因最終名單轉班而改寫。
+- 班級屬於且只屬於一個 `Semester`，同學期內 `(campus_id, department, name)` 唯一。
+- 該學期的名冊（`ClassroomMember`）與老師編制（`ClassroomTeacher`）直接掛在
+  班上；報表列出班上全部指派，`ended_at` 分辨現任與曾任。
+- 學期 `closed` 後名冊與編制由 trigger 凍結，API 也拒絕對已結束學期的班加人。分校名與
+  孩子姓名不凍結——更正後歷史報表跟著顯示新值；`ProjectStudent` 仍保存每本相本建立當時的姓名
+  與 Project 班級快照。
 
 ### ClassPeriodWorkSlot
 
 `class_period_work_slots` 是進度唯一統計單位：
 
-- `term_classroom_id`, `term_period_id`, `started_at`
+- `classroom_id`, `semester_period_id`, `started_at`
 - 同一學期班級與學期期別唯一。
 
 `projects.class_period_work_slot_id` 指向工作格。舊資料可有多個 Project
@@ -96,6 +81,11 @@ Project 新增不可變 `campus_id_snapshot`。班級歸入或建立時，必須
 
 ## Migration Contract
 
+> 以下十二條是「長期班級 + 學期快照」結構上線時的一次性遷移契約，屬歷史紀錄。班級改為
+> 學期範圍實體後（見 [term-scoped-classroom-v1](term-scoped-classroom-v1.md)），這些步驟由
+> `_is_term_scoped_classroom_schema()` 守衛整段跳過：全新資料庫由 `init_db()` 直接建出新
+> 結構，硬跑會把已移除的快照表重建回來。舊資料庫升級時仍會先跑完這段、再併入學期範圍。
+
 migration 必須冪等，並在 `run_migrations()` 末端追加：
 
 1. 建立上述 schema、索引與 snapshot freeze triggers。
@@ -107,12 +97,12 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 7. 對 active 期別 × 同部門 active 班級建立目前預期格；因此可顯示真正
    的「未建立」，archived 期別不憑目前班級補空格。
 8. 目前學生名單寫入 imported term 學生快照；不在目前名單但已有
-   有效 Project Student 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
+   有效 ProjectStudent 者，以最新相本班級／姓名補齊，不得同學期跨班重複。
 9. 現有有效老師編制寫入 imported term 的班級老師快照；找不到的歷史老師
    不可由 owner 猜測。
 10. 對 Project 校別 id 快照依遷移 ledger、唯一校名、目前 Classroom 依序回填；
    無法唯一決定時 migration 失敗，不可猜。
-11. Project 連回 slot 後，其校 id／校名／班名／部門快照必須與 term classroom
+11. Project 連回 slot 後，其校 id／校名／班名／部門快照必須與該工作格的班級
     完全一致；不一致 migration fail-fast，不建立分裂報表 scope。
 12. 封存待清除與未歸班 Project 保持 slot NULL，不建立 term rows。
 
@@ -123,18 +113,19 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 
 ### 新學期編班
 
-建立編班草稿會同時建立 draft AcademicTerm；label 是正式學期名稱，不再只是
+建立編班草稿會同時建立 draft Semester；label 是正式學期名稱，不再只是
 事件備註。草稿可指定 ordered TemplatePeriods。套用順序固定為：
 
 1. 驗證 revision、source fingerprint、學期期別與目標狀態。
-2. 結束舊學生與老師區間，建立新區間。
-3. 從套用後的目標班級建立 term classrooms 與學生／老師快照。
-4. 依同部門 term classrooms × term periods 建立完整工作格。
+2. 結束舊學期班級的全部名冊與老師區間——舊班隨學期一起結束，沒有「留在原班就不動」
+   的分支。
+3. 在目標學期的班（建立草稿時就已長出來）建立新的名冊與老師區間。
+4. 依同部門的目標學期班級 × term periods 建立完整工作格。
 5. 關閉舊 active term、啟用目標 term、標記 plan applied。
 6. 一次 commit；任一步失敗全部 rollback。
 
-新期別加入 active term 時，必須在同一 transaction 為同部門 term classrooms
-補工作格。取消 draft plan 同時取消其尚未啟用的 term。
+新期別加入 active term 時，必須在同一 transaction 為同部門的該學期班級補工作格。
+取消 draft plan 同時取消其尚未啟用的 term 與其班級。
 
 ### 建立相本
 
@@ -160,7 +151,7 @@ commit。空班、同格重複與錯配一律回 409/422，不建立部分資料
 
 ## Teacher Progress Contract
 
-`GET /roster/teacher-progress?academic_term_id=` 回 `term`、ordered `periods`、
+`GET /roster/teacher-progress?semester_id=` 回 `term`、ordered `periods`、
 `summary` 與 `classrooms[]`。每班有老師快照及 `slots[]`；slot 有
 `not_created|archived|single|multiple_projects` 與 `projects[]`。`archived`
 表示工作格曾開始、但目前只剩封存／已清除 Project；它不可被當成未建立而重做。
@@ -174,7 +165,7 @@ PDF 狀態只屬於學期匯出）：
 - `attention_codes`: 空相本、已交件但缺照片／缺文字。
 
 協同老師只列在班級老師，不產生自己的未開始卡；owner 只列 Project metadata。
-摘要計工作格與 Project，不把跨期 Student snapshots 加總稱為學生人數。
+摘要計工作格與 Project，不把跨期 ProjectStudent snapshots 加總稱為學生人數。
 
 Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別、學生明細。
 
@@ -196,10 +187,30 @@ Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別�
 
 - `not_enrolled`：在該 term 先前期別尚未有正式身分。
 - `departed`：最後出現後已 `departed|term_departed` 且無目前 membership。
-- `no_album`：學期學生快照存在，但該期沒有 Student snapshot；包含整期
+- `no_album`：學期學生快照存在，但該期沒有 ProjectStudent snapshot；包含整期
   從未建立 Project 的孩子。
 - `not_rendered|ready`：恰一筆且 PDF 未產生／已產生。
-- `duplicate`：同一 stable child 同一期有多筆；不補渲染、不下載並列 IDs。
+- `duplicate`：同一 stable child 同一期有多筆，且尚未有人裁決；不補渲染、不下載並列 IDs。
+- `resolved`：同一期有多筆但已裁決；照選中的那一本渲染與納入 ZIP。
+
+### 同期重複相本：由匯出者裁決（決策 2026-08-02）
+
+期中轉班會讓孩子在原班與新班各有一本該期相本，兩本都要留——原班那本通常已在製作中，
+新班那本則是他接下來的歸屬，硬刪任一本都會傷到其他孩子。
+
+**做法是「像 merge conflict 一樣擋下來讓人選邊」**，不是靜默略過：
+
+- **裁決單位是一格**（孩子 × 期別），不做逐頁合併。同一期的頁面來自不同班級的模板，
+  混著出會讓版面與頁碼不一致——這裡要的是 `--ours` / `--theirs`，不是逐 hunk 合併。
+- **未裁決會擋下匯出**：回報「N 格待裁決」，而不是產出一份少了人的 ZIP 再把它寫在
+  說明欄裡。少東西的匯出沒有人會發現。
+- **裁決要能比較兩邊**：班級、負責老師、完成狀態、是否已產生 PDF、頁數、最後更新時間。
+- **裁決要留下來**：記錄選了哪一本、誰決定的、什麼時候、為什麼，之後每次匯出沿用。
+- **選項變動時裁決自動失效**：又多出一本、或選中的相本被封存時，那一格回到 `duplicate`
+  重新等人裁決。沉默沿用一個過期的決定比沒有決定更危險。
+
+尚未實作；現況與限制見
+[known-issues.md](../dev/known-issues.md#開放設計問題)。
 
 前端不得再以 first appearance 推測缺期。ZIP manifest 必列缺檔、重複、身分
 異常與老師刪頁。補渲染是全程序 singleton；第二個 running request 回 503

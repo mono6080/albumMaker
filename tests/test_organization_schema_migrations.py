@@ -1,9 +1,8 @@
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import configure_mappers
 
 
 def _create_legacy_organization_schema(database_path: Path):
@@ -61,6 +60,12 @@ def _create_legacy_organization_schema(database_path: Path):
         connection.execute(text(
             "INSERT INTO projects (id, name) VALUES (1, '舊相本')"
         ))
+    # 改名排在所有 migration 之前，所以 legacy schema 建完就套用；
+    # 後續步驟看到的表名與 run_migrations 一致。
+    with migration_engine.connect() as connection:
+        import migrations
+
+        migrations._rename_tables_to_model_names(connection)
     return migration_engine
 
 
@@ -91,18 +96,19 @@ def test_roster_child_album_name_migration_is_idempotent_and_preserves_rows(
             ))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_roster_child_album_name_column(connection)
             migrations._add_roster_child_album_name_column(connection)
 
             columns = {
                 row[1]
                 for row in connection.execute(text(
-                    "PRAGMA table_info(roster_children)"
+                    "PRAGMA table_info(students)"
                 ))
             }
             assert "album_name" in columns
             assert connection.execute(text(
-                "SELECT name, album_name FROM roster_children WHERE id = 1"
+                "SELECT name, album_name FROM students WHERE id = 1"
             )).one() == ("王小明", None)
     finally:
         migration_engine.dispose()
@@ -180,11 +186,12 @@ def test_assigned_album_name_authority_migration_backfills_and_ignores_provision
             """))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             migrations._migrate_assigned_album_names_to_roster_authority(connection)
             migrations._migrate_assigned_album_names_to_roster_authority(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, album_name FROM roster_children ORDER BY id
+                SELECT id, album_name FROM students ORDER BY id
             """))) == [
                 (1, "小明"),
                 (2, None),
@@ -194,7 +201,7 @@ def test_assigned_album_name_authority_migration_backfills_and_ignores_provision
             ]
             assert list(connection.execute(text("""
                 SELECT id, album_name, output_filename
-                FROM students ORDER BY id
+                FROM project_students ORDER BY id
             """))) == [
                 (1, None, "same.pdf"),
                 (2, None, None),
@@ -241,15 +248,16 @@ def test_assigned_album_name_authority_migration_refuses_conflicting_values(
             """))
             connection.commit()
 
+            migrations._rename_tables_to_model_names(connection)
             with pytest.raises(RuntimeError, match="roster_child_ids=1"):
                 migrations._migrate_assigned_album_names_to_roster_authority(
                     connection
                 )
             assert connection.execute(text("""
-                SELECT album_name FROM roster_children WHERE id = 1
+                SELECT album_name FROM students WHERE id = 1
             """)).scalar_one() is None
             assert list(connection.execute(text("""
-                SELECT album_name, output_filename FROM students ORDER BY id
+                SELECT album_name, output_filename FROM project_students ORDER BY id
             """))) == [("小明", "one.pdf"), ("明明", "two.pdf")]
     finally:
         migration_engine.dispose()
@@ -276,14 +284,15 @@ def test_fresh_legacy_students_remain_unlinked_even_when_names_match(tmp_path):
             """))
             connection.commit()
 
-            migrations._add_roster_children_and_backfill(connection)
-            migrations._add_roster_children_and_backfill(connection)
+            migrations._rename_tables_to_model_names(connection)
+            migrations._add_students_and_backfill(connection)
+            migrations._add_students_and_backfill(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [(1, None), (2, None)]
             assert connection.execute(text(
-                "SELECT COUNT(*) FROM roster_children"
+                "SELECT COUNT(*) FROM students"
             )).scalar_one() == 0
     finally:
         migration_engine.dispose()
@@ -322,14 +331,15 @@ def test_existing_name_grouped_links_are_preserved_as_provisional_evidence(
             """))
             connection.commit()
 
-            migrations._add_roster_children_and_backfill(connection)
-            migrations._add_roster_children_and_backfill(connection)
+            migrations._rename_tables_to_model_names(connection)
+            migrations._add_students_and_backfill(connection)
+            migrations._add_students_and_backfill(connection)
 
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [(1, 7), (2, 7)]
             assert connection.execute(text(
-                "SELECT COUNT(*) FROM roster_children"
+                "SELECT COUNT(*) FROM students"
             )).scalar_one() == 1
     finally:
         migration_engine.dispose()
@@ -345,6 +355,7 @@ def test_identity_migration_ledger_has_no_operational_foreign_keys(tmp_path):
     try:
         Base.metadata.create_all(migration_engine)
         with migration_engine.connect() as connection:
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
 
@@ -365,7 +376,7 @@ def test_identity_migration_ledger_has_no_operational_foreign_keys(tmp_path):
                 """))
             }
             assert {
-                "trg_students_freeze_class_backed_identity",
+                "trg_project_students_freeze_class_backed_identity",
                 "trg_projects_reject_empty_identity_migration",
                 "trg_projects_require_identity_migration_ledger",
                 "trg_legacy_project_migrations_no_update",
@@ -465,6 +476,7 @@ def test_class_backed_identity_anomalies_are_quarantined_without_guessing(
             connection.commit()
 
             # 已存在 freeze/transition trigger 的中間版本也必須能安全 class→NULL。
+            migrations._rename_tables_to_model_names(connection)
             migrations._add_legacy_project_identity_migration_schema(connection)
             migrations._quarantine_class_backed_identity_anomalies(connection)
             migrations._quarantine_class_backed_identity_anomalies(connection)
@@ -489,7 +501,7 @@ def test_class_backed_identity_anomalies_are_quarantined_without_guessing(
                 ),
             ]
             assert list(connection.execute(text("""
-                SELECT id, roster_child_id FROM students ORDER BY id
+                SELECT id, roster_child_id FROM project_students ORDER BY id
             """))) == [
                 (1, 1),
                 (2, 2),
@@ -718,7 +730,7 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
             )).one() == (None, None)
 
             expected_tables = {
-                "classroom_teacher_assignments",
+                "classroom_teachers",
                 "project_editor_assignments",
                 "term_reclassification_plans",
                 "term_student_placements",
@@ -756,19 +768,19 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
 
         with migration_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_by_id, started_by_name_snapshot
                 ) VALUES (1, 1, 1, '主教', 'lead', 3, '管理員')
             """))
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_by_id, started_by_name_snapshot
                 ) VALUES (2, 1, 2, '協同', 'co_teacher', 3, '管理員')
             """))
             connection.execute(text("""
-                INSERT INTO classroom_teacher_assignments (
+                INSERT INTO classroom_teachers (
                     id, classroom_id, teacher_id, teacher_name_snapshot, duty,
                     started_at, ended_at, started_by_id, started_by_name_snapshot
                 ) VALUES (
@@ -829,19 +841,19 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
             """))
 
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (1, 3, '管理員', 'lead', 3, '管理員')
         """)
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (1, 2, '協同', 'co_teacher', 3, '管理員')
         """)
         _execute_integrity_error(migration_engine, """
-            INSERT INTO classroom_teacher_assignments (
+            INSERT INTO classroom_teachers (
                 classroom_id, teacher_id, teacher_name_snapshot, duty,
                 started_by_id, started_by_name_snapshot
             ) VALUES (2, 1, '主教', 'invalid', 3, '管理員')
@@ -966,197 +978,28 @@ def test_organization_access_and_reclassification_migration_is_idempotent(tmp_pa
         migration_engine.dispose()
 
 
-def _seed_academic_term_student_snapshot_fixture(
-    migration_engine,
-    *,
-    project_campus_name: str = "總校",
-) -> None:
-    from sqlalchemy.orm import Session
-
-    from database import (
-        Base,
-        Campus,
-        Classroom,
-        ClassRosterMember,
-        Project,
-        RosterChild,
-        Student,
-        Template,
-        TemplatePeriod,
-    )
-
-    Base.metadata.create_all(migration_engine)
-    with Session(migration_engine) as db:
-        campus = Campus(name="總校")
-        project_classroom = Classroom(
-            campus=campus,
-            department="infant",
-            name="太陽班",
-        )
-        current_classroom = Classroom(
-            campus=campus,
-            department="infant",
-            name="月亮班",
-        )
-        current_child = RosterChild(name="目前姓名")
-        project_only_child = RosterChild(name="已離班名冊姓名")
-        period = TemplatePeriod(
-            department="infant",
-            name="第一期",
-            status="active",
-        )
-        template = Template(name="範本", period=period)
-        db.add_all([
-            project_classroom,
-            current_classroom,
-            current_child,
-            project_only_child,
-            template,
-        ])
-        db.flush()
-        membership = ClassRosterMember(
-            classroom_id=current_classroom.id,
-            roster_child_id=current_child.id,
-        )
-        project = Project(
-            name="有效舊相本",
-            template_id=template.id,
-            department="infant",
-            template_period_id=period.id,
-            classroom_id=project_classroom.id,
-            campus_id_snapshot=campus.id,
-            campus_name_snapshot=project_campus_name,
-            classroom_name_snapshot=project_classroom.name,
-        )
-        db.add_all([membership, project])
-        db.flush()
-        db.add_all([
-            Student(
-                project_id=project.id,
-                name="舊班姓名",
-                roster_child_id=current_child.id,
-            ),
-            Student(
-                project_id=project.id,
-                name="已離班相本姓名",
-                roster_child_id=project_only_child.id,
-            ),
-        ])
-        db.commit()
-
-
-def test_imported_term_student_snapshot_backfill_is_complete_and_idempotent(
-    tmp_path,
-):
-    import migrations
-
-    migration_engine = create_engine(
-        f"sqlite:///{(tmp_path / 'term_student_snapshots.db').as_posix()}"
-    )
-    try:
-        _seed_academic_term_student_snapshot_fixture(migration_engine)
-        with migration_engine.connect() as connection:
-            migrations._add_legacy_project_identity_migration_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
-
-            rows = list(connection.execute(text("""
-                SELECT snapshot.roster_child_id_snapshot,
-                       term_classroom.classroom_name_snapshot,
-                       snapshot.source_membership_id,
-                       snapshot.student_name_snapshot
-                FROM academic_term_classroom_students AS snapshot
-                JOIN academic_term_classrooms AS term_classroom
-                  ON term_classroom.id = snapshot.term_classroom_id
-                ORDER BY snapshot.roster_child_id_snapshot
-            """)))
-            assert rows == [
-                (1, "月亮班", 1, "目前姓名"),
-                (2, "太陽班", None, "已離班相本姓名"),
-            ]
-            assert connection.execute(text("""
-                SELECT COUNT(*)
-                FROM academic_term_classroom_students
-                WHERE academic_term_id IS NULL
-            """)).scalar_one() == 0
-            index_names = {
-                row[1]
-                for row in connection.execute(text(
-                    "PRAGMA index_list(academic_term_classroom_students)"
-                ))
-            }
-            assert (
-                "ux_academic_term_classroom_students_term_child"
-                in index_names
-            )
-            term_id = connection.execute(text(
-                "SELECT id FROM academic_terms WHERE status = 'imported'"
-            )).scalar_one()
-            other_term_classroom_id = connection.execute(text("""
-                SELECT id
-                FROM academic_term_classrooms
-                WHERE academic_term_id = :term_id
-                  AND classroom_name_snapshot = '太陽班'
-            """), {"term_id": term_id}).scalar_one()
-            with pytest.raises(IntegrityError):
-                connection.execute(text("""
-                    INSERT INTO academic_term_classroom_students (
-                        academic_term_id, term_classroom_id,
-                        roster_child_id_snapshot, student_name_snapshot
-                    ) VALUES (:term_id, :term_classroom_id, 1, '重複學生')
-                """), {
-                    "term_id": term_id,
-                    "term_classroom_id": other_term_classroom_id,
-                })
-            connection.rollback()
-    finally:
-        migration_engine.dispose()
-
-
-def test_imported_term_migration_rejects_project_scope_snapshot_split(tmp_path):
-    import migrations
-
-    migration_engine = create_engine(
-        f"sqlite:///{(tmp_path / 'term_scope_split.db').as_posix()}"
-    )
-    try:
-        _seed_academic_term_student_snapshot_fixture(
-            migration_engine,
-            project_campus_name="錯誤分校",
-        )
-        with migration_engine.connect() as connection:
-            migrations._add_legacy_project_identity_migration_schema(connection)
-            with pytest.raises(
-                RuntimeError,
-                match="有效相本與學期班級快照不一致",
-            ):
-                migrations._add_academic_term_reporting_schema(connection)
-    finally:
-        migration_engine.dispose()
-
-
-def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path):
+def test_semester_current_index_is_cross_status_and_migration_safe(tmp_path):
     import migrations
     from database import Base
 
     migration_engine = create_engine(
-        f"sqlite:///{(tmp_path / 'academic_term_current_index.db').as_posix()}"
+        f"sqlite:///{(tmp_path / 'semester_current_index.db').as_posix()}"
     )
     try:
         Base.metadata.create_all(migration_engine)
         with migration_engine.begin() as connection:
             # 模擬曾上線的錯誤 index：只能防同 status 重複，無法防 imported + active。
             connection.execute(text(
-                "DROP INDEX IF EXISTS ux_academic_terms_current"
+                "DROP INDEX IF EXISTS ux_semesters_current"
             ))
             connection.execute(text(
-                "CREATE UNIQUE INDEX ux_academic_terms_current "
-                "ON academic_terms(status) "
+                "CREATE UNIQUE INDEX ux_semesters_current "
+                "ON semesters(status) "
                 "WHERE status IN ('imported', 'active')"
             ))
             connection.execute(
                 text("""
-                    INSERT INTO academic_terms (
+                    INSERT INTO semesters (
                         label, status, migration_key, created_at,
                         created_by_name_snapshot
                     ) VALUES (
@@ -1166,24 +1009,24 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
                 """),
                 {
                     "migration_key": (
-                        migrations.ACADEMIC_TERM_REPORTING_MIGRATION_KEY
+                        migrations.SEMESTER_REPORTING_MIGRATION_KEY
                     ),
                 },
             )
 
         with migration_engine.connect() as connection:
             migrations._add_legacy_project_identity_migration_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
-            migrations._add_academic_term_reporting_schema(connection)
+            migrations._add_semester_reporting_schema(connection)
+            migrations._add_semester_reporting_schema(connection)
             index_sql = connection.execute(text("""
                 SELECT sql
                 FROM sqlite_master
-                WHERE type = 'index' AND name = 'ux_academic_terms_current'
+                WHERE type = 'index' AND name = 'ux_semesters_current'
             """)).scalar_one()
-            assert "ON academic_terms((1))" in index_sql
+            assert "ON semesters((1))" in index_sql
 
         _execute_integrity_error(migration_engine, """
-            INSERT INTO academic_terms (
+            INSERT INTO semesters (
                 label, status, created_at, created_by_name_snapshot
             ) VALUES (
                 '不應並存的正式學期', 'active', CURRENT_TIMESTAMP, '管理員'
@@ -1192,7 +1035,7 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
 
         with migration_engine.begin() as connection:
             connection.execute(text("""
-                INSERT INTO academic_terms (
+                INSERT INTO semesters (
                     label, status, created_at, created_by_name_snapshot
                 ) VALUES
                     ('下一學期草稿甲', 'draft', CURRENT_TIMESTAMP, '管理員'),
@@ -1200,86 +1043,6 @@ def test_academic_term_current_index_is_cross_status_and_migration_safe(tmp_path
             """))
     finally:
         migration_engine.dispose()
-
-
-def test_organization_schema_orm_relationship_contracts():
-    from database import (
-        AcademicTerm,
-        AcademicTermClassroom,
-        AcademicTermClassroomStudent,
-        AcademicTermClassroomTeacher,
-        AcademicTermPeriod,
-        Base,
-        ClassPeriodWorkSlot,
-        ClassRosterMember,
-        Classroom,
-        Campus,
-        OrganizationSupervisorAssignment,
-        Project,
-        TermClassroomPlan,
-        TermClassroomTeacherTarget,
-        TermReclassificationPlan,
-        TermStudentPlacement,
-        User,
-    )
-
-    configure_mappers()
-
-    assert "teacher_assignments" in inspect(Classroom).relationships
-    assert "supervisor_assignments" in inspect(Campus).relationships
-    assert "editor_assignments" in inspect(Project).relationships
-    assert "classroom_teacher_assignments" in inspect(User).relationships
-    assert "project_editor_assignments" in inspect(User).relationships
-    assert "organization_supervisor_assignments" in inspect(User).relationships
-    assert "supervisor_id" not in inspect(User).columns
-    assert {
-        "supervisor",
-        "subordinates",
-        "supervisors",
-        "managed_teachers",
-    }.isdisjoint(inspect(User).relationships.keys())
-    assert "teacher_supervisors" not in Base.metadata.tables
-    assert "legacy_teacher_supervisor_links" not in Base.metadata.tables
-    assert {
-        "term_placements",
-        "academic_term_student_snapshots",
-    } <= set(inspect(ClassRosterMember).relationships.keys())
-    assert {"periods", "classrooms"} <= set(
-        inspect(AcademicTerm).relationships.keys()
-    )
-    assert "template_period" in inspect(AcademicTermPeriod).relationships
-    assert {"teachers", "students", "work_slots"} <= set(
-        inspect(AcademicTermClassroom).relationships.keys()
-    )
-    assert "source_assignment" in inspect(
-        AcademicTermClassroomTeacher
-    ).relationships
-    assert {
-        "term_classroom",
-        "source_membership",
-    } <= set(inspect(AcademicTermClassroomStudent).relationships.keys())
-    assert "academic_term_id" in inspect(
-        AcademicTermClassroomStudent
-    ).columns
-    assert {"term_classroom", "term_period", "projects"} <= set(
-        inspect(ClassPeriodWorkSlot).relationships.keys()
-    )
-    assert "class_period_work_slot" in inspect(Project).relationships
-    assert {
-        "student_placements",
-        "classroom_plans",
-    } <= set(inspect(TermReclassificationPlan).relationships.keys())
-    assert "source_membership" in inspect(TermStudentPlacement).relationships
-    assert "teacher_targets" in inspect(TermClassroomPlan).relationships
-    assert "ux_term_classroom_teacher_target_lead" not in {
-        index.name for index in TermClassroomTeacherTarget.__table__.indexes
-    }
-    assert {
-        "ux_organization_supervisor_active_campus",
-        "ux_organization_supervisor_active_department",
-    } <= {
-        index.name for index in OrganizationSupervisorAssignment.__table__.indexes
-    }
 
 
 def test_active_project_editors_are_retired_as_historical_rows(tmp_path):
@@ -1329,5 +1092,364 @@ def test_active_project_editors_are_retired_as_historical_rows(tmp_path):
                 FROM project_editor_assignments WHERE id = 2
             """)).one()
             assert historical == ("2025-06-30", "manual", "舊管理員")
+    finally:
+        migration_engine.dispose()
+
+
+def test_term_scope_migration_cancels_orphan_draft_semester(tmp_path):
+    """取消既有編班草稿時，草稿持有的目標學期要一起取消。
+
+    留著會變成孤兒 draft 學期：使用者之後建立期別時系統會要求「指定學期」，
+    而那個選項是一份已經作廢的草稿。
+    """
+    import migrations
+
+    database_path = tmp_path / "orphan-draft-semester.db"
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(text("""
+                CREATE TABLE semesters (
+                    id INTEGER PRIMARY KEY,
+                    label VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL
+                )
+            """))
+            connection.execute(text("""
+                CREATE TABLE term_reclassification_plans (
+                    id INTEGER PRIMARY KEY,
+                    status VARCHAR NOT NULL,
+                    target_semester_id INTEGER REFERENCES semesters(id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO semesters (id, label, status) VALUES
+                    (1, '目前學期', 'imported'),
+                    (2, '草稿學期', 'draft'),
+                    (3, '沒有草稿指向它', 'draft')
+            """))
+            connection.execute(text("""
+                INSERT INTO term_reclassification_plans
+                    (id, status, target_semester_id)
+                VALUES (1, 'draft', 2)
+            """))
+
+        with migration_engine.connect() as connection:
+            migrations._cancel_draft_term_plans(connection)
+            migrations._cancel_draft_term_plans(connection)
+            statuses = dict(connection.execute(text(
+                "SELECT id, status FROM semesters ORDER BY id"
+            )).all())
+            plan_status = connection.execute(text(
+                "SELECT status FROM term_reclassification_plans WHERE id = 1"
+            )).scalar_one()
+
+        assert plan_status == "cancelled"
+        assert statuses[2] == "cancelled"
+        assert statuses[1] == "imported"
+        # 沒有草稿指向的學期不該被順手動到
+        assert statuses[3] == "draft"
+    finally:
+        migration_engine.dispose()
+
+
+def _legacy_term_scope_fixture(database_path):
+    """建出剛好可以併入學期範圍的舊結構：一個班、一本相本、一個工作格。"""
+    import sqlite3
+
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.executescript("""
+            CREATE TABLE campuses (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL);
+            CREATE TABLE classrooms (
+                id INTEGER PRIMARY KEY,
+                campus_id INTEGER NOT NULL REFERENCES campuses(id),
+                department VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+            CREATE TABLE semesters (
+                id INTEGER PRIMARY KEY,
+                label VARCHAR NOT NULL,
+                status VARCHAR NOT NULL
+            );
+            CREATE TABLE semester_periods (
+                id INTEGER PRIMARY KEY,
+                semester_id INTEGER NOT NULL REFERENCES semesters(id)
+            );
+            CREATE TABLE academic_term_classrooms (
+                id INTEGER PRIMARY KEY,
+                semester_id INTEGER NOT NULL REFERENCES semesters(id),
+                classroom_id INTEGER NOT NULL REFERENCES classrooms(id),
+                campus_id_snapshot INTEGER NOT NULL,
+                campus_name_snapshot VARCHAR NOT NULL,
+                classroom_name_snapshot VARCHAR NOT NULL,
+                department VARCHAR NOT NULL
+            );
+            CREATE TABLE class_period_work_slots (
+                id INTEGER PRIMARY KEY,
+                term_classroom_id INTEGER NOT NULL
+                    REFERENCES academic_term_classrooms(id),
+                semester_period_id INTEGER NOT NULL REFERENCES semester_periods(id),
+                started_at DATETIME
+            );
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                classroom_id INTEGER REFERENCES classrooms(id),
+                class_period_work_slot_id INTEGER
+                    REFERENCES class_period_work_slots(id),
+                deleted_at DATETIME
+            );
+            CREATE TABLE term_reclassification_plans (
+                id INTEGER PRIMARY KEY,
+                status VARCHAR NOT NULL,
+                target_semester_id INTEGER
+            );
+            INSERT INTO campuses VALUES (1, '總校');
+            INSERT INTO classrooms VALUES (1, 1, 'infant', '太陽班', 1, NULL, NULL);
+            INSERT INTO semesters VALUES (1, '114 下', 'imported');
+            INSERT INTO semester_periods VALUES (1, 1);
+            INSERT INTO academic_term_classrooms
+                VALUES (1, 1, 1, 1, '總校', '太陽班', 'infant');
+            INSERT INTO class_period_work_slots VALUES (1, 1, 1, NULL);
+            INSERT INTO projects VALUES (1, '第一期相本', 1, 1, NULL);
+        """)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _run_term_scope_preflight(database_path):
+    import migrations
+
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.connect() as connection:
+            migrations._assert_term_scope_migration_preconditions(connection)
+    finally:
+        migration_engine.dispose()
+
+
+def test_term_scope_preflight_accepts_consistent_legacy_data(tmp_path):
+    database_path = tmp_path / "preflight-ok.db"
+    _legacy_term_scope_fixture(database_path)
+    _run_term_scope_preflight(database_path)
+
+
+@pytest.mark.parametrize(
+    "corruption, expected",
+    [
+        (
+            "UPDATE classrooms SET name = '改過名的班' WHERE id = 1",
+            "學期快照與班級現值不符",
+        ),
+        (
+            "INSERT INTO classrooms VALUES (2, 1, 'infant', '別班', 1, NULL, NULL);"
+            "UPDATE projects SET classroom_id = 2 WHERE id = 1",
+            "與工作格推出的班不一致",
+        ),
+        (
+            "UPDATE projects SET class_period_work_slot_id = NULL WHERE id = 1",
+            "沒有工作格",
+        ),
+    ],
+)
+def test_term_scope_preflight_aborts_on_inconsistent_legacy_data(
+    tmp_path,
+    corruption,
+    expected,
+):
+    """規格明列的三項不一致，各自都要在刪掉舊快照表之前中止。"""
+    import sqlite3
+
+    database_path = tmp_path / "preflight-abort.db"
+    _legacy_term_scope_fixture(database_path)
+    connection = sqlite3.connect(str(database_path))
+    try:
+        connection.executescript(corruption)
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(RuntimeError, match=expected):
+        _run_term_scope_preflight(database_path)
+
+
+def test_term_scope_migration_leaves_nothing_behind_when_it_fails(tmp_path):
+    """搬遷中途失敗不得留下半套結構。
+
+    留下半套的後果不是報錯而是靜默跳過：下次啟動只要看到 classrooms 已經有
+    semester_id，就判定遷移完成，資料卻停在一半。
+    """
+    import sqlite3
+
+    import migrations
+
+    database_path = tmp_path / "term-scope-rollback.db"
+    _legacy_term_scope_fixture(database_path)
+    before = sqlite3.connect(str(database_path))
+    try:
+        original_tables = {
+            row[0]
+            for row in before.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        original_classroom_columns = {
+            row[1] for row in before.execute("PRAGMA table_info(classrooms)")
+        }
+    finally:
+        before.close()
+
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    boom = RuntimeError("simulated failure mid-migration")
+    try:
+        with migration_engine.connect() as connection:
+            real_execute = connection.execute
+            state = {"seen_drop": False}
+
+            def failing_execute(statement, *args, **kwargs):
+                # 撐到快照表被 drop 的那一刻才炸，確保已經改過結構
+                if "DROP TABLE IF EXISTS academic_term_classroom_students" in str(
+                    statement
+                ):
+                    state["seen_drop"] = True
+                    raise boom
+                return real_execute(statement, *args, **kwargs)
+
+            connection.execute = failing_execute
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                migrations._migrate_classrooms_to_term_scope(connection)
+            assert state["seen_drop"], "測試沒走到預期的失敗點"
+    finally:
+        migration_engine.dispose()
+
+    after = sqlite3.connect(str(database_path))
+    try:
+        tables = {
+            row[0]
+            for row in after.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        classroom_columns = {
+            row[1] for row in after.execute("PRAGMA table_info(classrooms)")
+        }
+        assert "academic_term_classrooms" in tables, "舊快照表不該在失敗後消失"
+        assert classroom_columns == original_classroom_columns
+        assert "semester_id" not in classroom_columns
+        assert tables >= original_tables
+        assert after.execute("SELECT COUNT(*) FROM classrooms").fetchone()[0] == 1
+    finally:
+        after.close()
+
+
+def test_student_serial_is_unique_only_where_present(tmp_path):
+    """學號的唯一性只能在有值時要求。
+
+    多數孩子沒有學號（已離園、或未在行政系統登記），全欄位 UNIQUE 會把他們互相排擠。
+    partial index 讓 NULL 可以有很多個，但同一個學號只能屬於一個孩子——與行政系統
+    對帳靠的就是這個保證。
+    """
+    import migrations
+
+    migration_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'student-serial.db').as_posix()}"
+    )
+    try:
+        with migration_engine.begin() as connection:
+            # 升級前的名冊表：沒有 student_serial
+            connection.execute(text("""
+                CREATE TABLE students (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    created_at DATETIME,
+                    album_name VARCHAR
+                )
+            """))
+            connection.execute(text(
+                "INSERT INTO students (id, name) VALUES (1, '甲'), (2, '乙'), (3, '丙')"
+            ))
+
+        with migration_engine.connect() as connection:
+            migrations._add_student_serial_column(connection)
+            migrations._add_student_serial_column(connection)  # 重跑不出錯
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(students)"))
+            }
+            assert "student_serial" in columns
+            # 既有資料不受影響
+            assert connection.execute(
+                text("SELECT COUNT(*) FROM students")
+            ).scalar_one() == 3
+
+        with migration_engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE students SET student_serial = 'DN0000001' WHERE id = 1"
+            ))
+
+        # 同一個學號不可屬於兩個孩子
+        _execute_integrity_error(migration_engine, """
+            UPDATE students SET student_serial = 'DN0000001' WHERE id = 2
+        """)
+
+        # 沒有學號的孩子可以有很多個
+        with migration_engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO students (name, student_serial) VALUES ('丁', NULL), ('戊', NULL)"
+            ))
+            without_serial = connection.execute(text(
+                "SELECT COUNT(*) FROM students WHERE student_serial IS NULL"
+            )).scalar_one()
+            assert without_serial == 4
+    finally:
+        migration_engine.dispose()
+
+
+def test_term_scope_migration_rejects_foreign_key_drift_before_committing(tmp_path):
+    """FK 不一致必須在 commit 前擋下，而且不能留下半套結構。
+
+    這一段會 drop 掉兩張快照表與 mapping 表。commit 之後才發現 FK 壞掉就沒有回頭路，
+    而下次啟動又會因為 classrooms 已有 semester_id 而判定完成——帶著 drift 繼續跑。
+    """
+    import migrations
+
+    database_path = tmp_path / "term-scope-fk-drift.db"
+    _legacy_term_scope_fixture(database_path)
+    migration_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with migration_engine.begin() as connection:
+            # 工作格指向一個不存在的期別：搬遷後會是貨真價實的 FK 違反
+            connection.execute(text(
+                "UPDATE class_period_work_slots SET semester_period_id = 999999"
+            ))
+
+        with migration_engine.connect() as connection:
+            with pytest.raises(RuntimeError, match="外鍵不一致"):
+                migrations._migrate_classrooms_to_term_scope(connection)
+
+        # 舊結構必須原封不動，才有機會修完再跑一次
+        with migration_engine.connect() as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ))
+            }
+            assert "academic_term_classrooms" in tables, "失敗後 mapping 表不該消失"
+            classroom_columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(classrooms)"))
+            }
+            assert "semester_id" not in classroom_columns, (
+                "失敗後 classrooms 不該留下半套結構，否則重跑會誤判已完成"
+            )
+            assert connection.execute(
+                text("PRAGMA foreign_keys")
+            ).scalar_one() == 1, "失敗路徑必須把 foreign_keys 還原"
     finally:
         migration_engine.dispose()

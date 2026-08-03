@@ -5,7 +5,7 @@ import json
 import threading
 from datetime import timedelta
 
-from database import SessionLocal, Student
+from database import SessionLocal, ProjectStudent
 from services import project_photo_service
 from services.storage_factory import get_storage
 from tests.helpers import (
@@ -30,7 +30,7 @@ def _students_by_name(client, project_id: int) -> dict[str, dict]:
 def _student_created_at(student_id: int):
     db = SessionLocal()
     try:
-        return db.get(Student, student_id).created_at
+        return db.get(ProjectStudent, student_id).created_at
     finally:
         db.close()
 
@@ -45,7 +45,7 @@ def _insert_replacement_with_reused_id(
 ) -> None:
     db = SessionLocal()
     try:
-        replacement = Student(
+        replacement = ProjectStudent(
             project_id=project_id,
             name=name,
             order_index=order_index,
@@ -97,7 +97,7 @@ def _delete_student_directly(student_id: int) -> None:
     """模擬外部遷移在解碼期間替換學生 identity。"""
     db = SessionLocal()
     try:
-        student = db.get(Student, student_id)
+        student = db.get(ProjectStudent, student_id)
         assert student is not None
         db.delete(student)
         db.commit()
@@ -171,7 +171,7 @@ def test_single_photo_upload_rejects_reused_student_id_before_storage_write(
 
     db = SessionLocal()
     try:
-        replacement = db.get(Student, original_student_id)
+        replacement = db.get(ProjectStudent, original_student_id)
         assert replacement.name == replacement_name
         assert replacement.pages_data_json == "[]"
     finally:
@@ -255,8 +255,8 @@ def test_batch_photo_upload_preflights_all_reused_student_ids_before_any_write(
 
     db = SessionLocal()
     try:
-        stable_student = db.get(Student, stable_student_id)
-        replacement = db.get(Student, stale_student_id)
+        stable_student = db.get(ProjectStudent, stable_student_id)
+        replacement = db.get(ProjectStudent, stale_student_id)
         assert stable_student.pages_data_json == "[]"
         assert replacement.name == replacement_name
         assert replacement.pages_data_json == "[]"

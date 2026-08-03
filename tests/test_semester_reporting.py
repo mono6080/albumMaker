@@ -7,13 +7,12 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 
 from database import (
-    AcademicTerm,
-    AcademicTermClassroom,
+    Semester,
     Classroom,
     Project,
-    RosterChild,
-    SessionLocal,
     Student,
+    SessionLocal,
+    ProjectStudent,
 )
 from routers import roster as roster_router
 from services import semester_render_service
@@ -35,7 +34,7 @@ from tests.test_roster import (
     create_scoped_classroom,
     get_semester_preview,
     preview_children,
-    reporting_term_id,
+    reporting_semester_id,
     set_campus_supervisor_scope,
     set_classroom_teachers,
 )
@@ -77,11 +76,11 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
             [unique_name("missing_photo_a"), unique_name("missing_photo_b")],
         )
         project_id = create_classroom_project(client, classroom_id, template_id)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         project = _project_progress(progress.json(), project_id)
@@ -94,7 +93,7 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
         assert_status(complete, 200)
         submitted_progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         submitted_project = _project_progress(
             submitted_progress.json(),
@@ -111,7 +110,7 @@ def test_progress_keeps_started_slot_archived_and_separates_status_axes():
         assert_status(archived, 200)
         archived_progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(archived_progress, 200)
         classroom = next(
@@ -140,11 +139,11 @@ def test_closed_term_does_not_seed_children_from_current_roster():
         original_name = unique_name("closed_term_original")
         add_classroom_members(client, classroom_id, [original_name])
         create_classroom_project(client, classroom_id, template_id)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         db = SessionLocal()
         try:
-            term = db.get(AcademicTerm, academic_term_id)
+            term = db.get(Semester, semester_id)
             original_status = term.status
             term.status = "closed"
             db.commit()
@@ -153,11 +152,16 @@ def test_closed_term_does_not_seed_children_from_current_roster():
 
         current_only_name = unique_name("current_roster_only")
         try:
-            add_classroom_members(client, classroom_id, [current_only_name])
+            # 學期一關，那學期的班就不再收人——匯出因此不可能長出當時不在的孩子
+            rejected = client.post(
+                f"/api/organization/classrooms/{classroom_id}/members/batch",
+                json={"members": [{"name": current_only_name}]},
+            )
+            assert_status(rejected, 409)
             preview = client.get(
                 "/api/roster/semester-export",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                 },
             )
@@ -170,7 +174,7 @@ def test_closed_term_does_not_seed_children_from_current_roster():
         finally:
             db = SessionLocal()
             try:
-                db.get(AcademicTerm, academic_term_id).status = original_status
+                db.get(Semester, semester_id).status = original_status
                 db.commit()
             finally:
                 db.close()
@@ -183,11 +187,11 @@ def test_closed_term_keeps_snapshot_student_without_any_project():
         _, classroom_id = create_scoped_classroom(client)
         student_name = unique_name("closed_no_project")
         add_classroom_members(client, classroom_id, [student_name])
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         db = SessionLocal()
         try:
-            term = db.get(AcademicTerm, academic_term_id)
+            term = db.get(Semester, semester_id)
             original_status = term.status
             term.status = "closed"
             db.commit()
@@ -198,7 +202,7 @@ def test_closed_term_keeps_snapshot_student_without_any_project():
             preview = client.get(
                 "/api/roster/semester-export",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                 },
             )
@@ -213,7 +217,7 @@ def test_closed_term_keeps_snapshot_student_without_any_project():
         finally:
             db = SessionLocal()
             try:
-                db.get(AcademicTerm, academic_term_id).status = original_status
+                db.get(Semester, semester_id).status = original_status
                 db.commit()
             finally:
                 db.close()
@@ -285,12 +289,12 @@ def test_teacher_overview_excel_escapes_formula_like_user_text():
             },
         )
         assert_status(project_response, 201)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         export = client.get(
             "/api/roster/teacher-overview/export",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "campus_id": campus_id,
                 "classroom_id": classroom_id,
             },
@@ -316,7 +320,7 @@ def test_teacher_overview_excel_escapes_formula_like_user_text():
         assert all(str(cell.value).startswith("'") for cell in formula_like_cells)
 
 
-def test_render_request_validates_term_period_before_starting_job(monkeypatch):
+def test_render_request_validates_semester_period_before_starting_job(monkeypatch):
     started_jobs = []
     monkeypatch.setattr(
         roster_router,
@@ -326,20 +330,20 @@ def test_render_request_validates_term_period_before_starting_job(monkeypatch):
     with started_client() as client:
         login(client)
         period = create_active_period(client)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
         response = client.post(
             "/api/roster/semester-export/render-missing",
             json={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [2_000_000_000],
             },
         )
         assert_status(response, 422)
-        assert response.json()["detail"]["code"] == "period_not_in_academic_term"
+        assert response.json()["detail"]["code"] == "period_not_in_semester"
         assert started_jobs == []
 
 
-def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
+def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_semesters():
     with started_client() as client:
         login(client)
         supervisor, supervisor_password = create_user(client, "supervisor")
@@ -355,12 +359,12 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
         db = SessionLocal()
         try:
             outside_classroom = db.get(Classroom, outside_classroom_id)
-            closed_term = AcademicTerm(
+            closed_term = Semester(
                 label=unique_name("outside_closed_term"),
                 status="closed",
                 created_by_name_snapshot="admin",
             )
-            cancelled_term = AcademicTerm(
+            cancelled_term = Semester(
                 label=unique_name("cancelled_term"),
                 status="cancelled",
                 created_by_name_snapshot="admin",
@@ -368,22 +372,13 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
             db.add_all([closed_term, cancelled_term])
             db.flush()
             db.add_all([
-                AcademicTermClassroom(
-                    academic_term_id=closed_term.id,
-                    classroom_id=outside_classroom.id,
-                    campus_id_snapshot=outside_classroom.campus_id,
-                    campus_name_snapshot=outside_classroom.campus.name,
-                    classroom_name_snapshot=outside_classroom.name,
+                Classroom(
+                    semester_id=term.id,
+                    campus_id=outside_classroom.campus_id,
+                    name=outside_classroom.name,
                     department=outside_classroom.department,
-                ),
-                AcademicTermClassroom(
-                    academic_term_id=cancelled_term.id,
-                    classroom_id=outside_classroom.id,
-                    campus_id_snapshot=outside_classroom.campus_id,
-                    campus_name_snapshot=outside_classroom.campus.name,
-                    classroom_name_snapshot=outside_classroom.name,
-                    department=outside_classroom.department,
-                ),
+                )
+                for term in (closed_term, cancelled_term)
             ])
             db.commit()
             closed_term_id = closed_term.id
@@ -395,13 +390,13 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
         login(client, supervisor["username"], supervisor_password)
         hidden_teacher = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": closed_term_id},
+            params={"semester_id": closed_term_id},
         )
         assert_status(hidden_teacher, 404)
         hidden_semester = client.get(
             "/api/roster/semester-export",
             params={
-                "academic_term_id": closed_term_id,
+                "semester_id": closed_term_id,
                 "period_ids": [2_000_000_000],
             },
         )
@@ -411,20 +406,20 @@ def test_report_direct_term_id_hides_out_of_scope_and_nonreporting_terms():
         login(client)
         cancelled_teacher = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": cancelled_term_id},
+            params={"semester_id": cancelled_term_id},
         )
         assert_status(cancelled_teacher, 404)
         cancelled_semester = client.get(
             "/api/roster/semester-export",
             params={
-                "academic_term_id": cancelled_term_id,
+                "semester_id": cancelled_term_id,
                 "period_ids": [2_000_000_000],
             },
         )
         assert_status(cancelled_semester, 404)
 
 
-def test_reporting_term_list_only_exposes_supervisor_departments():
+def test_reporting_semester_list_only_exposes_supervisor_departments():
     with started_client() as client:
         login(client)
         supervisor, supervisor_password = create_user(client, "supervisor")
@@ -442,19 +437,19 @@ def test_reporting_term_list_only_exposes_supervisor_departments():
             supervisor["id"],
             department="academy",
         )
-        academic_term_id = reporting_term_id(
+        semester_id = reporting_semester_id(
             client,
             [infant_period["id"], academy_period["id"]],
         )
 
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
-        response = client.get("/api/roster/academic-terms")
+        response = client.get("/api/roster/semesters")
         assert_status(response, 200)
         term = next(
             term
             for term in response.json()["terms"]
-            if term["id"] == academic_term_id
+            if term["id"] == semester_id
         )
         assert academy_period["id"] in {
             period["template_period_id"] for period in term["periods"]
@@ -485,7 +480,7 @@ def test_semester_preview_hides_out_of_scope_period_ids_from_supervisor():
             supervisor["id"],
             department="academy",
         )
-        academic_term_id = reporting_term_id(
+        semester_id = reporting_semester_id(
             client,
             [infant_period["id"], academy_period["id"]],
         )
@@ -495,7 +490,7 @@ def test_semester_preview_hides_out_of_scope_period_ids_from_supervisor():
         visible_preview = client.get(
             "/api/roster/semester-export",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [academy_period["id"]],
             },
         )
@@ -513,7 +508,7 @@ def test_semester_preview_hides_out_of_scope_period_ids_from_supervisor():
             hidden_preview = client.get(
                 "/api/roster/semester-export",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": hidden_period_ids,
                 },
             )
@@ -521,10 +516,14 @@ def test_semester_preview_hides_out_of_scope_period_ids_from_supervisor():
             assert hidden_preview.json() == {"detail": "找不到期別"}
 
 
-def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
+def test_closed_term_export_follows_roster_name_correction(
     monkeypatch,
     tmp_path,
 ):
+    """名冊姓名是唯一真相：更正之後，已結束學期的匯出也跟著顯示新名。
+
+    凍結的是相本本身——`ProjectStudent.name` 與已渲染的 PDF 內容都停在當時。
+    """
     use_tmp_uploads(monkeypatch, tmp_path)
     with started_client() as client:
         login(client)
@@ -546,15 +545,15 @@ def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
             f"/api/projects/{project_id}/students/{student_id}/render"
         )
         assert_status(rendered, 200)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         db = SessionLocal()
         try:
-            term = db.get(AcademicTerm, academic_term_id)
+            term = db.get(Semester, semester_id)
             original_status = term.status
             term.status = "closed"
-            student = db.get(Student, student_id)
-            db.get(RosterChild, student.roster_child_id).name = current_name
+            student = db.get(ProjectStudent, student_id)
+            db.get(Student, student.roster_child_id).name = current_name
             db.commit()
         finally:
             db.close()
@@ -563,19 +562,19 @@ def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
             preview = client.get(
                 "/api/roster/semester-export",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                 },
             )
             assert_status(preview, 200)
             names = {child["name"] for child in preview_children(preview.json())}
-            assert historical_name in names
-            assert current_name not in names
+            assert current_name in names
+            assert historical_name not in names
 
             download = client.get(
                 "/api/roster/semester-export/download",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                     "mode": "print",
                 },
@@ -583,12 +582,18 @@ def test_closed_term_uses_term_student_name_snapshot_for_preview_and_zip(
             assert_status(download, 200)
             with ZipFile(BytesIO(download.content)) as zip_archive:
                 entry_names = zip_archive.namelist()
-            assert any(f"/{historical_name}/" in name for name in entry_names)
-            assert not any(current_name in name for name in entry_names)
+            assert any(f"/{current_name}/" in name for name in entry_names)
+            assert not any(historical_name in name for name in entry_names)
+
+            db = SessionLocal()
+            try:
+                assert db.get(ProjectStudent, student_id).name == historical_name
+            finally:
+                db.close()
         finally:
             db = SessionLocal()
             try:
-                db.get(AcademicTerm, academic_term_id).status = original_status
+                db.get(Semester, semester_id).status = original_status
                 db.commit()
             finally:
                 db.close()
@@ -636,11 +641,11 @@ def test_semester_zip_uses_term_student_final_classroom_for_transferred_child(
             json={"target_classroom_id": target_classroom_id},
         )
         assert_status(transferred, 200)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         db = SessionLocal()
         try:
-            term = db.get(AcademicTerm, academic_term_id)
+            term = db.get(Semester, semester_id)
             original_status = term.status
             term.status = "closed"
             campus_name = db.get(Classroom, target_classroom_id).campus.name
@@ -654,7 +659,7 @@ def test_semester_zip_uses_term_student_final_classroom_for_transferred_child(
             preview = client.get(
                 "/api/roster/semester-export",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                 },
             )
@@ -672,7 +677,7 @@ def test_semester_zip_uses_term_student_final_classroom_for_transferred_child(
             download = client.get(
                 "/api/roster/semester-export/download",
                 params={
-                    "academic_term_id": academic_term_id,
+                    "semester_id": semester_id,
                     "period_ids": [period["id"]],
                     "mode": "print",
                 },
@@ -690,7 +695,7 @@ def test_semester_zip_uses_term_student_final_classroom_for_transferred_child(
         finally:
             db = SessionLocal()
             try:
-                db.get(AcademicTerm, academic_term_id).status = original_status
+                db.get(Semester, semester_id).status = original_status
                 db.commit()
             finally:
                 db.close()
@@ -719,7 +724,7 @@ def test_semester_zip_appends_merged_pdf_for_multi_period_child(
                 f"/api/projects/{project_id}/students/{student_id}/render"
             )
             assert_status(rendered, 200)
-        academic_term_id = reporting_term_id(
+        semester_id = reporting_semester_id(
             client,
             [period_a["id"], period_b["id"]],
         )
@@ -727,7 +732,7 @@ def test_semester_zip_appends_merged_pdf_for_multi_period_child(
         download = client.get(
             "/api/roster/semester-export/download",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period_a["id"], period_b["id"]],
                 "mode": "print",
             },
@@ -763,7 +768,7 @@ def test_semester_zip_appends_merged_pdf_for_multi_period_child(
         assert "全期合併" in manifest
 
 
-def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
+def test_current_supervisor_reads_historical_snapshot_after_campus_rename():
     with started_client() as client:
         login(client)
         supervisor, supervisor_password = create_user(client, "supervisor")
@@ -791,7 +796,7 @@ def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
         assert_status(member_response, 201)
         member_id = member_response.json()["created"][0]["id"]
         project_id = create_classroom_project(client, classroom_id, template_id)
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         ended_member = client.patch(
             f"/api/organization/classrooms/{classroom_id}/members/{member_id}",
@@ -799,19 +804,30 @@ def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
         )
         assert_status(ended_member, 200)
         set_classroom_teachers(client, classroom_id, [])
-        moved = client.patch(
+        # 班級的分校不可變更（見 term-scoped-classroom-v1 的決定 A）；
+        # 快照與現況的分歧改由分校改名產生。
+        rejected_move = client.patch(
             f"/api/organization/classrooms/{classroom_id}",
-            json={"campus_id": target_campus_id, "is_active": False},
+            json={"campus_id": target_campus_id},
         )
-        assert_status(moved, 200)
+        assert_status(rejected_move, 409)
+        assert rejected_move.json()["detail"]["code"] == "classroom_scope_is_immutable"
+        renamed_campus = client.patch(
+            f"/api/organization/campuses/{source_campus_id}",
+            json={"name": unique_name("renamed_source")},
+        )
+        assert_status(renamed_campus, 200)
+        renamed_campus_name = renamed_campus.json()["name"]
 
         client.cookies.clear()
         login(client, supervisor["username"], supervisor_password)
         detail = client.get(f"/api/projects/{project_id}")
         assert_status(detail, 200)
+        # 主管 scope 走 campus_id_snapshot，相本顯示的分校名仍是建立當時的
+        assert detail.json()["campus_name"] != renamed_campus_name
         progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(progress, 200)
         assert _project_progress(progress.json(), project_id)["project_id"] == project_id
@@ -836,7 +852,7 @@ def test_current_supervisor_reads_historical_snapshot_after_classroom_move():
         assert_status(forbidden_detail, 403)
         forbidden_progress = client.get(
             "/api/roster/teacher-progress",
-            params={"academic_term_id": academic_term_id},
+            params={"semester_id": semester_id},
         )
         assert_status(forbidden_progress, 403)
 
@@ -853,12 +869,12 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
         add_classroom_members(client, classroom_id, [student_name])
         project_id = create_classroom_project(client, classroom_id, template_id)
         student_id = add_students(client, project_id, [student_name])[student_name]
-        academic_term_id = reporting_term_id(client, [period["id"]])
+        semester_id = reporting_semester_id(client, [period["id"]])
 
         db = SessionLocal()
         try:
             original_project = db.get(Project, project_id)
-            original_student = db.get(Student, student_id)
+            original_student = db.get(ProjectStudent, student_id)
             duplicate_project = Project(
                 name=unique_name("legacy_duplicate"),
                 template_id=original_project.template_id,
@@ -876,7 +892,7 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
             )
             db.add(duplicate_project)
             db.flush()
-            db.add(Student(
+            db.add(ProjectStudent(
                 project_id=duplicate_project.id,
                 name=original_student.name,
                 order_index=0,
@@ -911,7 +927,7 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
         try:
             render_result = semester_render_service.render_missing_semester_albums(
                 db,
-                academic_term_id,
+                semester_id,
                 [period["id"]],
             )
         finally:
@@ -923,7 +939,7 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
         download = client.get(
             "/api/roster/semester-export/download",
             params={
-                "academic_term_id": academic_term_id,
+                "semester_id": semester_id,
                 "period_ids": [period["id"]],
                 "mode": "print",
             },

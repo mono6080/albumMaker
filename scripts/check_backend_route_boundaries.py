@@ -210,7 +210,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ("delete", "/{user_id}", "delete_user"),
     ),
     "routers/roster.py": _routes(
-        ("get", "/academic-terms", "get_reporting_terms"),
+        ("get", "/semesters", "get_reporting_semesters"),
         ("get", "/semester-export", "get_semester_export_preview"),
         ("get", "/teacher-progress", "get_teacher_progress"),
         ("get", "/teacher-overview/export", "export_teacher_overview_excel"),
@@ -230,7 +230,7 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
     "routers/organization.py": _routes(
         ("get", "/overview", "get_organization_overview"),
         ("get", "/my-classrooms", "get_my_classrooms"),
-        ("get", "/academic-terms", "list_academic_terms"),
+        ("get", "/semesters", "list_semesters"),
         ("post", "/campuses", "create_campus"),
         ("patch", "/campuses/{campus_id}", "update_campus"),
         (
@@ -238,18 +238,9 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "/campuses/{campus_id}/supervisors",
             "replace_campus_supervisors",
         ),
-        (
-            "put",
-            "/projects/{project_id}/classroom",
-            "assign_project_to_classroom",
-        ),
-        (
-            "get",
-            "/projects/{project_id}/classroom-migration-preview",
-            "get_project_classroom_migration_preview",
-        ),
         ("post", "/classrooms", "create_classroom"),
         ("patch", "/classrooms/{classroom_id}", "update_classroom"),
+        ("delete", "/classrooms/{classroom_id}", "delete_classroom"),
         (
             "post",
             "/classrooms/{classroom_id}/members/batch",
@@ -261,18 +252,23 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "update_classroom_member",
         ),
         (
+            "delete",
+            "/classrooms/{classroom_id}/members/{member_id}",
+            "delete_draft_classroom_member",
+        ),
+        (
             "post",
             "/classrooms/{classroom_id}/members/album-names/auto-fill",
             "auto_fill_classroom_member_album_names",
         ),
         (
             "patch",
-            "/roster-children/{roster_child_id}/album-name",
+            "/students/{roster_child_id}/album-name",
             "update_roster_child_album_name",
         ),
         (
             "post",
-            "/roster-children/{roster_child_id}/album-name/auto-fill",
+            "/students/{roster_child_id}/album-name/auto-fill",
             "auto_fill_roster_child_album_name",
         ),
         (
@@ -284,6 +280,11 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "put",
             "/classrooms/{classroom_id}/teachers",
             "replace_classroom_teachers",
+        ),
+        (
+            "put",
+            "/semesters/{semester_id}/classroom-order",
+            "reorder_classrooms",
         ),
         (
             "post",

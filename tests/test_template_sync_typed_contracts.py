@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from database import Project, SessionLocal, Student, Template, TemplatePage, TemplateProjectSyncBackup, init_db
+from database import Project, SessionLocal, ProjectStudent, Template, TemplatePage, TemplateProjectSyncBackup, init_db
 from services.student_render_service import _RENDER_PIPELINE_FILES, _render_pipeline_fingerprint
 from services.template_project_sync_service import (
     ProjectSyncState,
@@ -163,7 +163,7 @@ def test_prepare_plan_preserves_raw_project_and_student_json_byte_for_byte():
         )
         db.add(project)
         db.flush()
-        db.add(Student(
+        db.add(ProjectStudent(
             project_id=project.id,
             name="原始 JSON 學生",
             order_index=0,
@@ -258,7 +258,7 @@ def test_change_hash_is_stable_and_binds_raw_json_and_normalized_page_payloads()
         deleted_at=None,
         label_texts_json=' {"0":{"label":"raw"}} ',
     )
-    student = Student(
+    student = ProjectStudent(
         id=404,
         project_id=303,
         name="hash student",
@@ -337,7 +337,7 @@ def test_structural_backup_keeps_exact_manual_rescue_payloads():
         label_texts_json=raw_labels_json,
     )
     student_completed_at = datetime(2026, 7, 15, 9, 0, 0)
-    student = Student(
+    student = ProjectStudent(
         id=404,
         project_id=303,
         name="backup student",

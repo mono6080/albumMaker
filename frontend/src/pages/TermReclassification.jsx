@@ -1,32 +1,35 @@
 // 新學期編班：先編輯全園目標狀態，驗證差異後再一次套用。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   ArrowRightLeft,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   ClipboardCheck,
-  Pencil,
   RefreshCw,
   Save,
   School,
   Search,
-  Users,
 } from "lucide-react";
 
 import {
   applyTermReclassificationPlan,
+  batchAddClassroomMembers,
   cancelTermReclassificationPlan,
+  createClassroom,
   createTermReclassificationPlan,
+  deleteClassroom,
   fetchOrganizationOverview,
+  reorderClassrooms,
+  updateClassroom,
+  deleteDraftClassroomMember,
   fetchTermReclassificationPlan,
   updateTermReclassificationPlan,
   validateTermReclassificationPlan,
 } from "../api/organizationApi";
 import ConfirmModal from "../components/ConfirmModal";
+import TermPlacementBoard from "../components/TermPlacementBoard";
 import FormModal from "../components/FormModal";
 import {
   Badge,
@@ -46,9 +49,11 @@ const DUTY_LABELS = {
 
 const getDiffCount = (value) => Array.isArray(value) ? value.length : Number(value ?? 0);
 
+// 來源班與目標班分屬不同學期，id 直接比不出有沒有換班。後端給的 stay_classroom_id
+// 是「來源班在目標學期的對應班」，與使用者目前選了什麼無關——搬走再改回來也認得出。
 const isStudentPlacementChanged = placement => (
   placement.outcome === "departed"
-  || placement.target_classroom_id !== placement.source_classroom_id
+  || placement.target_classroom_id !== placement.stay_classroom_id
 );
 
 const normalizeSearchText = value => value.replace(/[\s\u3000]+/g, "").toLocaleLowerCase("zh-TW");
@@ -56,16 +61,16 @@ const normalizeSearchText = value => value.replace(/[\s\u3000]+/g, "").toLocaleL
 const VALIDATION_ERROR_MESSAGES = {
   stale_reclassification_plan: "目前名單或老師編制已變更，這份草稿必須取消後重新建立。",
   target_classroom_not_found: "目標班級已不存在，請重新選擇。",
-  inactive_target_classroom: "學生被編入已停用的分校或班級。",
+  inactive_target_classroom: "學生被編入不屬於這個新學期的班級，或該分校已停用。",
   classroom_student_limit_exceeded: "目標班級人數超過相本可容納上限。",
   duplicate_target_student_name: "同一目標班級有重複姓名，請確認是否編錯學生。",
-  inactive_teacher_classroom: "已停用的分校或班級仍有目標老師編制。",
+  inactive_teacher_classroom: "老師編制落在不屬於這個新學期的班級，或該分校已停用。",
   invalid_lead_count: "非空老師編制必須恰有一位主教。",
   teacher_not_found: "目標老師帳號已不存在。",
   invalid_teacher_role: "目標帳號已無法指派為帶班老師，請重新指派。",
-  academic_term_period_required: "正式學期至少需要一個期別。請先到模板管理建立期別。",
-  academic_term_period_not_active: "正式學期的所有期別都必須先設為使用中。",
-  invalid_academic_term_dates: "學期開始日不可晚於結束日。",
+  semester_period_required: "正式學期至少需要一個期別。請先到模板管理建立期別。",
+  semester_period_not_active: "正式學期的所有期別都必須先設為使用中。",
+  invalid_semester_dates: "學期開始日不可晚於結束日。",
 };
 
 function getValidationErrorMessage(error) {
@@ -101,9 +106,16 @@ export default function TermReclassification() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [studentSearchText, setStudentSearchText] = useState("");
   const [isShowingChangedStudentsOnly, setIsShowingChangedStudentsOnly] = useState(false);
-  const [expandedStudentClassroomId, setExpandedStudentClassroomId] = useState(null);
   const [teacherEditor, setTeacherEditor] = useState(null);
   const [pendingValidationTargetId, setPendingValidationTargetId] = useState(null);
+  const [classroomDraft, setClassroomDraft] = useState(null);
+  const [newStudentDraft, setNewStudentDraft] = useState(null);
+  // 每次本地編輯都遞增；用來辨認「儲存回應回來時，本地是不是又動過了」
+  const saveGenerationRef = useRef(0);
+  const [focusAttempt, setFocusAttempt] = useState(0);
+  // 看板的分校分頁：放在頁面層才不會被載入狀態的卸載重置
+  const [activeCampusTab, setActiveCampusTab] = useState(null);
+  const reorderGenerationRef = useRef(0);
 
   const loadWorkspace = useCallback(async () => {
     setIsLoading(true);
@@ -141,33 +153,61 @@ export default function TermReclassification() {
   }, [isDirty]);
 
   useEffect(() => {
-    if (!pendingValidationTargetId) return;
+    if (!pendingValidationTargetId) return undefined;
     const target = document.getElementById(pendingValidationTargetId);
-    if (!target) return;
+    if (!target) {
+      // 目標可能在別的分校分頁上，看板要先切過去才會 render。重試幾次再放棄——
+      // 只試一次的話，切分頁不會重新觸發這個 effect，永遠定位不到。
+      if (focusAttempt >= 8) {
+        setPendingValidationTargetId(null);
+        return undefined;
+      }
+      const retry = setTimeout(() => setFocusAttempt(count => count + 1), 120);
+      return () => clearTimeout(retry);
+    }
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.focus({ preventScroll: true });
     setPendingValidationTargetId(null);
-  }, [expandedStudentClassroomId, pendingValidationTargetId]);
+    setFocusAttempt(0);
+    return undefined;
+  }, [pendingValidationTargetId, focusAttempt]);
 
-  const classrooms = useMemo(() => (
-    (overview?.campuses ?? []).flatMap(campus => (
-      campus.classrooms.map(classroom => ({
-        ...classroom,
-        campusName: campus.name,
-        campusIsActive: campus.is_active,
-      }))
-    ))
-  ), [overview]);
-  const activeClassrooms = classrooms.filter(classroom => (
-    classroom.is_active && classroom.campusIsActive
-  ));
+  // 可編入的是目標學期新建的班，不是目前學期那份清單
+  const targetClassrooms = useMemo(
+    () => (plan?.target_classrooms ?? []).map(classroom => ({
+      id: classroom.classroom_id,
+      name: classroom.name,
+      department: classroom.department,
+      campusId: classroom.campus_id,
+      campusName: classroom.campus_name,
+      // 可不可以移除由後端算，前端不自己再判一次——規則兩邊各一份就會走岔
+      canRemove: classroom.can_remove !== false,
+    })),
+    [plan?.target_classrooms],
+  );
   const teacherOptions = useMemo(
     () => overview?.teacher_options ?? [],
     [overview?.teacher_options],
   );
+  const currentClassrooms = useMemo(
+    () => (overview?.campuses ?? []).flatMap(campus => (
+      campus.classrooms.map(classroom => ({
+        id: classroom.id,
+        name: classroom.name,
+        campusName: campus.name,
+      }))
+    )),
+    [overview?.campuses],
+  );
+  const campusOptions = useMemo(
+    () => (overview?.campuses ?? [])
+      .filter(campus => campus.is_active)
+      .map(campus => ({ id: campus.id, name: campus.name })),
+    [overview?.campuses],
+  );
   const classroomById = useMemo(
-    () => new Map(classrooms.map(classroom => [classroom.id, classroom])),
-    [classrooms],
+    () => new Map(targetClassrooms.map(classroom => [classroom.id, classroom])),
+    [targetClassrooms],
   );
   const placementByMemberId = useMemo(
     () => new Map((plan?.student_placements ?? []).map(placement => (
@@ -179,52 +219,26 @@ export default function TermReclassification() {
     () => new Map(teacherOptions.map(teacher => [teacher.id, teacher])),
     [teacherOptions],
   );
-  const studentPlacementGroups = useMemo(() => {
-    const groupsByClassroomId = new Map();
-    for (const placement of plan?.student_placements ?? []) {
-      const currentGroup = groupsByClassroomId.get(placement.source_classroom_id) ?? {
-        classroomId: placement.source_classroom_id,
-        campusName: placement.source_campus_name,
-        classroomName: placement.source_classroom_name,
-        placements: [],
-      };
-      currentGroup.placements.push(placement);
-      groupsByClassroomId.set(placement.source_classroom_id, currentGroup);
-    }
-    return [...groupsByClassroomId.values()].sort((firstGroup, secondGroup) => (
-      firstGroup.campusName.localeCompare(secondGroup.campusName, "zh-TW")
-      || firstGroup.classroomName.localeCompare(secondGroup.classroomName, "zh-TW")
-    ));
-  }, [plan?.student_placements]);
-  const visibleStudentPlacementGroups = useMemo(() => {
+  // 看板是一欄一個目標班級，不再依來源班分組；搜尋與篩選直接作用在卡片上
+  const visibleBoardPlacements = useMemo(() => {
     const normalizedQuery = normalizeSearchText(studentSearchText);
-    return studentPlacementGroups
-      .map(group => {
-        const filteredPlacements = group.placements.filter(placement => {
-          if (isShowingChangedStudentsOnly && !isStudentPlacementChanged(placement)) return false;
-          if (!normalizedQuery) return true;
-          const targetClassroom = classroomById.get(placement.target_classroom_id);
-          return normalizeSearchText([
-            placement.student_name,
-            placement.source_campus_name,
-            placement.source_classroom_name,
-            targetClassroom?.campusName,
-            targetClassroom?.name,
-          ].filter(Boolean).join(" ")).includes(normalizedQuery);
-        });
-        return {
-          ...group,
-          filteredPlacements,
-          changedCount: group.placements.filter(isStudentPlacementChanged).length,
-        };
-      })
-      .filter(group => group.filteredPlacements.length > 0);
-  }, [classroomById, isShowingChangedStudentsOnly, studentPlacementGroups, studentSearchText]);
-  const visibleExpandedStudentClassroomId = visibleStudentPlacementGroups.some(
-    group => group.classroomId === expandedStudentClassroomId,
-  )
-    ? expandedStudentClassroomId
-    : (visibleStudentPlacementGroups[0]?.classroomId ?? null);
+    return (plan?.student_placements ?? []).filter(placement => {
+      if (isShowingChangedStudentsOnly && !isStudentPlacementChanged(placement)) return false;
+      if (!normalizedQuery) return true;
+      const target = placement.outcome === "departed"
+        ? "離園"
+        : (() => {
+          const classroom = classroomById.get(placement.target_classroom_id);
+          return classroom ? `${classroom.campusName}${classroom.name}` : "";
+        })();
+      return normalizeSearchText([
+        placement.student_name,
+        placement.source_campus_name,
+        placement.source_classroom_name,
+        target,
+      ].join("")).includes(normalizedQuery);
+    });
+  }, [classroomById, isShowingChangedStudentsOnly, plan?.student_placements, studentSearchText]);
 
   const handleTermMutationError = useCallback(async (error, fallback) => {
     const errorCode = getTermErrorCode(error);
@@ -242,6 +256,7 @@ export default function TermReclassification() {
   }, [loadWorkspace]);
 
   const markPlanEdited = (updater) => {
+    saveGenerationRef.current += 1;
     setPlan(currentPlan => {
       const nextPlan = updater(currentPlan);
       return { ...nextPlan, validation: null, diff: null };
@@ -249,11 +264,12 @@ export default function TermReclassification() {
     setIsDirty(true);
   };
 
-  const handleStudentTargetChange = (sourceMemberId, value) => {
+  const handleStudentTargetChange = (sourceMemberIds, value) => {
+    const targets = new Set(sourceMemberIds);
     markPlanEdited(currentPlan => ({
       ...currentPlan,
       student_placements: currentPlan.student_placements.map(placement => {
-        if (placement.source_member_id !== sourceMemberId) return placement;
+        if (!targets.has(placement.source_member_id)) return placement;
         if (value === "departed") {
           return { ...placement, outcome: "departed", target_classroom_id: null };
         }
@@ -264,6 +280,223 @@ export default function TermReclassification() {
         };
       }),
     }));
+  };
+
+  const handleAddTargetClassroom = async (event) => {
+    event.preventDefault();
+    const name = classroomDraft.name.trim();
+    if (!name) return;
+    // 增班會改動草稿的班級集合，之後必須重載；先擋住未儲存的編輯免得被蓋掉
+    if (isDirty) {
+      toast.error("請先儲存草稿，再增減班級。");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await createClassroom({
+        campus_id: Number(classroomDraft.campusId),
+        department: classroomDraft.department,
+        name,
+        semester_id: plan.target_semester_id,
+      });
+      setClassroomDraft(null);
+      await loadWorkspace();
+      toast.success("已新增新學期班級");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "新增班級失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 新生：名冊裡還沒有的孩子，直接編進新學期的班。他們不是 placement（沒有來源名單
+  // 列），套用時不會被動到，會原封不動留在新學期。
+  const handleAddNewStudents = async (event) => {
+    event.preventDefault();
+    const names = newStudentDraft.text
+      .split(/[\n,、，]/)
+      .map(name => name.trim())
+      .filter(Boolean);
+    if (!names.length) return;
+    if (isDirty) {
+      toast.error("請先儲存草稿，再編入新生。");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const response = await batchAddClassroomMembers(
+        newStudentDraft.classroomId,
+        names.map(name => ({ name })),
+      );
+      setNewStudentDraft(null);
+      await loadWorkspace();
+      const skipped = response.data?.skipped_names ?? [];
+      if (skipped.length) {
+        toast.error(`${skipped.length} 位重名未編入：${skipped.join("、")}`);
+      } else {
+        toast.success(`已編入 ${names.length} 位新生`);
+      }
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "編入新生失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRemoveNewStudent = async (classroomId, student) => {
+    if (isDirty) {
+      toast.error("請先儲存草稿，再移除新生。");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await deleteDraftClassroomMember(classroomId, student.member_id);
+      await loadWorkspace();
+      toast.success(`已移除新生 ${student.name}`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "移除新生失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 改名與調順序都不重載：loadWorkspace 會把伺服器版本蓋回來，
+  // 未儲存的學生編班與老師調整會被無聲丟掉。這兩件事不影響草稿內容，本地更新即可。
+  const handleRenameTargetClassroom = async (classroomId, name) => {
+    const previous = plan.target_classrooms;
+    setPlan(currentPlan => ({
+      ...currentPlan,
+      target_classrooms: currentPlan.target_classrooms.map(classroom => (
+        classroom.classroom_id === classroomId ? { ...classroom, name } : classroom
+      )),
+    }));
+    try {
+      await updateClassroom(classroomId, { name });
+    } catch (error) {
+      setPlan(currentPlan => ({ ...currentPlan, target_classrooms: previous }));
+      toast.error(getApiErrorMessage(error, "更新班級名稱失敗"));
+    }
+  };
+
+  const handleReorderTargetClassrooms = async (classroomIds) => {
+    const previous = plan.target_classrooms;
+    const byId = new Map(previous.map(classroom => [classroom.classroom_id, classroom]));
+    // 連按 ‹ › 會送出多個請求；沒有序號的話，先送的後到就會把最後一次操作蓋掉，
+    // 失敗回滾也可能蓋掉之後成功的狀態。只有最後一次請求的結果算數。
+    const attempt = ++reorderGenerationRef.current;
+    setPlan(currentPlan => ({
+      ...currentPlan,
+      target_classrooms: classroomIds.map(id => byId.get(id)).filter(Boolean),
+    }));
+    try {
+      await reorderClassrooms(plan.target_semester_id, classroomIds);
+    } catch (error) {
+      if (attempt !== reorderGenerationRef.current) return;
+      setPlan(currentPlan => ({ ...currentPlan, target_classrooms: previous }));
+      toast.error(getApiErrorMessage(error, "調整班級順序失敗"));
+    }
+  };
+
+  // 拖到沒有主教的班就成為主教（驗證要求非空編制必須有一位），否則成為協同。
+  // 主教唯一是 DB 唯一鍵擋著的，這裡先算好才不會送出去才被拒絕。
+  const handleMoveTeachers = (items, toClassroomId) => {
+    markPlanEdited((currentPlan) => {
+      const destination = currentPlan.classroom_teacher_targets
+        .find(target => target.classroom_id === toClassroomId);
+      if (!destination) return currentPlan;
+      const alreadyThere = new Set(destination.teachers.map(teacher => teacher.teacher_id));
+      // 同一位老師可能同時掛在多個來源班；一次搬到第三班時會變成同班重複，
+      // 後端會直接拒絕整份草稿。這裡先去重。
+      const seen = new Set();
+      const moving = items
+        .filter((item) => {
+          if (item.fromClassroomId === toClassroomId) return false;
+          if (alreadyThere.has(item.teacherId) || seen.has(item.teacherId)) return false;
+          seen.add(item.teacherId);
+          return true;
+        })
+        .map(item => ({
+          ...item,
+          teacher: currentPlan.classroom_teacher_targets
+            .find(target => target.classroom_id === item.fromClassroomId)
+            ?.teachers.find(teacher => teacher.teacher_id === item.teacherId),
+        }))
+        .filter(item => item.teacher);
+      if (!moving.length) return currentPlan;
+      // 目標班沒有主教時由這批的第一位補上；主教唯一是 DB 唯一鍵擋著的
+      let needsLead = !destination.teachers.some(teacher => teacher.duty === "lead");
+      const arrivals = moving.map((item) => {
+        const duty = needsLead ? "lead" : "co_teacher";
+        needsLead = false;
+        return { ...item.teacher, duty };
+      });
+      const removedByClassroom = new Map();
+      for (const item of moving) {
+        const bucket = removedByClassroom.get(item.fromClassroomId) ?? new Set();
+        bucket.add(item.teacherId);
+        removedByClassroom.set(item.fromClassroomId, bucket);
+      }
+      return {
+        ...currentPlan,
+        classroom_teacher_targets: currentPlan.classroom_teacher_targets.map((target) => {
+          if (target.classroom_id === toClassroomId) {
+            return { ...target, teachers: [...target.teachers, ...arrivals] };
+          }
+          const removed = removedByClassroom.get(target.classroom_id);
+          if (!removed) return target;
+          const remaining = target.teachers.filter(
+            teacher => !removed.has(teacher.teacher_id),
+          );
+          // 把來源班的主教搬走之後，剩下的協同要遞補主教——非空編制必須恰有一位，
+          // 不補的話這份草稿一定驗證失敗，而使用者不會知道問題出在剛才那一拖。
+          if (remaining.length && !remaining.some(teacher => teacher.duty === "lead")) {
+            return {
+              ...target,
+              teachers: remaining.map((teacher, index) => (
+                index === 0 ? { ...teacher, duty: "lead" } : teacher
+              )),
+            };
+          }
+          return { ...target, teachers: remaining };
+        }),
+      };
+    });
+  };
+
+  // 一個班只能有一位主教（DB 唯一鍵擋著，驗證也要求非空編制恰有一位），
+  // 所以升主教必然伴隨原主教降為協同——是換人當，不是各自開關。
+  const handlePromoteTeacher = (teacherId, classroomId) => {
+    markPlanEdited(currentPlan => ({
+      ...currentPlan,
+      classroom_teacher_targets: currentPlan.classroom_teacher_targets.map(target => {
+        if (target.classroom_id !== classroomId) return target;
+        if (target.teachers.every(teacher => teacher.teacher_id !== teacherId)) return target;
+        return {
+          ...target,
+          teachers: target.teachers.map(teacher => ({
+            ...teacher,
+            duty: teacher.teacher_id === teacherId ? "lead" : "co_teacher",
+          })),
+        };
+      }),
+    }));
+  };
+
+  const handleRemoveTargetClassroom = async (classroomId) => {
+    if (isDirty) {
+      toast.error("請先儲存草稿，再增減班級。");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await deleteClassroom(classroomId);
+      await loadWorkspace();
+      toast.success("已移除新學期班級");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "移除班級失敗"));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleOpenTeacherEditor = (classroomId) => {
@@ -322,6 +555,9 @@ export default function TermReclassification() {
 
   const saveDraft = async ({ showToast = true } = {}) => {
     if (!plan || !isDirty) return plan;
+    // 記下送出當下的內容；回來後只有在期間沒有新編輯時才採用伺服器版本。
+    // 不擋的話，慢回應會把送出後才做的調整覆寫掉，還顯示成「已儲存」。
+    const submittedAt = ++saveGenerationRef.current;
     const response = await updateTermReclassificationPlan(
       plan.id,
       plan.revision,
@@ -338,6 +574,13 @@ export default function TermReclassification() {
         })),
       })),
     );
+    if (submittedAt !== saveGenerationRef.current) {
+      // 期間又動過：伺服器已存下送出時的版本，但本地還有更新的內容。
+      // 保留本地編輯與 dirty 狀態，只把 revision 對齊，讓下一次儲存不會撞 revision。
+      setPlan(currentPlan => ({ ...currentPlan, revision: response.data.revision }));
+      toast("儲存期間又有新的調整，請再存一次。", { icon: "✏️" });
+      return response.data;
+    }
     setPlan(response.data);
     setIsDirty(false);
     if (showToast) toast.success("編班草稿已儲存");
@@ -395,7 +638,13 @@ export default function TermReclassification() {
     setIsSubmitting(true);
     try {
       const savedPlan = await saveDraft({ showToast: false });
+      const validatedAt = saveGenerationRef.current;
       const response = await validateTermReclassificationPlan(savedPlan.id);
+      if (validatedAt !== saveGenerationRef.current) {
+        // 驗證期間又動過：驗證結果講的是舊版本，套上去等於丟掉新編輯
+        toast("驗證期間又有新的調整，請重新驗證。", { icon: "✏️" });
+        return;
+      }
       setPlan(response.data);
       setIsDirty(false);
       if (response.data.validation?.is_valid) {
@@ -487,11 +736,11 @@ export default function TermReclassification() {
     if (!targetId) return;
     const sourceMemberId = error?.source_member_id ?? error?.source_member_ids?.[0];
     if (sourceMemberId) {
-      const placement = placementByMemberId.get(sourceMemberId);
+      // 卡片可能被搜尋或篩選藏起來；先清掉條件，捲動才找得到那張卡片
       setStudentSearchText("");
       setIsShowingChangedStudentsOnly(false);
-      setExpandedStudentClassroomId(placement?.source_classroom_id ?? null);
     }
+    setFocusAttempt(0);
     setPendingValidationTargetId(targetId);
   };
 
@@ -692,17 +941,21 @@ export default function TermReclassification() {
           <Surface>
             <div className="mb-3 flex items-center gap-2">
               <School className="h-4 w-4 text-indigo-500" />
-              <h2 className="font-semibold text-gray-900">可編入的目標班級</h2>
+              <h2 className="font-semibold text-gray-900">會被複製到新學期的班級</h2>
             </div>
-            <p className="mb-3 text-xs leading-5 text-gray-500">缺少新班級時，請先回班級與名單建立並啟用。</p>
+            <p className="mb-3 text-xs leading-5 text-gray-500">
+              建立草稿時會照目前的分校／部門／班名，在新學期長出對應的班；之後可以在草稿裡增減。
+            </p>
             <div className="space-y-2">
-              {activeClassrooms.map(classroom => (
+              {currentClassrooms.map(classroom => (
                 <div key={classroom.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
                   <div className="font-medium text-gray-800">{classroom.name}</div>
                   <div className="text-xs text-gray-400">{classroom.campusName}</div>
                 </div>
               ))}
-              {activeClassrooms.length === 0 && <p className="text-sm text-amber-700">目前沒有使用中的班級。</p>}
+              {currentClassrooms.length === 0 && (
+                <p className="text-sm text-amber-700">目前學期還沒有班級。</p>
+              )}
             </div>
           </Surface>
 
@@ -740,18 +993,18 @@ export default function TermReclassification() {
             </div>
           </Surface>
 
-          <Surface className={plan.target_academic_term?.periods?.length ? "border-indigo-100" : "border-amber-200 bg-amber-50"}>
+          <Surface className={plan.target_semester?.periods?.length ? "border-indigo-100" : "border-amber-200 bg-amber-50"}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-gray-900">正式學期期別</h2>
-                  <Badge tone={plan.target_academic_term?.periods?.length ? "info" : "warning"}>
-                    {plan.target_academic_term?.periods?.length ?? 0} 個期別
+                  <Badge tone={plan.target_semester?.periods?.length ? "info" : "warning"}>
+                    {plan.target_semester?.periods?.length ?? 0} 個期別
                   </Badge>
                 </div>
-                {plan.target_academic_term?.periods?.length ? (
+                {plan.target_semester?.periods?.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {plan.target_academic_term.periods.map(period => (
+                    {plan.target_semester.periods.map(period => (
                       <Badge key={period.id} tone="neutral">
                         {period.name} · {period.department === "infant" ? "嬰幼部" : "學院部"}
                       </Badge>
@@ -878,11 +1131,91 @@ export default function TermReclassification() {
             </Surface>
           )}
 
+          {classroomDraft !== null && (
+            <Surface>
+              <h2 className="mb-2 font-semibold text-gray-900">新增新學期班級</h2>
+              <form className="space-y-2" onSubmit={handleAddTargetClassroom}>
+                <FormField label="所屬分校">
+                  <select
+                    required
+                    value={classroomDraft.campusId}
+                    onChange={event => setClassroomDraft(current => ({ ...current, campusId: event.target.value }))}
+                    className={fieldControlClass}
+                  >
+                    {campusOptions.map(campus => (
+                      <option key={campus.id} value={campus.id}>{campus.name}</option>
+                    ))}
+                  </select>
+                </FormField>
+                <FormField label="部門">
+                  <select
+                    required
+                    value={classroomDraft.department}
+                    onChange={event => setClassroomDraft(current => ({ ...current, department: event.target.value }))}
+                    className={fieldControlClass}
+                  >
+                    <option value="infant">嬰幼部</option>
+                    <option value="academy">學院部</option>
+                  </select>
+                </FormField>
+                <FormField label="班級名稱">
+                  <input
+                    autoFocus
+                    required
+                    value={classroomDraft.name}
+                    onChange={event => setClassroomDraft(current => ({ ...current, name: event.target.value }))}
+                    className={fieldControlClass}
+                  />
+                </FormField>
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" onClick={() => setClassroomDraft(null)} disabled={isSubmitting}>
+                    取消
+                  </Button>
+                  <Button size="sm" type="submit" variant="primary" disabled={isSubmitting}>
+                    {isSubmitting ? "新增中..." : "新增"}
+                  </Button>
+                </div>
+              </form>
+            </Surface>
+          )}
+
+          {newStudentDraft !== null && (
+            <Surface>
+              <h2 className="mb-1 font-semibold text-gray-900">
+                編入新生：{newStudentDraft.label}
+              </h2>
+              <p className="mb-2 text-xs text-gray-500">
+                只給名冊裡還沒有的孩子用。續讀的孩子請從原班拖過來，不要在這裡重打一次姓名——
+                重打會變成另一個孩子，跟舊相本接不起來。
+              </p>
+              <form className="space-y-2" onSubmit={handleAddNewStudents}>
+                <FormField label="姓名" hint="一行一位，也可以用逗號分隔。">
+                  <textarea
+                    autoFocus
+                    required
+                    rows={4}
+                    value={newStudentDraft.text}
+                    onChange={event => setNewStudentDraft(current => ({ ...current, text: event.target.value }))}
+                    className={fieldControlClass}
+                  />
+                </FormField>
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" onClick={() => setNewStudentDraft(null)} disabled={isSubmitting}>
+                    取消
+                  </Button>
+                  <Button size="sm" type="submit" variant="primary" disabled={isSubmitting}>
+                    {isSubmitting ? "編入中..." : "編入"}
+                  </Button>
+                </div>
+              </form>
+            </Surface>
+          )}
+
           <Surface>
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="min-w-0">
                 <h2 className="font-semibold text-gray-900">學生目標班級</h2>
-                <p className="mt-0.5 text-xs text-gray-500">依目前班級逐班調整；每位學生必須選擇一個目標班級或標記離園。</p>
+                <p className="mt-0.5 text-xs text-gray-500">拖曳學生卡片到目標班級即完成編班；每位學生都要落在一個班或「離園」欄。</p>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <div className="relative min-w-0 sm:w-64">
@@ -907,146 +1240,63 @@ export default function TermReclassification() {
                 <Badge tone="info">{plan.student_placements.length} 位</Badge>
               </div>
             </div>
-            <div className="space-y-2">
-              {visibleStudentPlacementGroups.map(group => {
-                const isExpanded = group.classroomId === visibleExpandedStudentClassroomId;
-                const groupPanelId = `term-student-group-${group.classroomId}`;
-                return (
-                  <section key={group.classroomId} className="overflow-hidden rounded-xl border border-gray-200">
-                    <button
-                      type="button"
-                      className="flex min-h-12 w-full items-center gap-3 bg-gray-50 px-3 py-2.5 text-left hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400"
-                      aria-label={`編輯 ${group.campusName}／${group.classroomName} 學生目標班級`}
-                      aria-expanded={isExpanded}
-                      aria-controls={groupPanelId}
-                      onClick={() => setExpandedStudentClassroomId(group.classroomId)}
-                    >
-                      {isExpanded
-                        ? <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-400" />
-                        : <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-400" />}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-gray-900">{group.classroomName}</span>
-                        <span className="block truncate text-xs text-gray-400">{group.campusName}</span>
-                      </span>
-                      <span className="flex flex-shrink-0 items-center gap-1.5">
-                        {group.changedCount > 0 && <Badge tone="warning">{group.changedCount} 位變更</Badge>}
-                        <Badge tone="neutral">{group.filteredPlacements.length}/{group.placements.length} 位</Badge>
-                      </span>
-                    </button>
-                    {isExpanded && (
-                      <div id={groupPanelId} className="divide-y divide-gray-100">
-                        {group.filteredPlacements.map(placement => {
-                          const isChanged = isStudentPlacementChanged(placement);
-                          return (
-                            <div
-                              key={placement.source_member_id}
-                              id={`term-student-${placement.source_member_id}`}
-                              tabIndex={-1}
-                              className="grid scroll-mt-24 gap-3 px-3 py-3 outline-none focus:bg-amber-50 sm:grid-cols-[minmax(0,1fr)_minmax(14rem,0.8fr)] sm:items-center"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate font-medium text-gray-900">{placement.student_name}</span>
-                                {isChanged && <Badge tone="warning">已變更</Badge>}
-                              </div>
-                              <select
-                                aria-label={`${placement.student_name} 的目標班級`}
-                                className={fieldControlClass}
-                                value={placement.outcome === "departed" ? "departed" : String(placement.target_classroom_id)}
-                                onChange={event => handleStudentTargetChange(placement.source_member_id, event.target.value)}
-                              >
-                                {activeClassrooms.map(classroom => (
-                                  <option key={classroom.id} value={classroom.id}>{classroom.campusName}／{classroom.name}</option>
-                                ))}
-                                <option value="departed">離園／畢業，不編入班級</option>
-                              </select>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-              {visibleStudentPlacementGroups.length === 0 && (
-                <div className="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">
-                  沒有符合目前篩選條件的學生
-                </div>
+            <TermPlacementBoard
+              placements={visibleBoardPlacements}
+              classrooms={targetClassrooms}
+              campuses={campusOptions}
+              activeTab={activeCampusTab}
+              onActiveTabChange={setActiveCampusTab}
+              focusClassroomId={
+                pendingValidationTargetId?.startsWith("term-classroom-")
+                  ? Number(pendingValidationTargetId.replace("term-classroom-", ""))
+                  : null
+              }
+              teacherTargets={plan.classroom_teacher_targets}
+              // 標籤只放姓名：欄寬有限，「・帶班老師」在這裡每一個都一樣，是雜訊
+              teacherLabelOf={teacher => (
+                teacherOptionById.get(teacher.teacher_id)?.display_name
+                  ?? teacher.teacher_name
+                  ?? "已刪除老師"
               )}
-            </div>
-          </Surface>
-
-          <Surface>
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <div>
-                <h2 className="font-semibold text-gray-900">新學期老師編制</h2>
-                <p className="mt-0.5 text-xs text-gray-500">非空編制必須指定一位主教；其他老師可設為協同。</p>
+              onMovePlacements={handleStudentTargetChange}
+              onMoveTeachers={handleMoveTeachers}
+              onPromoteTeacher={handlePromoteTeacher}
+              onRenameClassroom={handleRenameTargetClassroom}
+              onRemoveClassroom={handleRemoveTargetClassroom}
+              onAddClassroom={(campusId) => {
+                // 擋在開表單的當下，不要讓人填完才被告知
+                if (isDirty) {
+                  toast.error("請先儲存草稿，再增減班級。");
+                  return;
+                }
+                setClassroomDraft({
+                  campusId: String(campusId ?? campusOptions[0]?.id ?? ""),
+                  department: "infant",
+                  name: "",
+                });
+              }}
+              onReorderClassrooms={handleReorderTargetClassrooms}
+              onEditTeachers={handleOpenTeacherEditor}
+              newStudents={plan.new_students}
+              onAddNewStudents={(classroomId) => {
+                if (isDirty) {
+                  toast.error("請先儲存草稿，再編入新生。");
+                  return;
+                }
+                setNewStudentDraft({
+                  classroomId,
+                  label: getClassroomName(classroomId),
+                  text: "",
+                });
+              }}
+              onRemoveNewStudent={handleRemoveNewStudent}
+              isSubmitting={isSubmitting}
+            />
+            {visibleBoardPlacements.length === 0 && (
+              <div className="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">
+                沒有符合目前篩選條件的學生
               </div>
-              <Users className="h-5 w-5 text-indigo-500" />
-            </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              {plan.classroom_teacher_targets.map(target => {
-                const classroom = classroomById.get(target.classroom_id);
-                const lead = target.teachers.find(teacher => teacher.duty === "lead");
-                const coTeachers = target.teachers.filter(teacher => teacher.duty === "co_teacher");
-                const invalidTeachers = target.teachers
-                  .filter(teacher => (
-                    teacher.teacher_id === null || !selectableTeacherIds.has(teacher.teacher_id)
-                  ));
-                const getTeacherTargetLabel = teacher => {
-                  const teacherOption = teacherOptionById.get(teacher?.teacher_id);
-                  return teacherOption
-                    ? getAssignableAccountLabel(teacherOption)
-                    : (teacher?.teacher_name ?? "已刪除老師");
-                };
-                return (
-                  <section
-                    key={target.classroom_id}
-                    id={`term-classroom-${target.classroom_id}`}
-                    tabIndex={-1}
-                    aria-label={classroom
-                      ? `新學期老師編制 ${classroom.campusName}／${classroom.name}`
-                      : `新學期老師編制 班級 #${target.classroom_id}`}
-                    className="scroll-mt-24 rounded-xl border border-gray-200 p-4 outline-none focus:border-amber-300 focus:bg-amber-50/50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate font-semibold text-gray-900">{classroom?.name ?? `班級 #${target.classroom_id}`}</h3>
-                        <p className="text-xs text-gray-400">{classroom?.campusName}</p>
-                      </div>
-                      {invalidTeachers.length > 0
-                        ? <Badge tone="warning">{invalidTeachers.length} 筆需修正</Badge>
-                        : <Badge tone={lead ? "success" : "neutral"}>{lead ? "已設定" : "尚無老師"}</Badge>}
-                    </div>
-                    <dl className="mt-4 space-y-2 text-sm">
-                      <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-2">
-                        <dt className="text-gray-400">主教</dt>
-                        <dd className="truncate font-medium text-gray-800">{lead ? getTeacherTargetLabel(lead) : "未設定"}</dd>
-                      </div>
-                      <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-2">
-                        <dt className="text-gray-400">協同老師</dt>
-                        <dd className="flex min-w-0 flex-wrap gap-1.5">
-                          {coTeachers.map((teacher, teacherIndex) => (
-                            <Badge key={`${teacher.teacher_id ?? "deleted"}-${teacherIndex}`} tone="info">
-                              {getTeacherTargetLabel(teacher)}
-                            </Badge>
-                          ))}
-                          {coTeachers.length === 0 && <span className="text-gray-500">無</span>}
-                        </dd>
-                      </div>
-                    </dl>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="mt-4"
-                      onClick={() => handleOpenTeacherEditor(target.classroom_id)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                      調整老師
-                    </Button>
-                  </section>
-                );
-              })}
-            </div>
+            )}
           </Surface>
 
           <div className="sticky bottom-2 z-20 pb-1">

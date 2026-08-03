@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
-from database import Project, Student
+from database import Project, ProjectStudent
 from services.output_keys import (
     build_combined_stem,
     make_safe_filename,
@@ -20,7 +20,7 @@ from services.zip_stream import open_zip_stream
 
 def get_student_pdf_download(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
 ) -> tuple[bytes, str]:
     """讀取學生 PDF 並回傳 bytes 與下載檔名。"""
@@ -37,7 +37,7 @@ def get_student_pdf_download(
 
 def _student_pdf_zip_entry(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
     download_stem: str | None = None,
 ) -> tuple[str, str] | None:
@@ -51,7 +51,7 @@ def _student_pdf_zip_entry(
 
 def _plan_student_image_keys(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
     download_stem: str | None = None,
 ) -> list[tuple[str, list[str]]]:
@@ -118,7 +118,7 @@ def _read_first_existing(storage, candidate_keys: list[str]) -> bytes | None:
 
 def get_student_image_entry(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
     page_number: int,
 ) -> tuple[str, bytes] | None:
@@ -151,7 +151,7 @@ def get_student_image_entry(
 
 def get_student_image_entries(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
 ) -> list[tuple[str, bytes]]:
     storage = get_storage()
@@ -169,7 +169,7 @@ def get_student_image_entries(
 
 def build_zip_of_student_images(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     output_mode: str,
     image_entries: list[tuple[str, bytes]] | None = None,
 ) -> bytes:
@@ -244,7 +244,7 @@ _UPLOADED_PHOTO_KEY_PREFIX_PATTERN = re.compile(r"^p\d+_slot\d+_")
 _UPLOADED_PHOTO_CONTENT_HASH_PATTERN = re.compile(r"_[0-9a-f]{16}(?=\.[^.]*$)")
 
 
-def iter_student_uploaded_photo_entries(student: Student) -> list[tuple[int, int, str]]:
+def iter_student_uploaded_photo_entries(student: ProjectStudent) -> list[tuple[int, int, str]]:
     """列舉學生所有已放照片的 (page_index, slot_id, photo_key)。"""
     entries: list[tuple[int, int, str]] = []
     for page_index, page in enumerate(parse_pages_data(student.pages_data_json)):
@@ -262,7 +262,7 @@ def _approximate_original_photo_filename(photo_key: str) -> str:
     return _UPLOADED_PHOTO_CONTENT_HASH_PATTERN.sub("", basename)
 
 
-def _plan_student_uploaded_photo_entries(student: Student) -> list[tuple[str, str]]:
+def _plan_student_uploaded_photo_entries(student: ProjectStudent) -> list[tuple[str, str]]:
     """組出單生上傳照片的 (ZIP 內檔名, photo_key)；同生撞名附 -2/-3 序號。"""
     planned: list[tuple[str, str]] = []
     used_names: set[str] = set()
@@ -295,7 +295,7 @@ def _open_planned_photos_zip_stream(planned_entries: list[tuple[str, str]]):
     return open_zip_stream(write_entries, "ZIP 正在產生中，請稍後再試")
 
 
-def open_student_uploaded_photos_zip_stream(student: Student):
+def open_student_uploaded_photos_zip_stream(student: ProjectStudent):
     """單生上傳照片 ZIP 串流；尚無照片時回 404（在串流開始前判斷）。"""
     planned_entries = _plan_student_uploaded_photo_entries(student)
     if not planned_entries:

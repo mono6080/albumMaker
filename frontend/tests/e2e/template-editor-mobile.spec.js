@@ -1,5 +1,5 @@
 // 手機版模板編輯器 e2e：工作區、明確命令、camera view state 與斷點契約
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 
 import {
   createTemplateWithLayout,

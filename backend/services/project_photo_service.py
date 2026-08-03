@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from crud.project_crud import get_project_or_404, get_student_or_404
-from database import Project, Student, User, utc_now
+from database import Project, ProjectStudent, User, utc_now
 from services.file_service import (
     PHOTO_THUMBNAIL_SIZE,
     ProcessedImageUpload,
@@ -99,7 +99,7 @@ class StudentPhotoUploadIdentity:
 
 
 def _capture_student_photo_upload_identity(
-    student: Student,
+    student: ProjectStudent,
 ) -> StudentPhotoUploadIdentity:
     return StudentPhotoUploadIdentity(
         student_id=student.id,
@@ -111,13 +111,13 @@ def _capture_student_photo_upload_identity(
 def _get_current_student_for_photo_upload(
     db: Session,
     identity: StudentPhotoUploadIdentity,
-) -> Student:
+) -> ProjectStudent:
     student = (
-        db.query(Student)
+        db.query(ProjectStudent)
         .filter(
-            Student.id == identity.student_id,
-            Student.project_id == identity.project_id,
-            Student.created_at == identity.created_at,
+            ProjectStudent.id == identity.student_id,
+            ProjectStudent.project_id == identity.project_id,
+            ProjectStudent.created_at == identity.created_at,
         )
         .one_or_none()
     )
@@ -210,7 +210,7 @@ def _get_photo_key_or_404(
 
 def _validate_photo_mapping(
     project: Project,
-    student: Student,
+    student: ProjectStudent,
     pages_data: list,
     mapping: dict,
 ) -> dict:
@@ -444,8 +444,8 @@ async def batch_upload_project_photos(
             created_at=student_created_at,
         )
         for student_id, identity_project_id, student_created_at in (
-            db.query(Student.id, Student.project_id, Student.created_at)
-            .filter(Student.project_id == project_id)
+            db.query(ProjectStudent.id, ProjectStudent.project_id, ProjectStudent.created_at)
+            .filter(ProjectStudent.project_id == project_id)
             .all()
         )
     }

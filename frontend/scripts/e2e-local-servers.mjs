@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  E2E_WORKERS,
   assertFixedPortsAvailable,
   createSupervisorReadyMessage,
   stopOwnedProcessTrees,
@@ -12,10 +13,10 @@ const frontendDir = resolve(scriptDir, "..");
 const isWindows = process.platform === "win32";
 const children = [];
 
-function startProcess(name, command, args) {
+function startProcess(name, command, args, extraEnv = {}) {
   const child = spawn(command, args, {
     cwd: frontendDir,
-    env: process.env,
+    env: { ...process.env, ...extraEnv },
     shell: isWindows,
     detached: !isWindows,
     stdio: ["ignore", "pipe", "pipe"],
@@ -90,20 +91,29 @@ process.on("SIGTERM", () => { void shutdown(0); });
 
 async function main() {
   await assertFixedPortsAvailable();
-  startProcess("backend", isWindows ? "python.exe" : "python", ["../scripts/e2e_server.py"]);
-  startProcess("vite", isWindows ? "npm.cmd" : "npm", [
-    "run",
-    "dev",
-    "--",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    "5173",
-    "--strictPort",
-  ]);
+  // 每個 Playwright worker 一組獨立的 (backend, vite)：資料庫互不相干，
+  // 才敢把 workers 開大於 1，也才不會出現「單獨跑會過、跑全套會掛」。
+  for (let index = 0; index < E2E_WORKERS; index += 1) {
+    const backendPort = 8765 + index;
+    const vitePort = 5173 + index;
+    startProcess(
+      `backend${index}`,
+      isWindows ? "python.exe" : "python",
+      ["../scripts/e2e_server.py"],
+      { ALBUM_MAKER_E2E_INDEX: String(index) },
+    );
+    startProcess(
+      `vite${index}`,
+      isWindows ? "npm.cmd" : "npm",
+      ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"],
+      { VITE_API_PROXY_TARGET: `http://127.0.0.1:${backendPort}` },
+    );
+  }
 
-  await waitForUrl("backend", "http://127.0.0.1:8765/api/health", 60_000);
-  await waitForUrl("vite", "http://127.0.0.1:5173", 90_000);
+  for (let index = 0; index < E2E_WORKERS; index += 1) {
+    await waitForUrl(`backend${index}`, `http://127.0.0.1:${8765 + index}/api/health`, 60_000);
+    await waitForUrl(`vite${index}`, `http://127.0.0.1:${5173 + index}`, 90_000);
+  }
   // 讓已排入 event loop 的 child exit 先落地，避免舊 URL 回應造成假 ready。
   await new Promise(resolveTurn => setImmediate(resolveTurn));
   assertChildrenRunning();

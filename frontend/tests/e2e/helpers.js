@@ -10,7 +10,12 @@ import { fileURLToPath } from "node:url";
 
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-password-123";
 export const E2E_SECRET_KEY = "e2e-secret-do-not-use";
-export const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
+// worker 是獨立 process，這個模組層變數天然是 worker-local；由 fixtures.js 設定
+let workerBaseUrl = null;
+export function setE2eBaseUrl(url) { workerBaseUrl = url; }
+export function e2eBaseUrl() {
+  return workerBaseUrl ?? process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
+}
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const fixturePath = resolve(repoRoot, "tests/fixtures/render_smoke_layout.json");
 export const redPng = Buffer.from(
@@ -37,7 +42,7 @@ export async function loginViaApi(page) {
   await page.context().addCookies([{
     name: "access_token",
     value: token,
-    url: E2E_BASE_URL,
+    url: e2eBaseUrl(),
     httpOnly: true,
     sameSite: "Lax",
     expires: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
@@ -215,14 +220,13 @@ export async function fetchStudentPreview(page, projectId, studentId, cacheBuste
     `/api/projects/${projectId}/students/${studentId}/preview/0?t=${cacheBuster}`,
   );
   expect(previewResponse.ok()).toBeTruthy();
-  expect(previewResponse.headers()["content-type"]).toContain("image/png");
+  expect(previewResponse.headers()["content-type"]).toContain("image/jpeg");
   expect(previewResponse.headers()["cache-control"]).toBe(
     "private, no-cache, must-revalidate",
   );
   const body = await previewResponse.body();
-  expect(body.subarray(0, 8)).toEqual(Buffer.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  ]));
+  // JPEG SOI + APP marker：預覽早已改輸出 JPEG，這裡原本還在驗 PNG magic bytes
+  expect(body.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
   return previewResponse;
 }
 
@@ -316,4 +320,18 @@ export async function fetchTemplateDetail(page, templateId) {
   const detailResponse = await page.request.get(`/api/templates/${templateId}`);
   expect(detailResponse.ok()).toBeTruthy();
   return await detailResponse.json();
+}
+
+
+// 全園同時只允許一份編班草稿。任何 spec 在建草稿前都要先清掉殘留的那一份，
+// 否則只要有一條測試中途逾時、草稿沒收乾淨，後面每一條要建草稿的都會拿到
+// 409 draft_exists——失敗會出現在無辜的那條 spec 上，很難追。
+export async function cancelLeftoverTermPlan(page) {
+  const overview = await page.request.get("/api/organization/overview");
+  if (!overview.ok()) return;
+  const planId = (await overview.json()).draft_term_plan_id;
+  if (!planId) return;
+  await page.request.post(
+    `/api/organization/term-reclassification-plans/${planId}/cancel`,
+  );
 }
