@@ -151,3 +151,30 @@ def test_auto_whitelist_never_includes_staffing_or_classrooms():
     for kind in _sync().AUTO_KINDS:
         assert not kind.startswith("編制"), kind
         assert not kind.startswith("班級"), kind
+
+
+def test_student_serial_and_staff_serial_are_separate_namespaces():
+    """學號與員編是兩套各自編號的序號，字面大量重疊。
+
+    2026-08-04 對正式資料實測：430 個序號同時是某個學生的學號、也是某個**不同的**
+    職員的員編（DN0022001 → 學生王品淯 / 職員邱惠萍）。兩者一旦被當成同一把鍵，
+    比對就會把不相干的兩個人湊成一對，而且不會有任何錯誤訊息。
+    """
+    shared = "DN0022001"
+    album = _album(
+        members={shared: {"name": "王品淯", "campus": "安平校", "room": "三階A"}},
+        staffing={("安平校", "三階A", shared): {"display_name": "邱惠萍", "duty": "lead"}},
+    )
+    album["accounts"] = {shared: {"display_name": "邱惠萍"}}
+    upstream = _upstream(
+        members={shared: {"name": "王品淯", "campus": "安平校", "room": "三階A"}},
+        staffing={
+            ("安平校", "三階A", shared): {"name": "邱惠萍", "duty": "lead", "post": "嬰幼主教"}
+        },
+    )
+
+    result = drift.diff(album, upstream)
+
+    # 同一個序號在兩邊都各自對得上，不該因為撞號而被判成姓名不符或編制缺漏
+    assert result["auto"] == [], result["auto"]
+    assert result["review"] == [], result["review"]
