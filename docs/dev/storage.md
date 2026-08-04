@@ -91,6 +91,30 @@ python scripts\migrate_uploads_to_r2.py --dry-run  # 只列出將上傳的 key
 - 以 `head_object` 比對物件大小，相同即跳過 → 可重複執行；
   第二次執行顯示 `uploaded=0, failed=0` 代表已同步
 
+### 把本機匯入好的模板搬到正式站
+
+`import_office_template.py` 需要 Windows + Word COM，而且素材是直接寫本機檔案系統、
+不走 StorageAdapter——正式站在容器裡、儲存是 R2，那支跑不動。所以模板一律「本機匯入好
+再搬過去」，兩支腳本各負責一半：
+
+```bash
+# 1. 資料庫那一半：templates + template_pages 的列（預設 dry-run）
+python scripts/transfer_template.py --source-db backend/album_maker.db \
+    --target-db <正式站 db> --template-id 26 --template-id 27 \
+    --source-uploads backend/uploads --staging-dir .tmp/template_transfer --apply
+
+# 2. 素材那一半：staging 目錄已用「新的」template id 命名，直接餵給上傳
+python scripts/migrate_uploads_to_r2.py --uploads-dir .tmp/template_transfer
+```
+
+`transfer_template.py` 處理三件錯了不會報錯的事：期別用（部門，名稱）對而不是 id
+（兩邊 id 不保證一樣）、template id 重新配（照抄會撞主鍵或蓋掉別的模板）、`layout_json`
+裡三處素材路徑跟著改（`template_pages.background_filename` 欄位、`layout_json` 的背景、
+每個 `stickers[].path`）。漏掉路徑那一步的症狀是「模板在、圖是空的」。
+
+**目標期別要先建好**，否則會被擋下並列出缺哪一個。同期別已有同名模板也會擋，重跑不會
+建出第二份。規則由 `tests/test_transfer_template.py` 釘住。
+
 ### R2 備份與大量改寫
 
 `backup_data.py` 在 R2 模式只備份 SQLite；memory/local cache 與同 bucket 的一般前綴都
