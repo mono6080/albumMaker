@@ -55,6 +55,7 @@ from services.student_input_policy import (
     assert_project_student_capacity,
     normalize_student_album_name,
     normalize_student_name,
+    normalize_student_serial,
     validate_student_batch_size,
 )
 from services.template_sync_locks import lock_project_content_writes, lock_template_write
@@ -95,6 +96,8 @@ def _serialize_member(member: ClassroomMember) -> dict:
         "name": member.roster_child.name,
         "album_name": member.roster_child.album_name,
         "effective_album_name": member.roster_child.effective_album_name,
+        # 學號要看得見：沒有學號的孩子在名冊同步裡對不到上游，畫面上得能一眼認出來
+        "student_serial": member.roster_child.student_serial,
         "status": "ended" if member.ended_at is not None else "active",
         "started_at": member.started_at,
         "ended_at": member.ended_at,
@@ -1358,9 +1361,15 @@ def batch_add_classroom_members(
     normalized_album_names = [
         normalize_student_album_name(item.get("album_name")) for item in members
     ]
+    normalized_serials = [
+        normalize_student_serial(item.get("student_serial")) for item in members
+    ]
     created_members: list[ClassroomMember] = []
     skipped_names: list[str] = []
+    # 學號對不上的情形要回報而不是丟例外：一次貼一整批，不能因為其中一位有問題就整批失敗
+    serial_conflicts: list[dict] = []
     names_seen: set[str] = set()
+    serials_seen: set[str] = set()
     active_members = db.query(ClassroomMember).options(
         selectinload(ClassroomMember.roster_child)
     ).filter(
@@ -1374,9 +1383,15 @@ def batch_add_classroom_members(
     ]
     created_children: list[Student] = []
 
-    for member_name, album_name in zip(
+    def conflict(name: str, serial: str, code: str, message: str) -> None:
+        serial_conflicts.append(
+            {"name": name, "student_serial": serial, "code": code, "message": message}
+        )
+
+    for member_name, album_name, student_serial in zip(
         normalized_names,
         normalized_album_names,
+        normalized_serials,
         strict=True,
     ):
         normalized_identity = normalize_child_name(member_name)
@@ -1397,11 +1412,42 @@ def batch_add_classroom_members(
         if active_membership:
             skipped_names.append(member_name)
             continue
-        roster_child = Student(
-            name=normalized_identity,
-            album_name=album_name,
-        )
-        db.add(roster_child)
+
+        # 學號已經屬於名冊裡的某個孩子時，正解是沿用那一筆而不是再開一個——學號有部分
+        # 唯一索引，硬建會撞索引；而且同一個孩子兩筆名冊項正是同步要防的事。
+        roster_child: Student | None = None
+        if student_serial is not None:
+            if student_serial in serials_seen:
+                conflict(member_name, student_serial, "duplicate_in_request",
+                         "同一批裡出現重複的學號")
+                continue
+            serials_seen.add(student_serial)
+            existing = db.query(Student).filter(
+                Student.student_serial == student_serial
+            ).first()
+            if existing is not None:
+                if normalize_child_name(str(existing.name)) != normalized_identity:
+                    conflict(member_name, student_serial, "name_mismatch",
+                             f"學號已屬於名冊中的「{existing.name}」")
+                    continue
+                if db.query(ClassroomMember).filter(
+                    ClassroomMember.roster_child_id == existing.id,
+                    ClassroomMember.ended_at.is_(None),
+                ).first():
+                    conflict(member_name, student_serial, "active_elsewhere",
+                             "這位孩子目前已編在其他班")
+                    continue
+                roster_child = existing
+                if album_name is not None:
+                    roster_child.album_name = album_name
+
+        if roster_child is None:
+            roster_child = Student(
+                name=normalized_identity,
+                album_name=album_name,
+                student_serial=student_serial,
+            )
+            db.add(roster_child)
         db.flush()
         member = ClassroomMember(
             classroom_id=classroom_id,
@@ -1439,6 +1485,7 @@ def batch_add_classroom_members(
     return {
         "created": [_serialize_member(member) for member in created_members],
         "skipped": skipped_names,
+        "serial_conflicts": serial_conflicts,
     }
 
 

@@ -830,6 +830,8 @@ def _serialize_plan(plan: TermReclassificationPlan, db: Session) -> dict:
                 "classroom_id": member.classroom_id,
                 "name": member.roster_child.name,
                 "album_name": member.roster_child.effective_album_name,
+                # 沒有學號的孩子在名冊同步裡對不到行政系統，看板上要標得出來
+                "student_serial": member.roster_child.student_serial,
             }
             for member in _draft_new_members(plan, db)
         ],

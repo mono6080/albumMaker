@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 STUDENT_NAME_MAX_LENGTH = 100
 STUDENT_ALBUM_NAME_MAX_LENGTH = 100
+STUDENT_SERIAL_MAX_LENGTH = 64
 STUDENT_BATCH_MAX_SIZE = 100
 PROJECT_STUDENT_MAX_COUNT = 100
 
@@ -73,3 +74,27 @@ def assert_project_student_capacity(
                 "requested_new_students": new_student_count,
             },
         )
+
+
+def normalize_student_serial(raw_serial: str | None) -> str | None:
+    """正規化學號：去掉所有空白並轉大寫；空字串視為沒有學號。
+
+    學號是名冊與行政系統之間唯一穩定的對應鍵，大小寫或多打一個空格都會讓同一個孩子
+    對不上。正式資料裡 1995 筆學號全部是大寫、無空白的 `AA#######`，所以統一轉大寫
+    是安全的正規化，不是猜測。
+    """
+    if raw_serial is None:
+        return None
+    serial = "".join(str(raw_serial).split()).upper()
+    if not serial:
+        return None
+    if len(serial) > STUDENT_SERIAL_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "student_serial_too_long",
+                "message": f"學號不可超過 {STUDENT_SERIAL_MAX_LENGTH} 個字",
+                "max_length": STUDENT_SERIAL_MAX_LENGTH,
+            },
+        )
+    return serial

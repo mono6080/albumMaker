@@ -372,10 +372,28 @@ function BoardColumn({
             key={`new-${student.member_id}`}
             className="flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-1 text-xs text-emerald-900"
           >
-            <span className="min-w-0 flex-1 truncate" title={`${student.name}（新生）`}>
+            <span
+              className="min-w-0 flex-1 truncate"
+              title={
+                student.student_serial
+                  ? `${student.name}（新生，學號 ${student.student_serial}）`
+                  : `${student.name}（新生，沒有學號）`
+              }
+            >
               {student.name}
             </span>
-            <span className="shrink-0 text-[10px] text-emerald-600">新</span>
+            {/* 沒有學號的孩子在名冊同步裡對不到行政系統——標出來，不然沒有人會發現 */}
+            {student.student_serial ? (
+              <span className="shrink-0 text-[10px] text-emerald-600">新</span>
+            ) : (
+              <span
+                aria-label={`${student.name} 沒有學號`}
+                title="沒有學號，之後名冊同步對不到行政系統"
+                className="shrink-0 text-[10px] font-semibold text-amber-600"
+              >
+                新·無學號
+              </span>
+            )}
             <button
               type="button"
               aria-label={`移除新生 ${student.name}`}

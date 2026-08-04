@@ -55,6 +55,8 @@ backend/rendered_*.png
 *.png
 *.jpg
 *.jpeg
+# 品牌素材是要進版控的正式資產，不是測試產物；上面那三行是為了擋算圖暫存檔。
+!assets/brand/*.png
 
 # Env
 # `.env` 與 `*.env` 擋不住 `.env.bak`／`.env.20260801` 這類備份或暫存副本，

@@ -150,15 +150,28 @@ try:
     )
     sample_teacher_id = sample_assignment.teacher_id
     sample_classroom_id = sample_assignment.classroom_id
+    # 學期界線兩側都要取樣：未完成的相本老師仍要改得動（學期一到就鎖住等於逼老師
+    # 在期末最後一天完成），已完成的則不該再被改。兩個方向都取不到就只驗取得到的那個。
     sample_project = (
         db.query(Project)
         .filter(
             Project.classroom_id == sample_classroom_id,
             Project.deleted_at.is_(None),
+            Project.completed_at.is_(None),
         )
         .first()
     )
     sample_project_id = sample_project.id if sample_project else None
+    completed_project = (
+        db.query(Project)
+        .filter(
+            Project.classroom_id == sample_classroom_id,
+            Project.deleted_at.is_(None),
+            Project.completed_at.isnot(None),
+        )
+        .first()
+    )
+    completed_project_id = completed_project.id if completed_project else None
     sample_teacher = db.get(User, sample_teacher_id)
     sample_teacher.hashed_password = hash_password("dryrun-teacher")
     sample_teacher_username = sample_teacher.username
@@ -330,7 +343,20 @@ if sample_project_id is not None:
         permissions = detail.json()["permissions"]
         check("舊相本可讀", permissions["can_read"] is True)
         check(
-            "舊相本不可製作（編制已隨學期結束）",
+            "未完成的舊相本仍可製作（編制只因學期輪替而結束）",
+            permissions["can_edit"] is True,
+            f"can_edit={permissions['can_edit']}",
+        )
+if completed_project_id is None:
+    # 沒驗到不等於驗過了。這一側另由 tests/ 與 e2e 的「完成後鎖定」釘住。
+    print("  [SKIP] 已完成的舊相本不可製作 — 取樣班級裡沒有已完成的相本，本次未驗到")
+else:
+    detail = client.get(f"/api/projects/{completed_project_id}")
+    check("已完成的舊相本仍讀得到", detail.status_code == 200, f"HTTP {detail.status_code}")
+    if detail.status_code == 200:
+        permissions = detail.json()["permissions"]
+        check(
+            "已完成的舊相本不可製作",
             permissions["can_edit"] is False,
             f"can_edit={permissions['can_edit']}",
         )

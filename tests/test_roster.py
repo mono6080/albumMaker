@@ -1872,3 +1872,121 @@ def test_semester_export_zip_paths_cannot_escape_with_database_names(monkeypatch
                 segment not in {".", ".."}
                 for segment in archive_path.split("/")
             )
+
+
+def test_new_member_carries_the_student_serial():
+    """學號是名冊與行政系統之間唯一穩定的對應鍵。
+
+    看板手動編進來的孩子如果沒有學號，名冊同步就對不到上游——2026-08-04 的正式資料
+    演練裡，一次編班產生 44 位沒有學號的孩子，漂移報告直接 88 筆並觸發爆炸半徑警告。
+    """
+    with started_client() as client:
+        login(client)
+        _, classroom_id = create_scoped_classroom(client)
+
+        response = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={"members": [
+                {"name": "王小明", "student_serial": " dn0037024 "},
+                {"name": "李小華"},
+            ]},
+        )
+
+        assert_status(response, 201)
+        created = {row["name"]: row for row in response.json()["created"]}
+        # 去空白並轉大寫：多一個空格或大小寫不同都會讓同一個孩子對不上
+        assert created["王小明"]["student_serial"] == "DN0037024"
+        assert created["李小華"]["student_serial"] is None
+        assert response.json()["serial_conflicts"] == []
+
+
+def test_existing_serial_is_reused_instead_of_creating_a_second_roster_child():
+    """學號已在名冊裡＝這個孩子已經存在（例如離園後又回來）。
+
+    再開一筆會撞上 student_serial 的部分唯一索引，而且「同一個孩子兩筆名冊項」
+    正是名冊同步要防的事。
+    """
+    with started_client() as client:
+        login(client)
+        campus_id, classroom_a_id = create_scoped_classroom(client)
+        _, classroom_b_id = create_scoped_classroom(client, campus_id=campus_id)
+
+        first = client.post(
+            f"/api/organization/classrooms/{classroom_a_id}/members/batch",
+            json={"members": [{"name": "王小明", "student_serial": "DN0001"}]},
+        )
+        assert_status(first, 201)
+        child_id = first.json()["created"][0]["roster_child_id"]
+        member_id = first.json()["created"][0]["id"]
+
+        # 還在 A 班時不能編進 B 班——要先離班
+        blocked = client.post(
+            f"/api/organization/classrooms/{classroom_b_id}/members/batch",
+            json={"members": [{"name": "王小明", "student_serial": "DN0001"}]},
+        )
+        assert_status(blocked, 201)
+        assert blocked.json()["created"] == []
+        assert [row["code"] for row in blocked.json()["serial_conflicts"]] == ["active_elsewhere"]
+
+        ended = client.patch(
+            f"/api/organization/classrooms/{classroom_a_id}/members/{member_id}",
+            json={"status": "ended", "end_reason": "departed"},
+        )
+        assert_status(ended, 200)
+
+        again = client.post(
+            f"/api/organization/classrooms/{classroom_b_id}/members/batch",
+            json={"members": [{"name": "王小明", "student_serial": "DN0001"}]},
+        )
+        assert_status(again, 201)
+        assert again.json()["created"][0]["roster_child_id"] == child_id, "應沿用同一筆名冊項"
+        assert again.json()["serial_conflicts"] == []
+
+
+def test_serial_belonging_to_a_different_name_is_reported_not_written():
+    """學號對到別的姓名代表輸入有誤——猜任何一邊都是把兩個孩子混成一個。"""
+    with started_client() as client:
+        login(client)
+        campus_id, classroom_a_id = create_scoped_classroom(client)
+        _, classroom_b_id = create_scoped_classroom(client, campus_id=campus_id)
+
+        assert_status(client.post(
+            f"/api/organization/classrooms/{classroom_a_id}/members/batch",
+            json={"members": [{"name": "王小明", "student_serial": "DN0001"}]},
+        ), 201)
+
+        response = client.post(
+            f"/api/organization/classrooms/{classroom_b_id}/members/batch",
+            json={"members": [
+                {"name": "陳小美", "student_serial": "DN0001"},
+                {"name": "林小安", "student_serial": "DN0002"},
+            ]},
+        )
+
+        assert_status(response, 201)
+        created = response.json()["created"]
+        assert [row["name"] for row in created] == ["林小安"], "只有沒問題的那位該進去"
+        conflicts = response.json()["serial_conflicts"]
+        assert [row["code"] for row in conflicts] == ["name_mismatch"]
+        assert "王小明" in conflicts[0]["message"]
+
+
+def test_duplicate_serial_within_one_batch_is_rejected():
+    """同一批貼進兩個相同學號，只可能是貼錯——不能靜靜地建出兩筆。"""
+    with started_client() as client:
+        login(client)
+        _, classroom_id = create_scoped_classroom(client)
+
+        response = client.post(
+            f"/api/organization/classrooms/{classroom_id}/members/batch",
+            json={"members": [
+                {"name": "王小明", "student_serial": "DN0001"},
+                {"name": "陳小美", "student_serial": "DN0001"},
+            ]},
+        )
+
+        assert_status(response, 201)
+        assert [row["name"] for row in response.json()["created"]] == ["王小明"]
+        assert [row["code"] for row in response.json()["serial_conflicts"]] == [
+            "duplicate_in_request"
+        ]

@@ -64,10 +64,14 @@ def open_readonly(path: pathlib.Path) -> sqlite3.Connection:
 
 def load_album_state(db: sqlite3.Connection) -> dict:
     semester = db.execute(
-        "select id, label, starts_on, ends_on from semesters where status = 'imported'"
+        # 目前學期是 imported 或 active：`imported` 只是遷移進來的第一個學期，之後每次
+        # 編班套用產生的新學期都是 `active`。只認 imported 的話，第一次編班一套用，
+        # 同步就會在最需要它的時候整組停掉。資料庫層有唯一索引保證兩者同時只有一個。
+        "select id, label, starts_on, ends_on from semesters "
+        "where status in ('imported', 'active')"
     ).fetchone()
     if semester is None:
-        sys.exit("相本系統沒有 imported 狀態的學期，無法判斷目前學期")
+        sys.exit("相本系統沒有 imported/active 狀態的學期，無法判斷目前學期")
 
     classrooms = {}
     for row in db.execute(
@@ -80,7 +84,11 @@ def load_album_state(db: sqlite3.Connection) -> dict:
     ):
         classrooms[(row["campus"], row["name"])] = dict(row)
 
+    # 沒有學號的在籍孩子要分開收：他們是編班看板上手動建的新生（`batch_add_classroom_members`
+    # 收不到學號），對帳時完全比不到上游。混進 members 會讓他們共用同一個 None 鍵，
+    # 互相覆蓋、還會讓排序爆掉，最後看起來像「只有一位沒對到」。
     members = {}
+    members_without_serial = []
     for row in db.execute(
         """
         select m.id member_id, s.id student_id, s.name, s.student_serial,
@@ -93,7 +101,10 @@ def load_album_state(db: sqlite3.Connection) -> dict:
         """,
         (semester["id"],),
     ):
-        members[row["student_serial"]] = dict(row)
+        if row["student_serial"]:
+            members[row["student_serial"]] = dict(row)
+        else:
+            members_without_serial.append(dict(row))
 
     staffing = {}
     for row in db.execute(
@@ -140,6 +151,7 @@ def load_album_state(db: sqlite3.Connection) -> dict:
         "semester": dict(semester),
         "classrooms": classrooms,
         "members": members,
+        "members_without_serial": members_without_serial,
         "staffing": staffing,
         "serials": serials,
         "accounts": accounts,
@@ -235,11 +247,36 @@ def diff(album: dict, upstream: dict) -> dict:
         review.append(("班級：相本有、上游沒有", f"{key[0]}／{key[1]}"))
 
     # ── 名冊與編班 ────────────────────────────────────────────────────────
+    # 編班看板手動建的新生沒有學號（`batch_add_classroom_members` 收不到），對帳時
+    # 比不到上游。上游有、相本「以學號」查不到，就會被判成新生而再建一次——同一個
+    # 孩子在名冊裡出現兩筆。所以先按（分校,班級,姓名）建索引，用來擋掉重建。
+    # 這裡用姓名只是為了**不要自動動手**，不是拿姓名當鍵去配對人。
+    unmatched_here = {
+        (row["campus"], row["room"], normalize_name(row["name"])): row
+        for row in album.get("members_without_serial", [])
+    }
+    for row in album.get("members_without_serial", []):
+        review.append((
+            "名冊：在籍但沒有學號",
+            f"{row['name']} 在 {row['campus']}／{row['room']}"
+            "，無法與行政系統對帳；請回填學號（scripts/backfill_student_serials.py）",
+        ))
+
     for serial, up_member in sorted(upstream["members"].items()):
         here = album["members"].get(serial)
         if here is None:
-            known = album["serials"].get(serial)
             label = f"{up_member['name']}（{serial}）→ {up_member['campus']}／{up_member['room']}"
+            looks_like = unmatched_here.get(
+                (up_member["campus"], up_member["room"], normalize_name(up_member["name"]))
+            )
+            if looks_like is not None:
+                review.append((
+                    "名冊：疑似同一位但相本沒有學號",
+                    f"{label}；相本已有同班同名的「{looks_like['name']}」"
+                    "，應回填學號而不是重建",
+                ))
+                continue
+            known = album["serials"].get(serial)
             auto.append(("名冊：應入班" if known else "名冊：新生應建檔並入班", label))
             continue
         if (here["campus"], here["room"]) != (up_member["campus"], up_member["room"]):

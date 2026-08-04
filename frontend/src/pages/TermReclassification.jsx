@@ -40,6 +40,10 @@ import {
   fieldControlClass,
 } from "../components/ui";
 import { getApiErrorMessage } from "../utils/apiError";
+import {
+  describeSerialConflicts,
+  parseRosterMemberInput,
+} from "../utils/rosterMemberInput";
 import { getAssignableAccountLabel } from "../utils/userRoles";
 
 const DUTY_LABELS = {
@@ -313,11 +317,12 @@ export default function TermReclassification() {
   // 列），套用時不會被動到，會原封不動留在新學期。
   const handleAddNewStudents = async (event) => {
     event.preventDefault();
-    const names = newStudentDraft.text
-      .split(/[\n,、，]/)
-      .map(name => name.trim())
-      .filter(Boolean);
-    if (!names.length) return;
+    const { members, invalid } = parseRosterMemberInput(newStudentDraft.text);
+    if (invalid.length) {
+      toast.error(`這幾行超過兩欄，看不出哪個是姓名哪個是學號：${invalid.join("、")}`);
+      return;
+    }
+    if (!members.length) return;
     if (isDirty) {
       toast.error("請先儲存草稿，再編入新生。");
       return;
@@ -326,15 +331,21 @@ export default function TermReclassification() {
     try {
       const response = await batchAddClassroomMembers(
         newStudentDraft.classroomId,
-        names.map(name => ({ name })),
+        members,
       );
       setNewStudentDraft(null);
       await loadWorkspace();
-      const skipped = response.data?.skipped_names ?? [];
+      const created = response.data?.created ?? [];
+      const skipped = response.data?.skipped ?? [];
+      const conflicts = response.data?.serial_conflicts ?? [];
+      if (created.length) {
+        toast.success(`已編入 ${created.length} 位新生`);
+      }
       if (skipped.length) {
         toast.error(`${skipped.length} 位重名未編入：${skipped.join("、")}`);
-      } else {
-        toast.success(`已編入 ${names.length} 位新生`);
+      }
+      if (conflicts.length) {
+        toast.error(`${conflicts.length} 位學號有問題未編入：${describeSerialConflicts(conflicts)}`);
       }
     } catch (error) {
       toast.error(getApiErrorMessage(error, "編入新生失敗"));
@@ -1189,11 +1200,15 @@ export default function TermReclassification() {
                 重打會變成另一個孩子，跟舊相本接不起來。
               </p>
               <form className="space-y-2" onSubmit={handleAddNewStudents}>
-                <FormField label="姓名" hint="一行一位，也可以用逗號分隔。">
+                <FormField
+                  label="姓名與學號"
+                  hint="一行一位，格式「姓名 學號」（從行政系統的表格整欄複製過來即可）。沒有學號也能編入，但之後名冊同步對不到上游，要另外補。"
+                >
                   <textarea
                     autoFocus
                     required
                     rows={4}
+                    placeholder={"王小明\tDN0037024\n李小華\tDN0037025"}
                     value={newStudentDraft.text}
                     onChange={event => setNewStudentDraft(current => ({ ...current, text: event.target.value }))}
                     className={fieldControlClass}

@@ -214,8 +214,16 @@ split 或 merge 入口；此 invariant 由 `tests/test_organization.py` 與 `tes
   partial index `ux_students_student_serial ... WHERE student_serial IS NOT NULL`：
   NULL 可以有很多個，同一個學號只能屬於一個孩子。契約由
   `tests/test_organization_schema_migrations.py::test_student_serial_is_unique_only_where_present` 釘住。
+- **手動編入名冊時就要帶學號**：`POST /classrooms/{id}/members/batch` 收 `student_serial`，
+  兩個入口（編班看板的「＋新生」、園所管理的批次新增）都是一行一位的「姓名 學號」。
+  事後才補的話，這批孩子在名冊同步裡對不到上游，還會被誤判成新生而重複建檔——
+  2026-08-04 的正式資料演練實測 44 位、漂移 88 筆。理由與實測見
+  [websystem-roster-sync-v1](../specs/websystem-roster-sync-v1.md#手動編入的孩子一定要帶學號2026-08-04-演練發現並修掉)。
+- 學號一律以 `normalize_student_serial` 去空白轉大寫後存放：大小寫或多一個空格都會讓
+  同一個孩子對不上。正式資料裡 1995 筆學號全是大寫無空白的 `AA#######`。
 - 回填由 `scripts/backfill_student_serials.py --mapping <對照表> --db <資料庫>` 執行；學號值不同時
   **不覆寫**，列出來讓人決定——學號變了代表行政系統換了身分，不是腳本該自己決定的事。
+  編班後若還有沒學號的孩子，用 `scripts/backfill_new_student_serials.py` 對回上游補。
 - 身分證字號**不進本系統**。它與學號在行政系統內嚴格一對一，對帳能力完全相同，但把
   可辨識個人的政府識別號放進會被複製與備份的相本資料庫，是沒有換到任何東西的風險。
   需要更強的核對時，在一次性腳本裡直接讀行政系統的身分證交叉驗證即可。

@@ -135,6 +135,15 @@ def update_template_period(
         period = get_period_or_404(period_id, db)
         if name is not None:
             period.name = name
+            # 老師端一律讀 semester_periods 的名稱快照（進度總覽、工作格、學期匯出），
+            # 只改 template_periods.name 的話畫面上還是舊名字，而期別列表已經是新的
+            # ——兩個端點對同一個期別給出不同名字。一個 template period 只會對到一個
+            # semester period（ux_semester_periods_template_period），所以同步沒有歧義。
+            semester_period = db.query(SemesterPeriod).filter(
+                SemesterPeriod.template_period_id == period.id
+            ).first()
+            if semester_period is not None:
+                semester_period.period_name_snapshot = name
         if status is not None:
             period.status = status
         _attach_period_to_semester(db, period, semester_id)
