@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { ChevronRight, CircleHelp, Pencil, Users } from "lucide-react";
+import { ArrowRightLeft, ChevronRight, CircleHelp, Pencil, Users } from "lucide-react";
 
 import {
   completeProject,
@@ -17,6 +17,7 @@ import {
 } from "../api/projectApi";
 import { fetchProjectTemplatePair } from "../api/templateApi";
 import ConfirmModal from "../components/ConfirmModal";
+import StudentTransferModal from "../components/StudentTransferModal";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
 import ReviewCommentsPanel from "../components/ReviewCommentsPanel";
 import RosterModal from "../components/RosterModal";
@@ -115,6 +116,7 @@ export default function ProjectReview() {
   const [studentSearch, setStudentSearch] = useState("");
   const [confirmModal, setConfirmModal] = useState(null);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
 
   const previewDialogRef = useDialogA11y({
     isOpen: Boolean(preview),
@@ -343,6 +345,21 @@ export default function ProjectReview() {
                 <span className="sm:hidden">學生</span>
               </Button>
             )}
+            {canEditCurrentProject
+              && !derived.isProjectCompleted
+              && (project.transfer_targets ?? []).length > 0 && (
+              <Button
+                type="button"
+                onClick={() => setIsTransferOpen(true)}
+                variant="secondary"
+                size="touch"
+                className={responsiveActionItemClass}
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">搬移學生</span>
+                <span className="sm:hidden">搬移</span>
+              </Button>
+            )}
             <Button
               type="button"
               onClick={handleStartGuide}
@@ -449,6 +466,15 @@ export default function ProjectReview() {
           setConfirmModal(null);
         }}
         onCancel={() => setConfirmModal(null)}
+      />
+
+      <StudentTransferModal
+        isOpen={isTransferOpen}
+        onClose={() => setIsTransferOpen(false)}
+        projectId={projectId}
+        students={project.students}
+        transferTargets={project.transfer_targets ?? []}
+        onTransferred={loadProject}
       />
 
       <RosterModal

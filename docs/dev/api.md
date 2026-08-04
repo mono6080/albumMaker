@@ -127,7 +127,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
 | PATCH | `/students/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/students/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
-| POST | `/classrooms/{id}/projects` | admin／當班 lead 以目前名單建立相本；body 必帶尚未開始且屬目前學期／該班／模板期別的 `work_slot_id`，owner 須為目前老師（省略採 lead） |
+| POST | `/classrooms/{id}/projects` | admin／當班 lead 依目前名單建立相本；body 必帶屬目前學期／該班／模板期別的 `work_slot_id`（**同一格可多本**，例如同排版兩套對應文字），可選 `roster_child_ids` 指定收錄的孩子（省略即收該格尚未編入相本者），owner 須為目前老師（省略採 lead）。同一個孩子不可被同格兩本收錄；全班都已編入時回 409 `slot_roster_fully_assigned`（此時可送空 `roster_child_ids` 建一本空的當搬移目標） |
 | POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班（含 `sort_order` 與 `can_remove`——後者由後端算，前端據此決定移除鍵能不能按），`classroom_id` 一律指它們。在草稿學期新增班級會自動補進計畫，該班才編得到老師。payload 另有 `new_students`：草稿期間直接編進目標班的新生，他們沒有來源名單列因此不是 placement，套用時不會被動到 |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
@@ -169,6 +169,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/{id}/restore` | 復原封存 |
 | POST | `/{id}/complete` | 標記全班完成（admin／該班目前老師）；完成後非 admin 內容寫入鎖定；不回填學生個別時間戳 |
 | POST | `/{id}/reopen` | 退回全班完成（admin 或該校／部門 scope supervisor）；同時清除全部學生的個別完成 |
+| POST | `/{id}/students/transfer` | 把學生搬到同一個班級期別的另一本相本（同 `can_edit`，來源與目標都要）；body 帶 `target_project_id` 與 `student_ids`。照片實體搬到新命名空間、頁面資料（個人文字與跳過設定）跟著走、來源的該生輸出清除、個別完成清空、`started_at` 不動。限制：同一 `class_period_work_slot_id`、同 `template_id`、兩本都未完成、孩子仍在班級目前名單、不可把來源搬空；違反依序回 422/409 附 code |
 | POST | `/{id}/students/{sid}/complete` | 標記單一學生完成（同 `can_edit`）；前置條件：該生照片與可填文字全數填滿（與老師進度同一計算，`student_progress.summarize_student_progress`），未滿回 409 `student_content_incomplete` 附計數；冪等；全班皆完成時同 transaction 自動寫入 `project.completed_at` |
 | POST | `/{id}/students/{sid}/reopen` | 退回單一學生完成（僅 `can_reopen`）；全班完成已成立時一併清除 `project.completed_at`，其他學生保留 |
 | POST | `/{id}/assignment` | admin 把進度負責人轉給該班目前老師並寫 from/to/operator 快照與原因；owner 不授權 |
