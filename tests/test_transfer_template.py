@@ -159,3 +159,38 @@ def test_source_and_target_must_differ(monkeypatch, tmp_path):
                                      "--template-id", "1"])
     with pytest.raises(SystemExit):
         transfer_template.main()
+
+
+def test_source_with_uncheckpointed_wal_is_refused(monkeypatch, workspace):
+    """只複製 .db 漏掉 -wal 會讀到舊資料。
+
+    2026-08-04 上線當天踩過：把演練庫 scp 到伺服器只送了主檔，最近匯入的 7 個模板
+    還在 1.6MB 的 WAL 裡，腳本回報「來源沒有 template id=26」白跑一次。與其讓人自己
+    看懂那個訊息，不如直接擋下並給出 checkpoint 指令。
+    """
+    src, dst, uploads, staging = workspace
+    src.with_name(src.name + "-wal").write_bytes(b"x" * 4096)
+
+    monkeypatch.setattr("sys.argv",
+                        ["x", "--source-db", str(src), "--target-db", str(dst),
+                         "--template-id", "26", "--source-uploads", str(uploads),
+                         "--staging-dir", str(staging), "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        transfer_template.main()
+
+    # sys.exit(訊息) 的字串在例外裡，不是印到 stdout
+    message = str(exc.value)
+    assert "WAL" in message and "checkpoint" in message, message
+    assert sqlite3.connect(dst).execute(
+        "select count(*) from templates").fetchone()[0] == 1, "被擋下時不該寫入"
+
+
+def test_empty_wal_does_not_block(workspace, monkeypatch):
+    """WAL 檔存在但已 checkpoint（大小 0）是正常狀態，不該擋。"""
+    src, dst, uploads, staging = workspace
+    src.with_name(src.name + "-wal").write_bytes(b"")
+    monkeypatch.setattr("sys.argv",
+                        ["x", "--source-db", str(src), "--target-db", str(dst),
+                         "--template-id", "26", "--source-uploads", str(uploads),
+                         "--staging-dir", str(staging), "--apply"])
+    assert transfer_template.main() == 0

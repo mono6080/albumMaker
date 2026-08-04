@@ -38,6 +38,19 @@ ASSET_PATH_KEYS = ("background_filename",)
 def open_ro(path: pathlib.Path) -> sqlite3.Connection:
     if not path.is_file():
         sys.exit(f"找不到資料庫：{path}")
+    # 只複製 .db 而漏掉 -wal 是很容易犯的錯：SQLite 在 WAL 模式下最近的寫入還沒
+    # checkpoint 進主檔，複製過去的來源會少掉剛匯入的模板。症狀是「來源沒有
+    # template id=N」——2026-08-04 上線當天就這樣白跑一次。
+    wal = path.with_name(path.name + "-wal")
+    if wal.is_file() and wal.stat().st_size > 0:
+        sys.exit(
+            chr(10).join([
+                f"來源旁邊有未 checkpoint 的 WAL（{wal.name}，{wal.stat().st_size} bytes）。",
+                "直接讀會漏掉最近的寫入。請先產生 checkpoint 過的副本再搬：",
+                "    python -c \"import sqlite3,sys; s=sqlite3.connect(sys.argv[1]);"
+                " d=sqlite3.connect(sys.argv[2]); s.backup(d)\" <來源> <乾淨副本>",
+            ])
+        )
     conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
