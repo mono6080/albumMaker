@@ -13,10 +13,16 @@ RULES = [
     (
         re.compile(r"\.pages_data_json\s*=[^=]"),
         # 模板同步已同時持有 template→project→student locks，必須在單一 transaction
-        # 直接重排所有學生；兩個測試檔則刻意種入舊版／損壞 JSON 驗證復原路徑。
+        # 直接重排所有學生；學生搬移同理（見下）；兩個測試檔則刻意種入舊版／損壞
+        # JSON 驗證復原路徑。
+        #
+        # student_transfer_service 不能用 mutate_student_pages()——它會在自己的鎖裡
+        # commit，而搬移必須讓「改照片路徑、改 project_id、清輸出」一起成功。它改成
+        # 明確持有 lock_student_page_writes(要搬的學生) 再寫，鎖的保證與唯一入口相同。
         {
             "backend/services/student_pages.py",
             "backend/services/template_project_sync_service.py",
+            "backend/services/student_transfer_service.py",
             "tests/test_api_edges.py",
             "tests/test_template_project_sync.py",
         },

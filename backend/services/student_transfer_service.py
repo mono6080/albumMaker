@@ -28,6 +28,7 @@ from database import ClassroomMember, ProjectStudent
 from services.organization_lock import organization_acl_lock
 from services.project_access_service import assert_project_writable
 from services.storage_factory import get_storage
+from services.student_pages import lock_student_page_writes
 from services.student_render_service import clear_student_render_outputs
 from services.template_sync_locks import lock_project_content_writes
 
@@ -131,6 +132,30 @@ def _relocate_student_photos(
     return stale_keys
 
 
+def _transfer_locked(db, storage, requested_ids, student_by_id, source, target, next_order):
+    """在學生寫鎖內做完全部搬移動作，回傳待清除的舊照片 key。
+
+    呼叫端必須已持有 lock_student_page_writes(requested_ids)——這裡直接寫
+    pages_data_json（透過 _relocate_student_photos），沒有鎖就會跟併發的照片／文字
+    上傳互相蓋寫。
+    """
+    stale_photo_keys: list[str] = []
+    for index, student_id in enumerate(requested_ids):
+        student = student_by_id[student_id]
+        stale_photo_keys.extend(
+            _relocate_student_photos(storage, student, source.id, target.id)
+        )
+        # 換本之後舊輸出一定過期：整個學生輸出 namespace（PDF／頁圖／指紋）清掉
+        clear_student_render_outputs(
+            storage, source.id, student.id, student.output_filename
+        )
+        student.project_id = target.id
+        student.order_index = next_order + index
+        student.output_filename = None
+        # 個別完成狀態跟著清除：換本等於這本的內容還沒被確認過
+        student.completed_at = None
+    return stale_photo_keys
+
 def transfer_students_between_projects(
     db: Session,
     current_user,
@@ -216,21 +241,17 @@ def transfer_students_between_projects(
             (student.order_index or 0 for student in target.students),
             default=-1,
         ) + 1
-        for index, student_id in enumerate(requested_ids):
-            student = student_by_id[student_id]
-            stale_photo_keys.extend(
-                _relocate_student_photos(storage, student, source.id, target.id)
-            )
-            # 換本之後舊輸出一定過期：整個學生輸出 namespace（PDF／頁圖／指紋）清掉
-            clear_student_render_outputs(
-                storage, source.id, student.id, student.output_filename
-            )
-            student.project_id = target.id
-            student.order_index = next_order + index
-            student.output_filename = None
-            # 個別完成狀態跟著清除：換本等於這本的內容還沒被確認過
-            student.completed_at = None
-
+        # pages_data_json 的 read-modify-write 必須在學生寫鎖內，否則會跟同時進行的
+        # 照片／文字上傳互相蓋寫（那些路徑只拿學生鎖，不拿 project 鎖，所以外層的
+        # lock_project_content_writes 擋不住它們）。這裡不能用 mutate_student_pages()
+        # ——它會在自己的鎖裡 commit，而搬移必須讓「改照片路徑、改 project_id、清輸出」
+        # 一起成功；改成一次鎖住全部要搬的學生，跟模板同步的做法一致。
+        with lock_student_page_writes(requested_ids):
+            for student_id in requested_ids:
+                db.refresh(student_by_id[student_id])
+            stale_photo_keys.extend(_transfer_locked(
+                db, storage, requested_ids, student_by_id, source, target, next_order
+            ))
         db.flush()
         transferred_count = len(requested_ids)
         source_remaining = len(source.students) - transferred_count
