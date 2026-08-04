@@ -223,8 +223,15 @@ function WorkSlotCell({ slot, classroomName, periodLabel }) {
   const projects = slot.projects ?? [];
   return (
     <div className="space-y-2">
+      {/* 一格多本是正式支援的做法（同排版兩套文字、或一人一本），所以只是資訊。
+          會出事的是同一個孩子被兩本收錄——期末彙整會把他算兩次，那才標紅。 */}
       {slot.creation_status === "multiple_projects" && (
-        <Badge tone="danger">同一工作格有 {projects.length} 本相本</Badge>
+        <Badge tone="neutral">這一格共 {projects.length} 本相本</Badge>
+      )}
+      {(slot.duplicate_roster_child_ids?.length ?? 0) > 0 && (
+        <Badge tone="danger">
+          有 {slot.duplicate_roster_child_ids.length} 位孩子被同格多本重複收錄
+        </Badge>
       )}
       {projects.map(project => (
         <ProjectStatusCard

@@ -51,6 +51,13 @@ export const completeStudent = (projectId, studentId) =>
 export const reopenStudent = (projectId, studentId) =>
   apiClient.post(`/projects/${projectId}/students/${studentId}/reopen`);
 
+/** 把學生搬到同一個班級期別的另一本相本，照片與個人文字一起帶走 */
+export const transferStudents = (projectId, targetProjectId, studentIds) =>
+  apiClient.post(`/projects/${projectId}/students/transfer`, {
+    target_project_id: targetProjectId,
+    student_ids: studentIds,
+  });
+
 // ── 本期學生快照 ──────────────────────────────────────────────────────────────
 
 /** 設定或取消學生某頁的跳過旗標 */

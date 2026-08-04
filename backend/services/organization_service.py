@@ -145,7 +145,37 @@ def _serialize_project(project: Project) -> dict:
     }
 
 
-def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
+def _assigned_child_ids_by_work_slot(
+    db: Session,
+    work_slot_ids: list[int],
+) -> dict[int, list[int]]:
+    """每個工作格已被相本收錄的孩子。
+
+    只撈兩個欄位而不是 selectinload(Project.students)——ProjectStudent 帶著整包
+    pages_data_json，為了幾個 id 把它拉進 overview 會很重。
+    """
+    if not work_slot_ids:
+        return {}
+    rows = (
+        db.query(Project.class_period_work_slot_id, ProjectStudent.roster_child_id)
+        .join(ProjectStudent, ProjectStudent.project_id == Project.id)
+        .filter(
+            Project.class_period_work_slot_id.in_(work_slot_ids),
+            Project.deleted_at.is_(None),
+            ProjectStudent.roster_child_id.isnot(None),
+        )
+        .all()
+    )
+    grouped: dict[int, set[int]] = {}
+    for slot_id, child_id in rows:
+        grouped.setdefault(int(slot_id), set()).add(int(child_id))
+    return {slot_id: sorted(ids) for slot_id, ids in grouped.items()}
+
+
+def _serialize_work_slot(
+    work_slot: ClassPeriodWorkSlot,
+    assigned_child_ids_by_slot: dict[int, list[int]] | None = None,
+) -> dict:
     classroom = work_slot.classroom
     semester_period = work_slot.semester_period
     return {
@@ -166,10 +196,17 @@ def _serialize_work_slot(work_slot: ClassPeriodWorkSlot) -> dict:
             template.id for template in semester_period.template_period.templates
         ],
         "started_at": work_slot.started_at,
-        "can_create_project": work_slot.started_at is None,
+        # 一個班級期別可以有多本相本（同一套排版、不同對應文字），所以這裡不再看
+        # started_at，只看學期是否還在進行中——那才是建相本的硬條件。已收幾本由
+        # project_ids 呈現；孩子全部編完時由建立 API 回 slot_roster_fully_assigned。
+        "can_create_project": classroom.semester.status in {"imported", "active"},
         "project_ids": [
             project.id for project in work_slot.projects if project.deleted_at is None
         ],
+        # 已被這格相本收錄的孩子；建下一本時用來預選「還沒編到的人」
+        "assigned_roster_child_ids": (
+            (assigned_child_ids_by_slot or {}).get(work_slot.id, [])
+        ),
     }
 
 
@@ -456,6 +493,10 @@ def get_organization_overview(db: Session) -> dict:
         if current_term is not None
         else []
     )
+    # 一次算完所有工作格已收錄的孩子，避免在序列化時每格各查一次
+    assigned_child_ids_by_slot = _assigned_child_ids_by_work_slot(
+        db, [int(work_slot.id) for work_slot in current_work_slots]
+    )
     return {
         "campuses": [
             _serialize_campus(campus, current_semester_id)
@@ -494,7 +535,8 @@ def get_organization_overview(db: Session) -> dict:
             else None
         ),
         "work_slots": [
-            _serialize_work_slot(work_slot) for work_slot in current_work_slots
+            _serialize_work_slot(work_slot, assigned_child_ids_by_slot)
+            for work_slot in current_work_slots
         ],
         "templates": [
             {
@@ -729,7 +771,10 @@ def replace_campus_supervisors(
     }
 
 
-def _serialize_scoped_classroom(classroom: Classroom) -> dict:
+def _serialize_scoped_classroom(
+    classroom: Classroom,
+    assigned_child_ids_by_slot: dict[int, list[int]] | None = None,
+) -> dict:
     current_term_classrooms = [classroom] if classroom.is_current else []
     return {
         "id": classroom.id,
@@ -748,9 +793,9 @@ def _serialize_scoped_classroom(classroom: Classroom) -> dict:
             if member.ended_at is None
         ],
         "work_slots": [
-            _serialize_work_slot(work_slot)
-            for classroom in current_term_classrooms
-            for work_slot in classroom.work_slots
+            _serialize_work_slot(work_slot, assigned_child_ids_by_slot)
+            for current_classroom in current_term_classrooms
+            for work_slot in current_classroom.work_slots
         ],
     }
 
@@ -801,9 +846,19 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
         Classroom.sort_order,
         Classroom.id,
     ).all()
+    scoped_work_slot_ids = [
+        work_slot.id
+        for classroom in classrooms
+        if classroom.is_current
+        for work_slot in classroom.work_slots
+    ]
+    assigned_child_ids_by_slot = _assigned_child_ids_by_work_slot(
+        db, scoped_work_slot_ids
+    )
     return {
         "classrooms": [
-            _serialize_scoped_classroom(classroom) for classroom in classrooms
+            _serialize_scoped_classroom(classroom, assigned_child_ids_by_slot)
+            for classroom in classrooms
         ],
         "permissions": permissions,
     }
@@ -1943,6 +1998,7 @@ def create_classroom_project(
     template_id: int,
     work_slot_id: int,
     owner_id: int | None,
+    roster_child_ids: list[int] | None = None,
 ) -> dict:
     project_name = _normalize_organization_name(name, "相本")
     with organization_acl_lock, lock_template_write(template_id):
@@ -2000,14 +2056,9 @@ def create_classroom_project(
                         "message": "工作格與模板部門必須一致",
                     },
                 )
-            if work_slot.started_at is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "work_slot_already_started",
-                        "message": "此班級期別已建立相本",
-                    },
-                )
+            # 同一個班級期別允許多本相本（同一套排版、不同對應文字），所以不再因為
+            # 這格已開工就擋下。改用「同一個孩子不能被同格兩本收錄」當防線，見下面
+            # slot_taken_child_ids——重複收錄會讓期末匯出同一個孩子出現兩次。
             if not classroom.is_current or not classroom.campus.is_active:
                 raise HTTPException(
                     status_code=409,
@@ -2092,6 +2143,86 @@ def create_classroom_project(
                         "message": "班級目前沒有學生，無法建立相本",
                     },
                 )
+            # 同格既有相本已經收錄的孩子：同一個孩子只能落在其中一本，否則期末
+            # 匯出會把他算成兩次。已刪除（deleted_at）的相本不佔名額。
+            slot_taken_child_ids = {
+                int(child_id)
+                for (child_id,) in db.query(ProjectStudent.roster_child_id)
+                .join(Project, ProjectStudent.project_id == Project.id)
+                .filter(
+                    Project.class_period_work_slot_id == work_slot.id,
+                    Project.deleted_at.is_(None),
+                    ProjectStudent.roster_child_id.isnot(None),
+                )
+                .all()
+            }
+            if roster_child_ids is None:
+                # 沒指定就收「這格還沒有人收」的孩子：第一本是全班，之後每一本
+                # 預設接手剩下的，老師不必自己記得哪些已經編過。
+                selected_members = [
+                    member for member in active_members
+                    if int(member.roster_child_id) not in slot_taken_child_ids
+                ]
+                if not selected_members:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "slot_roster_fully_assigned",
+                            "message": "這個班級期別的孩子都已編入相本，請指定要收錄的孩子",
+                        },
+                    )
+            else:
+                requested_ids = list(dict.fromkeys(roster_child_ids))
+                if not requested_ids:
+                    # 這格已經有相本時允許明確建立一本空的：全班都收在第一本、之後
+                    # 才決定要分兩本時，得先有第二本當搬移目標，否則會卡成死結
+                    # （建第二本說沒人可收、搬移又說沒有目標）。
+                    slot_has_album = any(
+                        existing.deleted_at is None for existing in work_slot.projects
+                    )
+                    if not slot_has_album:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "empty_roster_selection",
+                                "message": "請至少選擇一位孩子",
+                            },
+                        )
+                    selected_members = []
+                else:
+                    member_by_child_id = {
+                        int(member.roster_child_id): member for member in active_members
+                    }
+                    missing_ids = [
+                        child_id for child_id in requested_ids
+                        if child_id not in member_by_child_id
+                    ]
+                    if missing_ids:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "roster_child_not_in_classroom",
+                                "roster_child_ids": missing_ids,
+                                "message": "選到的孩子不在這個班級的目前名單",
+                            },
+                        )
+                    conflicting_ids = [
+                        child_id for child_id in requested_ids
+                        if child_id in slot_taken_child_ids
+                    ]
+                    if conflicting_ids:
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "roster_child_already_in_slot",
+                                "roster_child_ids": conflicting_ids,
+                                "message": "選到的孩子已經編入這個班級期別的其他相本",
+                            },
+                        )
+                    selected_members = [
+                        member_by_child_id[child_id] for child_id in requested_ids
+                    ]
+            active_members = selected_members
             assert_project_student_capacity(0, len(active_members))
             student_names = [member.roster_child.name for member in active_members]
             duplicate_names = [
@@ -2121,7 +2252,10 @@ def create_classroom_project(
                 campus_name_snapshot=classroom.campus.name,
                 classroom_name_snapshot=classroom.name,
             )
-            work_slot.started_at = utc_now()
+            # started_at 是「這格開工了」的水位，不是相本數；同格加第二本時保留
+            # 第一次開工時間，進度報表才不會因為多開一本而看起來變晚。
+            if work_slot.started_at is None:
+                work_slot.started_at = utc_now()
             db.flush()
             for order_index, member in enumerate(active_members):
                 db.add(ProjectStudent(

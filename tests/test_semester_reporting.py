@@ -951,3 +951,97 @@ def test_duplicate_child_period_is_skipped_by_preview_render_and_download(monkey
         assert "同一期有重複相本" in manifest
         assert str(project_id) in manifest
         assert str(duplicate_project_id) in manifest
+
+
+def test_multiple_albums_in_one_slot_are_normal_but_duplicate_children_are_flagged():
+    """一格多本是正式支援的做法，會出事的是同一個孩子被兩本收錄。
+
+    契約見 academic-term-reporting-v1.md：「同一孩子同一期出現在多 Project 才是匯出
+    duplicate」。舊版把「>1 本」直接當成紅字，正式站因此對 4 個一人一本的工作格
+    誤報（2026-08-04 查證：0 位重複孩子）。
+    """
+    with started_client() as client:
+        login(client)
+        teacher, _ = create_user(client, "teacher")
+        period = create_active_period(client)
+        template_id, _ = create_template_with_page(client, period_id=period["id"])
+        _, classroom_id = create_scoped_classroom(client)
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        first_name, second_name = unique_name("child_a"), unique_name("child_b")
+        add_classroom_members(client, classroom_id, [first_name, second_name])
+
+        overview = client.get("/api/organization/overview")
+        assert_status(overview, 200)
+        members = [
+            member
+            for campus in overview.json()["campuses"]
+            for room in campus["classrooms"] if room["id"] == classroom_id
+            for member in room["members"]
+        ]
+        child_ids = {member["name"]: member["roster_child_id"] for member in members}
+        work_slot_id = next(
+            slot["id"] for slot in overview.json()["work_slots"]
+            if slot["classroom_id"] == classroom_id
+            and slot["template_period_id"] == period["id"]
+        )
+
+        def make_album(roster_child_ids):
+            response = client.post(
+                f"/api/organization/classrooms/{classroom_id}/projects",
+                json={
+                    "name": unique_name("album"),
+                    "template_id": template_id,
+                    "work_slot_id": work_slot_id,
+                    "roster_child_ids": roster_child_ids,
+                },
+            )
+            assert_status(response, 201)
+            return response.json()["id"]
+
+        # 一人一本：兩本、互不重疊 —— 這是正常的
+        make_album([child_ids[first_name]])
+        make_album([child_ids[second_name]])
+        semester_id = reporting_semester_id(client, [period["id"]])
+
+        progress = client.get(
+            "/api/roster/teacher-progress", params={"semester_id": semester_id}
+        )
+        assert_status(progress, 200)
+        data = progress.json()
+        slot = next(
+            slot
+            for room in data["classrooms"] if room["classroom_id"] == classroom_id
+            for slot in room["slots"] if slot["work_slot_id"] == work_slot_id
+        )
+        assert slot["creation_status"] == "multiple_projects"
+        assert slot["duplicate_roster_child_ids"] == [], "沒有重複就不該報"
+        assert data["summary"]["duplicate_child_slot_count"] == 0
+
+
+def test_duplicate_roster_child_ids_finds_a_child_collected_twice():
+    """反向：真的重複時一定要報出來。
+
+    這條走純函式而不是 API——現行寫入路徑進不到這個狀態（建相本時擋
+    slot_taken_child_ids、DB 的 trg_project_students_freeze_class_backed_identity
+    也擋改 roster_child_id），所以整合測試造不出這個情境。這個偵測是給那些防線
+    建立之前就留下的資料用的。
+    """
+    from types import SimpleNamespace
+
+    from services.teacher_overview_service import duplicate_roster_child_ids
+
+    def album(*child_ids):
+        return SimpleNamespace(
+            students=[SimpleNamespace(roster_child_id=cid) for cid in child_ids]
+        )
+
+    # 一人一本、互不重疊：正常
+    assert duplicate_roster_child_ids([album(1), album(2)]) == set()
+    # 同一個孩子落在兩本：要報
+    assert duplicate_roster_child_ids([album(1, 2), album(2, 3)]) == {2}
+    # 三本都收到同一位
+    assert duplicate_roster_child_ids([album(7), album(7), album(7)]) == {7}
+    # 未歸班的學生（roster_child_id 為空）不算重複
+    assert duplicate_roster_child_ids([album(None), album(None)]) == set()
+    # 單本內部即使重複也算——那同樣會讓匯出算兩次
+    assert duplicate_roster_child_ids([album(5, 5)]) == {5}

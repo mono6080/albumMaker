@@ -58,6 +58,13 @@ class StudentInProject(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class ProjectTransferTarget(BaseModel):
+    """可以把學生搬過去的相本：同一個班級期別、同一個模板、且尚未完成。"""
+    id: int
+    name: str
+    student_count: int
+
+
 class ProjectDetail(BaseModel):
     """專案完整資訊（含所有學生）"""
     id: int
@@ -85,6 +92,8 @@ class ProjectDetail(BaseModel):
     label_texts: Any
     students: list[StudentInProject]
     permissions: ProjectPermissions
+    # 同班級期別的其他相本；空清單代表沒有可搬移的去處
+    transfer_targets: list[ProjectTransferTarget] = []
 
 
 class StudentEditorStudentSummary(BaseModel):
@@ -276,3 +285,9 @@ class BatchTextsPayload(BaseModel):
       }
     """
     students: dict[str, dict[str, dict[str, Any]]] = {}
+
+
+class StudentTransferPayload(BaseModel):
+    """把學生搬到同一個班級期別的另一本相本。"""
+    target_project_id: int
+    student_ids: list[int]

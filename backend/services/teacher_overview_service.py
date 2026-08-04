@@ -156,6 +156,31 @@ def _parse_json_dict(value: str | None) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def duplicate_roster_child_ids(active_projects) -> set[int]:
+    """同一格裡被兩本以上相本收錄的孩子。
+
+    一格多本是正式支援的做法（同一套排版、不同對應文字；或一人一本），本身不是錯誤。
+    會出事的是同一個孩子被收錄兩次——期末彙整會把他算兩次，而且沒有別的訊號會提醒。
+    契約見 academic-term-reporting-v1.md：「同一孩子同一期出現在多 Project 才是匯出
+    duplicate」。
+
+    現行寫入路徑進不到這個狀態（建相本時擋 slot_taken_child_ids、DB 也有
+    trg_project_students_freeze_class_backed_identity），所以這是給那些防線建立之前
+    就留下的資料用的第二道防線。
+    """
+    seen: set[int] = set()
+    duplicates: set[int] = set()
+    for project in active_projects:
+        for student in project.students:
+            if student.roster_child_id is None:
+                continue
+            child_id = int(student.roster_child_id)
+            if child_id in seen:
+                duplicates.add(child_id)
+            seen.add(child_id)
+    return duplicates
+
+
 def _serialize_project_progress(
     project: Project,
     page_layouts: list[dict],
@@ -285,6 +310,7 @@ def build_teacher_progress_overview(
         "archived_slot_count": 0,
         "single_slot_count": 0,
         "multiple_projects_slot_count": 0,
+        "duplicate_child_slot_count": 0,
         "project_count": 0,
         "content_ready_project_count": 0,
         "submitted_project_count": 0,
@@ -307,6 +333,7 @@ def build_teacher_progress_overview(
                 creation_status = "single"
             else:
                 creation_status = "multiple_projects"
+            duplicate_child_ids = duplicate_roster_child_ids(active_projects)
             projects_payload = []
             for project in active_projects:
                 if project.template_id not in layouts_by_template:
@@ -330,6 +357,7 @@ def build_teacher_progress_overview(
                 )
             summary["slot_count"] += 1
             summary[f"{creation_status}_slot_count"] += 1
+            summary["duplicate_child_slot_count"] += int(bool(duplicate_child_ids))
             slots_payload.append({
                 "work_slot_id": slot.id,
                 "semester_period_id": slot.semester_period_id,
@@ -341,6 +369,7 @@ def build_teacher_progress_overview(
                     slot.started_at.isoformat() if slot.started_at else None
                 ),
                 "creation_status": creation_status,
+                "duplicate_roster_child_ids": sorted(duplicate_child_ids),
                 "projects": projects_payload,
             })
         classrooms_payload.append({
@@ -412,6 +441,7 @@ def build_teacher_overview_workbook(
         "archived_slot_count": "已封存工作格",
         "single_slot_count": "單一專案工作格",
         "multiple_projects_slot_count": "多專案工作格",
+        "duplicate_child_slot_count": "同一孩子重複收錄的工作格",
         "project_count": "專案數",
         "content_ready_project_count": "照片與文字內容已齊專案",
         "submitted_project_count": "已交件鎖定專案",

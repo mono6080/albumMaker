@@ -286,6 +286,15 @@ export default function OrganizationManagement() {
         template.period_id === selectedProjectWorkSlot.template_period_id
       ))
     : [];
+  // 同一個班級期別可以有多本相本（同排版、不同對應文字）。已被同格其他相本收錄
+  // 的孩子不能再收一次，否則期末彙整會把他算成兩次。
+  const assignedChildIdsInSlot = new Set(
+    selectedProjectWorkSlot?.assigned_roster_child_ids ?? [],
+  );
+  const selectableMembers = activeMembers.filter(member => (
+    !assignedChildIdsInSlot.has(member.roster_child_id)
+  ));
+  const existingAlbumCountInSlot = selectedProjectWorkSlot?.project_ids?.length ?? 0;
   const teacherOptions = overview?.teacher_options ?? [];
   const supervisorOptions = overview?.supervisor_options ?? [];
   const normalizedSupervisorSearchQuery = supervisorSearchQuery.trim().toLocaleLowerCase("zh-TW");
@@ -613,6 +622,12 @@ export default function OrganizationManagement() {
     event.preventDefault();
     const name = formModal.name.trim();
     if (!name || !formModal.workSlotId || !formModal.templateId || !formModal.ownerId) return;
+    const selectedChildIds = formModal.selectedChildIds ?? [];
+    // 還有人沒編入卻一個都沒勾，多半是漏選；全部都編入時才是刻意要建空相本
+    if (selectedChildIds.length === 0 && selectableMembers.length > 0) {
+      toast.error("請至少勾選一位孩子");
+      return;
+    }
     setIsSubmitting(true);
     try {
       await createClassroomProject(selectedClassroom.id, {
@@ -620,8 +635,9 @@ export default function OrganizationManagement() {
         template_id: Number(formModal.templateId),
         work_slot_id: Number(formModal.workSlotId),
         owner_id: Number(formModal.ownerId),
+        roster_child_ids: selectedChildIds,
       });
-      toast.success("新一期相本已依目前名單建立");
+      toast.success(`相本已建立，收錄 ${selectedChildIds.length} 位學生`);
       setFormModal(null);
       setActiveView("projects");
       await loadOverview();
@@ -1184,8 +1200,14 @@ export default function OrganizationManagement() {
         {formModal?.type === "project" && (
           <form className="space-y-4" onSubmit={handleCreateProjectSubmit}>
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-              將目前 {activeMembers.length} 位學生的成員與完整姓名形成這一期快照；之後離園或轉班不會讓快照消失，相本稱呼則持續跟隨園所設定。
+              將勾選學生的成員與完整姓名形成這一期快照；之後離園或轉班不會讓快照消失，相本稱呼則持續跟隨園所設定。
             </p>
+            {existingAlbumCountInSlot > 0 && (
+              <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                這個期別已經有 {existingAlbumCountInSlot} 本相本。想用同一套排版但不同的對應文字時，
+                可以再建一本，收錄尚未編入的孩子。
+              </p>
+            )}
             <FormField label="相本名稱">
               <input
                 autoFocus
@@ -1208,10 +1230,15 @@ export default function OrganizationManagement() {
                   const nextTemplate = availableTemplates.find(template => (
                     template.period_id === nextWorkSlot?.template_period_id
                   ));
+                  // 換期別要重算預選：每個期別已編入相本的孩子不一樣
+                  const assignedIds = new Set(nextWorkSlot?.assigned_roster_child_ids ?? []);
                   setFormModal(current => ({
                     ...current,
                     workSlotId: nextWorkSlotId,
                     templateId: nextTemplate ? String(nextTemplate.id) : "",
+                    selectedChildIds: activeMembers
+                      .filter(member => !assignedIds.has(member.roster_child_id))
+                      .map(member => member.roster_child_id),
                   }));
                 }}
                 className={fieldControlClass}
@@ -1259,6 +1286,71 @@ export default function OrganizationManagement() {
                 所有目前當班老師都可依班級編制存取；所選負責人只決定主要進度歸戶。
               </p>
             )}
+            {selectableMembers.length === 0 && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                這個期別的孩子都已編入相本。仍可建立一本空的，之後在班級總覽用
+                「搬移學生」把要分開做的孩子移過來。
+              </p>
+            )}
+            <FormField label={`收錄的孩子（${formModal.selectedChildIds?.length ?? 0}／${selectableMembers.length}）`}>
+              <div className="rounded-lg border border-gray-200">
+                <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                  <span className="text-xs text-gray-500">
+                    預設收錄這個期別還沒編入相本的孩子
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      onClick={() => setFormModal(current => ({
+                        ...current,
+                        selectedChildIds: selectableMembers.map(member => member.roster_child_id),
+                      }))}
+                    >
+                      全選
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => setFormModal(current => ({ ...current, selectedChildIds: [] }))}
+                    >
+                      全不選
+                    </Button>
+                  </div>
+                </div>
+                <div className="max-h-56 divide-y divide-gray-100 overflow-y-auto">
+                  {activeMembers.map(member => {
+                    const isAssignedElsewhere = assignedChildIdsInSlot.has(member.roster_child_id);
+                    const isChecked = (formModal.selectedChildIds ?? []).includes(member.roster_child_id);
+                    return (
+                      <label
+                        key={member.roster_child_id}
+                        className={`flex min-h-11 items-center gap-2 px-3 py-2 text-sm ${
+                          isAssignedElsewhere ? "text-gray-400" : "text-gray-800 hover:bg-gray-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          disabled={isAssignedElsewhere}
+                          onChange={event => setFormModal(current => {
+                            const currentIds = current.selectedChildIds ?? [];
+                            return {
+                              ...current,
+                              selectedChildIds: event.target.checked
+                                ? [...currentIds, member.roster_child_id]
+                                : currentIds.filter(childId => childId !== member.roster_child_id),
+                            };
+                          })}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                        {isAssignedElsewhere && (
+                          <span className="flex-shrink-0 text-xs">已編入這期其他相本</span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </FormField>
             <div className="flex justify-end gap-2">
               <Button onClick={closeFormModal} disabled={isSubmitting}>取消</Button>
               <Button
@@ -1699,15 +1791,23 @@ export default function OrganizationManagement() {
                         size="sm"
                         variant="success"
                         disabled={createProjectDisabledReasons.length > 0}
-                        onClick={() => setFormModal({
-                          type: "project",
-                          name: "",
-                          workSlotId: String(creatableWorkSlots[0]?.id ?? ""),
-                          templateId: String(availableTemplates.find(template => (
-                            template.period_id === creatableWorkSlots[0]?.template_period_id
-                          ))?.id ?? ""),
-                          ownerId: String(leadTeacher?.teacher_id ?? ""),
-                        })}
+                        onClick={() => {
+                          const firstSlot = creatableWorkSlots[0];
+                          const assignedIds = new Set(firstSlot?.assigned_roster_child_ids ?? []);
+                          setFormModal({
+                            type: "project",
+                            name: "",
+                            workSlotId: String(firstSlot?.id ?? ""),
+                            templateId: String(availableTemplates.find(template => (
+                              template.period_id === firstSlot?.template_period_id
+                            ))?.id ?? ""),
+                            ownerId: String(leadTeacher?.teacher_id ?? ""),
+                            // 預設收錄這格還沒編入相本的孩子：第一本是全班，之後每本接手剩下的
+                            selectedChildIds: activeMembers
+                              .filter(member => !assignedIds.has(member.roster_child_id))
+                              .map(member => member.roster_child_id),
+                          });
+                        }}
                       >
                         <BookOpen className="h-4 w-4" />
                         建立新一期相本
