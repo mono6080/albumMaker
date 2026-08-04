@@ -26,6 +26,13 @@
     python scripts/import_office_template.py "..." --name "..." --period-id 5 \
         --force-page image16.png=2
 
+    版面微調（都有預設值，一般不需要給）：
+        --font-size 20      文字框字級，就是編輯器屬性面板顯示的數字
+        --line-height 1.4   行高倍率
+        --max-rotation 0    文字放不下時不要旋轉底圖（只用放大）
+        --max-growth 1.0    文字放不下時不要放大底圖（只用旋轉）
+    兩個上限都關閉時，放不下就維持原樣、由人工調整。
+
 需求（僅此腳本，不是 app 執行期依賴，不用加進 backend/requirements.txt）：
     pip install pymupdf lxml
     docm/doc 輸入需要 Windows + 已安裝 Microsoft Word（透過 COM 自動化轉存 PDF，
@@ -42,6 +49,7 @@ import re
 import sqlite3
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -54,10 +62,54 @@ DEFAULT_UPLOADS_DIR = ROOT_DIR / "backend" / "uploads"
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 from services.draw_helpers import get_font, wrap_text  # noqa: E402  真正的渲染引擎用的字型/換行邏輯
 from services.text_layout import TEXT_LAYOUT_MEASUREMENT_SCALE  # noqa: E402
+from services.material_text_box import (  # noqa: E402  編輯器「重新分析」用的同一支分析器
+    analyze_material_text_box,
+    project_normalized_box_to_sticker,
+)
 
 CANVAS_W, CANVAS_H = 794, 1123
 PLACEHOLDER_TEXT = "{name}的文字標題的文字標題的文字標題的文字標題"
 PX_PER_EMU = 1 / 9525  # 96dpi 畫布下，1px = 9525 EMU
+
+# 匯入的文字一律用這個字級：屬性面板的「字級（pt）」直接綁 layout 的 font_size，
+# 所以這裡填的就是老師在編輯器看到的數字，不再依 PDF 量到的原始字級換算。
+TEXT_FONT_SIZE_PT = 18
+TEXT_LINE_HEIGHT = 1.3
+
+# 素材文字捷徑（見 docs/specs/illustrator-style-nested-groups-v2.md）：
+# link 存在 layout 頂層，有非空 links 就必須帶 contract。
+MATERIAL_TEXT_LINK_KIND = "material-text-v1"
+NESTED_GROUP_CONTRACT = "nested-world-v2"
+
+# 分析框放不下預留字樣時的補救順序：先試最小角度的素材旋轉，再試最小幅度的
+# 等比例放大。旋轉的是素材本身（存旋轉後的圖、文字框仍水平），不是把文字轉斜。
+# 上限都是保險，避免極端形狀一路轉/放大到破版；到頂仍放不下就維持原樣。
+MATERIAL_ROTATION_STEP = 2.0
+MATERIAL_ROTATION_LIMIT = 20.0
+MATERIAL_GROWTH_STEP = 0.02
+MATERIAL_GROWTH_LIMIT = 1.60
+
+
+@dataclass(frozen=True)
+class ImportOptions:
+    """一次匯入的可調參數；預設值就是上面的常數，命令列可覆寫。"""
+
+    font_size_pt: float = TEXT_FONT_SIZE_PT
+    line_height: float = TEXT_LINE_HEIGHT
+    rotation_limit: float = MATERIAL_ROTATION_LIMIT
+    growth_limit: float = MATERIAL_GROWTH_LIMIT
+    rotation_step: float = MATERIAL_ROTATION_STEP
+    growth_step: float = MATERIAL_GROWTH_STEP
+
+    def __post_init__(self) -> None:
+        if not 8 <= self.font_size_pt <= 72:
+            raise SystemExit("--font-size 必須介於 8 與 72 之間")
+        if not 1.0 <= self.line_height <= 3.0:
+            raise SystemExit("--line-height 必須介於 1.0 與 3.0 之間")
+        if not 0 <= self.rotation_limit <= 45:
+            raise SystemExit("--max-rotation 必須介於 0 與 45 度之間（0 代表不旋轉）")
+        if not 1.0 <= self.growth_limit <= 3.0:
+            raise SystemExit("--max-growth 必須介於 1.0 與 3.0 之間（1.0 代表不放大）")
 
 DOCX_NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -462,7 +514,13 @@ def detect_caption_regions(page, scale: float, stickers: list[dict],
     return regions
 
 
-def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: float) -> dict:
+def build_page_layout(
+    pdf_doc,
+    page_no: int,
+    photo_boxes_px: list[dict],
+    scale: float,
+    options: ImportOptions,
+) -> dict:
     page = pdf_doc[page_no]
     bg_xref = detect_background_xref(page)
 
@@ -584,11 +642,130 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
                 best_ratio, best = ratio, s
         return best if best_ratio > 0.3 else None
 
-    font_size = 16 * scale
-    line_height = 1.3
+    font_size = options.font_size_pt
+    line_height = options.line_height
     line_height_px = font_size * line_height
 
+    def analyzed_box_for(sticker):
+        """用後端素材分析器算這張貼圖的文字框（跟編輯器「重新分析並重設」同一套）。
+
+        不自己另寫一套內縮規則：編輯器的素材文字捷徑走
+        services/material_text_box.py 的 alpha-inner-rect 偵測 + 投影，匯入時
+        若用別的算法，同一張貼圖在「匯入結果」與「按下重新分析」會得到兩個不同
+        的框，之後每次重新分析都會讓版面跳一次。分析不出來（低信心／形狀不明）
+        時才退回舊的可見範圍內縮法。
+
+        分析框放不下預留字樣時，**就地最小幅度放大素材**再重新投影——放大素材
+        而不是把框撐出泡泡，框才會一直等於分析結果（編輯器按重新分析不會跳），
+        同時佔位字也不會被裁掉。放大以素材中心為基準、等比例，所以泡泡造型與
+        文字的相對位置不變。
+        """
+        asset = sticker_assets.get(sticker["filename"])
+        if asset is None:
+            return None
+        try:
+            analysis = analyze_material_text_box(asset)
+        except Exception:  # 分析失敗不該讓整份匯入中斷，退回 fallback
+            return None
+        if analysis.get("status") != "suggested":
+            return None
+        px_per_unit_x = asset.width / sticker["width"]
+        px_per_unit_y = asset.height / sticker["height"]
+        center_x = sticker["x"] + sticker["width"] / 2
+        center_y = sticker["y"] + sticker["height"] / 2
+        normalized_box = analysis["normalized_box"]
+
+        def geometry_for(image, scale_factor):
+            """把素材圖換算成畫布幾何：素材實際大小不變（同 px/unit），中心不動。"""
+            width = image.width / px_per_unit_x * scale_factor
+            height = image.height / px_per_unit_y * scale_factor
+            return {
+                "x": center_x - width / 2, "y": center_y - height / 2,
+                "width": width, "height": height, "rotation": 0,
+            }
+
+        def evaluate(image, box_source, scale_factor):
+            geom = geometry_for(image, scale_factor)
+            box = project_normalized_box_to_sticker(geom, box_source)
+            need = estimate_placeholder_height(box["width"], font_size, line_height, line_height_px)
+            return geom, box, need
+
+        try:
+            geom, box, need = evaluate(asset, normalized_box, 1.0)
+        except ValueError:
+            return None
+        if need <= box["height"]:
+            return box
+
+        # 放不下時找「總幅度最小」的補救：底圖可以旋轉、可以放大，也可以兩者混用。
+        # 兩個手段各自歸一化後相加當成本，所以 10° 不會被當成跟放大 10% 一樣輕微。
+        # 旋轉的是素材圖本身（存旋轉後的圖），文字框仍水平——底圖轉、文字不轉。
+        def cost_of(degree, factor):
+            return (
+                abs(degree) / max(options.rotation_limit, 1e-9)
+                + (factor - 1) / max(options.growth_limit - 1, 1e-9)
+            )
+
+        degrees = [0.0]
+        step = options.rotation_step
+        while step <= options.rotation_limit:
+            degrees.extend((step, -step))
+            step = round(step + options.rotation_step, 4)
+
+        best = None
+        for degree in degrees:
+            # 角度本身的成本已超過目前最佳解時，再小的放大也贏不了，直接剪枝
+            if best is not None and cost_of(degree, 1.0) >= best[0]:
+                continue
+            image = (
+                asset if degree == 0
+                else asset.rotate(degree, expand=True, resample=Image.BICUBIC)
+            )
+            if degree != 0:
+                try:
+                    rotated_analysis = analyze_material_text_box(image)
+                except Exception:
+                    continue
+                if rotated_analysis.get("status") != "suggested":
+                    continue
+                candidate_box = rotated_analysis["normalized_box"]
+            else:
+                candidate_box = normalized_box
+
+            factor = 1.0
+            while factor <= options.growth_limit:
+                if best is not None and cost_of(degree, factor) >= best[0]:
+                    break
+                try:
+                    geom, box, need = evaluate(image, candidate_box, factor)
+                except ValueError:
+                    break
+                if need <= box["height"]:
+                    best = (cost_of(degree, factor), degree, factor, image, geom, box)
+                    break
+                factor = round(factor + options.growth_step, 4)
+
+        if best is None:
+            # 轉到底、放大到頂都塞不下：維持原樣，交由人工調整（不硬撐破版）
+            return box
+
+        _, degree, factor, image, geom, box = best
+        if degree != 0:
+            sticker_assets[sticker["filename"]] = image
+        sticker.update(
+            x=geom["x"], y=geom["y"], width=geom["width"], height=geom["height"]
+        )
+        changes = []
+        if degree:
+            changes.append(f"旋轉 {degree:+.0f}°")
+        if factor > 1.0:
+            changes.append(f"放大 {factor:.0%}")
+        print(f"      第 {page_no + 1} 頁 {sticker['filename']}："
+              f"底圖{'＋'.join(changes)} 讓文字放得下")
+        return box
+
     text_labels = []
+    material_text_links = []
     seen_backing_ids: set[int] = set()
     caption_regions = detect_caption_regions(page, scale, stickers, sticker_visual_bounds)
     for ti, (x0, y0, x1, y1, color_hex) in enumerate(caption_regions, start=1):
@@ -603,10 +780,30 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
                 # 相同、疊在一起的「老師可填文字」欄位
                 continue
             seen_backing_ids.add(backing["id"])
-            # 框寬高跟著背後對話泡泡「看得到的圖案範圍」走（不是素材檔案含留白
-            # 的外接矩形），而不是原始（通常短很多的）文案量出來的窄框——預留
-            # 字樣比原始文案長很多，貼著素材可見大小排版，視覺上才會跟泡泡形狀
-            # 吻合，不會小小一塊擠在泡泡一角、也不會因為留白被撐得太大
+            # 文字底下有素材框時，交給素材分析器決定框，並把兩者連結成素材文字
+            # 捷徑：之後在編輯器按「重新分析並重設」會得到同一個框，不會跳動。
+            analyzed = analyzed_box_for(backing)
+            if analyzed is not None:
+                text_labels.append({
+                    "id": ti,
+                    "x": analyzed["x"], "y": analyzed["y"],
+                    "width": analyzed["width"], "height": analyzed["height"],
+                    "rotation": analyzed["rotation"],
+                    "text": PLACEHOLDER_TEXT, "font_size": font_size,
+                    "font_color": color_hex, "text_align": "left",
+                    "line_height": line_height, "z_index": backing["z_index"] + 0.5,
+                })
+                material_text_links.append({
+                    "kind": MATERIAL_TEXT_LINK_KIND,
+                    "material_id": backing["id"],
+                    "text_id": ti,
+                })
+                continue
+            # 分析不出來才退回：框寬高跟著背後對話泡泡「看得到的圖案範圍」走
+            # （不是素材檔案含留白的外接矩形），而不是原始（通常短很多的）文案
+            # 量出來的窄框——預留字樣比原始文案長很多，貼著素材可見大小排版，
+            # 視覺上才會跟泡泡形狀吻合，不會小小一塊擠在泡泡一角、也不會因為
+            # 留白被撐得太大
             vx, vy, vw, vh = sticker_visual_bounds[backing["id"]]
             pad_x = vw * BUBBLE_PAD_X_RATIO
             pad_y = vh * BUBBLE_PAD_Y_RATIO
@@ -650,6 +847,11 @@ def build_page_layout(pdf_doc, page_no: int, photo_boxes_px: list[dict], scale: 
         "text_labels": text_labels, "stickers": stickers,
         "footer": None,
     }
+    # 契約：有非空 material_text_links[] 就必須帶 contract；兩者都空時省略，
+    # 不寫入空 marker（見 nested-groups-v2 規格的 validation invariants）。
+    if material_text_links:
+        layout["material_text_links"] = material_text_links
+        layout["group_contract"] = NESTED_GROUP_CONTRACT
     return layout, {bg_fname: bg_bytes}, sticker_assets
 
 
@@ -735,7 +937,39 @@ def main():
     parser.add_argument("--force-page", action="append", default=[],
                          help="手動指定某個媒體檔案屬於哪一頁，格式 filename=page_index，可重複給")
     parser.add_argument("--commit", action="store_true", help="真正寫入資料庫；不加這個參數只做 dry-run 預覽")
+    tuning = parser.add_argument_group(
+        "版面微調",
+        "不給就用預設值；預設值是這批模板實測出來的，沒有特別理由不需要動。",
+    )
+    tuning.add_argument(
+        "--font-size", type=float, default=TEXT_FONT_SIZE_PT, metavar="PT",
+        help=f"文字框字級，就是編輯器屬性面板顯示的數字（預設 {TEXT_FONT_SIZE_PT}）",
+    )
+    tuning.add_argument(
+        "--line-height", type=float, default=TEXT_LINE_HEIGHT, metavar="倍",
+        help=f"行高倍率（預設 {TEXT_LINE_HEIGHT}）",
+    )
+    tuning.add_argument(
+        "--max-rotation", type=float, default=MATERIAL_ROTATION_LIMIT, metavar="度",
+        help=(
+            "文字放不下時，底圖最多轉幾度（0 = 不用旋轉這個手段，"
+            f"預設 {MATERIAL_ROTATION_LIMIT:.0f}）"
+        ),
+    )
+    tuning.add_argument(
+        "--max-growth", type=float, default=MATERIAL_GROWTH_LIMIT, metavar="倍",
+        help=(
+            "文字放不下時，底圖最多放大幾倍（1.0 = 不用放大這個手段，"
+            f"預設 {MATERIAL_GROWTH_LIMIT}）"
+        ),
+    )
     args = parser.parse_args()
+    options = ImportOptions(
+        font_size_pt=args.font_size,
+        line_height=args.line_height,
+        rotation_limit=args.max_rotation,
+        growth_limit=args.max_growth,
+    )
 
     import fitz
 
@@ -767,7 +1001,7 @@ def main():
     layouts, bg_assets, sticker_assets = {}, {}, {}
     for page_no in range(n_pages):
         boxes = photo_boxes_by_page.get(page_no, [])
-        layout, bg, stk = build_page_layout(pdf_doc, page_no, boxes, scale)
+        layout, bg, stk = build_page_layout(pdf_doc, page_no, boxes, scale, options)
         layouts[page_no] = layout
         bg_assets[page_no] = bg
         sticker_assets[page_no] = stk

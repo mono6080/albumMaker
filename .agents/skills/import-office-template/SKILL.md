@@ -59,12 +59,34 @@ trigger: /import-office-template
 - **模板預設文字一律用** `{name}的文字標題的文字標題的文字標題的文字標題`
   ——不要把 docm 或 PDF 裡量到的實際文案當範本預設值，那是特定一次匯出的
   內容，不是模板該有的通用預留字。
+- **字級固定 18，不從 PDF 量到的原始字級換算**：屬性面板的「字級（pt）」直接綁
+  layout 的 `font_size`，所以這個數字就是老師看到的。字級、行高與下面兩個補救
+  上限都可以用命令列覆寫（`--font-size` / `--line-height` / `--max-rotation` /
+  `--max-growth`），預設值定義在 `ImportOptions`。**不需要為了調數字改程式碼**；
+  改預設值才動 `TEXT_FONT_SIZE_PT` 那幾個常數。
+- **文字底下有素材框時，框交給後端素材分析器決定，並建立素材文字連結**：走
+  `backend/services/material_text_box.py` 的 `analyze_material_text_box()` ＋
+  `project_normalized_box_to_sticker()`——跟編輯器「重新分析並重設」是同一支，
+  匯入時若自己另寫一套內縮規則，同一張貼圖在「匯入結果」與「按下重新分析」會
+  得到兩個不同的框，之後每次重新分析版面都會跳一次。連結寫在 layout 頂層的
+  `material_text_links[]`，有非空 links 就必須同時寫 `group_contract:
+  "nested-world-v2"`（契約見
+  [nested-groups-v2 規格](../../../docs/specs/illustrator-style-nested-groups-v2.md)）。
+  分析不出來（低信心／形狀不明）才退回舊的可見範圍內縮法，那條路不建連結。
+- **分析框放不下預留字樣時，改的是底圖不是文字框**：分析框比舊算法保守（內接
+  矩形再侵蝕一圈邊距），細長水滴形的泡泡常常放不下 24 字的預留字樣。這時**最小
+  幅度旋轉或放大素材**（兩者可混用，各自歸一化後取總成本最小），讓分析框自然
+  變得夠大——不要把文字框撐出泡泡，那樣框就不等於分析結果，老師按重新分析會
+  看到框突然縮回去。旋轉的是素材圖本身（存旋轉後的圖），文字框仍是水平的，
+  所以是「底圖轉、文字不轉」。上限 `MATERIAL_ROTATION_LIMIT` /
+  `MATERIAL_GROWTH_LIMIT` 是保險，到頂仍放不下就維持原樣、交人工調整。
 - **圖層順序**：照片格跟貼圖的 `z_index` 用 PDF content stream 裡 `/ImageN Do`
   出現的順序（腳本已處理），文字固定疊在自己那張泡泡貼圖正上方
   （`z_index = 該貼圖.z_index + 0.5`），不要交給前端預設的
   `{photo:0, bubble:100, text:200, sticker:300}` base 順序，那個順序會讓
   sticker 蓋住 text。
-- **文字框高度不能用固定倍數猜**：預留字樣 `PLACEHOLDER_TEXT` 長度固定，但
+- **文字框高度不能用固定倍數猜**（現在只有「分析不出來」的 fallback 會走到這條，
+  但補救放大/旋轉的收斂條件也用同一個量測）：預留字樣 `PLACEHOLDER_TEXT` 長度固定，但
   每個對話泡泡的框寬是照原始文案（通常比預留字樣短很多）量出來的——框越窄，
   同樣的預留字樣要排的行數就越多。腳本用 `estimate_placeholder_height()` 直接
   呼叫後端渲染引擎的 `get_font`/`wrap_text` 量出真正的行數再決定框高，不要
@@ -411,7 +433,8 @@ python scripts/import_office_template.py "<docm 路徑>" \
   背景上，縮圖解析度低時很難注意到。之後核對算圖要特別去數「每頁應該有幾個
   對話泡泡」跟原始 PDF 對，不能只看「有沒有貼圖」，要看「數量對不對」。
 - **文字框大小要貼合貼圖「看得到的圖案」，不是素材檔案尺寸、也不能只用
-  alpha bbox**：對話泡泡是「圓角矩形本體＋一個尖角尾巴」，尾巴會把 alpha
+  alpha bbox**（這段描述的是 fallback 路徑；主路徑已改由後端素材分析器決定框，
+  見前置知識）：對話泡泡是「圓角矩形本體＋一個尖角尾巴」，尾巴會把 alpha
   bbox 往那個方向撐大，用固定比例從 bbox 內縮，尾巴那一側會算出「還在 bbox
   裡、其實已經超出實色本體」的框，文字疊到背景上（肉眼在整頁縮圖上很容易
   漏看，要放大到單一泡泡才看得出來）。改用**最大內接矩形**（`largest_opaque_rect`，
