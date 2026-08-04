@@ -226,12 +226,24 @@ sticker 的 z_index + 0.5」——是的話直接刪掉這個 text_label，不�
    （`backend/uploads/templates/tmpl{id}/stickers/{filename}`），肉眼判斷
    哪個是 logo 圖層、哪個是日期章（通常是一小張黑色半透明數字，見步驟 4b）、
    哪些是無關的裝飾（例如照片陰影、葉子花紋）。
-2. logo 換成統一素材：
+2. logo 換成統一素材。素材在 `assets/brand/`，兩個版本依背景亮度選
+   （量四角＋中心，任一點亮度 ≥ 215 就用含陰影版；選法與陰影參數的由來見
+   [assets/brand/README.md](../../../assets/brand/README.md)）：
 
    ```bash
+   # 深色／中間色背景
    python scripts/replace_template_sticker.py --template-id <id> --page <頁碼> \
-       --remove <logo 的 filename> --add-file "<統一 logo 檔案路徑>"
+       --remove <logo 的 filename> --add-file assets/brand/derni_logo_white.png
+
+   # 淺色背景（含陰影版多了 pad 圈留白，x/y/width/height 要照 README 的公式換算）
+   python scripts/replace_template_sticker.py --template-id <id> --page <頁碼> \
+       --remove <logo 的 filename> --add-file assets/brand/derni_logo_white_shadow.png \
+       --x <換算後> --y <換算後> --width <換算後> --height <換算後>
    ```
+
+   **不要沿用原 logo 框的尺寸**：原稿是橫式手寫體 lockup，統一素材是「圓標在上、
+   粗體 Derni 在下」的直式，同樣寬度會高出一大截並蓋掉旁邊元素（2026-08 那批第一次
+   就是這樣爆版）。可見寬度取 150px（794 畫布）實測與頁面比例協調。
 
    不給 `--x/--y/--width/--height` 時會自動用被移除貼圖的外框、依新素材的
    原始長寬比算高度（不會變形）——**但這個外框是原始 logo 在這個模板裡的
