@@ -207,7 +207,9 @@ test("teacher progress uses classroom-period slots and never creates a false co-
 
   await page.getByRole("button", { name: /和平校.*太陽班/ }).click();
   const sunPanel = page.locator("#teacher-classroom-3");
-  await expect(sunPanel.getByText("同一工作格有 2 本相本", { exact: true })).toBeVisible();
+  // 一格多本是正式支援的做法，只是資訊；標紅的條件改成「同一個孩子被多本收錄」
+  await expect(sunPanel.getByText("這一格共 2 本相本", { exact: true })).toBeVisible();
+  await expect(sunPanel.getByText(/重複收錄/)).toHaveCount(0);
   await expect(sunPanel.getByText("已交件鎖定", { exact: true })).toBeVisible();
   await expect(sunPanel.getByText("交件後仍缺照片", { exact: true })).toBeVisible();
 
