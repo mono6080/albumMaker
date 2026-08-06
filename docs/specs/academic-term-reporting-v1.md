@@ -134,10 +134,13 @@ migration 必須冪等，並在 `run_migrations()` 末端追加：
 `POST /organization/classrooms/{id}/projects` 必須帶 `work_slot_id`，並在既有
 organization/template lock 與 transaction 中驗證：
 
-- slot 屬於 URL 班級、active term，且期別等於 template.period。
+- slot 屬於 URL 班級、期別等於 template.period，且該期別**沒有建立鎖**。
+  能不能開新相本已與學期狀態脫鉤，SSOT 見
+  [period-album-creation-lock-v1](period-album-creation-lock-v1.md)。
 - template、班級、slot 的 department 一致。
-- 目前班級至少一位學生；slot 已 started 不阻擋建立（同格可多本）。
-- owner 是該班目前有效老師；無 owner 時用主教。
+- 班級至少一位學生；slot 已 started 不阻擋建立（同格可多本）。
+- owner 是該班有效老師；無 owner 時用主教。名冊與編制的有效範圍在已結束學期
+  改用 carryover 判準（同上）。
 - 可選 `roster_child_ids` 指定這本收錄哪些孩子：必須都在該班目前名單，且都還沒被
   同格其他相本收錄。省略時收錄該格尚未編入相本的孩子（第一本即全班）；若已無人
   可收，回 409 `slot_roster_fully_assigned`，不建立空相本。

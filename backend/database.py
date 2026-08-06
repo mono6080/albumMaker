@@ -402,8 +402,22 @@ class SemesterPeriod(Base):
     period_name_snapshot = Column(String, nullable=False)
     department = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
+    # 建立相本鎖：非 NULL 代表這一期已停止開新相本。取代舊的「只能在目前正式學期
+    # 建立相本」硬閘——學期結束不再自動封死，鎖與解鎖都由 admin 決定。
+    # 見 docs/specs/period-album-creation-lock-v1.md
+    album_creation_locked_at = Column(DateTime, nullable=True)
+    album_creation_locked_by_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    album_creation_locked_by_name_snapshot = Column(String, nullable=True)
 
     semester = relationship("Semester", back_populates="periods")
+    album_creation_locked_by = relationship(
+        "User",
+        foreign_keys=[album_creation_locked_by_id],
+    )
     template_period = relationship(
         "TemplatePeriod",
         back_populates="semester_period",

@@ -292,6 +292,11 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
             "reorder_classrooms",
         ),
         (
+            "patch",
+            "/semesters/{semester_id}/periods/{semester_period_id}",
+            "set_semester_period_album_creation_lock",
+        ),
+        (
             "post",
             "/term-reclassification-plans",
             "create_term_reclassification_plan",

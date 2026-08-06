@@ -504,6 +504,26 @@ test("admin manages current roster while period snapshots and owner history stay
   await page.getByRole("button", { name: new RegExp(`^${targetClassName}`) }).click();
   await page.getByRole("button", { name: "目前名單" }).click();
   await expect(page.getByText(secondStudentName, { exact: true })).toBeVisible();
+
+  // 期別建立相本開關：admin 唯一的鎖／解鎖入口。鎖住只擋「開新相本」，
+  // 契約見 docs/specs/period-album-creation-lock-v1.md
+  const lockPanel = page.getByRole("region", { name: "期別建立相本開關" });
+  await expect(lockPanel).toBeVisible();
+  const lockButton = lockPanel.getByRole("button", {
+    name: `停止建立：${period.name}`,
+    exact: true,
+  });
+  await lockButton.click();
+  const unlockButton = lockPanel.getByRole("button", {
+    name: `重新開放：${period.name}`,
+    exact: true,
+  });
+  await expect(unlockButton).toBeVisible();
+  await expect(lockPanel.getByText("已停止建立", { exact: true }).first()).toBeVisible();
+
+  // 還原，避免把「不能建相本」留給同檔後續流程
+  await unlockButton.click();
+  await expect(lockButton).toBeVisible();
 });
 
 
@@ -994,10 +1014,15 @@ test("class staffing and new-term reclassification preserve old project content 
   await expect(page.getByText("主教", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "建立新一期相本" })).toBeVisible();
   await expect(page.getByRole("button", { name: "新建專案" })).toHaveCount(0);
-  // 舊相本屬於已結束學期的班，會落在「我帶過的班級」區，而不是可編輯的班級卡片裡。
-  // 但它**還沒完成**——學期在日曆上結束時相本通常還沒做完，所以原老師仍然做得完。
-  const pastClassroomSection = page.getByRole("heading", { name: "我帶過的班級" }).locator("..");
-  await expect(pastClassroomSection).toBeVisible();
+  // 舊相本屬於已結束學期的班。那一期還沒鎖，所以整班落在「已結束學期（可補建）」區——
+  // 與本學期的班分開列，班名另外帶學期以免同名班看錯。
+  // 相本**還沒完成**——學期在日曆上結束時相本通常還沒做完，所以原老師仍然做得完。
+  // 契約見 docs/specs/period-album-creation-lock-v1.md
+  const lateCreationSection = page.getByRole("heading", { name: "已結束學期（可補建）" });
+  await expect(lateCreationSection).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: `${sourceClassName}（`, exact: false }),
+  ).toBeVisible();
   await expect(page.getByText(projectName, { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "編輯相本" })).toHaveCount(1);
 

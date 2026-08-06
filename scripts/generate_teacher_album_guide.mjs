@@ -148,7 +148,7 @@ async function getTemplateRevision(context, templateId) {
   return (await response.json()).revision;
 }
 
-// 模板一定隸屬期別，而且老師建專案只能用「使用中」期別的模板；
+// 模板一定隸屬期別，示範需要一個掛得上模板、又還能開新相本的期別；
 // 沒有現成 active 期別就補建一個（新建的才在收尾時封存，避免動到現場資料）
 async function ensureActivePeriod(context) {
   const listResponse = await requireOk(

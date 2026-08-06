@@ -77,8 +77,8 @@ def build_project_record(
             raise HTTPException(status_code=400, detail="模板不屬於所選部門")
         if template_period_id and template_period_id != template.period.id:
             raise HTTPException(status_code=400, detail="模板不屬於所選期別")
-        if template.period.status != "active":
-            raise HTTPException(status_code=400, detail="只能使用「使用中」期別的模板建立專案")
+        # 期別能不能開新相本由 semester_periods 的建立鎖決定（呼叫端已驗），
+        # 不看 template_periods.status，見 docs/specs/period-album-creation-lock-v1.md
         project_department = template.period.department
         project_period_id = template.period.id
 

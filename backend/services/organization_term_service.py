@@ -135,10 +135,72 @@ def _serialize_semester(term: Semester) -> dict:
                 "name": semester_period.period_name_snapshot,
                 "department": semester_period.department,
                 "position": semester_period.position,
+                "album_creation_locked_at": semester_period.album_creation_locked_at,
+                "album_creation_locked_by_name": (
+                    semester_period.album_creation_locked_by_name_snapshot
+                ),
             }
             for semester_period in term.periods
         ],
     }
+
+
+def set_semester_period_album_creation_lock(
+    db: Session,
+    current_admin: User,
+    semester_id: int,
+    semester_period_id: int,
+    *,
+    locked: bool,
+) -> dict:
+    """切換一個學期期別的建立相本鎖。
+
+    鎖是「還能不能開新相本」的唯一開關；已結束學期照樣可以切換——期末回頭補開一本
+    正是這個功能的用途。見 docs/specs/period-album-creation-lock-v1.md
+    """
+    with organization_write_transaction(db):
+        semester_period = (
+            db.query(SemesterPeriod)
+            .filter(
+                SemesterPeriod.id == semester_period_id,
+                SemesterPeriod.semester_id == semester_id,
+            )
+            .first()
+        )
+        if semester_period is None:
+            raise HTTPException(status_code=404, detail="找不到這個學期的期別")
+        if semester_period.semester.status == "cancelled":
+            raise _coded_error(
+                409,
+                "semester_not_lockable",
+                "已取消的學期不能切換建立相本鎖",
+            )
+        already_locked = semester_period.album_creation_locked_at is not None
+        if locked != already_locked:
+            if locked:
+                semester_period.album_creation_locked_at = utc_now()
+                semester_period.album_creation_locked_by_id = current_admin.id
+                semester_period.album_creation_locked_by_name_snapshot = (
+                    current_admin.display_name
+                )
+            else:
+                semester_period.album_creation_locked_at = None
+                semester_period.album_creation_locked_by_id = None
+                semester_period.album_creation_locked_by_name_snapshot = None
+            db.commit()
+        else:
+            db.rollback()
+        db.refresh(semester_period)
+        return {
+            "id": semester_period.id,
+            "semester_id": semester_period.semester_id,
+            "name": semester_period.period_name_snapshot,
+            "department": semester_period.department,
+            "album_creation_locked_at": semester_period.album_creation_locked_at,
+            "album_creation_locked_by_name": (
+                semester_period.album_creation_locked_by_name_snapshot
+            ),
+        }
 
 
 def list_semesters(db: Session) -> list[dict]:

@@ -36,6 +36,7 @@ import {
   createClassroomProject,
   fetchOrganizationOverview,
   fetchProjectAssignmentHistory,
+  setSemesterPeriodAlbumCreationLock,
   updateCampus,
   updateCampusSupervisors,
   updateClassroom,
@@ -202,6 +203,7 @@ export default function OrganizationManagement() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAutoFillingClassroomAlbumNames, setIsAutoFillingClassroomAlbumNames] = useState(false);
   const [autoFillingRosterChildId, setAutoFillingRosterChildId] = useState(null);
+  const [togglingPeriodLockId, setTogglingPeriodLockId] = useState(null);
   const [expandedHistoryProjectId, setExpandedHistoryProjectId] = useState(null);
   const [historyByProjectId, setHistoryByProjectId] = useState({});
   const [loadingHistoryProjectId, setLoadingHistoryProjectId] = useState(null);
@@ -268,15 +270,23 @@ export default function OrganizationManagement() {
     member => !(member.album_name || "").trim(),
   ).length;
   const historicalMembers = selectedClassroom?.members.filter(member => member.status === "ended") ?? [];
-  const availableTemplates = overview?.templates.filter(template => (
-    template.period_status === "active"
-  )) ?? [];
+  // 能不能拿來建相本已由後端依建立鎖決定（含已結束學期未鎖的期別），
+  // 不再另外用 period_status 篩一次——那是設計端狀態。
+  // 見 docs/specs/period-album-creation-lock-v1.md
+  const availableTemplates = overview?.templates ?? [];
   const classroomWorkSlots = (overview?.work_slots ?? []).filter(workSlot => (
     workSlot.classroom_id === selectedClassroom?.id
   ));
-  const creatableWorkSlots = classroomWorkSlots.filter(workSlot => (
-    workSlot.can_create_project
-    && availableTemplates.some(template => template.period_id === workSlot.template_period_id)
+  const listedWorkSlots = classroomWorkSlots.filter(workSlot => (
+    availableTemplates.some(template => template.period_id === workSlot.template_period_id)
+  ));
+  const creatableWorkSlots = listedWorkSlots.filter(workSlot => workSlot.can_create_project);
+  const semesterPeriods = overview?.semester_periods ?? [];
+  const currentSemesterPeriods = semesterPeriods.filter(period => (
+    period.semester_status !== "closed"
+  ));
+  const closedSemesterPeriods = semesterPeriods.filter(period => (
+    period.semester_status === "closed"
   ));
   const selectedProjectWorkSlot = formModal?.type === "project"
     ? creatableWorkSlots.find(workSlot => String(workSlot.id) === String(formModal.workSlotId))
@@ -367,6 +377,28 @@ export default function OrganizationManagement() {
       setSupervisorSearchQuery("");
     }
     setFormModal(null);
+  };
+
+  // 期別建立鎖：鎖住之後該學期該期別全園都不能再開新相本，既有相本不受影響
+  const handleAlbumCreationLockToggle = async (semesterPeriod, locked) => {
+    setTogglingPeriodLockId(semesterPeriod.id);
+    try {
+      await setSemesterPeriodAlbumCreationLock(
+        semesterPeriod.semester_id,
+        semesterPeriod.id,
+        locked,
+      );
+      toast.success(
+        locked
+          ? `${semesterPeriod.name} 已停止建立相本`
+          : `${semesterPeriod.name} 已重新開放建立相本`,
+      );
+      await loadOverview();
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "切換建立相本鎖失敗"));
+    } finally {
+      setTogglingPeriodLockId(null);
+    }
   };
 
   const handleStructureSubmit = async (event) => {
@@ -1244,9 +1276,14 @@ export default function OrganizationManagement() {
                 className={fieldControlClass}
               >
                 <option value="">請選擇尚未開始的期別工作格</option>
-                {creatableWorkSlots.map(workSlot => (
-                  <option key={workSlot.id} value={workSlot.id}>
+                {listedWorkSlots.map(workSlot => (
+                  <option
+                    key={workSlot.id}
+                    value={workSlot.id}
+                    disabled={!workSlot.can_create_project}
+                  >
                     {workSlot.semester_label}／{workSlot.period_name}
+                    {workSlot.album_creation_locked_at ? "（已停止建立）" : ""}
                   </option>
                 ))}
               </select>
@@ -1521,6 +1558,79 @@ export default function OrganizationManagement() {
                 查看未歸班相本
               </Button>
             )}
+          </div>
+        </Surface>
+      )}
+
+      {semesterPeriods.length > 0 && (
+        <Surface as="section" aria-label="期別建立相本開關" className="mb-5">
+          <div className="mb-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <CalendarDays className="h-4 w-4 text-indigo-600" />
+              期別建立相本開關
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-gray-500">
+              鎖住之後全園都不能再開這一期的新相本；既有相本的編輯、交件與下載都不受影響。
+              學期結束不會自動鎖，漏掉的那一本仍補得回來。
+            </p>
+          </div>
+          <div className="space-y-4">
+            {[
+              { key: "current", label: "目前學期", periods: currentSemesterPeriods },
+              { key: "closed", label: "已結束學期", periods: closedSemesterPeriods },
+            ].filter(group => group.periods.length > 0).map(group => (
+              <div key={group.key}>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                  {group.label}
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {group.periods.map(semesterPeriod => {
+                    const isLocked = !!semesterPeriod.album_creation_locked_at;
+                    return (
+                      <div
+                        key={semesterPeriod.id}
+                        className={`flex items-start justify-between gap-2 rounded-lg border px-3 py-2 ${
+                          isLocked ? "border-amber-200 bg-amber-50" : "border-gray-200 bg-white"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-sm font-medium text-gray-800">
+                              {semesterPeriod.name}
+                            </span>
+                            <Badge tone={isLocked ? "warning" : "success"}>
+                              {isLocked ? "已停止建立" : "開放建立"}
+                            </Badge>
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-gray-500">
+                            {semesterPeriod.semester_label}
+                            {" · "}
+                            {semesterPeriod.department === "infant" ? "嬰幼部" : "學院部"}
+                          </p>
+                          {isLocked && semesterPeriod.album_creation_locked_by_name && (
+                            <p className="mt-0.5 truncate text-xs text-amber-700">
+                              由 {semesterPeriod.album_creation_locked_by_name} 鎖定
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          size="xs"
+                          variant={isLocked ? "secondary" : "dangerSoft"}
+                          disabled={togglingPeriodLockId === semesterPeriod.id}
+                          aria-label={`${isLocked ? "重新開放" : "停止建立"}：${semesterPeriod.name}`}
+                          onClick={() => void handleAlbumCreationLockToggle(
+                            semesterPeriod,
+                            !isLocked,
+                          )}
+                        >
+                          {isLocked ? "重新開放" : "停止建立"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </Surface>
       )}
