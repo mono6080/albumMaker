@@ -3,7 +3,7 @@
 from collections import Counter
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from crud.organization_crud import (
@@ -34,7 +34,13 @@ from database import (
     User,
     utc_now,
 )
-from services.organization_scope_service import build_organization_read_scope
+from services.organization_scope_service import (
+    build_organization_read_scope,
+    roster_carryover_condition,
+    roster_member_is_carryover,
+    teacher_assignment_is_carryover,
+    teacher_carryover_condition,
+)
 from services.organization_lock import organization_acl_lock
 from services.project_assignment_service import (
     serialize_assignment_history,
@@ -197,9 +203,14 @@ def _serialize_work_slot(
         ],
         "started_at": work_slot.started_at,
         # 一個班級期別可以有多本相本（同一套排版、不同對應文字），所以這裡不再看
-        # started_at，只看學期是否還在進行中——那才是建相本的硬條件。已收幾本由
+        # started_at；建相本的硬條件是這一期沒被鎖，與學期是否結束無關。已收幾本由
         # project_ids 呈現；孩子全部編完時由建立 API 回 slot_roster_fully_assigned。
-        "can_create_project": classroom.semester.status in {"imported", "active"},
+        "can_create_project": (
+            semester_period.album_creation_locked_at is None
+            and classroom.campus.is_active
+        ),
+        # 前端要能把「這一期已截止」與「這格根本不該出現」分開講
+        "album_creation_locked_at": semester_period.album_creation_locked_at,
         "project_ids": [
             project.id for project in work_slot.projects if project.deleted_at is None
         ],
@@ -431,7 +442,21 @@ def get_organization_overview(db: Session) -> dict:
     templates = (
         db.query(Template)
         .join(TemplatePeriod, Template.period_id == TemplatePeriod.id)
-        .filter(TemplatePeriod.status == "active")
+        .filter(
+            or_(
+                TemplatePeriod.status == "active",
+                # 已結束學期中還沒鎖的期別也要選得到模板，否則補建時沒有模板可用——
+                # 期別退役與否由建立鎖決定，不由設計端的 status 決定
+                TemplatePeriod.id.in_(
+                    select(SemesterPeriod.template_period_id)
+                    .join(Semester, Semester.id == SemesterPeriod.semester_id)
+                    .where(
+                        Semester.status == "closed",
+                        SemesterPeriod.album_creation_locked_at.is_(None),
+                    )
+                ),
+            )
+        )
         .order_by(TemplatePeriod.department, TemplatePeriod.name, Template.name)
         .all()
     )
@@ -471,11 +496,19 @@ def get_organization_overview(db: Session) -> dict:
         .first()
     )
     current_semester_id = current_term.id if current_term is not None else None
-    current_work_slots = (
+    # 目前學期的全部工作格（含已鎖的，前端要顯示「已截止」），加上已結束學期中
+    # 該期別還沒鎖的格——那是期末回頭補開一本的入口，見
+    # docs/specs/period-album-creation-lock-v1.md
+    visible_work_slots = (
         db.query(ClassPeriodWorkSlot)
         .join(
             Classroom,
             Classroom.id == ClassPeriodWorkSlot.classroom_id,
+        )
+        .join(Semester, Semester.id == Classroom.semester_id)
+        .join(
+            SemesterPeriod,
+            SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
         )
         .options(
             selectinload(ClassPeriodWorkSlot.projects),
@@ -484,18 +517,33 @@ def get_organization_overview(db: Session) -> dict:
             ),
             selectinload(ClassPeriodWorkSlot.semester_period),
         )
-        .filter(Classroom.semester_id == current_term.id)
+        .filter(
+            or_(
+                Semester.status.in_(CURRENT_SEMESTER_STATUSES),
+                and_(
+                    Semester.status == "closed",
+                    SemesterPeriod.album_creation_locked_at.is_(None),
+                ),
+            )
+        )
         .order_by(
             Classroom.id,
             ClassPeriodWorkSlot.id,
         )
         .all()
-        if current_term is not None
-        else []
     )
     # 一次算完所有工作格已收錄的孩子，避免在序列化時每格各查一次
     assigned_child_ids_by_slot = _assigned_child_ids_by_work_slot(
-        db, [int(work_slot.id) for work_slot in current_work_slots]
+        db, [int(work_slot.id) for work_slot in visible_work_slots]
+    )
+    # 建立相本鎖的管理清單：已結束學期也要在場，否則鎖上之後就再也解不開
+    lockable_semester_periods = (
+        db.query(SemesterPeriod)
+        .join(Semester, Semester.id == SemesterPeriod.semester_id)
+        .options(selectinload(SemesterPeriod.semester))
+        .filter(Semester.status.in_((*CURRENT_SEMESTER_STATUSES, "closed")))
+        .order_by(Semester.id.desc(), SemesterPeriod.position, SemesterPeriod.id)
+        .all()
     )
     return {
         "campuses": [
@@ -536,7 +584,24 @@ def get_organization_overview(db: Session) -> dict:
         ),
         "work_slots": [
             _serialize_work_slot(work_slot, assigned_child_ids_by_slot)
-            for work_slot in current_work_slots
+            for work_slot in visible_work_slots
+        ],
+        "semester_periods": [
+            {
+                "id": semester_period.id,
+                "semester_id": semester_period.semester_id,
+                "semester_label": semester_period.semester.label,
+                "semester_status": semester_period.semester.status,
+                "template_period_id": semester_period.template_period_id,
+                "name": semester_period.period_name_snapshot,
+                "department": semester_period.department,
+                "position": semester_period.position,
+                "album_creation_locked_at": semester_period.album_creation_locked_at,
+                "album_creation_locked_by_name": (
+                    semester_period.album_creation_locked_by_name_snapshot
+                ),
+            }
+            for semester_period in lockable_semester_periods
         ],
         "templates": [
             {
@@ -775,29 +840,96 @@ def _serialize_scoped_classroom(
     classroom: Classroom,
     assigned_child_ids_by_slot: dict[int, list[int]] | None = None,
 ) -> dict:
-    current_term_classrooms = [classroom] if classroom.is_current else []
+    """老師端的班級視圖。
+
+    已結束學期的班仍可能出現在這裡（未鎖期別的補建入口），而那時全班編制與名冊都有
+    `ended_at`。老師編制與名冊改用 carryover 判準，`current_teachers` 對這種班的語意是
+    「這一班可以補開相本的老師」，工作格則只留還沒鎖的那幾格。
+    """
+    if classroom.is_current:
+        listed_teachers = [
+            assignment
+            for assignment in classroom.teacher_assignments
+            if assignment.ended_at is None
+        ]
+        listed_members = [
+            member
+            for member in classroom.roster_members
+            if member.ended_at is None
+        ]
+        listed_work_slots = list(classroom.work_slots)
+    else:
+        listed_teachers = [
+            assignment
+            for assignment in classroom.teacher_assignments
+            if teacher_assignment_is_carryover(assignment)
+        ]
+        listed_members = [
+            member
+            for member in classroom.roster_members
+            if roster_member_is_carryover(member)
+        ]
+        listed_work_slots = [
+            work_slot
+            for work_slot in classroom.work_slots
+            if work_slot.semester_period.album_creation_locked_at is None
+        ]
     return {
         "id": classroom.id,
         "campus_id": classroom.campus_id,
         "campus_name": classroom.campus.name,
         "department": classroom.department,
         "name": classroom.name,
+        "semester_id": classroom.semester_id,
+        "semester_label": classroom.semester.label,
+        "semester_status": classroom.semester.status,
         "current_teachers": [
             _serialize_teacher_assignment(assignment)
-            for assignment in classroom.teacher_assignments
-            if assignment.ended_at is None
+            for assignment in listed_teachers
         ],
         "members": [
             _serialize_member(member)
-            for member in classroom.roster_members
-            if member.ended_at is None
+            for member in listed_members
         ],
         "work_slots": [
             _serialize_work_slot(work_slot, assigned_child_ids_by_slot)
-            for current_classroom in current_term_classrooms
-            for work_slot in current_classroom.work_slots
+            for work_slot in listed_work_slots
         ],
     }
+
+
+def _classroom_ids_open_for_late_creation(
+    db: Session,
+    teacher_carryover_classroom_ids: tuple[int, ...],
+) -> tuple[int, ...]:
+    """老師仍可補開相本的班：已結束學期中、期別還沒鎖的那些。
+
+    只服務老師端。admin 的補建入口在園所設定（`get_organization_overview` 的
+    `work_slots`）——那裡本來就依學期分組，不會像「我的班級」那樣每過一個學期就多
+    堆一屆。
+    """
+    if not teacher_carryover_classroom_ids:
+        return ()
+    query = (
+        db.query(Classroom.id)
+        .join(Semester, Semester.id == Classroom.semester_id)
+        .join(Campus, Campus.id == Classroom.campus_id)
+        .join(
+            ClassPeriodWorkSlot,
+            ClassPeriodWorkSlot.classroom_id == Classroom.id,
+        )
+        .join(
+            SemesterPeriod,
+            SemesterPeriod.id == ClassPeriodWorkSlot.semester_period_id,
+        )
+        .filter(
+            Classroom.id.in_(teacher_carryover_classroom_ids),
+            Semester.status == "closed",
+            SemesterPeriod.album_creation_locked_at.is_(None),
+            Campus.is_active.is_(True),
+        )
+    )
+    return tuple(sorted({row[0] for row in query.distinct().all()}))
 
 
 def get_my_classrooms(db: Session, current_user: User) -> dict:
@@ -810,7 +942,20 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
             or organization_scope.has_supervisor_assignment
         ),
     }
-    if not organization_scope.classroom_ids:
+    # 已結束學期中還沒鎖的期別，是老師補開漏掉那一本的入口；認的是編制因學期輪替
+    # 而結束的班，被換掉的班不算。admin 不走這裡——她的補建入口在園所設定，
+    # 否則「我的班級」會每過一個學期就多堆一屆。
+    carryover_classroom_ids = (
+        ()
+        if organization_scope.is_admin
+        else _classroom_ids_open_for_late_creation(
+            db, organization_scope.teacher_carryover_classroom_ids
+        )
+    )
+    listed_classroom_ids = set(organization_scope.classroom_ids) | set(
+        carryover_classroom_ids
+    )
+    if not listed_classroom_ids:
         return {"classrooms": [], "permissions": permissions}
     query = (
         db.query(Classroom)
@@ -831,11 +976,14 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
             .selectinload(TemplatePeriod.templates),
         )
         .filter(
-            Classroom.id.in_(organization_scope.classroom_ids),
-            Classroom.semester_id.in_(
-                select(Semester.id).where(
-                    Semester.status.in_(CURRENT_SEMESTER_STATUSES)
-                )
+            Classroom.id.in_(listed_classroom_ids),
+            or_(
+                Classroom.semester_id.in_(
+                    select(Semester.id).where(
+                        Semester.status.in_(CURRENT_SEMESTER_STATUSES)
+                    )
+                ),
+                Classroom.id.in_(carryover_classroom_ids),
             ),
             Campus.is_active.is_(True),
         )
@@ -849,7 +997,6 @@ def get_my_classrooms(db: Session, current_user: User) -> dict:
     scoped_work_slot_ids = [
         work_slot.id
         for classroom in classrooms
-        if classroom.is_current
         for work_slot in classroom.work_slots
     ]
     assigned_child_ids_by_slot = _assigned_child_ids_by_work_slot(
@@ -2032,12 +2179,25 @@ def create_classroom_project(
                         "message": "工作格不屬於指定班級",
                     },
                 )
-            if classroom.semester.status not in {"imported", "active"}:
+            # 草稿與已取消的學期不是「還沒鎖」，是根本還不能作業：那些班的名冊仍在編排
+            # 中。目前這種學期長不出工作格，所以這裡擋的是未來多一條建格路徑時的破口。
+            if classroom.semester.status not in (*CURRENT_SEMESTER_STATUSES, "closed"):
                 raise HTTPException(
                     status_code=409,
                     detail={
-                        "code": "work_slot_term_not_current",
-                        "message": "只能在目前正式學期建立相本",
+                        "code": "work_slot_term_not_open",
+                        "message": "草稿或已取消學期不能建立相本",
+                    },
+                )
+            # 「還能不能開新相本」只看這一期的建立鎖，不看學期是否已結束：學期在日曆上
+            # 結束時相本常還沒做完，漏開的那本必須補得回來。見
+            # docs/specs/period-album-creation-lock-v1.md
+            if semester_period.album_creation_locked_at is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "work_slot_period_locked",
+                        "message": "這一期已停止建立相本",
                     },
                 )
             if semester_period.template_period_id != template.period_id:
@@ -2059,17 +2219,19 @@ def create_classroom_project(
             # 同一個班級期別允許多本相本（同一套排版、不同對應文字），所以不再因為
             # 這格已開工就擋下。改用「同一個孩子不能被同格兩本收錄」當防線，見下面
             # slot_taken_child_ids——重複收錄會讓期末匯出同一個孩子出現兩次。
-            if not classroom.is_current or not classroom.campus.is_active:
+            if not classroom.campus.is_active:
                 raise HTTPException(
                     status_code=409,
-                    detail="只能為使用中的分校與班級建立相本",
+                    detail="只能為使用中的分校建立相本",
                 )
+            # 已結束學期的班，「目前編制」一律是空的（套用編班時全部結束），所以認的是
+            # 結束原因；仍在進行的學期兩者等價。
             active_assignments = (
                 db.query(ClassroomTeacher)
                 .options(selectinload(ClassroomTeacher.teacher))
                 .filter(
                     ClassroomTeacher.classroom_id == classroom_id,
-                    ClassroomTeacher.ended_at.is_(None),
+                    teacher_carryover_condition(),
                 )
                 .order_by(ClassroomTeacher.id)
                 .all()
@@ -2116,21 +2278,22 @@ def create_classroom_project(
                 )
             owner = assignment_by_teacher_id[selected_owner_id].teacher
             validate_project_owner(owner)
+            # 期別是否退役由建立鎖決定，不看 template_periods.status——那個欄位只剩
+            # 設計端語意（模板可選清單與新模板的預設期別）。
             if (
                 template.period is None
-                or template.period.status != "active"
                 or template.period.department != classroom.department
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail="只能使用同部門且使用中的期別模板建立相本",
+                    detail="只能使用同部門的期別模板建立相本",
                 )
             active_members = (
                 db.query(ClassroomMember)
                 .options(selectinload(ClassroomMember.roster_child))
                 .filter(
                     ClassroomMember.classroom_id == classroom_id,
-                    ClassroomMember.ended_at.is_(None),
+                    roster_carryover_condition(),
                 )
                 .order_by(ClassroomMember.started_at, ClassroomMember.id)
                 .all()

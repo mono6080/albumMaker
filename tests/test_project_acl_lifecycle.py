@@ -1211,10 +1211,21 @@ def test_same_class_name_across_semesters_keeps_each_cohort_separate():
         assert completed_permissions["can_read"] is True
         assert completed_permissions["can_edit"] is False, "完成後不該再靠跨期沿用改得動"
 
-        # 「我的班級」只認目前學期的編制
+        # 「我的班級」除了目前學期的編制，還會留著上一屆尚未鎖住的期別——那是補開
+        # 漏掉那一本的唯一入口，見 docs/specs/period-album-creation-lock-v1.md
         my_classrooms = client.get("/api/organization/my-classrooms")
         assert_status(my_classrooms, 200)
-        assert my_classrooms.json()["classrooms"] == []
+        late_creation_classrooms = my_classrooms.json()["classrooms"]
+        assert [
+            item["id"] for item in late_creation_classrooms
+        ] == [previous_classroom_id]
+        late_work_slots = late_creation_classrooms[0]["work_slots"]
+        assert late_work_slots, "未鎖期別必須留著補建入口"
+        assert all(
+            work_slot["album_creation_locked_at"] is None
+            and work_slot["can_create_project"] is True
+            for work_slot in late_work_slots
+        )
 
         client.cookies.clear()
         login(client, next_teacher["username"], next_password)
@@ -1222,6 +1233,30 @@ def test_same_class_name_across_semesters_keeps_each_cohort_separate():
         assert_status(next_my_classrooms, 200)
         assert [
             item["id"] for item in next_my_classrooms.json()["classrooms"]
+        ] == [next_classroom_id]
+
+        # 鎖住上一屆那一期之後，補建入口就收起來；同名班的本屆完全不受影響
+        client.cookies.clear()
+        login(client)
+        lock_response = client.patch(
+            f"/api/organization/semesters/{late_work_slots[0]['semester_id']}"
+            f"/periods/{late_work_slots[0]['semester_period_id']}",
+            json={"album_creation_locked": True},
+        )
+        assert_status(lock_response, 200)
+
+        client.cookies.clear()
+        login(client, previous_teacher["username"], previous_password)
+        locked_classrooms = client.get("/api/organization/my-classrooms")
+        assert_status(locked_classrooms, 200)
+        assert locked_classrooms.json()["classrooms"] == []
+
+        client.cookies.clear()
+        login(client, next_teacher["username"], next_password)
+        unaffected = client.get("/api/organization/my-classrooms")
+        assert_status(unaffected, 200)
+        assert [
+            item["id"] for item in unaffected.json()["classrooms"]
         ] == [next_classroom_id]
 
 

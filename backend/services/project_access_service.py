@@ -13,6 +13,7 @@ from services.organization_scope_service import (
     project_in_supervisor_scope,
     project_in_teacher_carryover_scope,
     project_in_teacher_scope,
+    teacher_carryover_condition,
 )
 
 
@@ -291,18 +292,22 @@ def assert_classroom_project_creatable(
     current_user: User,
     classroom_id: int,
 ) -> None:
-    """班級相本只允許 admin 或目前主教建立。"""
+    """班級相本只允許 admin 或該班主教建立。
+
+    已結束學期的班仍可補開相本（期別鎖才是開關），而那時全班編制都有 ended_at，
+    所以主教認的是 `teacher_carryover_condition`：被換掉的舊主教仍然擋得住。
+    """
     if current_user.role == "admin":
         return
-    is_active_lead = db.query(ClassroomTeacher.id).filter(
+    is_eligible_lead = db.query(ClassroomTeacher.id).filter(
         ClassroomTeacher.classroom_id == classroom_id,
         ClassroomTeacher.teacher_id == current_user.id,
         ClassroomTeacher.duty == "lead",
-        ClassroomTeacher.ended_at.is_(None),
+        teacher_carryover_condition(),
     ).first()
-    if current_user.role in {"teacher", "supervisor"} and is_active_lead:
+    if current_user.role in {"teacher", "supervisor"} and is_eligible_lead:
         return
-    raise HTTPException(status_code=403, detail="只有目前主教或管理員能建立此班級相本")
+    raise HTTPException(status_code=403, detail="只有該班主教或管理員能建立此班級相本")
 
 
 def assert_comment_deletable(comment: ProjectComment, current_user: User) -> None:

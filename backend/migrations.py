@@ -224,6 +224,7 @@ def run_migrations():
         _add_term_scoped_classroom_freeze_triggers(connection)
         _add_student_serial_column(connection)
         _add_classroom_sort_order_column(connection)
+        _add_semester_period_album_creation_lock_columns(connection)
 
 
 def _retire_legacy_project_classroom_triggers(connection):
@@ -2516,6 +2517,62 @@ def _add_classroom_sort_order_column(connection):
             "ALTER TABLE classrooms ADD COLUMN sort_order INTEGER"
         ))
         connection.commit()
+
+
+def _add_semester_period_album_creation_lock_columns(connection):
+    """新增學期期別的建立相本鎖，並把已結束學期的期別預設鎖上。
+
+    鎖是「還能不能開新相本」的唯一開關，取代舊的學期硬閘，見
+    docs/specs/period-album-creation-lock-v1.md。
+
+    回填的理由：升級前「已結束學期不能開新相本」是硬性事實，若讓既有期別一律開放，
+    上線那一刻全園老師會突然多出歷屆班級與補建入口。預設鎖上讓上線行為與升級前一致，
+    要補做哪一期由 admin 明確解鎖。
+
+    回填**只在欄位剛建立的那一次**執行：之後 admin 解鎖了某一期，重跑 migration
+    不可以把它again 鎖回去。
+    """
+    existing_columns = {
+        row[1]
+        for row in connection.execute(text("PRAGMA table_info(semester_periods)"))
+    }
+    if not existing_columns:
+        return
+    is_first_run = "album_creation_locked_at" not in existing_columns
+    for column_name, column_type in (
+        ("album_creation_locked_at", "DATETIME"),
+        ("album_creation_locked_by_id", "INTEGER REFERENCES users(id)"),
+        ("album_creation_locked_by_name_snapshot", "VARCHAR"),
+    ):
+        if column_name not in existing_columns:
+            connection.execute(text(
+                f"ALTER TABLE semester_periods ADD COLUMN {column_name} {column_type}"
+            ))
+    if is_first_run:
+        _backfill_closed_semester_period_locks(connection)
+    connection.commit()
+
+
+def _backfill_closed_semester_period_locks(connection):
+    """把已結束學期的期別鎖上；actor 留 NULL——這不是某個人按下的。
+
+    只在建立欄位的那一次呼叫。時間戳取該學期的 `closed_at`，早期資料沒有記錄
+    結束時間時退回現在時刻（值本身只用於顯示，判斷只看是否為 NULL）。
+    """
+    connection.execute(text("""
+        UPDATE semester_periods
+        SET album_creation_locked_at = COALESCE(
+            (
+                SELECT semesters.closed_at
+                FROM semesters
+                WHERE semesters.id = semester_periods.semester_id
+            ),
+            CURRENT_TIMESTAMP
+        )
+        WHERE semester_id IN (
+            SELECT id FROM semesters WHERE status = 'closed'
+        )
+    """))
 
 
 def _add_student_serial_column(connection):

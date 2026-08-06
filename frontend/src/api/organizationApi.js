@@ -93,6 +93,12 @@ export const createTermReclassificationPlan = (label, options = {}) =>
 export const fetchSemesters = () =>
   apiClient.get("/organization/semesters");
 
+/** 切換某個學期期別的建立相本鎖；鎖住後該期不能再開新相本。 */
+export const setSemesterPeriodAlbumCreationLock = (semesterId, semesterPeriodId, locked) =>
+  apiClient.patch(`/organization/semesters/${semesterId}/periods/${semesterPeriodId}`, {
+    album_creation_locked: locked,
+  });
+
 /** 取得指定的新學期編班草稿或已套用結果。 */
 export const fetchTermReclassificationPlan = (planId) =>
   apiClient.get(`/organization/term-reclassification-plans/${planId}`);

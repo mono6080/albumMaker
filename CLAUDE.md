@@ -40,6 +40,7 @@ Claude Code 在此專案的工作指引。本檔只放 **agent 行為規則** �
 | [docs/specs/websystem-roster-sync-v1.md](docs/specs/websystem-roster-sync-v1.md) | 行政系統為組織資料上游、對應鍵、快照取得、同步分類與安全閘的實作契約 | 實作或審查名冊／編制的自動同步、期中異動 |
 | [docs/specs/academic-term-reporting-v1.md](docs/specs/academic-term-reporting-v1.md) | 正式學期、班級期別工作格、老師進度與學期彙整匯出的實作契約 | 實作或審查學期遷移、進度報表、彙整匯出與歷史主管 scope |
 | [docs/specs/student-album-completion-v1.md](docs/specs/student-album-completion-v1.md) | 學生層個別完成、分層內容鎖、全班文字硬鎖與下載閘門的實作契約 | 實作或審查個別完成、完成鎖定、單生/全班下載解鎖 |
+| [docs/specs/period-album-creation-lock-v1.md](docs/specs/period-album-creation-lock-v1.md) | 期別建立相本鎖、carryover 名冊／編制判準、已結束學期的補建入口 | 動「還能不能開新相本」、期別鎖、跨學期補建 |
 | docs/teacher-album-guide.md 等 | 終端使用者教學（老師 / 設計組），由 `scripts/generate_*.mjs` 產出 HTML/PDF | 改使用者教學 |
 
 ## Agent 硬規則（必守）

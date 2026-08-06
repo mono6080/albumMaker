@@ -1,7 +1,6 @@
 """專案建立者與目前負責人的轉交稽核 use cases。"""
 
 from fastapi import HTTPException
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from crud.project_crud import get_project_or_404
@@ -14,6 +13,7 @@ from database import (
     utc_now,
 )
 from services.organization_lock import organization_acl_lock
+from services.organization_scope_service import teacher_carryover_condition
 from services.template_sync_locks import lock_project_content_writes
 
 
@@ -93,17 +93,17 @@ def assign_project_owner(
                 )
             # 學期切換後，該班的編制全部有 ended_at。若只認「目前編制」，那些跨過學期
             # 界線還沒完成的相本就再也轉交不出去——而那正是最需要換人接手的時候
-            # （原老師離職、請假）。與製作權同一條規則：學期輪替結束的編制仍算數，
-            # 被管理員換掉的（assignment_replaced）不算。
-            staffing_conditions = [ClassroomTeacher.ended_at.is_(None)]
-            if project.completed_at is None:
-                staffing_conditions.append(
-                    ClassroomTeacher.end_reason == "term_reassignment"
-                )
+            # （原老師離職、請假）。與製作權同一條規則（teacher_carryover_condition），
+            # 但相本已完成時收回：交件完成後就只剩目前編制能接手。
+            staffing_condition = (
+                teacher_carryover_condition()
+                if project.completed_at is None
+                else ClassroomTeacher.ended_at.is_(None)
+            )
             eligible_teacher = db.query(ClassroomTeacher.id).filter(
                 ClassroomTeacher.classroom_id == project.classroom_id,
                 ClassroomTeacher.teacher_id == target_owner.id,
-                or_(*staffing_conditions),
+                staffing_condition,
             ).first()
             if target_owner.role not in {"teacher", "supervisor"} or eligible_teacher is None:
                 raise HTTPException(

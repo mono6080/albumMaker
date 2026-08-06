@@ -111,9 +111,10 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | `/overview` | admin：園所結構、編制、名單、相本、待遷移狀態，以及目前正式學期的 `work_slots`／可用模板；owner 只從該班目前老師選擇 |
-| GET | `/my-classrooms` | admin 全部；`teacher\|supervisor` 回目前任教班級與 active 主管 scope 聯集，每班含目前正式學期 `work_slots`，另回 `permissions.can_view_supervisor_reports`；其他角色 403 |
-| GET | `/semesters` | admin／art_team：正式學期及其 ordered 期別；供模板與新學期設定使用 |
+| GET | `/overview` | admin：園所結構、編制、名單、相本、待遷移狀態，以及 `work_slots`／可用模板／可切鎖的 `semester_periods`；`work_slots` 含目前學期全部工作格，加上已結束學期中該期別未鎖的補建入口；owner 只從該班目前老師選擇 |
+| GET | `/my-classrooms` | admin 全部；`teacher\|supervisor` 回目前任教班級與 active 主管 scope 聯集，另含已結束學期中該期別未鎖、且編制因學期輪替結束的班（補建入口，只帶未鎖的 `work_slots`），另回 `permissions.can_view_supervisor_reports`；其他角色 403 |
+| GET | `/semesters` | admin／art_team：正式學期及其 ordered 期別（含各期建立相本鎖狀態）；供模板與新學期設定使用 |
+| PATCH | `/semesters/{id}/periods/{semester_period_id}` | admin 切換該學期期別的建立相本鎖；body `album_creation_locked`。鎖住後全園都不能再開這一期的新相本，既有相本不受影響；已結束學期可切換（補建用），已取消學期回 409 `semester_not_lockable`。重複上鎖／解鎖冪等。契約見 [period-album-creation-lock-v1](../specs/period-album-creation-lock-v1.md) |
 | POST / PATCH | `/campuses`、`/campuses/{id}` | 建立／更新分校；旗下仍有目前學生或老師時不可停用 |
 | PUT | `/campuses/{id}/supervisors` | admin 完整替換該校全校主管與 `infant`／`academy` 部門主管；未變區間保留 |
 | POST | `/classrooms` | 建立班級（分校、`infant\|academy` 部門、名稱）。省略 `semester_id` 建在目前正式學期；帶編班草稿的目標學期則建在草稿裡（並自動補進計畫），該草稿學期必須仍有 draft 計畫，否則回 409 `draft_semester_has_no_plan` |
@@ -127,12 +128,13 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/classrooms/{id}/members/album-names/auto-fill` | admin 整批替目前名單中尚未設定者安全推導中央相本稱呼；不覆蓋人工值，回 `{updated, unresolved}` |
 | PATCH | `/students/{id}/album-name` | admin 設定或清除中央相本稱呼；供已無 membership、但仍被既有已歸班相本引用的孩子使用 |
 | POST | `/students/{id}/album-name/auto-fill` | admin 單筆替空白中央稱呼安全推導；已有值不覆蓋，回 `{updated, unresolved}` |
-| POST | `/classrooms/{id}/projects` | admin／當班 lead 依目前名單建立相本；body 必帶屬目前學期／該班／模板期別的 `work_slot_id`（**同一格可多本**，例如同排版兩套對應文字），可選 `roster_child_ids` 指定收錄的孩子（省略即收該格尚未編入相本者），owner 須為目前老師（省略採 lead）。同一個孩子不可被同格兩本收錄；全班都已編入時回 409 `slot_roster_fully_assigned`（此時可送空 `roster_child_ids` 建一本空的當搬移目標） |
+| POST | `/classrooms/{id}/projects` | admin／該班 lead 依名單建立相本；body 必帶屬該班／模板期別的 `work_slot_id`（**同一格可多本**，例如同排版兩套對應文字），可選 `roster_child_ids` 指定收錄的孩子（省略即收該格尚未編入相本者），owner 須為該班有效老師（省略採 lead）。**能不能建立只看該期別的建立鎖**，鎖住回 409 `work_slot_period_locked`；學期已結束但期別未鎖時，原任主教（編制僅因學期輪替結束者）仍可補建，名冊取該學期結束時仍在班的孩子。同一個孩子不可被同格兩本收錄；全班都已編入時回 409 `slot_roster_fully_assigned`（此時可送空 `roster_child_ids` 建一本空的當搬移目標）。契約見 [period-album-creation-lock-v1](../specs/period-album-creation-lock-v1.md) |
 | POST / GET / PUT | `/term-reclassification-plans`、`/term-reclassification-plans/{id}` | admin 建立唯一全園 draft（可帶期別 ids／日期）、讀取或以 `expected_revision` 完整替換學生／老師目標；草稿同時持有目標 Semester 與其新建班級，payload 的 `target_classrooms` 列出這些班（含 `sort_order` 與 `can_remove`——後者由後端算，前端據此決定移除鍵能不能按），`classroom_id` 一律指它們。在草稿學期新增班級會自動補進計畫，該班才編得到老師。payload 另有 `new_students`：草稿期間直接編進目標班的新生，他們沒有來源名單列因此不是 placement，套用時不會被動到 |
 | POST | `/term-reclassification-plans/{id}/validate\|apply\|cancel` | admin 驗證正式期別、學生與老師目標；以 revision + source fingerprint 原子結束舊學期的名冊與編制、在目標學期的班建立新區間與工作格並啟用目標學期；或取消且不動目前狀態 |
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
-相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**（`ended_at IS NULL` 的指派）；
+相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**（`ended_at IS NULL` 的指派，
+未完成的相本另認僅因學期輪替結束的編制）；
 **讀取**只要在該學期班級有過任何一筆指派即可，所以學期轉換不會讓老師看不到自己去年
 做的相本，而接手同名班的新老師也不會拿到上一屆的相本——班不跨學期，兩者是不同的班。
 見 [term-scoped-classroom-v1](../specs/term-scoped-classroom-v1.md#權限契約)。

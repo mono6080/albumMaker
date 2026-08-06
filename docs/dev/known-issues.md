@@ -62,6 +62,12 @@ Safari 問題」**——如果是應用本身在切換使用者時吃掉太多�
   現有未群組 layout 不會依位置建立群組，自動群組 migration 明確延後到功能驗收後另案設計。
   `backfill_material_text_links.py` 只會回填可確定的素材文字 metadata link，不會猜或改 group topology
 
+- **未鎖的舊學期期別會一直留在老師畫面**：建立相本鎖與學期轉換脫鉤之後
+  （[period-album-creation-lock-v1](../specs/period-album-creation-lock-v1.md)），套用編班**不會**
+  自動鎖上被關閉學期的期別。admin 一直不鎖的話，那些班會持續出現在老師的「已結束學期
+  （可補建）」區與 admin 的工作格清單裡，逐年累積。目前靠分區呈現與班名帶學期避免混淆；
+  是否要在期末流程提示 admin 逐期收尾，留待實際使用後再決定，不預先自動化——自動鎖就
+  等於把鎖又綁回學期轉換。
 - **多 worker 下的並發**：`render_album` 是純 PIL（無共享 mutable state），
   但 uvicorn workers > 1 時 SQLite 寫入會搶鎖。目前單 worker、低並發沒事
 - **Storage cleanup 沒有 durable retry**：專案／學生改名或刪除在 DB commit 後清理舊輸出與

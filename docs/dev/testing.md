@@ -78,6 +78,10 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     舊 editor 結束、schema constraint 與 migration 冪等
   - `test_organization_term.py`：編班完整目標、revision/fingerprint、validate 零寫入、
     stale/invalid rollback、同時間原子套用，以及既有 Project/ProjectStudent/ACL invariant
+  - `test_period_album_creation_lock.py`：期別建立鎖的開關與冪等、admin-only、學期結束後
+    未鎖期別仍可由原任主教補建、被換掉的主教仍被擋、補建名冊的 carryover 判準、
+    archived 期別不再擋建立，以及補建期間已結束學期的名冊／編制零寫入
+    （契約見 [period-album-creation-lock-v1](../specs/period-album-creation-lock-v1.md)）
   - `test_project_acl_lifecycle.py`：目前班級老師與校／部門主管 object policy、owner 不授權、
     未歸班 admin-only、generic create route 不存在、歷史 editor 不進 response／生命週期、
     角色停權與刪帳 audited cleanup

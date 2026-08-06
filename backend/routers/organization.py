@@ -34,6 +34,7 @@ from services.organization_term_service import (
     create_term_reclassification_plan as create_term_reclassification_plan_use_case,
     get_term_reclassification_plan as get_term_reclassification_plan_use_case,
     list_semesters as list_semesters_use_case,
+    set_semester_period_album_creation_lock as set_period_album_creation_lock_use_case,
     update_term_reclassification_plan as update_term_reclassification_plan_use_case,
     validate_term_reclassification_plan as validate_term_reclassification_plan_use_case,
 )
@@ -204,6 +205,12 @@ class TermPlanUpdateBody(BaseModel):
 
 class TermPlanApplyBody(BaseModel):
     expected_revision: int = Field(..., ge=1)
+
+
+class SemesterPeriodLockBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    album_creation_locked: bool
 
 
 @router.get("/overview")
@@ -407,6 +414,23 @@ def list_semesters(
     _: User = Depends(require_role("admin", "art_team")),
 ):
     return list_semesters_use_case(db)
+
+
+@router.patch("/semesters/{semester_id}/periods/{semester_period_id}")
+def set_semester_period_album_creation_lock(
+    semester_id: int,
+    semester_period_id: int,
+    body: SemesterPeriodLockBody,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_role("admin")),
+):
+    return set_period_album_creation_lock_use_case(
+        db,
+        current_admin,
+        semester_id,
+        semester_period_id,
+        locked=body.album_creation_locked,
+    )
 
 
 @router.get("/term-reclassification-plans/{plan_id}")

@@ -12,6 +12,7 @@ from database import (
     Semester,
     Campus,
     Classroom,
+    ClassroomMember,
     ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
@@ -20,6 +21,57 @@ from database import (
 
 
 REPORTING_SEMESTER_STATUSES = ("imported", "active", "closed")
+
+
+# carryover 判準的唯一真相來源：SQL 與 Python 兩種形式都由這兩組常數展開，
+# 不得各寫一份字面值。見 docs/specs/period-album-creation-lock-v1.md
+TEACHER_CARRYOVER_END_REASONS = ("term_reassignment",)
+ROSTER_CARRYOVER_END_REASONS = ("term_reassignment", "term_departed")
+
+
+def teacher_carryover_condition() -> ColumnElement[bool]:
+    """目前在編制，或編制只因為學期輪替而結束。
+
+    學期輪替會把舊班的全部編制一次結束，所以已結束學期的「目前編制」永遠是空的。
+    認的是結束原因而不是「曾經任教」：`term_reassignment` 是學期輪替帶來的，
+    `assignment_replaced` 是有人刻意把她換掉，後者不算。
+
+    製作權（`get_project_permissions`）、進度負責人轉交（`transfer_project_owner`）
+    與已結束學期的補建相本共用這一條，不得各寫一份。
+    """
+    return or_(
+        ClassroomTeacher.ended_at.is_(None),
+        ClassroomTeacher.end_reason.in_(TEACHER_CARRYOVER_END_REASONS),
+    )
+
+
+def roster_carryover_condition() -> ColumnElement[bool]:
+    """該學期結束時仍在這個班的孩子。
+
+    與老師同一個道理：學期輪替會結束全部名冊區間，所以要認結束原因。
+    `term_reassignment`（升到下學期別班）與 `term_departed`（學期末離園）都是整期在籍；
+    期中 `transfer` 出去與期中 `departed` 的孩子在該學期的歸屬已經不是這個班，不算。
+    """
+    return or_(
+        ClassroomMember.ended_at.is_(None),
+        ClassroomMember.end_reason.in_(ROSTER_CARRYOVER_END_REASONS),
+    )
+
+
+def teacher_assignment_is_carryover(assignment: ClassroomTeacher) -> bool:
+    """`teacher_carryover_condition` 的 Python 形式，供已載入的關聯過濾。"""
+    return (
+        assignment.ended_at is None
+        or assignment.end_reason in TEACHER_CARRYOVER_END_REASONS
+    )
+
+
+def roster_member_is_carryover(member: ClassroomMember) -> bool:
+    """`roster_carryover_condition` 的 Python 形式，供已載入的關聯過濾。"""
+    return (
+        member.ended_at is None
+        or member.end_reason in ROSTER_CARRYOVER_END_REASONS
+    )
 
 
 @dataclass(frozen=True)
@@ -183,17 +235,14 @@ def _load_teacher_carryover_classroom_ids(
     製作、當天還有人在編。製作權若只看目前學期的編制，那些相本會在套用編班的瞬間
     對老師變成唯讀。
 
-    但「被移出班級」必須仍然擋得住，所以認的是結束原因而不是「曾經任教」：
-    `term_reassignment` 是學期輪替帶來的，`assignment_replaced` 是有人刻意把她換掉。
+    但「被移出班級」必須仍然擋得住，所以認的是結束原因而不是「曾經任教」，
+    判準見 `teacher_carryover_condition`。
     """
     rows = (
         db.query(ClassroomTeacher.classroom_id)
         .filter(
             ClassroomTeacher.teacher_id == teacher_id,
-            or_(
-                ClassroomTeacher.ended_at.is_(None),
-                ClassroomTeacher.end_reason == "term_reassignment",
-            ),
+            teacher_carryover_condition(),
         )
         .distinct()
         .all()
