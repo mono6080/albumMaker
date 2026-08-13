@@ -32,6 +32,11 @@ import SemesterChildrenTable from "../components/SemesterChildrenTable";
 import { Badge, Button, PageHeader, Surface } from "../components/ui";
 
 const CLASSROOM_GROUPS_PER_PAGE = 8;
+// 版式套用到整包 PDF：每期檔與全期合併檔一致，單期孩子同樣適用
+const SHEET_LAYOUT_OPTIONS = [
+  { value: "spread", label: "雙頁 A3", hint: "每張左右各一頁 A4" },
+  { value: "single", label: "單頁 A4", hint: "維持相本原頁" },
+];
 
 function normalizeSearchText(value) {
   return String(value ?? "").replace(/[\s\u3000]+/g, "").toLocaleLowerCase("zh-TW");
@@ -138,6 +143,7 @@ export default function SemesterExport() {
   const [selectedPeriodIds, setSelectedPeriodIds] = useState([]);
   const [campusId, setCampusId] = useState("");
   const [selectedClassroomId, setSelectedClassroomId] = useState("");
+  const [sheetLayout, setSheetLayout] = useState("spread");
   const [preview, setPreview] = useState(null);
   const [previewSignature, setPreviewSignature] = useState("");
   const [selectedChildIds, setSelectedChildIds] = useState(new Set());
@@ -514,6 +520,7 @@ export default function SemesterExport() {
       { semesterId, periodIds: selectedPeriodIds },
       "print",
       canOmitChildIds ? null : [...selectedChildIds],
+      sheetLayout,
     ));
     toast.success("已開始產生並下載，請留意瀏覽器的下載列");
   };
@@ -733,6 +740,34 @@ export default function SemesterExport() {
 
           {isAdmin && allPreviewChildIds.length > 0 && (
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-gray-100 bg-white py-2">
+              <div className="mr-auto flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-gray-500">列印版式</span>
+                {SHEET_LAYOUT_OPTIONS.map(option => {
+                  const isSelected = sheetLayout === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      title={option.hint}
+                      className={`inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm max-sm:min-h-11 [@media(pointer:coarse)]:min-h-11 ${
+                        isSelected
+                          ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                          : "border-gray-200 bg-white text-gray-600"
+                      } ${isRenderingMissing ? "pointer-events-none opacity-50" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        name="sheet-layout"
+                        value={option.value}
+                        checked={isSelected}
+                        disabled={isRenderingMissing}
+                        onChange={() => setSheetLayout(option.value)}
+                        className="accent-indigo-600"
+                      />
+                      {option.label}
+                    </label>
+                  );
+                })}
+              </div>
               {hiddenSelectedCount > 0 && (
                 <span className="flex items-center gap-1.5 text-xs text-amber-700">
                   已選取中有 {hiddenSelectedCount} 位不在目前搜尋／狀態結果

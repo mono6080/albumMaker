@@ -253,7 +253,7 @@ provisional child link 仍讀 legacy `ProjectStudent.album_name`。來源、回�
 | GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
 | GET | `/teacher-progress?semester_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
 | GET | `/teacher-overview/export?semester_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
-| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填 |
+| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&sheet_layout=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填；`sheet_layout` 為 `spread`（預設，雙頁 A3）或 `single`（單頁 A4），套用到整包每一份 PDF |
 
 主管呼叫 `/semester-export` 時，`period_ids` 必須全部屬於該學期且位於其主管 snapshot scope
 實際可見的部門；不存在、跨學期或超出部門 scope 一律回 404，不回傳部分期別 metadata。

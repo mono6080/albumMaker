@@ -159,6 +159,8 @@ test("semester export groups by campus/classroom snapshots and renders authorita
 
   await page.getByLabel("選取 和平校 向日葵班 的孩子").uncheck();
   await expect(page.getByRole("button", { name: /下載學期 ZIP（4 位孩子）/ })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "雙頁 A3" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "單頁 A4" })).not.toBeChecked();
 
   const controlHeights = await page.locator(
     'select, input[type="search"], label input[type="checkbox"], button',
@@ -171,6 +173,66 @@ test("semester export groups by campus/classroom snapshots and renders authorita
 });
 
 
+test("download carries the sheet layout the exporter picked", async ({ page }) => {
+  await mockBase(page);
+  const readyEntry = (projectId, projectName, studentId) => entry({
+    projectId,
+    projectName,
+    studentId,
+    campusId: 1,
+    campusName: "和平校",
+    classroomId: 10,
+    classroomName: "向日葵班",
+  });
+  await page.route("**/api/roster/semester-export?**", route => route.fulfill({
+    json: {
+      term: { id: 1, label: term.label, status: "active" },
+      periods: term.periods.map(period => ({
+        ...period,
+        semester_period_id: period.id,
+        id: period.template_period_id,
+      })),
+      summary: {},
+      classroom_groups: [{
+        campus_id: 1,
+        campus_name: "和平校",
+        classroom_id: 10,
+        classroom_name: "向日葵班",
+        department: "infant",
+        children: [child(1, "兩期都完成", [
+          cell(11, "ready", [readyEntry(101, "九月成長紀錄", 1001)]),
+          cell(12, "ready", [readyEntry(102, "十月成長紀錄", 1002)]),
+        ])],
+      }],
+      unlinked: [],
+    },
+  }));
+  await page.route("**/api/roster/semester-export/download**", route => route.fulfill({
+    status: 200,
+    headers: {
+      "content-type": "application/zip",
+      "content-disposition": 'attachment; filename="semester.zip"',
+    },
+    body: "",
+  }));
+
+  await page.goto("/admin/semester-export");
+  await page.getByRole("radio", { name: "單頁 A4" }).check();
+  const [singleRequest] = await Promise.all([
+    page.waitForRequest("**/api/roster/semester-export/download**"),
+    page.getByRole("button", { name: /下載學期 ZIP/ }).click(),
+  ]);
+  expect(singleRequest.url()).toContain("sheet_layout=single");
+
+  await page.getByRole("radio", { name: "雙頁 A3" }).check();
+  const [spreadRequest] = await Promise.all([
+    page.waitForRequest("**/api/roster/semester-export/download**"),
+    page.getByRole("button", { name: /下載學期 ZIP/ }).click(),
+  ]);
+  expect(spreadRequest.url()).toContain("sheet_layout=spread");
+});
+
+
 test("supervisor semester view is read-only", async ({ page }) => {
   await mockBase(page, "supervisor");
   await page.route("**/api/roster/semester-export?**", route => route.fulfill({ json: previewPayload() }));
@@ -180,4 +242,5 @@ test("supervisor semester view is read-only", async ({ page }) => {
   await expect(page.getByRole("button", { name: /下載學期 ZIP/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /補產生/ })).toHaveCount(0);
   await expect(page.getByLabel(/選取 .* 的孩子/)).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: /雙頁 A3|單頁 A4/ })).toHaveCount(0);
 });

@@ -179,6 +179,17 @@ npm run test:e2e:reuse -- -g multi-select
 `test:e2e:reuse` 會略過 Playwright 的 `webServer` 啟動；**只在 `dev:e2e`
 已常駐時使用**。
 
+本機開發後端正佔著 8765 時不必把它停掉，用 `E2E_PORT_OFFSET` 把整組 e2e port
+（backend `8765+offset+i`、vite `5173+offset+i`）一起挪開；預設 0，CI 不受影響：
+
+```bash
+E2E_PORT_OFFSET=100 npm run test:e2e     # 改用 8865 / 5273
+```
+
+offset 要大於 worker 數，否則會和原本的 port 重疊。`playwright.config.js`、
+`scripts/e2e-supervisor-utils.mjs`、`tests/e2e/fixtures.js` 與
+`scripts/e2e_server.py` 讀的是同一個變數。
+
 ## 資料修復腳本 runbook
 
 資料腳本都從 repo 根目錄執行，預設只讀資料庫並把 CSV 寫到被 git 忽略的
