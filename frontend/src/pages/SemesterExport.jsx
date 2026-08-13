@@ -341,6 +341,9 @@ export default function SemesterExport() {
   const hiddenSelectedCount = [...selectedChildIds].filter(
     childId => !displayedChildIdSet.has(childId),
   ).length;
+  const displayedSelectedCount = displayedChildIds.filter(
+    childId => selectedChildIds.has(childId),
+  ).length;
   const allPreviewChildIds = scopeGroups.flatMap(group => (
     (group.children ?? []).map(child => child.roster_child_id)
   ));
@@ -564,6 +567,17 @@ export default function SemesterExport() {
     ));
   };
 
+  // 全選／全不選只作用在目前搜尋與狀態篩選的結果，不動被篩掉的既有選取
+  const selectAllDisplayed = () => {
+    setSelectedChildIds(new Set([...selectedChildIds, ...displayedChildIds]));
+  };
+
+  const clearDisplayedSelected = () => {
+    setSelectedChildIds(new Set(
+      [...selectedChildIds].filter(childId => !displayedChildIdSet.has(childId)),
+    ));
+  };
+
   return (
     <div className="mx-auto flex min-h-[calc(100svh-6rem)] max-w-7xl flex-col sm:min-h-[calc(100svh-8rem)]">
       <PageHeader
@@ -715,6 +729,10 @@ export default function SemesterExport() {
             isRenderingMissing={isRenderingMissing}
             renderJob={renderJob}
             onRenderMissing={handleRenderMissing}
+            displayedChildCount={displayedChildIds.length}
+            displayedSelectedCount={displayedSelectedCount}
+            onSelectAllDisplayed={selectAllDisplayed}
+            onClearDisplayedSelected={clearDisplayedSelected}
           />
 
           {renderJobErrors.length > 0 && (
