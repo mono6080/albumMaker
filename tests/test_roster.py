@@ -1844,6 +1844,7 @@ def test_semester_export_zip_paths_cannot_escape_with_database_names(monkeypatch
         7,
         [1],
         "print",
+        "spread",
     )
 
     assert child_plans == [

@@ -54,15 +54,17 @@ export const buildTeacherOverviewExcelUrl = (filters) => {
   return `/api/roster/teacher-overview/export?${searchParams.toString()}`;
 };
 
-/** 學期 ZIP；孩子依校別／班級 snapshot 分類。 */
+/** 學期 ZIP；孩子依校別／班級 snapshot 分類，sheetLayout 決定整包 PDF 的版式。 */
 export const buildSemesterExportDownloadUrl = (
   filters,
   outputMode = "print",
   rosterChildIds = null,
+  sheetLayout = "spread",
 ) => {
   const searchParams = new URLSearchParams();
   appendReportScopeQuery(searchParams, filters);
   searchParams.set("mode", outputMode);
+  searchParams.set("sheet_layout", sheetLayout);
   for (const rosterChildId of rosterChildIds ?? []) {
     searchParams.append("roster_child_ids", String(rosterChildId));
   }

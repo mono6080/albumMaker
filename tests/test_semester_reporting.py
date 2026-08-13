@@ -753,19 +753,112 @@ def test_semester_zip_appends_merged_pdf_for_multi_period_child(
                     if "/全期合併_" not in name
                 ) + f"/全期合併_{child_name}.pdf"
             ]
-            period_page_total = sum(
-                len(PdfReader(BytesIO(zip_archive.read(name))).pages)
-                for name in pdf_paths
-                if name not in merged_paths
-            )
-            merged_reader = PdfReader(BytesIO(zip_archive.read(merged_paths[0])))
-            assert period_page_total >= 2
-            assert len(merged_reader.pages) == (period_page_total + 1) // 2
-            for merged_page in merged_reader.pages:
-                assert round(float(merged_page.mediabox.width)) == 1191
-                assert round(float(merged_page.mediabox.height)) == 842
+            # 預設雙頁版式：每期檔與全期合併檔都是 A3，兩期各一頁併成一張
+            for pdf_path in pdf_paths:
+                reader = PdfReader(BytesIO(zip_archive.read(pdf_path)))
+                assert len(reader.pages) == 1
+                for page in reader.pages:
+                    assert round(float(page.mediabox.width)) == 1191
+                    assert round(float(page.mediabox.height)) == 842
             manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
         assert "全期合併" in manifest
+        assert "雙頁 A3" in manifest
+
+
+def test_semester_zip_single_sheet_layout_keeps_a4_pages(monkeypatch, tmp_path):
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        teacher, _ = create_user(client, "teacher")
+        period_a = create_active_period(client)
+        period_b = create_active_period(client)
+        template_a_id, _ = create_template_with_page(client, period_id=period_a["id"])
+        template_b_id, _ = create_template_with_page(client, period_id=period_b["id"])
+        _, classroom_id = create_scoped_classroom(client)
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        child_name = unique_name("single_layout_child")
+        add_classroom_members(client, classroom_id, [child_name])
+        for template_id in (template_a_id, template_b_id):
+            project_id = create_classroom_project(client, classroom_id, template_id)
+            student_id = add_students(client, project_id, [child_name])[child_name]
+            assert_status(
+                client.post(f"/api/projects/{project_id}/students/{student_id}/render"),
+                200,
+            )
+        semester_id = reporting_semester_id(client, [period_a["id"], period_b["id"]])
+
+        download = client.get(
+            "/api/roster/semester-export/download",
+            params={
+                "semester_id": semester_id,
+                "period_ids": [period_a["id"], period_b["id"]],
+                "mode": "print",
+                "sheet_layout": "single",
+            },
+        )
+        assert_status(download, 200)
+        with ZipFile(BytesIO(download.content)) as zip_archive:
+            pdf_paths = [
+                name for name in zip_archive.namelist() if name.endswith(".pdf")
+            ]
+            merged_path = next(name for name in pdf_paths if "/全期合併_" in name)
+            assert len(pdf_paths) == 3
+            # 單頁版式：每期檔維持原頁，全期合併檔只是依期別順序串接
+            for period_path in (name for name in pdf_paths if name != merged_path):
+                reader = PdfReader(BytesIO(zip_archive.read(period_path)))
+                assert len(reader.pages) == 1
+                assert round(float(reader.pages[0].mediabox.width)) != 1191
+            merged_reader = PdfReader(BytesIO(zip_archive.read(merged_path)))
+            assert len(merged_reader.pages) == 2
+            for merged_page in merged_reader.pages:
+                assert round(float(merged_page.mediabox.width)) != 1191
+            manifest = zip_archive.read("匯出說明.txt").decode("utf-8")
+        assert "單頁 A4" in manifest
+
+
+def test_semester_zip_spread_layout_applies_to_single_period_child(
+    monkeypatch,
+    tmp_path,
+):
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        teacher, _ = create_user(client, "teacher")
+        period = create_active_period(client)
+        template_id, _ = create_template_with_page(client, period_id=period["id"])
+        _, classroom_id = create_scoped_classroom(client)
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        child_name = unique_name("single_period_child")
+        add_classroom_members(client, classroom_id, [child_name])
+        project_id = create_classroom_project(client, classroom_id, template_id)
+        student_id = add_students(client, project_id, [child_name])[child_name]
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/{student_id}/render"),
+            200,
+        )
+        semester_id = reporting_semester_id(client, [period["id"]])
+
+        download = client.get(
+            "/api/roster/semester-export/download",
+            params={
+                "semester_id": semester_id,
+                "period_ids": [period["id"]],
+                "mode": "print",
+                "sheet_layout": "spread",
+            },
+        )
+        assert_status(download, 200)
+        with ZipFile(BytesIO(download.content)) as zip_archive:
+            pdf_paths = [
+                name for name in zip_archive.namelist() if name.endswith(".pdf")
+            ]
+            # 只有一期時不附全期合併檔，但那唯一一份仍套用雙頁 A3
+            assert len(pdf_paths) == 1
+            assert "/全期合併_" not in pdf_paths[0]
+            reader = PdfReader(BytesIO(zip_archive.read(pdf_paths[0])))
+            assert len(reader.pages) == 1
+            assert round(float(reader.pages[0].mediabox.width)) == 1191
+            assert round(float(reader.pages[0].mediabox.height)) == 842
 
 
 def test_current_supervisor_reads_historical_snapshot_after_campus_rename():

@@ -5,11 +5,23 @@ export const E2E_SUPERVISOR_READY_MESSAGE = "e2e-supervisor-ready-v1";
 
 export const E2E_WORKERS = Math.max(1, Number(process.env.E2E_WORKERS ?? 2));
 
+// 本機開發後端佔著 8765 時，用 E2E_PORT_OFFSET 把整組 e2e port 一起挪開；
+// 預設 0，CI 與既有指令的 port 不變。Python 端 scripts/e2e_server.py 讀同一個變數。
+export const E2E_PORT_OFFSET = Number(process.env.E2E_PORT_OFFSET ?? 0);
+
+export function e2eBackendPort(workerIndex) {
+  return 8765 + E2E_PORT_OFFSET + workerIndex;
+}
+
+export function e2eVitePort(workerIndex) {
+  return 5173 + E2E_PORT_OFFSET + workerIndex;
+}
+
 // 每個 worker 一組 (backend, vite)，port 依序往上長
 export const E2E_FIXED_SERVERS = Object.freeze(
   Array.from({ length: E2E_WORKERS }, (_unused, index) => ([
-    Object.freeze({ name: `backend${index}`, host: "127.0.0.1", port: 8765 + index }),
-    Object.freeze({ name: `vite${index}`, host: "127.0.0.1", port: 5173 + index }),
+    Object.freeze({ name: `backend${index}`, host: "127.0.0.1", port: e2eBackendPort(index) }),
+    Object.freeze({ name: `vite${index}`, host: "127.0.0.1", port: e2eVitePort(index) }),
   ])).flat(),
 );
 

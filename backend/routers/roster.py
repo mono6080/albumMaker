@@ -135,6 +135,7 @@ def download_semester_export_zip(
     semester_id: int = Query(..., ge=1),
     period_ids: list[int] = Query(..., min_length=1),
     mode: str = Query("print", pattern="^(print|screen)$"),
+    sheet_layout: str = Query("spread", pattern="^(single|spread)$"),
     roster_child_ids: list[int] | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
@@ -144,6 +145,7 @@ def download_semester_export_zip(
         semester_id,
         period_ids,
         mode,
+        sheet_layout,
         roster_child_ids,
     )
     return StreamingResponse(

@@ -2,7 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === "1";
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
+// 與 scripts/e2e-supervisor-utils.mjs 同一個 offset（預設 0）
+const portOffset = Number(process.env.E2E_PORT_OFFSET ?? 0);
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${5173 + portOffset}`;
 
 
 // 只有「瀏覽器引擎差異真的會咬人」的地方才值得跑第二顆引擎：畫布渲染與幾何、
@@ -76,7 +78,7 @@ if (!skipWebServer) {
   // 單一 supervisor 同時管理 backend/Vite，Windows 才能在測試後清完整行程樹。
   config.webServer = {
     command: "npm run dev:e2e",
-    url: "http://127.0.0.1:8765/api/health",
+    url: `http://127.0.0.1:${8765 + portOffset}/api/health`,
     reuseExistingServer,
     timeout: 90_000,
   };

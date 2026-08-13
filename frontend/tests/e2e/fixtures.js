@@ -13,9 +13,12 @@ import { setE2eBaseUrl } from "./helpers.js";
 
 // baseURL 是 Playwright 內建的 test-scope fixture，不能改成 worker-scope，
 // 但 testInfo.parallelIndex 就是 worker 編號，一樣拿得到。
+// 與 scripts/e2e-supervisor-utils.mjs 同一個 offset：本機後端佔著預設 port 時整組挪開。
+const portOffset = Number(process.env.E2E_PORT_OFFSET ?? 0);
+
 export const test = base.extend({
   baseURL: async ({}, use, testInfo) => {
-    const url = `http://127.0.0.1:${5173 + testInfo.parallelIndex}`;
+    const url = `http://127.0.0.1:${5173 + portOffset + testInfo.parallelIndex}`;
     // helpers 裡有些地方要絕對網址（例如寫 cookie），worker 是獨立 process，
     // 模組層的變數天然是 worker-local。
     setE2eBaseUrl(url);

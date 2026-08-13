@@ -523,6 +523,7 @@ def _plan_semester_export_zip(
     semester_id: int,
     period_ids: list[int],
     output_mode: str,
+    sheet_layout: str,
     roster_child_ids: list[int] | None = None,
 ) -> tuple[list[dict], str]:
     preview = build_semester_export_preview(db, semester_id, period_ids)
@@ -626,44 +627,57 @@ def _plan_semester_export_zip(
             f"（{entry['campus_name']}／{entry['classroom_name']}／"
             f"{entry['project_name']}），未納入"
         )
-    return child_plans, _build_export_manifest(manifest_preview, missing_notes)
+    return child_plans, _build_export_manifest(
+        manifest_preview,
+        missing_notes,
+        sheet_layout,
+    )
 
 
 A3_LANDSCAPE_WIDTH_PT = 1190.55
 A3_LANDSCAPE_HEIGHT_PT = 841.89
 
 
-def _merge_pdf_bytes(pdf_bytes_list: list[bytes]) -> bytes:
-    """依期別順序把 A4 頁兩頁併成一張 A3 橫式；奇數頁時最後一張右半留白。"""
+def _compose_pdf_bytes(pdf_bytes_list: list[bytes], sheet_layout: str) -> bytes:
+    """依版式把來源 PDF 依期別順序組成一份：spread 兩頁併一張 A3 橫式
+    （奇數頁時最後一張右半留白），single 維持 A4 原頁串接。"""
     from pypdf import PdfReader, PdfWriter, Transformation
+
+    # 單頁版式的單一來源不需重寫，直接沿用原始 bytes
+    if sheet_layout == "single" and len(pdf_bytes_list) == 1:
+        return pdf_bytes_list[0]
 
     readers = [PdfReader(BytesIO(pdf_bytes)) for pdf_bytes in pdf_bytes_list]
     source_pages = [page for reader in readers for page in reader.pages]
     writer = PdfWriter()
-    for pair_start in range(0, len(source_pages), 2):
-        a3_page = writer.add_blank_page(
-            width=A3_LANDSCAPE_WIDTH_PT,
-            height=A3_LANDSCAPE_HEIGHT_PT,
-        )
-        for slot, page in enumerate(source_pages[pair_start:pair_start + 2]):
-            src_width = float(page.mediabox.width)
-            src_height = float(page.mediabox.height)
-            scale = min(
-                A3_LANDSCAPE_WIDTH_PT / 2 / src_width,
-                A3_LANDSCAPE_HEIGHT_PT / src_height,
+    if sheet_layout == "single":
+        for page in source_pages:
+            writer.add_page(page)
+    else:
+        for pair_start in range(0, len(source_pages), 2):
+            a3_page = writer.add_blank_page(
+                width=A3_LANDSCAPE_WIDTH_PT,
+                height=A3_LANDSCAPE_HEIGHT_PT,
             )
-            offset_x = (
-                slot * A3_LANDSCAPE_WIDTH_PT / 2
-                + (A3_LANDSCAPE_WIDTH_PT / 2 - src_width * scale) / 2
-            )
-            offset_y = (A3_LANDSCAPE_HEIGHT_PT - src_height * scale) / 2
-            a3_page.merge_transformed_page(
-                page,
-                Transformation().scale(scale).translate(offset_x, offset_y),
-            )
-    merged_buffer = BytesIO()
-    writer.write(merged_buffer)
-    return merged_buffer.getvalue()
+            for slot, page in enumerate(source_pages[pair_start:pair_start + 2]):
+                src_width = float(page.mediabox.width)
+                src_height = float(page.mediabox.height)
+                scale = min(
+                    A3_LANDSCAPE_WIDTH_PT / 2 / src_width,
+                    A3_LANDSCAPE_HEIGHT_PT / src_height,
+                )
+                offset_x = (
+                    slot * A3_LANDSCAPE_WIDTH_PT / 2
+                    + (A3_LANDSCAPE_WIDTH_PT / 2 - src_width * scale) / 2
+                )
+                offset_y = (A3_LANDSCAPE_HEIGHT_PT - src_height * scale) / 2
+                a3_page.merge_transformed_page(
+                    page,
+                    Transformation().scale(scale).translate(offset_x, offset_y),
+                )
+    composed_buffer = BytesIO()
+    writer.write(composed_buffer)
+    return composed_buffer.getvalue()
 
 
 def open_semester_export_zip_stream(
@@ -671,6 +685,7 @@ def open_semester_export_zip_stream(
     semester_id: int,
     period_ids: list[int],
     output_mode: str,
+    sheet_layout: str,
     roster_child_ids: list[int] | None = None,
 ):
     child_plans, manifest_text = _plan_semester_export_zip(
@@ -678,6 +693,7 @@ def open_semester_export_zip_stream(
         semester_id,
         period_ids,
         output_mode,
+        sheet_layout,
         roster_child_ids,
     )
     storage = get_storage()
@@ -688,14 +704,18 @@ def open_semester_export_zip_stream(
             merged_sources = []
             for archive_path, pdf_key in plan["files"]:
                 pdf_bytes = storage.get_bytes(pdf_key)
-                zip_archive.writestr(archive_path, pdf_bytes)
+                zip_archive.writestr(
+                    archive_path,
+                    _compose_pdf_bytes([pdf_bytes], sheet_layout),
+                )
+                # 跨期合併從原始 A4 頁重組，頁序跨期連續，不是接已併好的 A3
                 if plan["merged_path"] is not None:
                     merged_sources.append(pdf_bytes)
                 yield
             if plan["merged_path"] is not None:
                 zip_archive.writestr(
                     plan["merged_path"],
-                    _merge_pdf_bytes(merged_sources),
+                    _compose_pdf_bytes(merged_sources, sheet_layout),
                 )
                 yield
         zip_archive.writestr("匯出說明.txt", manifest_text)
@@ -703,12 +723,24 @@ def open_semester_export_zip_stream(
     return open_zip_stream(write_entries, "學期匯出 ZIP 正在產生中，請稍後再試")
 
 
-def _build_export_manifest(preview: dict, missing_notes: list[str]) -> str:
+def _build_export_manifest(
+    preview: dict,
+    missing_notes: list[str],
+    sheet_layout: str,
+) -> str:
     lines = [
         "【分類方式】",
         "檔案依「校別／班級／孩子／期別_孩子.pdf」分類。",
-        "同一孩子有兩期以上 PDF 時，另附「全期合併_孩子.pdf」：",
-        "依期別順序兩頁併成一張 A3 橫式（左右各一頁 A4），奇數頁時最後一張右半留白。",
+        *(
+            [
+                "版式：這包所有 PDF 都是雙頁 A3 橫式（每張左右各一頁 A4），",
+                "頁數為奇數時最後一張右半留白。",
+            ]
+            if sheet_layout == "spread"
+            else ["版式：這包所有 PDF 都是單頁 A4，維持相本原頁。"]
+        ),
+        "同一孩子有兩期以上 PDF 時，孩子資料夾內另附「全期合併_孩子.pdf」，",
+        "內容依期別順序連續排頁。",
         "校別與班級使用相本建立當下的正式快照，不使用相本名稱代替班級。",
         "",
         "【班級對照】",
