@@ -173,6 +173,38 @@ test("semester export groups by campus/classroom snapshots and renders authorita
 });
 
 
+test("select-all and clear-all only act on the current search result", async ({ page }) => {
+  await mockBase(page);
+  await page.route("**/api/roster/semester-export?**", route => route.fulfill({ json: previewPayload() }));
+
+  await page.goto("/admin/semester-export");
+  await expect(page.getByText("已選 5／5", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "全不選", exact: true }).click();
+  await expect(page.getByText("已選 0／5", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /下載學期 ZIP/ })).toBeDisabled();
+
+  // 搜尋收窄後全選，只會選到結果內那一位
+  await page.getByRole("searchbox", { name: /搜尋孩子/ }).fill("測試歷史生");
+  await expect(page.getByText("已選 0／1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "全選", exact: true }).click();
+  await expect(page.getByText("已選 1／1", { exact: true })).toBeVisible();
+
+  // 清掉搜尋後，被篩掉的那 4 位仍然沒有被連帶選取
+  await page.getByRole("searchbox", { name: /搜尋孩子/ }).fill("");
+  await expect(page.getByText("已選 1／5", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /下載學期 ZIP（1 位孩子）/ })).toBeVisible();
+
+  // 全不選也只清目前結果：先縮回搜尋結果再按，其餘選取不受影響
+  await page.getByRole("button", { name: "全選", exact: true }).click();
+  await expect(page.getByText("已選 5／5", { exact: true })).toBeVisible();
+  await page.getByRole("searchbox", { name: /搜尋孩子/ }).fill("測試歷史生");
+  await page.getByRole("button", { name: "全不選", exact: true }).click();
+  await page.getByRole("searchbox", { name: /搜尋孩子/ }).fill("");
+  await expect(page.getByText("已選 4／5", { exact: true })).toBeVisible();
+});
+
+
 test("download carries the sheet layout the exporter picked", async ({ page }) => {
   await mockBase(page);
   const readyEntry = (projectId, projectName, studentId) => entry({

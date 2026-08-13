@@ -42,6 +42,10 @@ export default function SemesterSummaryBar({
   isRenderingMissing,
   renderJob,
   onRenderMissing,
+  displayedChildCount,
+  displayedSelectedCount,
+  onSelectAllDisplayed,
+  onClearDisplayedSelected,
 }) {
   return (
     <Surface padding="sm" className="mb-4 shrink-0">
@@ -98,6 +102,32 @@ export default function SemesterSummaryBar({
             />
           )}
         </div>
+        {isAdmin && displayedChildCount > 0 && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <span
+              className="text-xs text-gray-500"
+              title="數字只算目前搜尋與狀態篩選結果內的孩子"
+            >
+              已選 {displayedSelectedCount}／{displayedChildCount}
+            </span>
+            <Button
+              size="xs"
+              variant="neutral"
+              disabled={isRenderingMissing || displayedSelectedCount === displayedChildCount}
+              onClick={onSelectAllDisplayed}
+            >
+              全選
+            </Button>
+            <Button
+              size="xs"
+              variant="neutral"
+              disabled={isRenderingMissing || displayedSelectedCount === 0}
+              onClick={onClearDisplayedSelected}
+            >
+              全不選
+            </Button>
+          </div>
+        )}
         {isAdmin && exportStats.notRenderedCount > 0 && (
           <Button
             variant="secondary"
