@@ -2,6 +2,12 @@
 
 > Owns：測試指令、測試防線現況、agent 修改後的驗證流程。
 > CI 在 `.github/workflows/tests.yml`，push / PR 時跑同一組 gate。
+> `push` 只跑 master、PR 分支交給 `pull_request`——兩者都不設限的話同一個 commit 會跑
+> 兩份完整 CI，兩份還會搶寫同一個 Playwright cache key。另有 `concurrency`
+> （group 用 `head_ref || ref_name`，不能用 `github.ref`：PR 事件的 ref 是
+> `refs/pull/<n>/merge`，與 push 的 `refs/heads/<branch>` 不同組就不會去重）。
+> 每個 job 都有 `timeout-minutes`：2026-08-19 有一個 e2e job 卡在 `playwright install`
+> 燒了 2h24m 才被人工發現，沒有上限就會跑滿 GitHub 預設的 6 小時。
 
 ---
 
