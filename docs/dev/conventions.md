@@ -62,7 +62,11 @@
   做實際 I/O；細節見 [storage.md](storage.md)
 - **DB 單筆查詢過 `get_*_or_404`**：路由不直接 `db.query(...).first()` 抓單筆；
   批次列表查詢例外
-- **路由函式 ≤ 10 行**：超過就下移 service；`render_all_students` 是既有合理例外
+- **路由函式 ≤ 10 行**：超過就下移 service。由
+  `scripts/check_backend_route_boundaries.py` 的 `ROUTE_LINE_BASELINE` 以**棘輪**強制：
+  2026-08-19 實測 103 個路由裡有 33 個超標（最肥的 `get_project` 68 行，且是上一輪結構
+  重構後又長回來的），這 33 個凍結成 baseline **只准變小**；新路由沒有豁免，超過就擋。
+  `--show-current` 會印出目前的實測值。此前這條規則只寫在文件上、沒有任何東西擋
 - **IME 輸入一律用 `CompositionTextarea`**：中文輸入框不得用裸 `<textarea>`，
   其 `onChange` 接收 value 字串（非 event），`onScheduleSave` 由元件在
   compositionEnd 或非組字 onChange 時呼叫，避免 IME 組字被 re-render 打斷
