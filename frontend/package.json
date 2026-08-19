@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:unit": "node tests/unit/run.mjs",
+    "test:supervisor": "node --test scripts/e2e-supervisor.test.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:reuse": "node scripts/playwright-reuse.mjs",
     "test:bundle-budget": "node ../scripts/check_frontend_bundle_budget.mjs dist",

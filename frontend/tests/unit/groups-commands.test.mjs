@@ -61,7 +61,7 @@ test("group and ungroup preserve child geometry, style, path, and effective stac
   };
   const original = structuredClone(layout);
   const stableChild = element => {
-    const { z_index: ignored, ...stable } = element;
+    const { z_index: _ignored, ...stable } = element;
     return stable;
   };
   const beforeOrder = getAllElementsSorted(layout).map(node => node.type + ":" + node.data.id);
@@ -198,7 +198,7 @@ test("root and child reorder, link lifecycle, and deletion keep command boundari
   };
   const original = structuredClone(layout);
   const withoutZ = element => {
-    const { z_index: ignored, ...stable } = element;
+    const { z_index: _ignored, ...stable } = element;
     return stable;
   };
 

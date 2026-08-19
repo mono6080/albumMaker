@@ -90,7 +90,7 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        to_fill, already, conflicts, missing = [], [], [], []
+        to_fill, already, skipped_conflicts, missing = [], [], [], []
         taken = {
             serial: child_id
             for child_id, serial in db.query(Student.id, Student.student_serial)
@@ -103,9 +103,9 @@ def main() -> int:
             elif child.student_serial == serial:
                 already.append(child_id)
             elif child.student_serial:
-                conflicts.append((child_id, child.name, child.student_serial, serial))
+                skipped_conflicts.append((child_id, child.name, child.student_serial, serial))
             elif serial in taken and taken[serial] != child_id:
-                conflicts.append((child_id, child.name, f"(學號已屬名冊 {taken[serial]})", serial))
+                skipped_conflicts.append((child_id, child.name, f"(學號已屬名冊 {taken[serial]})", serial))
             else:
                 to_fill.append((child, serial))
 
@@ -113,15 +113,15 @@ def main() -> int:
         print(f"  可回填      {len(to_fill)}")
         print(f"  已經一致    {len(already)}")
         print(f"  名冊查無此人 {len(missing)}")
-        print(f"  衝突不覆寫  {len(conflicts)}")
-        for child_id, name, old, new in conflicts:
+        print(f"  衝突不覆寫  {len(skipped_conflicts)}")
+        for child_id, name, old, new in skipped_conflicts:
             print(f"      名冊 {child_id}「{name}」現有 {old} → 對照表 {new}")
         for child_id, serial in missing[:10]:
             print(f"      名冊 {child_id}（學號 {serial}）不存在")
 
         if not args.apply:
             print("\n（dry-run，未寫入。加 --apply 才會執行）")
-            return 1 if conflicts or missing else 0
+            return 1 if skipped_conflicts or missing else 0
 
         # 條件式 UPDATE：讀取現值到寫入之間若有人先填了，這裡就不會蓋掉他
         written = 0
@@ -138,7 +138,7 @@ def main() -> int:
         total = db.query(Student).count()
         with_serial = db.query(Student).filter(Student.student_serial.isnot(None)).count()
         print(f"名冊 {total} 位，其中 {with_serial} 位有學號。")
-        return 1 if conflicts or missing else 0
+        return 1 if skipped_conflicts or missing else 0
     finally:
         db.close()
 

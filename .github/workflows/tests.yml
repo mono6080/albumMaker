@@ -29,7 +29,7 @@ jobs:
           python -m pip install pytest==9.0.3 pytest-xdist==3.6.1 httpx ruff==0.15.12 mypy==1.20.2
 
       - name: Ruff
-        run: python -m ruff check backend tests
+        run: python -m ruff check backend tests scripts
 
       - name: Banned patterns
         run: python scripts/check_banned_patterns.py
@@ -38,7 +38,7 @@ jobs:
         run: python scripts/check_backend_route_boundaries.py
 
       - name: Mypy
-        run: python -m mypy backend tests
+        run: python -m mypy backend tests scripts
 
       # 每個 worker 有自己的資料庫與 uploads（見 tests/conftest.py），平行是安全的。
       # 本機實測 309 秒 → 108 秒。
@@ -99,6 +99,10 @@ jobs:
 
       - name: Frontend unit tests
         run: npm run test:unit
+
+      # e2e supervisor 的 fixed-port 防線；接上 CI 之前它沒有任何 runner 會執行。
+      - name: E2E supervisor tests
+        run: npm run test:supervisor
 
       - name: Render parity
         run: npm run test:render-parity

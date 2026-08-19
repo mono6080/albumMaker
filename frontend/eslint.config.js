@@ -7,7 +7,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores(['dist']),
   {
-    files: ['**/*.{js,jsx}'],
+    files: ['**/*.{js,jsx,mjs}'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -32,7 +32,8 @@ export default defineConfig([
     },
   },
   {
-    files: ['playwright.config.js', 'tests/e2e/**/*.js'],
+    // 測試 harness 與 e2e supervisor 是 Node 程式；它們曾因 files glob 漏掉 .mjs 而完全沒被 lint。
+    files: ['playwright.config.js', 'tests/e2e/**/*.js', '**/*.mjs'],
     languageOptions: {
       globals: globals.node,
     },
