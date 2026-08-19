@@ -2798,7 +2798,7 @@ def _add_template_revision_tracking(connection):
 
 
 def _add_project_completed_at_column(connection):
-    """新增專案「全班完成」時間戳：非 NULL 代表內容鎖定（見 _helpers.assert_project_content_writable）。"""
+    """新增專案「全班完成」時間戳：非 NULL 代表內容鎖定（見 project_access_service.assert_project_content_writable）。"""
     existing_columns = {
         row[1]
         for row in connection.execute(text("PRAGMA table_info(projects)"))

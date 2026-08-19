@@ -20,9 +20,9 @@
 
 - **Multi-stage Dockerfile**：Stage 1 Node 20 編前端 → Stage 2 Python 3.12
   serve 後端與 `frontend/dist`
-- candidate image 同時內建備份、startup schema、一次性 migration/audit 與補渲染
-  腳本；本次正式資料流程與 maintenance 順序見
-  [2026-07 正式切換 runbook](production-cutover-202607.md)
+- candidate image 內建備份、startup schema 與名冊同步腳本。2026-07 那次一次性
+  切換的腳本已退場（原因與該次結果見
+  [2026-07 正式切換紀錄](production-cutover-202607.md)）
 - Stage 1 用 `npm ci --legacy-peer-deps`（vite-plugin-pwa 與 vite 8 有
   peer dep 衝突）
 - 前端 build 會把共用 Noto TC 字型複製到 `/frontend/dist/fonts/`，後端也從同一路徑
@@ -95,9 +95,8 @@ docker compose exec app python /app/scripts/backup_data.py verify \
   /app/backups/album-maker-backup-YYYYMMDDTHHMMSSZ
 ```
 
-app 已停止時不能使用 `exec`；切換或還原期間改用同一 Compose project 的
-`docker compose run --rm --no-deps -T app ...`。一次性正式切換的完整命令只放在
-[2026-07 runbook](production-cutover-202607.md)，避免另建空 named volume。
+app 已停止時不能使用 `exec`；還原期間改用同一 Compose project 的
+`docker compose run --rm --no-deps -T app ...`，避免另建空 named volume。
 
 `backups` 是獨立 named volume；仍應用主機排程把它同步到異機／物件儲存。R2 模式只
 備份 SQLite，manifest 會明確標示未包含 R2 物件；媒體備份契約見

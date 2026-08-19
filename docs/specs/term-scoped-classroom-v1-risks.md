@@ -180,6 +180,12 @@ key 由 `project_id` / `student_id` 整數推導，與表名無關。但改名�
 已處理：`migrate_production_organization_202607.py` 已在檔頭標記退場（只供稽核，不可
 對現行資料庫執行），其測試一併移除——它建的是舊結構，留著只會擋住新結構的 migration。
 
+**收尾（2026-08-18）**：本節列出的五支 `*_202607.py`／`repair_project_203.py` 連同其四支
+測試已全部刪除，內容留在 git 歷史。標記退場擋不住的是 runbook——它仍叫值班人員對活的
+正式庫執行 rollback restore，而那支 preflight 在現行 schema 必拋
+`no such column: project_id`。詳見
+[2026-07 正式切換紀錄](../dev/production-cutover-202607.md)。
+
 ### R5 編班草稿的 source_fingerprint 失效
 
 `compute_organization_source_fingerprint` 把 `classroom_id` 寫進雜湊來源。改成學期

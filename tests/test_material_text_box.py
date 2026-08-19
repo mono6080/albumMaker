@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 
 from database import SessionLocal, TemplatePage
 from services import template_asset_service
-from services.layout_groups import MAX_JAVASCRIPT_SAFE_INTEGER
+from services.layout_group_validation import MAX_JAVASCRIPT_SAFE_INTEGER
 from services.material_text_box import (
     DETECTOR_VERSION,
     analyze_material_text_box,

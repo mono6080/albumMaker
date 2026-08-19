@@ -25,8 +25,7 @@ Claude Code 在此專案的工作指引。本檔只放 **agent 行為規則** �
 | [docs/dev/storage.md](docs/dev/storage.md) | StorageAdapter、key 格式、R2 設定與維運 | 動檔案 I/O / 上傳 |
 | [docs/dev/testing.md](docs/dev/testing.md) | 測試指令、測試防線、修改後驗證流程 | 每次改完程式 |
 | [docs/dev/deployment.md](docs/dev/deployment.md) | 啟動腳本、Docker/nginx、環境變數表 | 部署、環境設定 |
-| [docs/dev/production-cutover-202607.md](docs/dev/production-cutover-202607.md) | 2026-07 正式園所遷移、Project 203 修復、稽核、補渲染與 rollback runbook | 執行或審查本次正式切換 |
-| [docs/dev/production-r2-snapshot-202607.md](docs/dev/production-r2-snapshot-202607.md) | 本次正式 R2 bytes snapshot、drift audit 與 restore runbook | 執行或審查本次 R2 切換防線 |
+| [docs/dev/production-cutover-202607.md](docs/dev/production-cutover-202607.md) | 2026-07 正式切換做了什麼、結果如何、腳本為何退場（已完成紀錄，不是 runbook） | 想知道那次切換動了什麼、還原得了嗎 |
 | [docs/dev/known-issues.md](docs/dev/known-issues.md) | 已知 drift、開放問題、測試缺口 | 遇到「這是 bug 嗎」先查這裡 |
 | [docs/dev/doc-policy.md](docs/dev/doc-policy.md) | 文件怎麼寫、SSOT 規則、拆分規則 | 改任何文件之前 |
 | [docs/specs/illustrator-style-groups-v1.md](docs/specs/illustrator-style-groups-v1.md) | Illustrator 式群組、隔離編輯與素材文字框輔助功能的實作契約 | 實作或審查群組、雙擊隔離、圖片分析文字框 |

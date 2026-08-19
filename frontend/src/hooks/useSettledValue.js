@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export const SWITCH_SETTLE_MS = 300;
+const SWITCH_SETTLE_MS = 300;
 
 export function useSettledValue(value, delayMs = SWITCH_SETTLE_MS) {
   const [settled, setSettled] = useState(value);

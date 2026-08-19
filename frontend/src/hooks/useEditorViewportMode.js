@@ -6,7 +6,7 @@ export const EDITOR_VIEWPORT_MODE = {
   DESKTOP: "desktop",
 };
 
-export const EDITOR_VIEWPORT_QUERY = {
+const EDITOR_VIEWPORT_QUERY = {
   phone: "(max-width: 767.98px)",
   tablet: "(min-width: 768px) and (max-width: 1023.98px)",
   desktop: "(min-width: 1024px)",

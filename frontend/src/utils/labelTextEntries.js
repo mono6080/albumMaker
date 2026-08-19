@@ -1,6 +1,6 @@
 export const TEXT_ALIGN_VALUES = ["left", "center", "right"];
 
-export function normalizeTextAlign(value, fallback = "center") {
+function normalizeTextAlign(value, fallback = "center") {
   return TEXT_ALIGN_VALUES.includes(value) ? value : fallback;
 }
 

@@ -17,7 +17,7 @@ import {
 
 import { useDndPhotoSensors } from "../hooks/useDndPhotoSensors";
 
-export const DEPARTED_COLUMN_ID = "departed";
+const DEPARTED_COLUMN_ID = "departed";
 
 // 拖曳放開後緊接著送出的那個 click 要忽略掉的時間窗
 const CLICK_AFTER_DRAG_MS = 250;

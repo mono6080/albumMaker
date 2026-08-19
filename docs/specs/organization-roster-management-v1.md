@@ -347,6 +347,11 @@ active 班級端點建立，協作權只來自 active 班級老師編制。semes
   名稱快照、`deleted_at` 或 `archive_expires_at`。隔離前的 Project／校／班／封存狀態與各類
   異常數量寫入無 operational FK、每 Project 唯一且禁止 update／delete 的 raw audit row；
   重跑不得重複寫入。semester export 因只讀 class-backed Project，自動排除這些資料。
+> **端點已退場（2026-08-18 盤點確認）**：以下歸班 preview／apply 的請求契約不再有對應路由，
+> 其 Pydantic 模型已無消費者並隨本次清理刪除。相本現在直接在班級內建立
+> （`POST /api/organization/classrooms/{id}/projects`）。本節保留作歷史契約，說明當初
+> 為何要求逐位 explicit decision——同名不得自動選擇這條判準仍然有效。
+
 - 管理員先開歸班 preview，再為 Project 的**每位** ProjectStudent 送出完整 explicit decision。
   decision 集合缺少、重複或多出 student id 都拒絕；`existing` 必須是 established identity，
   `create_new` 永遠建立新 id。姓名只供人員核對；同名 proposal 不得自動選擇、確認或提交

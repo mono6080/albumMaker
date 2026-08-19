@@ -31,23 +31,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 後端程式碼
 COPY backend/ .
-# 正式備份、一次性資料遷移與上線後驗證必須由同一個 candidate image 執行。
+# 正式備份、名冊同步與上線後驗證必須由同一個 candidate image 執行。
 COPY scripts/backup_data.py \
      scripts/data_script_utils.py \
      scripts/run_startup_migrations.py \
-     scripts/migrate_production_organization_202607.py \
-     scripts/repair_project_203.py \
-     scripts/audit_production_migration_202607.py \
-     scripts/snapshot_production_r2_outputs_202607.py \
-     scripts/rerender_production_projects_202607.py \
      scripts/backfill_student_serials.py \
      scripts/backfill_new_student_serials.py \
      scripts/report_websystem_drift.py \
      scripts/sync_websystem_roster.py \
      /app/scripts/
-# correct_roster_names.py 與 fill_missing_album_names.py 不再納入 image：它們讀
-# `roster_children`，而學期範圍班級重構把那張表改名了，在容器裡只會找不到表。
-# 兩支已於 2026-08-01 在正式站執行完畢並標記退場，留在 repo 供稽核即可。
+# 讀已改名資料表的一次性腳本一律不納入 image，在容器裡只會找不到表：
+# - correct_roster_names.py / fill_missing_album_names.py 讀 `roster_children`，
+#   2026-08-01 在正式站執行完畢後標記退場。
+# - 2026-07 切換的五支 `*_202607.py`／`repair_project_203.py` 讀 `academic_term_*`
+#   與 `students.project_id`，已於 2026-08-18 連同測試一併刪除；那次切換的紀錄見
+#   docs/dev/production-cutover-202607.md，內容留在 git 歷史。
 
 # 前端編譯結果（放在 main.py 預期的相對位置）
 COPY --from=frontend-builder /build/dist/ /frontend/dist/

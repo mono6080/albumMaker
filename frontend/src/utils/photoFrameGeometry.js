@@ -11,25 +11,6 @@ export const PHOTO_SLOT_CONTENT_BOX_MODE = "content-box-v1";
 export const PHOTO_CONTENT_MIN_WIDTH = DESIGN_TOKENS.photo_frame.content_min_width;
 export const PHOTO_CONTENT_MIN_HEIGHT = 40;
 
-export function buildPhotoSlotFromFrameRect(slot = {}, frameRect = {}, options = {}) {
-  const dimensionSource = options.dimensionMode ? { dimensionMode: options.dimensionMode } : slot;
-  const frame = {
-    x: toFiniteNumber(frameRect.x, 0),
-    y: toFiniteNumber(frameRect.y, 0),
-    width: Math.max(1, toFiniteNumber(frameRect.width, 1)),
-    height: Math.max(1, toFiniteNumber(frameRect.height, 1)),
-  };
-  if (!isPhotoContentBoxMode(dimensionSource)) return { ...slot, ...frame };
-  const insets = getPhotoFrameInsets(slot);
-  return {
-    ...slot,
-    x: frame.x + insets.left,
-    y: frame.y + insets.top,
-    width: frame.width - insets.left - insets.right,
-    height: frame.height - insets.top - insets.bottom,
-  };
-}
-
 function toFiniteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -97,7 +78,7 @@ export function getPhotoFrameRect(slot = {}, options = {}) {
   };
 }
 
-export function buildPhotoFrameRectFromContent(slot = {}, contentRect = {}) {
+function buildPhotoFrameRectFromContent(slot = {}, contentRect = {}) {
   const insets = getPhotoFrameInsets(slot);
   const contentX = toFiniteNumber(contentRect.x, 0);
   const contentY = toFiniteNumber(contentRect.y, 0);

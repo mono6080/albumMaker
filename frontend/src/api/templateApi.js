@@ -61,7 +61,7 @@ const templateCache = new Map(); // templateId:revision -> { promise, expiresAt 
 const TEMPLATE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** fetchTemplate 的快取版：同模板、同版本 5 分鐘內共用同一次請求 */
-export const fetchTemplateCached = (templateId, templateRevision = null) => {
+const fetchTemplateCached = (templateId, templateRevision = null) => {
   const cacheKey = `${templateId}:${templateRevision ?? "unversioned"}`;
   const cached = templateCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;

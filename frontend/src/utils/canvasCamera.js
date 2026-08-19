@@ -3,9 +3,9 @@ import {
   CANVAS_DISPLAY_WIDTH,
 } from "./renderLayoutModel.js";
 
-export const CANVAS_CAMERA_GUTTER = 12;
-export const CANVAS_CAMERA_MAX_ZOOM = 3;
-export const CANVAS_CAMERA_PREFERRED_MIN_ZOOM = 0.5;
+const CANVAS_CAMERA_GUTTER = 12;
+const CANVAS_CAMERA_MAX_ZOOM = 3;
+const CANVAS_CAMERA_PREFERRED_MIN_ZOOM = 0.5;
 
 function clampValue(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));

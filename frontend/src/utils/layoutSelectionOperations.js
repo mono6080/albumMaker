@@ -136,12 +136,3 @@ export function canMatchSelectionSize(layout, refs) {
       && Math.abs(item.width / item.height - firstRatio) < 0.01;
   });
 }
-
-export function getSharedPropertyValue(items, propertyKey) {
-  if (!items.length) return { value: undefined, isMixed: false };
-  const value = items[0]?.[propertyKey];
-  return {
-    value,
-    isMixed: items.slice(1).some(item => item?.[propertyKey] !== value),
-  };
-}

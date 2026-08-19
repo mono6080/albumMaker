@@ -120,9 +120,13 @@ python scripts/migrate_uploads_to_r2.py --uploads-dir .tmp/template_transfer
 `backup_data.py` 在 R2 模式只備份 SQLite；memory/local cache 與同 bucket 的一般前綴都
 不是獨立備份。大量刪除或覆寫前，必須停掉所有 writer，把受影響範圍的原始 bytes 串流到
 repo 外的私人持久目錄，逐物件保存 SHA-256／metadata 並重驗；另保存全 bucket inventory
-摘要，完成後只允許已審範圍變動。這個契約由
-`tests/test_production_r2_snapshot_script.py` 釘住；2026-07 的完整命令見
-[正式 R2 快照 runbook](production-r2-snapshot-202607.md)。
+摘要，完成後只允許已審範圍變動。
+
+這是**維運慣例，目前沒有測試釘住**：原本釘它的
+`tests/test_production_r2_snapshot_script.py` 與對應的一次性腳本，隨 2026-07 切換家族
+於 2026-08-18 一併退場（見
+[2026-07 正式切換紀錄](production-cutover-202607.md)）。下次要對 R2 做大量改寫時，
+須重新備妥 snapshot／drift 工具，不能假設 repo 裡還有現成的。
 
 Cloudflare R2 的 active bucket lock 會禁止刪除／覆寫，不是版本快照；不得為了 rollback
 鎖住正式工作前綴，否則相本重算與失敗重試都會被阻擋。若使用 lock，只能套在不再寫入的

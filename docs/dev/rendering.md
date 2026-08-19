@@ -162,8 +162,8 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   `utils/layoutGroupContractGraph.js`、`layoutGroupQueries.js`、`layoutGroupGeometry.js`、
   `layoutGroupCommands.js`，`layoutGroups.js` 只保相容 exports；TemplateEditor 對同一 immutable
   page layout 以 `editorLayoutModel.js` 單次建圖。後端驗證與正式 traversal 分別在
-  `services/layout_group_validation.py`、`services/layout_group_traversal.py`，`layout_groups.py`
-  只保相容 exports；若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
+  `services/layout_group_validation.py`、`services/layout_group_traversal.py`；
+  若讀到繞過 validator 的 malformed persisted groups，整頁退回 legacy flat traversal，確保每個
   元素仍只畫一次。前端 export/model 契約由 `frontend/tests/unit/groups-contract.test.mjs` 釘住。
   圖層可見性契約見
   [layout-data-model.md 的 layout_json](layout-data-model.md#layout_json-格式)。

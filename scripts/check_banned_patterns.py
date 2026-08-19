@@ -35,8 +35,8 @@ RULES = [
         "補頁樣板（空頁 schema）只能住 ensure_page_entry()，散開會回到五份複本的狀態",
     ),
     (
-        re.compile(r'\[:-4\] \+ "_screen\.pdf"'),
-        {"backend/services/project_service.py"},
+        re.compile(r'_screen\{|\[:-4\] \+ "_screen'),
+        {"backend/services/output_keys.py"},
         "screen PDF key 推導只能住 student_pdf_key_for_mode()",
     ),
     (
