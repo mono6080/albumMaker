@@ -6,8 +6,6 @@ import toast from "react-hot-toast";
 import {
   AlertCircle,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   ExternalLink,
   FileSpreadsheet,
@@ -28,6 +26,7 @@ import SemesterReportFilters from "../components/SemesterReportFilters";
 import {
   Badge,
   Button,
+  Pagination,
   PageHeader,
   SegmentedControl,
   Surface,
@@ -270,23 +269,6 @@ function ClassroomIdentity({ classroom }) {
         {teachers.length === 0 && <Badge tone="warning">尚未設定老師編制</Badge>}
       </div>
     </div>
-  );
-}
-
-function Pagination({ page, pageCount, onChange }) {
-  if (pageCount <= 1) return null;
-  return (
-    <nav aria-label="班級分頁" className="mt-4 flex items-center justify-center gap-3">
-      <Button size="sm" variant="neutral" disabled={page === 1} onClick={() => onChange(page - 1)}>
-        <ChevronLeft aria-hidden="true" className="h-4 w-4" />
-        上一頁
-      </Button>
-      <span className="text-sm tabular-nums text-gray-500">第 {page}／{pageCount} 頁</span>
-      <Button size="sm" variant="neutral" disabled={page === pageCount} onClick={() => onChange(page + 1)}>
-        下一頁
-        <ChevronRight aria-hidden="true" className="h-4 w-4" />
-      </Button>
-    </nav>
   );
 }
 
@@ -736,7 +718,7 @@ export default function TeacherOverview() {
             })}
           </div>
 
-          <Pagination page={effectivePage} pageCount={pageCount} onChange={setCurrentPage} />
+          <Pagination page={effectivePage} pageCount={pageCount} onChange={setCurrentPage} className="mt-4" />
         </>
       )}
     </div>

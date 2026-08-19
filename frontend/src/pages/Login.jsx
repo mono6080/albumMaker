@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { ROLE_GROUPS } from "../utils/userRoles";
+import { getApiErrorMessage } from "../utils/apiError";
 
 export default function Login() {
   const { login } = useAuth();
@@ -27,8 +28,7 @@ export default function Login() {
         navigate("/projects");
       }
     } catch (error) {
-      const detail = error.response?.data?.detail;
-      setErrorMessage(detail || "登入失敗，請確認帳號與密碼");
+      setErrorMessage(getApiErrorMessage(error, "登入失敗，請確認帳號與密碼"));
     } finally {
       setIsSubmitting(false);
     }

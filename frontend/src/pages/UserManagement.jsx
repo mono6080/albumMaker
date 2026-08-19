@@ -9,6 +9,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import UserExcelImportForm from "../components/UserExcelImportForm";
 import UserList from "../components/UserList";
 import { ROLE_OPTIONS, USER_ROLES } from "../utils/userRoles";
+import { getApiErrorMessage } from "../utils/apiError";
 import {
   fetchAllUsers,
   createUser,
@@ -16,15 +17,6 @@ import {
   updateUser,
   deleteUser,
 } from "../api/authApi";
-
-function getErrorMessage(error, fallback) {
-  const detail = error.response?.data?.detail;
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail) && detail.length > 0) {
-    return detail.map(item => item.msg || String(item)).join("；");
-  }
-  return fallback;
-}
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -75,7 +67,7 @@ export default function UserManagement() {
       setNewRole(USER_ROLES.TEACHER);
       await loadUsers();
     } catch (error) {
-      toast.error(getErrorMessage(error, "建立失敗"));
+      toast.error(getApiErrorMessage(error, "建立失敗"));
     } finally {
       setIsCreating(false);
     }
@@ -96,7 +88,7 @@ export default function UserManagement() {
       if (importFileRef.current) importFileRef.current.value = "";
       await loadUsers();
     } catch (error) {
-      toast.error(getErrorMessage(error, "匯入失敗"));
+      toast.error(getApiErrorMessage(error, "匯入失敗"));
     } finally {
       setIsImporting(false);
     }
@@ -108,7 +100,7 @@ export default function UserManagement() {
       toast.success("角色已更新");
       await loadUsers();
     } catch (error) {
-      toast.error(getErrorMessage(error, "更新失敗"));
+      toast.error(getApiErrorMessage(error, "更新失敗"));
     }
   };
 
@@ -120,7 +112,7 @@ export default function UserManagement() {
       toast.success("密碼已重設");
       setResetPasswords((prev) => ({ ...prev, [userId]: "" }));
     } catch (error) {
-      toast.error(getErrorMessage(error, "重設失敗"));
+      toast.error(getApiErrorMessage(error, "重設失敗"));
     }
   };
 
@@ -141,7 +133,7 @@ export default function UserManagement() {
       setEditingField(null);
       await loadUsers();
     } catch (error) {
-      toast.error(getErrorMessage(error, "更新失敗"));
+      toast.error(getApiErrorMessage(error, "更新失敗"));
     }
   };
 
@@ -159,7 +151,7 @@ export default function UserManagement() {
           toast.success("使用者已刪除");
           await loadUsers();
         } catch (error) {
-          toast.error(getErrorMessage(error, "刪除失敗"));
+          toast.error(getApiErrorMessage(error, "刪除失敗"));
         }
       },
     });

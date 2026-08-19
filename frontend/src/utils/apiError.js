@@ -21,13 +21,43 @@ function getCompletionLockMessage(detail) {
   }
 }
 
-/** 從 FastAPI detail（字串或結構化物件）取得可顯示訊息。 */
+// FastAPI 的 RequestValidationError（422）回的 detail 是陣列
+// `[{ type, loc, msg, input }]`，不是字串也不是帶 message 的物件。
+// 沒有這一支的話，「密碼太短」「名稱超過 100 字」這類後端已經講清楚的錯誤，
+// 到畫面上會全部變成同一句 fallback。
+function getValidationMessage(detail) {
+  if (!Array.isArray(detail) || detail.length === 0) return null;
+  const messages = detail
+    .map(item => (typeof item?.msg === "string" ? item.msg : String(item)))
+    .filter(Boolean);
+  return messages.length ? messages.join("；") : null;
+}
+
+/**
+ * 從 FastAPI detail 取得可顯示訊息。
+ *
+ * 後端實際會回四種形狀，這裡全部要接住——任何一種漏掉，使用者就只會看到 fallback，
+ * 而後端其實已經說明了原因：
+ *   1. 字串           `detail: "帳號或密碼錯誤"`
+ *   2. 完成鎖代碼     `detail: { code, ...欄位 }` → 組成專用句子
+ *   3. 結構化訊息     `detail: { message, ... }`
+ *   4. 驗證錯誤陣列   `detail: [{ msg, loc, ... }]`（FastAPI 內建 422）
+ *
+ * **這是唯一的解讀器。** 各頁不要自己寫弱化版：2026-08 盤點時有 8 處各寫一套，
+ * 每一套漏的形狀都不一樣（見 tests/unit/api-error.test.mjs）。
+ */
 export function getApiErrorMessage(error, fallback = "操作失敗，請稍後再試") {
   const detail = error?.response?.data?.detail;
   if (typeof detail === "string" && detail) return detail;
   const completionLockMessage = getCompletionLockMessage(detail);
   if (completionLockMessage) return completionLockMessage;
   if (typeof detail?.message === "string" && detail.message) return detail.message;
+  const validationMessage = getValidationMessage(detail);
+  if (validationMessage) return validationMessage;
+  // slowapi 的限流回的是 `{"error": "Rate limit exceeded: 10 per 1 minute"}`，
+  // 沒有 detail 鍵。不特別處理的話，登入連打十次會顯示呼叫端的 fallback
+  // 「登入失敗，請確認帳號與密碼」——那是錯的指示，使用者會一直重試一直失敗。
+  if (error?.response?.status === 429) return "操作過於頻繁，請稍後再試";
   return fallback;
 }
 

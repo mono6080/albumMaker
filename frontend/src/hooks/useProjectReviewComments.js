@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 import { apiClient } from "../api/authApi";
+import { getApiErrorMessage } from "../utils/apiError";
 
 export default function useProjectReviewComments(projectId, setConfirmModal) {
   const [comments, setComments] = useState([]);
@@ -32,7 +33,7 @@ export default function useProjectReviewComments(projectId, setConfirmModal) {
       setNewCommentText("");
       await loadComments();
     } catch (error) {
-      toast.error(error.response?.data?.detail || "留言失敗");
+      toast.error(getApiErrorMessage(error, "留言失敗"));
     } finally {
       setIsSubmittingComment(false);
     }
@@ -48,7 +49,7 @@ export default function useProjectReviewComments(projectId, setConfirmModal) {
           await apiClient.delete(`/projects/${projectId}/comments/${commentId}`);
           await loadComments();
         } catch (error) {
-          toast.error(error.response?.data?.detail || "刪除失敗");
+          toast.error(getApiErrorMessage(error, "刪除失敗"));
         }
       },
     });

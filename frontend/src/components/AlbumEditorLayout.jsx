@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
-import { Camera, ChevronRight, CircleHelp, Eye, Type } from "lucide-react";
+import { Camera, ChevronRight, Eye, Type } from "lucide-react";
 
 import AlbumPageNav from "./AlbumPageNav";
 import PanelSwitcher from "./PanelSwitcher";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "./ResponsiveActionGroup";
+import GuideButton from "./GuideButton";
 import ScopeSwitcher from "./ScopeSwitcher";
 import { Badge, Button, PageHeader } from "./ui";
 
@@ -64,17 +65,7 @@ export default function AlbumEditorLayout({
               <span className="hidden sm:inline">班級總覽</span>
               <span className="sm:hidden">總覽</span>
             </Button>
-            <Button
-              type="button"
-              onClick={onStartGuide}
-              variant="secondary"
-              size="touch"
-              className={responsiveActionItemClass}
-            >
-              <CircleHelp className="w-4 h-4" />
-              <span className="hidden sm:inline">製作教學</span>
-              <span className="sm:hidden">教學</span>
-            </Button>
+            <GuideButton onStart={onStartGuide} />
           </ResponsiveActionGroup>
         )}
       />

@@ -53,6 +53,7 @@ from services.organization_transaction import (
     organization_write_transaction,
 )
 from services.roster_identity_service import normalize_child_name
+from services.student_identity_anomaly import count_assigned_identity_anomalies
 from services.student_album_name_policy import (
     assign_automatic_album_names,
     suggest_automatic_album_name,
@@ -70,7 +71,6 @@ from template_periods import VALID_TEMPLATE_DEPARTMENTS
 
 ORGANIZATION_NAME_MAX_LENGTH = 100
 SUPERVISOR_SCOPE_ORDER = {None: 0, "infant": 1, "academy": 2}
-LEGACY_PROJECT_CLASSROOM_MIGRATION_TABLE = "legacy_project_classroom_migrations"
 LEGACY_STUDENT_IDENTITY_RESOLUTION_TABLE = "legacy_student_identity_resolutions"
 
 
@@ -364,35 +364,7 @@ def _organization_migration_status(db: Session) -> dict:
     archived_identity_resolution_count = db.execute(text(
         f"SELECT COUNT(*) FROM {LEGACY_STUDENT_IDENTITY_RESOLUTION_TABLE}"
     )).scalar_one()
-    assigned_identity_anomaly_count = db.execute(text("""
-        SELECT COUNT(DISTINCT anomaly.student_id)
-        FROM (
-            SELECT student.id AS student_id
-            FROM project_students AS student
-            JOIN projects AS project ON project.id = student.project_id
-            LEFT JOIN students AS child
-                ON child.id = student.roster_child_id
-            WHERE project.classroom_id IS NOT NULL
-              AND project.deleted_at IS NULL
-              AND (student.roster_child_id IS NULL OR child.id IS NULL)
-
-            UNION ALL
-
-            SELECT student.id AS student_id
-            FROM project_students AS student
-            JOIN projects AS project ON project.id = student.project_id
-            WHERE project.classroom_id IS NOT NULL
-              AND project.deleted_at IS NULL
-              AND student.roster_child_id IS NOT NULL
-              AND EXISTS (
-                  SELECT 1
-                  FROM project_students AS sibling
-                  WHERE sibling.project_id = student.project_id
-                    AND sibling.id != student.id
-                    AND sibling.roster_child_id = student.roster_child_id
-              )
-        ) AS anomaly
-    """)).scalar_one()
+    assigned_identity_anomaly_count = count_assigned_identity_anomalies(db)
     return {
         "unassigned_project_count": unassigned_project_count,
         "pending_identity_student_count": pending_identity_student_count,
@@ -2398,6 +2370,8 @@ def create_classroom_project(
                     status_code=409,
                     detail={
                         "code": "duplicate_active_child_name",
+                        # 與 batch_add_classroom_members 同一句；names 保留給呼叫端細列
+                        "message": "同班目前名單不可有兩位同名學生",
                         "names": duplicate_names,
                     },
                 )

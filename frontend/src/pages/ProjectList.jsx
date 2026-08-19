@@ -17,7 +17,6 @@ import {
   ArchiveRestore,
   Building2,
   ChevronRight,
-  CircleHelp,
   FolderOpen,
   Plus,
   Search,
@@ -32,6 +31,8 @@ import ProjectCard, { ArchivedProjectRow } from "../components/ProjectCard";
 import ResponsiveActionGroup, {
   responsiveActionItemClass,
 } from "../components/ResponsiveActionGroup";
+import GuideButton from "../components/GuideButton";
+import { DEPARTMENTS } from "../constants/departments";
 import {
   Badge,
   Button,
@@ -43,6 +44,7 @@ import {
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { startProductGuide } from "../utils/productGuide";
 import { prefetchProjectWorkspaceRoutes } from "../routeLoaders";
+import { getApiErrorMessage } from "../utils/apiError";
 import {
   findCurrentTeacherAssignment,
   getProjectsOutsideClassrooms,
@@ -99,11 +101,6 @@ const PROJECT_LIST_GUIDE_STEPS = [
     side: "bottom",
     align: "end",
   },
-];
-
-const FALLBACK_DEPARTMENTS = [
-  { code: "infant", name: "嬰幼部" },
-  { code: "academy", name: "學院部" },
 ];
 
 const ALL_FILTER_VALUE = "all";
@@ -181,7 +178,7 @@ export default function ProjectList() {
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [listLoadError, setListLoadError] = useState(null);
   const [templates, setTemplates] = useState([]);
-  const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
+  const [departments, setDepartments] = useState(DEPARTMENTS);
   const [showArchive, setShowArchive] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
@@ -365,8 +362,8 @@ export default function ProjectList() {
       .then(r => setTemplates(r.data))
       .catch(() => toast.error("載入模板清單失敗"));
     fetchTemplateDepartments()
-      .then(r => setDepartments(r.data.length ? r.data : FALLBACK_DEPARTMENTS))
-      .catch(() => setDepartments(FALLBACK_DEPARTMENTS));
+      .then(r => setDepartments(r.data.length ? r.data : DEPARTMENTS))
+      .catch(() => setDepartments(DEPARTMENTS));
     if (isTeacher || isSupervisor) {
       fetchMyClassrooms()
         .then(response => setMyClassrooms(response.data.classrooms ?? []))
@@ -411,8 +408,7 @@ export default function ProjectList() {
       ]);
       setMyClassrooms(classroomResponse.data.classrooms ?? []);
     } catch (error) {
-      const detail = error?.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : detail?.message ?? "建立班級相本失敗");
+      toast.error(getApiErrorMessage(error, "建立班級相本失敗"));
     } finally {
       setIsCreatingClassProject(false);
     }
@@ -854,17 +850,7 @@ export default function ProjectList() {
         subtitle={teacherAssignedClassrooms.length > 0 ? "你的班級就是相本工作入口；各期相本直接依園所編制歸在班級下。" : "依班級與負責人查看、製作及審閱各期相本。"}
         actions={(
         <ResponsiveActionGroup mobileColumns={2}>
-          <Button
-            type="button"
-            onClick={startGuide}
-            variant="secondary"
-            size="touch"
-            className={responsiveActionItemClass}
-          >
-            <CircleHelp className="w-4 h-4" />
-            <span className="hidden sm:inline">製作教學</span>
-            <span className="sm:hidden">教學</span>
-          </Button>
+          <GuideButton onStart={startGuide} />
           {/* 零專案且無封存時是噪音，先藏 */}
           {showArchiveButton && (
           <Button

@@ -6,8 +6,6 @@ import toast from "react-hot-toast";
 import {
   AlertCircle,
   Archive,
-  ChevronLeft,
-  ChevronRight,
   Download,
   Loader2,
   RefreshCw,
@@ -29,7 +27,7 @@ import SemesterSummaryBar from "../components/SemesterSummaryBar";
 import SemesterRenderErrorsBanner from "../components/SemesterRenderErrorsBanner";
 import SemesterUnlinkedSection from "../components/SemesterUnlinkedSection";
 import SemesterChildrenTable from "../components/SemesterChildrenTable";
-import { Badge, Button, PageHeader, Surface } from "../components/ui";
+import { Badge, Button, Pagination, PageHeader, Surface } from "../components/ui";
 
 const CLASSROOM_GROUPS_PER_PAGE = 8;
 // 版式套用到整包 PDF：每期檔與全期合併檔一致，單期孩子同樣適用
@@ -106,23 +104,6 @@ function computeExportStats(classroomGroups, identityAnomalyCount) {
     departedCount,
     identityAnomalyCount,
   };
-}
-
-function Pagination({ page, pageCount, onChange }) {
-  if (pageCount <= 1) return null;
-  return (
-    <nav aria-label="班級分頁" className="flex shrink-0 items-center justify-center gap-3 py-2">
-      <Button size="sm" variant="neutral" disabled={page === 1} onClick={() => onChange(page - 1)}>
-        <ChevronLeft aria-hidden="true" className="h-4 w-4" />
-        上一頁
-      </Button>
-      <span className="text-sm tabular-nums text-gray-500">第 {page}／{pageCount} 頁</span>
-      <Button size="sm" variant="neutral" disabled={page === pageCount} onClick={() => onChange(page + 1)}>
-        下一頁
-        <ChevronRight aria-hidden="true" className="h-4 w-4" />
-      </Button>
-    </nav>
-  );
 }
 
 function waitForPollInterval(signal) {
@@ -754,7 +735,7 @@ export default function SemesterExport() {
             onRenderMissing={handleRenderMissing}
           />
 
-          <Pagination page={effectivePage} pageCount={pageCount} onChange={setCurrentPage} />
+          <Pagination page={effectivePage} pageCount={pageCount} onChange={setCurrentPage} className="shrink-0 py-2" />
 
           {isAdmin && allPreviewChildIds.length > 0 && (
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-gray-100 bg-white py-2">

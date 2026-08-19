@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { ArrowRightLeft, ChevronRight, CircleHelp, Pencil, Users } from "lucide-react";
+import { ArrowRightLeft, ChevronRight, Pencil, Users } from "lucide-react";
 
 import {
   completeProject,
@@ -19,6 +19,7 @@ import { fetchProjectTemplatePair } from "../api/templateApi";
 import ConfirmModal from "../components/ConfirmModal";
 import StudentTransferModal from "../components/StudentTransferModal";
 import ResponsiveActionGroup, { responsiveActionItemClass } from "../components/ResponsiveActionGroup";
+import GuideButton from "../components/GuideButton";
 import ReviewCommentsPanel from "../components/ReviewCommentsPanel";
 import RosterModal from "../components/RosterModal";
 import ProjectReviewProgress from "../components/review/ProjectReviewProgress";
@@ -360,17 +361,7 @@ export default function ProjectReview() {
                 <span className="sm:hidden">搬移</span>
               </Button>
             )}
-            <Button
-              type="button"
-              onClick={handleStartGuide}
-              variant="secondary"
-              size="touch"
-              className={responsiveActionItemClass}
-            >
-              <CircleHelp className="w-4 h-4" />
-              <span className="hidden sm:inline">製作教學</span>
-              <span className="sm:hidden">教學</span>
-            </Button>
+            <GuideButton onStart={handleStartGuide} />
           </ResponsiveActionGroup>
         )}
       />

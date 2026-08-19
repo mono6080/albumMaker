@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 from database import Project, ProjectStudent
 from services.request_limiter import album_render_limiter
 from services.semester_export_service import (
-    classify_project_student_identity_anomalies,
     load_export_projects,
     load_output_keys_by_project,
     student_pdf_key,
+)
+from services.student_identity_anomaly import (
+    classify_project_student_identity_anomalies,
 )
 from services.storage_factory import get_storage
 from services.student_render_service import render_and_save_student_album

@@ -30,11 +30,8 @@ import {
 } from "../components/ui";
 import { useInlineEdit } from "../hooks/useInlineEdit";
 import { statusTone } from "../utils/periodStatus";
-
-const FALLBACK_DEPARTMENTS = [
-  { code: "infant", name: "嬰幼部" },
-  { code: "academy", name: "學院部" },
-];
+import { DEPARTMENTS } from "../constants/departments";
+import { getApiErrorMessage } from "../utils/apiError";
 
 const PERIOD_STATUSES = [
   { value: "draft", label: "草稿" },
@@ -43,7 +40,7 @@ const PERIOD_STATUSES = [
 ];
 
 export default function TemplateList() {
-  const [departments, setDepartments] = useState(FALLBACK_DEPARTMENTS);
+  const [departments, setDepartments] = useState(DEPARTMENTS);
   const [periods, setPeriods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [semesters, setSemesters] = useState([]);
@@ -66,7 +63,7 @@ export default function TemplateList() {
       fetchAllTemplates(),
       fetchSemesters(),
     ]);
-    setDepartments(departmentResponse.data.length ? departmentResponse.data : FALLBACK_DEPARTMENTS);
+    setDepartments(departmentResponse.data.length ? departmentResponse.data : DEPARTMENTS);
     setPeriods(periodResponse.data);
     setTemplates(templateResponse.data);
     setSemesters(termResponse.data);
@@ -149,8 +146,7 @@ export default function TemplateList() {
       setPeriodForm(form => ({ ...form, name: "" }));
       await load();
     } catch (error) {
-      const detail = error.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "建立期別失敗");
+      toast.error(getApiErrorMessage(error, "建立期別失敗"));
     } finally {
       setCreatingPeriod(false);
     }

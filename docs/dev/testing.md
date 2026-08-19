@@ -10,15 +10,16 @@
 ```bash
 # 後端（repo 根目錄）
 python -m pytest -q
-python -m ruff check backend tests
-python -m mypy backend tests
+python -m ruff check backend tests scripts
+python -m mypy backend tests scripts
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
-python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；98 routes、零債務）
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；103 routes、零債務）
 
 # 前端
 cd frontend
 npm run lint
 npm run test:unit            # 自製 node runner 單元測試
+npm run test:supervisor      # e2e supervisor 的 fixed-port 防線（node:test）
 npm run test:render-parity   # 前後端渲染一致性（見 rendering.md）
 npm run test:e2e             # 乾淨 Playwright run（自起 e2e 後端與 Vite）
 npm run build                # production bundle（改前端後必跑）
@@ -58,8 +59,11 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     effective traversal、v1/v2 link 相容、CSV formula safety、review gate、唯一備份與多模板 partial manifest
   - `test_data_script_manifest_inspection.py`：manifest fsync/atomic replace 與 crash-gap
     revision/layout-hash reconciliation
-  - `test_production_r2_snapshot_script.py`：正式 R2 scope 推導、私有 bytes/blob SHA-256、
-    全 bucket 範圍外 drift gate、空 prefix 與 partial restore 的可重入契約
+  - `test_websystem_drift_report.py`：行政系統同步的**分類**——姓名區分後綴不算改名、
+    在籍看日期區間而非 offDate 是否 NULL、auto/review 白名單、爆炸半徑、無學號孩子不被摺疊
+  - `test_websystem_roster_apply.py`：同步的**寫入**——改名不動在班區間、新生先建檔再入班、
+    已知學號不重建名冊項、離園寫 end_reason、有製作中相本不離園、對不到班級零寫入；
+    另釘住「學號原樣寫入」這個與 `student_input_policy` 不一致的現況
   - `test_photo_upload_identity.py`：單張／批次照片在鎖外解碼期間遇外部 migration 替換
     學生快照或 SQLite ID 重用時，鎖內身份 CAS 回 409，且替代學生與同批其他學生皆零寫入
   - `test_backend_failure_contracts.py` / `test_user_transaction_contracts.py`：storage／DB 失敗與
@@ -204,9 +208,9 @@ python scripts/suggest_student_album_names.py --scope active
 
 ### 2026-07 正式園所與 Project 203 一次性遷移
 
-完整命令、人工 gate、rollback 與證據留存見
-[2026-07 正式切換 runbook](production-cutover-202607.md)。舊標題保留為連結，
-避免值班人員誤用本檔過時的片段命令。
+該次切換的腳本與測試已於 2026-08-18 退場（對現行 schema 已不可執行）。
+做了什麼、結果如何、為什麼退場見
+[2026-07 正式切換紀錄](production-cutover-202607.md)。
 
 相本稱呼腳本只對**未歸班 legacy Project** 中 `ProjectStudent.album_name IS NULL` 的學生產生候選；
 已歸班相本改由園所設定的 `Student.album_name` 管理，報告產生會排除，apply 前若相本

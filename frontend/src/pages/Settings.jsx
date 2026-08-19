@@ -4,6 +4,7 @@ import { RotateCcw, Save, Type } from "lucide-react";
 
 import { updateMySettings } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
+import { getApiErrorMessage } from "../utils/apiError";
 import {
   DEFAULT_UI_FONT_SCALE,
   UI_FONT_SCALE_MAX,
@@ -48,8 +49,7 @@ export default function Settings() {
       updateCurrentUser(response.data);
       toast.success("設定已儲存");
     } catch (error) {
-      const detail = error.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "設定儲存失敗");
+      toast.error(getApiErrorMessage(error, "設定儲存失敗"));
     } finally {
       setIsSaving(false);
     }

@@ -1,3 +1,11 @@
+"""模板期別的部門常數與狀態邏輯。
+
+`TEMPLATE_DEPARTMENTS` 是部門代碼與顯示名稱的正本。跨語言鏡像：
+`frontend/src/constants/departments.js`（前端另可經 `/api/templates/departments`
+取得同一份清單）；兩邊一致由 `tests/test_contract_pins.py` 的
+`test_department_labels_mirror_backend_source` 釘住。
+"""
+
 TEMPLATE_DEPARTMENTS = (
     {"code": "infant", "name": "嬰幼部"},
     {"code": "academy", "name": "學院部"},

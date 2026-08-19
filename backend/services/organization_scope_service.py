@@ -16,6 +16,7 @@ from database import (
     ClassroomTeacher,
     OrganizationSupervisorAssignment,
     Project,
+    SemesterPeriod,
     User,
 )
 
@@ -392,6 +393,34 @@ def apply_term_classroom_report_scope(
         Classroom.department,
         scope,
     ))
+
+
+def serialize_reporting_term(term: Semester) -> dict:
+    """學期彙整與老師進度共用的學期 payload；兩份報表的欄位必須一致。"""
+    return {
+        "id": term.id,
+        "label": term.label,
+        "status": term.status,
+        "is_current": term.status in CURRENT_SEMESTER_STATUSES,
+        "starts_on": term.starts_on.isoformat() if term.starts_on else None,
+        "ends_on": term.ends_on.isoformat() if term.ends_on else None,
+    }
+
+
+def serialize_reporting_period(semester_period: SemesterPeriod) -> dict:
+    """報表用期別 payload。
+
+    這裡的 `id` 是 `template_period_id`（報表以模板期別為欄位主體），
+    與園所設定的期別 payload 用 `SemesterPeriod.id` 當 `id` 不同，不可互相取代。
+    """
+    return {
+        "id": semester_period.template_period_id,
+        "semester_period_id": semester_period.id,
+        "template_period_id": semester_period.template_period_id,
+        "name": semester_period.period_name_snapshot,
+        "department": semester_period.department,
+        "position": semester_period.position,
+    }
 
 
 def load_reporting_semester_or_404(

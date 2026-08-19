@@ -31,6 +31,7 @@ FRONTEND_PROPERTY_PANEL_PATH = REPO_ROOT / "frontend" / "src" / "components" / "
 FRONTEND_TEXT_FIELD_PATH = REPO_ROOT / "frontend" / "src" / "components" / "TextLabelFieldRow.jsx"
 FRONTEND_PHOTO_EDIT_PATH = REPO_ROOT / "frontend" / "src" / "components" / "PhotoEditModal.jsx"
 FRONTEND_TEXT_VARIABLES_PATH = REPO_ROOT / "frontend" / "src" / "utils" / "textVariables.js"
+FRONTEND_DEPARTMENTS_PATH = REPO_ROOT / "frontend" / "src" / "constants" / "departments.js"
 TEXT_VARIABLE_FIXTURE_PATH = (
     REPO_ROOT / "tests" / "fixtures" / "template_text_variable_parity.json"
 )
@@ -51,6 +52,32 @@ def test_design_tokens_mirror_matches_backend_source():
     assert frontend_tokens == backend_tokens, (
         "design tokens 兩端不一致——正本是 backend/services/design_tokens.json，"
         "改了要同步 frontend/src/constants/designTokens.js"
+    )
+
+
+def test_department_labels_mirror_backend_source():
+    """前端 departments.js 必須與後端正本 TEMPLATE_DEPARTMENTS 完全一致（含順序）。
+
+    部門名稱原本在前端散落 9 處、5 種形狀（選單、篩選列、主管標題、兩處三元式、
+    兩頁的 API fallback），改一處忘另外八處是遲早的事。收斂成單一鏡像後由這條釘住。
+    """
+    from template_periods import TEMPLATE_DEPARTMENTS
+
+    source = FRONTEND_DEPARTMENTS_PATH.read_text(encoding="utf-8")
+    array_match = re.search(r"DEPARTMENTS = \[(.*?)\];", source, re.DOTALL)
+    assert array_match, (
+        "departments.js 找不到 DEPARTMENTS 陣列（格式改了？請同步更新這裡的解析）"
+    )
+    frontend_departments = [
+        {"code": code, "name": name}
+        for code, name in re.findall(
+            r'\{\s*code:\s*"([^"]+)",\s*name:\s*"([^"]+)"\s*\}', array_match.group(1)
+        )
+    ]
+    assert frontend_departments, "DEPARTMENTS 解析結果是空的，正則與檔案格式已不符"
+    assert frontend_departments == [dict(row) for row in TEMPLATE_DEPARTMENTS], (
+        "部門清單兩端不一致——正本是 backend/template_periods.py 的 TEMPLATE_DEPARTMENTS，"
+        "改了要同步 frontend/src/constants/departments.js"
     )
 
 
