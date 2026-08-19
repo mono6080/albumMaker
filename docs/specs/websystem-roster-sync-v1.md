@@ -195,6 +195,8 @@ v1 以「班級異動一律進待審佇列」迴避；要根治需要在 `classr
 
 `scripts/sync_websystem_roster.py`：在 Slice 1 的比對之上加寫入，預設 dry-run。
 自動套用新生建檔與入班、補在班區間、姓名更正、離園；其餘只列出、不動。
+寫入端行為由 `tests/test_websystem_roster_apply.py` 釘住（2026-08-18 補；在那之前
+`apply_changes` 一行測試都沒有——分類測得很細，執行寫入卻整段裸奔）。
 
 在正式資料副本上以「基準日 2026-03-01」實測（該基準日對現況刻意製造出差異）：
 
@@ -243,13 +245,17 @@ v1 以「班級異動一律進待審佇列」迴避；要根治需要在 `classr
 
 ## Risks And Test Plan
 
-| 風險 | 緩解 | 測試 |
+| 風險 | 緩解 | 測試現況 |
 |------|------|------|
-| 上游快照損壞導致名冊被洗掉 | 爆炸半徑上限 | 給一份「大量對不上」的快照，驗整批中止且無寫入 |
-| 對應鍵碰撞（同名不同人） | 只認學號 | 用行政系統真實的同名資料（郭芯妍 ×3）驗不會混 |
-| 同步碰到已結束學期 | freeze trigger | 驗寫入被 trigger 擋下並回報 |
-| 老師被移除導致製作中相本失去編輯權 | 進待審佇列 | 驗有製作中相本時不自動結束編制 |
-| 重複執行造成重複建檔 | 以學號查既有名冊項 | 連跑兩次，第二次應為全 0 |
+| 上游快照損壞導致名冊被洗掉 | 爆炸半徑上限 | ✅ `test_websystem_drift_report.py::test_blast_radius_blocks_a_run_that_would_rewrite_the_roster` |
+| 對應鍵碰撞（同名不同人） | 只認學號 | ✅ drift 側的後綴／改名兩條，加寫入側 `test_disambiguation_suffix_is_stripped_before_it_reaches_the_roster` |
+| 老師被移除導致製作中相本失去編輯權 | 編制異動只列出不套用 | ✅ `test_auto_whitelist_never_includes_staffing_or_classrooms`；名冊側另有 `test_child_with_an_unfinished_album_is_never_departed` |
+| 重複執行造成重複建檔 | 以學號查既有名冊項 | ⚠️ 機制有測（`test_known_serial_is_enrolled_without_creating_a_second_roster_child`），但「連跑兩次第二次全 0」的整合驗證仍只在人工 smoke |
+| 同步碰到已結束學期 | freeze trigger + `main()` 的 stray 檢查 | ❌ 未測。那道檢查在 `main()` 裡，不在 `apply_changes`，現有測試都沒走到 |
+| 上游送出未正規化的學號 | 無 | ❌ 無緩解。`apply_changes` 原樣寫入，與 `student_input_policy.normalize_student_serial` 不一致；現況由 `test_serial_is_written_exactly_as_upstream_sent_it` 釘住（釘的是現狀，不是背書） |
+
+寫入端的契約在 `tests/test_websystem_roster_apply.py`（9 條），schema 用真 migration 建，
+不手刻——一次性遷移腳本的測試曾各自手刻舊 schema，結果表改名後腳本早就跑不動、CI 卻全綠。
 
 ## Acceptance Smoke
 
