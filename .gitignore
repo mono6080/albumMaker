@@ -57,6 +57,10 @@ backend/rendered_*.png
 *.jpeg
 # 品牌素材是要進版控的正式資產，不是測試產物；上面那三行是為了擋算圖暫存檔。
 !assets/brand/*.png
+# PWA／iOS 圖示同理：由 scripts/generate_pwa_icons.mjs 產生，但必須進版控才會被
+# build 複製到 dist。漏掉這條的話 manifest 又會指向不存在的檔案，而 SPA catch-all
+# 會讓它回 200 + index.html，沒有任何錯誤訊號。
+!frontend/public/icons/*.png
 
 # Env
 # `.env` 與 `*.env` 擋不住 `.env.bak`／`.env.20260801` 這類備份或暫存副本，

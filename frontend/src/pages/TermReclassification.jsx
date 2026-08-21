@@ -45,6 +45,7 @@ import {
   parseRosterMemberInput,
 } from "../utils/rosterMemberInput";
 import { getAssignableAccountLabel } from "../utils/userRoles";
+import { DEPARTMENTS, departmentLabel } from "../constants/departments";
 
 const DUTY_LABELS = {
   lead: "主教",
@@ -1017,7 +1018,7 @@ export default function TermReclassification() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     {plan.target_semester.periods.map(period => (
                       <Badge key={period.id} tone="neutral">
-                        {period.name} · {period.department === "infant" ? "嬰幼部" : "學院部"}
+                        {period.name} · {departmentLabel(period.department)}
                       </Badge>
                     ))}
                   </div>
@@ -1165,8 +1166,11 @@ export default function TermReclassification() {
                     onChange={event => setClassroomDraft(current => ({ ...current, department: event.target.value }))}
                     className={fieldControlClass}
                   >
-                    <option value="infant">嬰幼部</option>
-                    <option value="academy">學院部</option>
+                    {DEPARTMENTS.map(department => (
+                      <option key={department.code} value={department.code}>
+                        {department.name}
+                      </option>
+                    ))}
                   </select>
                 </FormField>
                 <FormField label="班級名稱">

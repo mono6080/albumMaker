@@ -1,13 +1,25 @@
 name: Tests
 
 on:
+  # push 只跑 master：PR 分支由 pull_request 觸發就夠了。兩者都不設限的話，PR 分支的
+  # 同一個 commit 會跑兩份完整 CI（8 個 job 而非 4），而且兩份會搶寫同一個 Playwright
+  # cache key——PR #7 的 PR-run 因此連續兩次卡死在 `playwright install`。
   push:
+    branches: [master]
   pull_request:
+
+# 同一個分支連續 push 時，取消還在跑的舊 run。group 用 head_ref/ref_name 而不是
+# github.ref：pull_request 事件的 github.ref 是 `refs/pull/<n>/merge`，與 push 的
+# `refs/heads/<branch>` 不同，用它會分成兩組而完全不去重。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       SECRET_KEY: test-secret-do-not-use
       ALBUM_MAKER_TEST_TMPDIR: .tmp/pytest
@@ -29,7 +41,7 @@ jobs:
           python -m pip install pytest==9.0.3 pytest-xdist==3.6.1 httpx ruff==0.15.12 mypy==1.20.2
 
       - name: Ruff
-        run: python -m ruff check backend tests
+        run: python -m ruff check backend tests scripts
 
       - name: Banned patterns
         run: python scripts/check_banned_patterns.py
@@ -38,7 +50,7 @@ jobs:
         run: python scripts/check_backend_route_boundaries.py
 
       - name: Mypy
-        run: python -m mypy backend tests
+        run: python -m mypy backend tests scripts
 
       # 每個 worker 有自己的資料庫與 uploads（見 tests/conftest.py），平行是安全的。
       # 本機實測 309 秒 → 108 秒。
@@ -50,6 +62,7 @@ jobs:
     # （scripts/check_text_raster_parity.mjs），所以這個 job 要裝 chromium。
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: frontend
@@ -100,6 +113,10 @@ jobs:
       - name: Frontend unit tests
         run: npm run test:unit
 
+      # e2e supervisor 的 fixed-port 防線；接上 CI 之前它沒有任何 runner 會執行。
+      - name: E2E supervisor tests
+        run: npm run test:supervisor
+
       - name: Render parity
         run: npm run test:render-parity
 
@@ -116,6 +133,8 @@ jobs:
     # 拆成 matrix 之後兩邊各有乾淨的資料庫，牆鐘時間也砍半。
     name: E2E (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    # 卡住時的上限：正常 6–11 分鐘，2026-08-19 曾卡在 playwright install 燒 2h24m
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

@@ -793,6 +793,144 @@ def _static_boundary_errors(
     return errors
 
 
+# conventions.md 訂「路由函式 ≤ 10 行」，但這支腳本原本只查 import / 動態解析 /
+# transaction 次數，完全沒有行數檢查——所以那條 invariant 從來沒有被守住，
+# 最肥的幾支還是上一輪結構重構之後又長回來的（get_project 30 → 68 行）。
+#
+# 棘輪：baseline 是 2026-08-19 的實測值，只准變小。
+# - 不在 baseline 的路由：超過 ROUTE_LINE_BUDGET 就擋（新路由沒有豁免）
+# - 在 baseline 的路由：超過自己的紀錄值就擋；變小則提示更新 baseline
+#
+# 行數算法：扣掉 docstring、空行與整行註解後的有效行。
+# `--show-current` 會印出目前的實測值，改完把它貼回來。
+ROUTE_LINE_BUDGET = 10
+
+ROUTE_LINE_BASELINE: dict[str, int] = {
+    "routers/projects/crud.py::get_project": 68,
+    "routers/projects/render.py::preview_student_page": 49,
+    "routers/projects/crud.py::get_student_editor_detail": 46,
+    "routers/templates/crud.py::get_template": 43,
+    "routers/projects/render.py::preview_project_page": 37,
+    "routers/projects/render.py::render_all_students": 35,
+    "routers/auth.py::login": 30,
+    "routers/templates/crud.py::add_page": 29,
+    "routers/templates/render.py::preview_template_spread": 26,
+    "routers/templates/crud.py::update_page_layout": 20,
+    "routers/projects/crud.py::list_archived_projects": 19,
+    "routers/projects/photos.py::batch_upload_photos": 19,
+    "routers/projects/photos.py::upload_shared_project_photo": 19,
+    "routers/projects/render.py::download_student_images_as_zip": 18,
+    "routers/users.py::import_users_from_excel": 18,
+    "routers/roster.py::download_semester_export_zip": 17,
+    "routers/projects/crud.py::list_projects": 16,
+    "routers/projects/render.py::download_student_pdf": 16,
+    "routers/projects/render.py::render_student": 16,
+    "routers/roster.py::export_teacher_overview_excel": 16,
+    "routers/templates/crud.py::delete_page": 16,
+    "routers/projects/render.py::download_student_image": 15,
+    "routers/templates/crud.py::create_template": 14,
+    "routers/templates/periods.py::update_template_period": 14,
+    "routers/templates/assets.py::upload_background": 13,
+    "routers/templates/periods.py::create_template_period": 13,
+    "routers/projects/render.py::download_all_images_as_zip": 12,
+    "routers/projects/photos.py::upload_photo": 11,
+    "routers/projects/render.py::download_all_pdfs_as_zip": 11,
+    "routers/projects/render.py::download_student_uploaded_photos_as_zip": 11,
+    "routers/templates/assets.py::upload_sticker": 11,
+    "routers/templates/crud.py::list_templates": 11,
+    "routers/templates/periods.py::list_template_periods": 11,
+}
+
+
+def _effective_body_lines(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    source_lines: list[str],
+) -> int:
+    """函式主體扣掉 docstring、空行與整行註解之後的行數。"""
+    body = function.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    if not body:
+        return 0
+    start = body[0].lineno
+    end = max(getattr(node, "end_lineno", node.lineno) for node in body)
+    return sum(
+        1
+        for index in range(start, end + 1)
+        if source_lines[index - 1].strip()
+        and not source_lines[index - 1].strip().startswith("#")
+    )
+
+
+_HTTP_METHOD_DECORATORS = frozenset(
+    {"get", "post", "put", "patch", "delete", "head", "options"}
+)
+
+
+def _has_route_decorator(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """只看 `@<something>.<method>(...)` 的形狀，不做 alias 解析。
+
+    行數預算與「這個 router 物件是哪來的」無關，所以不必動用 inventory 那套
+    alias 機器；實測與 audit_routes 的 103 個路由數一致。
+    """
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Attribute) and target.attr in _HTTP_METHOD_DECORATORS:
+            return True
+    return False
+
+
+def measure_route_lines() -> dict[str, int]:
+    """回傳每個超過預算的路由函式目前的有效行數。"""
+    measured: dict[str, int] = {}
+    for path in sorted((AUDITED_ROOT / "routers").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        source_lines = source.splitlines()
+        relative_path = path.relative_to(AUDITED_ROOT).as_posix()
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not _has_route_decorator(node):
+                continue
+            line_count = _effective_body_lines(node, source_lines)
+            if line_count > ROUTE_LINE_BUDGET:
+                measured[f"{relative_path}::{node.name}"] = line_count
+    return measured
+
+
+def _route_line_errors(measured: dict[str, int]) -> list[str]:
+    errors: list[str] = []
+    for key in sorted(measured):
+        current = measured[key]
+        baseline = ROUTE_LINE_BASELINE.get(key)
+        if baseline is None:
+            errors.append(
+                f"路由過長：backend/{key} 有 {current} 行（上限 {ROUTE_LINE_BUDGET}）。"
+                "把邏輯下移 service；真的必須留在路由層才加進 ROUTE_LINE_BASELINE。"
+            )
+        elif current > baseline:
+            errors.append(
+                f"路由又長了：backend/{key} {baseline} → {current} 行。"
+                "baseline 只准變小。"
+            )
+    for key in sorted(ROUTE_LINE_BASELINE):
+        if key not in measured:
+            continue
+        if measured[key] < ROUTE_LINE_BASELINE[key]:
+            print(
+                f"  ↓ backend/{key} 已縮到 {measured[key]} 行"
+                f"（baseline {ROUTE_LINE_BASELINE[key]}），可把 baseline 調小"
+            )
+    for key in sorted(set(ROUTE_LINE_BASELINE) - set(measured)):
+        print(f"  ✓ backend/{key} 已降到預算內，可從 baseline 移除")
+    return errors
+
+
 def audit_routes() -> tuple[list[str], Counter[str]]:
     errors: list[str] = []
     debt: Counter[str] = Counter()
@@ -871,11 +1009,18 @@ def main() -> int:
     )
     args = parser.parse_args()
     errors, current_debt = audit_routes()
+    measured_route_lines = measure_route_lines()
     if args.show_current:
         if errors:
             print("\n".join(errors))
             return 1
         print(_format_counter(current_debt))
+        print("\nROUTE_LINE_BASELINE = {")
+        for key in sorted(
+            measured_route_lines, key=lambda name: (-measured_route_lines[name], name)
+        ):
+            print(f'    "{key}": {measured_route_lines[key]},')
+        print("}")
         return 0
 
     expected_debt = Counter(EXPECTED_DEBT)
@@ -886,6 +1031,7 @@ def main() -> int:
             errors.append(
                 f"route debt 不符：backend/{key} expected={expected_count} actual={actual_count}"
             )
+    errors.extend(_route_line_errors(measured_route_lines))
     if errors:
         print("Backend route boundary gate failed:")
         print("\n".join(f"- {error}" for error in errors))
@@ -893,7 +1039,8 @@ def main() -> int:
     print(
         "Backend route boundary gate passed "
         f"({sum(len(routes) for routes in ROUTE_INVENTORY.values())} routes, "
-        f"{sum(current_debt.values())} manifested debt calls)."
+        f"{sum(current_debt.values())} manifested debt calls, "
+        f"{len(measured_route_lines)} over the {ROUTE_LINE_BUDGET}-line budget)."
     )
     return 0
 

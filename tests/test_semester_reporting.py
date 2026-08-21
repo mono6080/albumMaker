@@ -22,6 +22,7 @@ from tests.helpers import (
     create_template_with_page,
     create_user,
     login,
+    project_template_revision,
     started_client,
     unique_name,
     use_tmp_uploads,
@@ -1138,3 +1139,74 @@ def test_duplicate_roster_child_ids_finds_a_child_collected_twice():
     assert duplicate_roster_child_ids([album(None), album(None)]) == set()
     # 單本內部即使重複也算——那同樣會讓匯出算兩次
     assert duplicate_roster_child_ids([album(5, 5)]) == {5}
+
+
+def test_stale_output_is_re_rendered_even_though_the_pdf_key_still_exists(
+    monkeypatch, tmp_path
+):
+    """有檔案不等於檔案是對的。
+
+    學期補渲染原本只看 storage 有沒有 print PDF 的 key，key 在就跳過。所以改內容、
+    換字型或渲染管線改版之後，舊 PDF 還在就不會被補渲染，ZIP 照舊出貨、cell 仍顯示
+    ready——匯出的內容靜靜過期，而那是拿去印給家長的最終檔。老師端的下載路由早就有
+    `ensure_student_render_fresh` 這道保證，只有學期彙整這條線沒有。
+    """
+    use_tmp_uploads(monkeypatch, tmp_path)
+    with started_client() as client:
+        login(client)
+        teacher, _ = create_user(client, "teacher")
+        period = create_active_period(client)
+        template_id, _ = create_template_with_page(client, period_id=period["id"])
+        _, classroom_id = create_scoped_classroom(client)
+        set_classroom_teachers(client, classroom_id, [teacher["id"]])
+        student_name = unique_name("stale_export")
+        add_classroom_members(client, classroom_id, [student_name])
+        project_id = create_classroom_project(client, classroom_id, template_id)
+        student_id = add_students(client, project_id, [student_name])[student_name]
+        semester_id = reporting_semester_id(client, [period["id"]])
+
+        # 真的渲染一次：print PDF 與 render state 都會落到 storage
+        assert_status(
+            client.post(f"/api/projects/{project_id}/students/{student_id}/render"),
+            200,
+        )
+
+        rendered_student_ids = []
+        monkeypatch.setattr(
+            semester_render_service,
+            "render_and_save_student_album",
+            lambda *args: rendered_student_ids.append(args[1].id),
+        )
+
+        db = SessionLocal()
+        try:
+            fresh_result = semester_render_service.render_missing_semester_albums(
+                db, semester_id, [period["id"]]
+            )
+        finally:
+            db.close()
+        assert rendered_student_ids == [], "剛渲染完、內容沒動，不該重畫"
+        assert fresh_result["rendered"] == 0
+
+        # 改個人文字：指紋變了，但 storage 上那個 print PDF 的 key 依然存在
+        revision = project_template_revision(client, project_id)
+        assert_status(
+            client.put(
+                f"/api/projects/{project_id}/students/{student_id}/pages/0/texts",
+                params={"expected_template_revision": revision},
+                json={"1": "改過的個人文字"},
+            ),
+            200,
+        )
+
+        db = SessionLocal()
+        try:
+            stale_result = semester_render_service.render_missing_semester_albums(
+                db, semester_id, [period["id"]]
+            )
+        finally:
+            db.close()
+        assert rendered_student_ids == [student_id], (
+            "內容改過就必須重畫；只看 key 存不存在會讓匯出交出過期的 PDF"
+        )
+        assert stale_result["rendered"] == 1

@@ -1,7 +1,7 @@
 """園所組織管理 HTTP adapters；所有業務邏輯由 organization service 持有。"""
 
 from datetime import date
-from typing import Annotated, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,40 +65,6 @@ class DepartmentSupervisorsInput(BaseModel):
 class CampusSupervisorsReplaceBody(BaseModel):
     campus_supervisor_ids: list[int]
     department_supervisors: list[DepartmentSupervisorsInput]
-
-
-class ExistingStudentIdentityDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    student_id: int
-    action: Literal["existing"]
-    roster_child_id: int
-
-
-class CreateNewStudentIdentityDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    student_id: int
-    action: Literal["create_new"]
-
-
-StudentIdentityDecision = Annotated[
-    ExistingStudentIdentityDecision | CreateNewStudentIdentityDecision,
-    Field(discriminator="action"),
-]
-
-
-class ProjectClassroomAssignmentBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    classroom_id: int
-    source_fingerprint: str = Field(..., min_length=64, max_length=64)
-    confirmed_all: Literal[True]
-    seed_current_roster: bool
-    student_identity_decisions: list[StudentIdentityDecision] = Field(
-        ...,
-        max_length=100,
-    )
 
 
 class ClassroomCreateBody(BaseModel):

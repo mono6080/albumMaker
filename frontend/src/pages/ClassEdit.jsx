@@ -11,7 +11,7 @@ import { fetchProjectTemplatePair } from "../api/templateApi";
 import { appendPreviewCacheVersion, buildProjectPagePreviewUrl } from "../api/urls";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
-import { usePermissions } from "../hooks/usePermissions";
+import { useProjectEditGuard } from "../hooks/useProjectEditGuard";
 import {
   ChevronLeft,
   Crop,
@@ -158,16 +158,7 @@ export default function ClassEdit() {
 
   useEffect(() => { loadProjectData(); }, [loadProjectData]);
 
-  // 路由守衛只擋角色、擋不了擁有權：非 owner（如別班主管）直接輸入網址
-  // 會看到可編輯 UI 但每次寫入都被後端 403，這裡直接轉去唯讀的班級總覽
-  const { canEditProject } = usePermissions();
-  useEffect(() => {
-    if (!project) return;
-    if (!canEditProject(project)) {
-      toast.error("你沒有此專案的編輯權限，已切到班級總覽");
-      navigate(`/projects/${projectId}/review`, { replace: true });
-    }
-  }, [project, canEditProject, navigate, projectId]);
+  useProjectEditGuard(project, projectId);
 
   // 專案已標記全班完成：照片/文字鎖定（主管或 admin 退回後恢復）
   const isProjectCompleted = Boolean(project?.completed_at);

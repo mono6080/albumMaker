@@ -1,4 +1,5 @@
 import { createElement, forwardRef } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -314,5 +315,23 @@ export function SegmentedControl({
         );
       })}
     </div>
+  );
+}
+
+// 班級清單分頁；學期彙整與老師進度總覽共用，外框間距由呼叫端用 className 補。
+export function Pagination({ page, pageCount, onChange, className = "" }) {
+  if (pageCount <= 1) return null;
+  return (
+    <nav aria-label="班級分頁" className={cn("flex items-center justify-center gap-3", className)}>
+      <Button size="sm" variant="neutral" disabled={page === 1} onClick={() => onChange(page - 1)}>
+        <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+        上一頁
+      </Button>
+      <span className="text-sm tabular-nums text-gray-500">第 {page}／{pageCount} 頁</span>
+      <Button size="sm" variant="neutral" disabled={page === pageCount} onClick={() => onChange(page + 1)}>
+        下一頁
+        <ChevronRight aria-hidden="true" className="h-4 w-4" />
+      </Button>
+    </nav>
   );
 }

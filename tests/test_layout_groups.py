@@ -5,11 +5,13 @@ from pathlib import Path
 from PIL import ImageChops
 
 from database import SessionLocal, TemplatePage
-from services.layout_groups import (
-    MAX_JAVASCRIPT_SAFE_INTEGER,
+from services.layout_group_traversal import (
     build_layout_render_tree,
-    canonical_id,
     iter_layout_render_elements,
+)
+from services.layout_group_validation import (
+    MAX_JAVASCRIPT_SAFE_INTEGER,
+    canonical_id,
     validate_layout_groups,
 )
 from services.preview_cache import PREVIEW_CACHE_VERSION

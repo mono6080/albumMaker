@@ -35,17 +35,6 @@ function rectCorners(rect) {
   ];
 }
 
-function elementCorners(element) {
-  const x = Number(element?.x) || 0;
-  const y = Number(element?.y) || 0;
-  const width = Math.max(0, Number(element?.width) || 0);
-  const height = Math.max(0, Number(element?.height) || 0);
-  const center = { x: x + width / 2, y: y + height / 2 };
-  return rectCorners({ x, y, width, height }).map(point => (
-    rotatePoint(point, center, Number(element?.rotation) || 0)
-  ));
-}
-
 function pointInPolygon(point, polygon) {
   let inside = false;
   for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
@@ -101,11 +90,6 @@ function polygonsIntersect(firstPolygon, secondPolygon) {
     }
   }
   return false;
-}
-
-export function selectionRectIntersectsElement(selectionRect, element) {
-  if (!selectionRect || selectionRect.width <= 0 || selectionRect.height <= 0 || !element) return false;
-  return polygonsIntersect(rectCorners(selectionRect), elementCorners(element));
 }
 
 export function getMarqueeSelectableRefs(

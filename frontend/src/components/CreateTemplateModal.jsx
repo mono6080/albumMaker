@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { createTemplate } from "../api/templateApi";
 import FormModal from "./FormModal";
 import { Button, FormField, fieldControlClass } from "./ui";
+import { getApiErrorMessage } from "../utils/apiError";
 
 // ── 建立模板 Modal（自管表單狀態；元件常駐掛載，關閉不清空輸入）──────────────
 // periods / templates 由頁面載入後傳入；建立成功後透過 onCreated 讓頁面重新載入清單。
@@ -59,8 +60,7 @@ export default function CreateTemplateModal({
       onClose();
       await onCreated();
     } catch (error) {
-      const detail = error.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "建立模板失敗");
+      toast.error(getApiErrorMessage(error, "建立模板失敗"));
     } finally {
       setCreatingTemplate(false);
     }

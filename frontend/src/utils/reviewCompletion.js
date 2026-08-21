@@ -3,7 +3,7 @@
 // 「交件解鎖」= completed_at 標記完成,是流程狀態 — 兩者是不同概念,詞彙不得混用。
 
 // 單一進度(照片或文字)是否填齊;沒有格子視為填齊
-export function isProgressComplete(progress) {
+function isProgressComplete(progress) {
   if (!progress) return true;
   return progress.total === 0 || progress.filled === progress.total;
 }

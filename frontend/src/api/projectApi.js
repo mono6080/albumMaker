@@ -2,8 +2,8 @@
 // 封裝所有與專案（Project）、學生（Student）、
 // 照片、對應文字、渲染及下載相關的 API 呼叫
 
-// 使用統一的 Cookie 認證 axios clients（含 401 interceptor）
-import { apiClient, renderClient } from "./authApi.js";
+// 使用統一的 Cookie 認證 axios client（含 401 interceptor）
+import { apiClient } from "./authApi.js";
 
 // ── 專案 CRUD ─────────────────────────────────────────────────────────────────
 
@@ -168,9 +168,3 @@ export const batchUpdateStudentTexts = (projectId, expectedTemplateRevision, stu
     signal,
     params: { expected_template_revision: expectedTemplateRevision },
   });
-
-// ── 渲染 ──────────────────────────────────────────────────────────────────────
-
-/** 渲染單一學生的相冊並儲存為 PDF */
-export const renderStudent = (projectId, studentId) =>
-  renderClient.post(`/projects/${projectId}/students/${studentId}/render`);

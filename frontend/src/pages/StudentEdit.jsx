@@ -10,7 +10,7 @@ import { fetchStudentEditor, batchUpdateStudentTexts, setStudentPageSkip } from 
 import { fetchProjectTemplatePair } from "../api/templateApi";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useLabelTextsEditor } from "../hooks/useLabelTextsEditor";
-import { usePermissions } from "../hooks/usePermissions";
+import { useProjectEditGuard } from "../hooks/useProjectEditGuard";
 import AlbumEditorLayout from "../components/AlbumEditorLayout";
 import PhotoManager from "../components/PhotoManager";
 import StudentPreviewPanel from "../components/StudentPreviewPanel";
@@ -130,16 +130,7 @@ export default function StudentEdit() {
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
-  // 路由守衛只擋角色、擋不了擁有權：非 owner 直接輸入網址會看到可編輯 UI
-  // 但每次寫入都被後端 403，直接轉去唯讀的班級總覽
-  const { canEditProject } = usePermissions();
-  useEffect(() => {
-    if (!project) return;
-    if (!canEditProject(project)) {
-      toast.error("你沒有此專案的編輯權限，已切到班級總覽");
-      navigate(`/projects/${projectId}/review`, { replace: true });
-    }
-  }, [project, canEditProject, navigate, projectId]);
+  useProjectEditGuard(project, projectId);
 
   const refreshPreview = (pageIdx = activePage) =>
     setPageTimestamps(prev => ({ ...prev, [pageIdx]: Date.now() }));

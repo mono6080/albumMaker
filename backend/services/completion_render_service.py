@@ -131,6 +131,30 @@ def ensure_project_renders_fresh(db, project: Project) -> None:
             render_and_save_student_album(project, student, project_id, db)
 
 
+def find_stale_students(
+    pairs: list[tuple[int, int]],
+) -> set[tuple[int, int]]:
+    """並行檢查一批 `(project_id, student_id)`，回傳輸出已過期或缺檔的那些。
+
+    只讀、不取渲染槽，與下載前補渲用的是同一套指紋判斷。供學期補渲染判斷
+    「這一格要不要重畫」——那條路徑原本只看 storage 有沒有那個 key，
+    換字型或改模板之後舊 PDF 還在就會被跳過，ZIP 照舊出貨。
+
+    成本：每位約 4 次 storage 往返（R2 上是網路來回），所以只適合放在
+    使用者已經預期要等的背景 job，不要放進互動式頁面的載入路徑。
+    """
+    if not pairs:
+        return set()
+    with ThreadPoolExecutor(max_workers=_FRESHNESS_CHECK_WORKERS) as pool:
+        fresh_flags = list(
+            pool.map(
+                lambda pair: _student_fresh_with_own_session(pair[0], pair[1]),
+                pairs,
+            )
+        )
+    return {pair for pair, is_fresh in zip(pairs, fresh_flags) if not is_fresh}
+
+
 def _render_students_in_background(project_id: int, student_ids: list[int]) -> dict:
     """逐位以指紋補渲;回傳 {rendered, skipped, failed} 統計供收斂掃描彙總。"""
     stats = {"rendered": 0, "skipped": 0, "failed": 0}

@@ -2,7 +2,7 @@
 
 > Owns：所有「已知但尚未處理」的程式碼落差（drift）、未定案設計問題與營運缺口。
 > 規則：修掉一條就同 commit 刪掉該條（見 [doc-policy.md](doc-policy.md)）。
-> 最後盤點：2026-07-31。
+> 最後盤點：2026-08-18（全專案結構盤點；行為保持的清理已執行，四條活缺陷見下）。
 
 ---
 
@@ -81,6 +81,47 @@ Safari 問題」**——如果是應用本身在切換使用者時吃掉太多�
 - **PWA SW 與 SPA catch-all 的同名 race**：目前「先實體檔案、後 index.html」
   已穩定（見 [architecture.md](architecture.md#spa-catch-all-與-pwa-service-worker-優先序)），
   但若新增與 SW asset 同名的 SPA 路由會出現 race
+- **12 個錯誤代碼沒有 message，使用者只會看到通用句**：後端 `detail={"code": ...}` 共 89 站，
+  其中 13 站（12 個不同 code）不帶 `message` 欄位。前端唯一的解讀器
+  `utils/apiError.js` 只為 5 個完成鎖代碼寫了專屬句子，其餘一律退回
+  「操作失敗，請稍後再試」。2026-08-19 以 AST 掃 `backend/` 逐站確認：
+
+  *使用者可以處理、值得寫文案的*：`child_already_active_in_another_classroom`
+  （organization_service.py:1680）、`invalid_teacher_role`（:608、:2231）、
+  `supervisor_not_found`（:722）、`invalid_supervisor_role`（:735）、
+  `period_not_in_semester`（semester_export_service.py:80）、
+  `semester_render_job_running`（export_jobs.py:92）、
+  `template_page_structure_changed`（template_page_snapshot_service.py:131）。
+
+  *編輯器送出畸形 layout 才會發生、使用者無從處理*：`invalid_label_texts`、
+  `invalid_layout_group`、`invalid_layout_typography`、`invalid_layout_geometry`、
+  `removed_layout_element`——這組共用一句「版面資料格式有誤」即可，不必逐個寫。
+
+  形狀本身已經不是問題（`apiError.js` 現在接住字串／完成鎖代碼／`message`／422 陣列／429
+  五種，由 `frontend/tests/unit/api-error.test.mjs` 釘住）；缺的是這 12 個代碼的中文文案，
+  那是產品決定，不該由實作者代擬。
+
+- **學期匯出的預覽與下載仍只看 key 存不存在**：補渲染那一步已改成指紋判斷
+  （見 [rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲)），但
+  `semester_export_service._serialize_entry` 的 `has_pdf` 與 `_cell_status` 仍是
+  「storage 有這個 key 就是 ready」，`open_semester_export_zip_stream` 也直接串流舊檔。
+  所以 admin 若跳過「補渲染」直接下載，仍可能拿到過期的 PDF，而 UI 顯示綠色 ready。
+  難處是成本：完整指紋檢查每位約 4 次 storage 往返，2026-08 實測一個學期有 827 個
+  學生格（≈3300 次往返），放進互動式的預覽載入會讓 admin 一開頁就等。
+  要修得先設計一個便宜的過期訊號（例如把 `_RENDER_PIPELINE_VERSION` 與 template
+  revision 這類全域／每本的訊號抽出來單獨比對，不必逐位讀 storage）。
+
+- **行政系統同步寫入的學號沒有正規化**：`student_input_policy.normalize_student_serial`
+  是學號的唯一真相來源（去空白、轉大寫），API 端建名冊時走它；
+  `scripts/sync_websystem_roster.py` 的 `apply_changes` 沒有，上游給什麼就寫什麼。
+  今天沒有實害（2026-08-18 實測正式名冊 466 筆學號全部已符合正規化、零碰撞），
+  但上游哪天送出小寫或帶空白的學號，同一個孩子就會多出一個 `roster_child_id`，
+  而唯一索引不會擋。現況由 `tests/test_websystem_roster_apply.py::
+  test_serial_is_written_exactly_as_upstream_sent_it` 釘住。
+  修的時候要先處理既有資料：只把查詢鍵改成正規化，會讓舊的未正規化列比不到而製造重複。
+- **同步寫到已結束學期的守衛未測**：`sync_websystem_roster.main()` 在 commit 前檢查有沒有
+  寫進非目前學期的班級，但那道檢查在 `main()` 裡、不在 `apply_changes`，現有測試都走不到
+  （見 [websystem-roster-sync-v1 的測試現況](../specs/websystem-roster-sync-v1.md#risks-and-test-plan)）。
 - **名冊稱呼修改不受完成鎖限制**:園所名冊的相本稱呼(`Student.album_name`)
   修改會影響已標記完成(全班或個別)相本的稱呼顯示,但名冊寫入不經過專案
   內容鎖;[相本個別完成 v1](../specs/student-album-completion-v1.md#non-goals)
@@ -110,7 +151,13 @@ Safari 問題」**——如果是應用本身在切換使用者時吃掉太多�
 2. **API negative contracts 持續擴充**：malformed payload 與更多
    endpoint-specific 403/404 邊界
 3. **前端元件測試（vitest / RTL）**：目前完全沒有
-4. **兩頁制新流程的 e2e 未全覆蓋**：「每人不同張」精靈（含關閉未上傳退回
+4. **未定義的 JSX 元件不會被 lint 擋下**：`no-undef` 是開著的（error），但核心 ESLint
+   不把 `<Foo />` 當成對 `Foo` 的變數引用——那是 `eslint-plugin-react` 的
+   `jsx-uses-vars` 的工作，而本專案刻意沒裝它（見 `eslint.config.js` 的註解）。
+   2026-08-18 實測：把一個元件搬進 `components/ui.jsx` 後忘了在使用端補 import，
+   `npm run lint` 仍回報全綠。這類錯誤要到該元件實際 render 時才在瀏覽器炸開。
+   權衡是「多一個相依」對「補上唯一擋得住這類錯誤的 gate」，尚未決定。
+5. **兩頁制新流程的 e2e 未全覆蓋**：「每人不同張」精靈（含關閉未上傳退回
    放照片 Modal）、共用照片裁切、PhotoManager 本頁/整本切換與跨頁上傳、
    全班完成鎖定→退回——e2e 已覆蓋「多人同一張」全班直傳與勾選部分學生
    （project-flow.spec.js）與依檔名整批匯入（batch-wizard.spec.js）

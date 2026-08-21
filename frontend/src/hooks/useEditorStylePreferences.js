@@ -67,7 +67,7 @@ function pushRecent(values, nextValue, limit) {
   return [normalized, ...values.filter(value => value !== normalized)].slice(0, limit);
 }
 
-export function pickEditorStyle(elementType, elementData) {
+function pickEditorStyle(elementType, elementData) {
   const fields = STYLE_FIELDS[elementType] || [];
   return Object.fromEntries(fields.flatMap(field => (
     elementData?.[field] === undefined ? [] : [[field, elementData[field]]]

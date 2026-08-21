@@ -125,7 +125,7 @@ export function getDescendantLeafRefs(layout, groupId) {
   return getDescendantLeafRefsFromGraph(buildLayoutGraph(layout || {}), groupId);
 }
 
-export function getDescendantGroupIdsFromGraph(graph, groupId) {
+function getDescendantGroupIdsFromGraph(graph, groupId) {
   const output = [];
   const group = getGroupByIdFromGraph(graph, groupId);
   if (!group) return output;

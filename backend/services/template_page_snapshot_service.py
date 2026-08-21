@@ -190,6 +190,8 @@ def replace_template_pages_snapshot(
                 status_code=409,
                 detail={
                     "code": "template_revision_changed",
+                    # 措辭與 template_asset_service 同一句：同一件事不該有兩種說法
+                    "message": "模板已被其他操作更新，請重新整理後再試",
                     "expected_revision": expected_revision,
                     "actual_revision": template.revision,
                 },
@@ -221,6 +223,7 @@ def replace_template_pages_snapshot(
                     status_code=409,
                     detail={
                         "code": "template_revision_changed",
+                        "message": "模板已被其他操作更新，請重新整理後再試",
                         "expected_revision": expected_revision,
                         "actual_revision": template.revision,
                     },

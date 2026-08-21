@@ -2,11 +2,7 @@
 // 校別與班級選項只使用後端已套用主管 scope 的報表資料。
 
 import { FormField, SegmentedControl, Surface, fieldControlClass } from "./ui";
-
-const DEPARTMENT_LABELS = {
-  infant: "嬰幼部",
-  academy: "學院部",
-};
+import { DEPARTMENT_LABELS } from "../constants/departments";
 
 export default function SemesterReportFilters({
   terms,

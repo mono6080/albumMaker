@@ -41,7 +41,6 @@ backend/
   template_periods.py  模板期別的部門常數與狀態邏輯
   crud/                template_crud / project_crud / user_crud /
                        organization_crud（get_or_404 輔助）
-  schemas/             Pydantic schema（跨路由共用者）
   routers/
     auth.py            /api/auth/*（login / logout / me）
     users.py           /api/users/*（admin only，含 .xlsx 批次匯入）
@@ -69,13 +68,19 @@ backend/
                          save_album_images；UPLOADS_DIR 只留相容 alias
     element_renderers.py 各元素 PIL 渲染：photo_slot / sticker / text_label
     draw_helpers.py      PIL 低階工具：字型、合成、形狀、文字換行、陰影
-    project_service.py   舊 import 相容 facade；新程式直接 import 下列責任 owner
+    render_image_loader.py  渲染用圖片載入（EXIF transpose、HEIF、失敗退回）
+    text_layout.py       固定字級的文字排版計畫；語意鏡像 Konva Text（見 rendering.md）
+    text_variables.py    相本文字變數（{name} / {full_name}）的統一解析規則
+    material_text_box.py 素材貼圖的文字框偵測與正規化投影
     project_access_service.py  專案 read/write/content/completion 權限判斷
+    project_template_revision.py  專案端模板 revision 的讀取與比對
     project_lifecycle_service.py  專案建立、改名、封存、還原、完成與退回 use case
     project_assignment_service.py  owner 進度歸戶轉交與歷史 editor 稽核
-    organization_service.py  校／部門主管、學生／老師區間、相本歸班與班級相本快照
+    organization_service.py  校／部門主管、學生／老師區間、班級相本建立與校班快照
+                         （歸班流程已退場，未歸班舊相本只列出不再指派——見 api.md）
     organization_term_service.py  編班草稿、目標正式學期、fingerprint、差異驗證、快照／工作格與原子套用
     organization_transaction.py / organization_lock.py  園所 ACL 異動的共用交易／鎖邊界
+    organization_scope_service.py  校／部門主管 scope 的共用查詢規則與報表學期／期別序列化
     project_student_service.py  本期學生相本稱呼與頁面 skip use case
     project_photo_service.py  單張／共用／批次照片、讀取、縮圖與 mapping use case
     project_text_service.py  專案／學生／批次文字 use case
@@ -83,14 +88,20 @@ backend/
     output_keys.py       輸出 key、安全檔名與 Content-Disposition
     project_archive_service.py  到期封存專案的 Storage cleanup 與 DB purge
     student_render_service.py   單一學生渲染、dirty-skip、發布 CAS 與 render fingerprint
+    completion_render_service.py  標記完成後觸發的背景補渲染
     project_export_service.py   專案 PDF／圖片 ZIP 串流
     student_pages.py     pages_data_json 的併發安全寫入入口（學生寫鎖、空頁 schema、
                          照片寫入與 mapping 協議）
     preview_cache.py     預覽圖內容定址快取（cache-aside、limiter 內二次查）
     file_service.py      Storage key 計算、上傳驗證與壓縮、照片縮圖（支援 HEIF）
     label_texts.py       label_texts 資料結構工具與專案／學生／模板文字合併
-    roster_service.py    舊 import 相容 facade；新程式直接 import 下列責任 owner
     roster_identity_service.py  名冊姓名正規化（不負責 identity 連結、合併或拆分）
+    student_progress.py  單一學生照片與可填文字進度的唯一計算來源
+    student_identity_anomaly.py  ProjectStudent↔名冊連結異常的唯一判準：逐位分類
+                         與全域計數兩種形狀，等價性由 test_student_identity_anomaly.py 釘住
+    student_transfer_service.py  學生跨班搬移（持學生寫鎖，含照片與文字快照）
+    student_album_name_policy.py  相本稱呼的自動推導與碰撞撤回規則
+    student_input_policy.py  名冊姓名／學號的長度與字元上限（唯一真相來源）
     semester_render_service.py  正式學期工作格缺漏 PDF 逐本補渲染與 partial-success 進度
     semester_export_service.py  依學期校班快照與學生穩定身分建立 cell、ZIP plan／manifest／stream
     teacher_overview_service.py  班級×期別四軸進度總覽與同源 Excel 匯出
@@ -99,11 +110,14 @@ backend/
     template_period_service.py  部門與期別 CRUD use case
     template_asset_service.py  背景／貼圖資產與素材文字框分析
     template_project_sync_service.py  typed template sync plan、影響摘要、備份與 apply
+    template_page_snapshot_service.py  模板頁 full-page snapshot 的驗證與寫入
+    template_sync_locks.py  template→project→student 同步的鎖梯
     layout_group_validation.py / layout_group_traversal.py  後端群組驗證與正式渲染 traversal
-    layout_groups.py     舊 import 相容 facade
+    layout_geometry_validation.py  layout 元素幾何與字級／行高上限驗證
     user_service.py      使用者建立／更新／刪除與 Excel 批次匯入 use case
     export_jobs.py       學期匯出補渲染背景 job（執行緒＋記憶體 registry，進度輪詢）
     photo_frame_geometry.py  照片框幾何（content-box insets、frame rect）
+    photo_transform_policy.py  學生照片 transform 的跨 API／renderer 安全上限
     zip_stream.py        串流 ZIP 骨架（佔 limiter → 逐 entry drain → 釋放）
     storage.py           Storage 公開相容 facade（見 storage.md）
     storage_base.py / storage_local.py / storage_r2.py  adapter 抽象與實作
@@ -119,7 +133,8 @@ components/  純顯示或輕量互動；canvas/ 子目錄是 Konva 專用元件
 hooks/       可重用 state 邏輯（useAutoSave / usePermissions / useInlineEdit），不含 JSX
 api/         只做 HTTP，不含業務判斷（authApi / templateApi / projectApi / urls）
 context/     AuthContext（全域 currentUser）
-constants/   靜態資料（fonts / design tokens），不含邏輯
+constants/   靜態資料（fonts / design tokens / departments），不含邏輯；
+             跨語言鏡像者檔頭注明正本與釘測試
 utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / …）
 ```
 
@@ -154,7 +169,7 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 | TemplateList | `/templates` | 模板/期別清單 |
 | TemplateEditor | `/templates/:id/edit` | Konva 版型編輯器（見 rendering.md） |
 | UserManagement | `/admin/users` | 使用者管理（admin） |
-| OrganizationManagement | `/admin/organization` | 園所設定：校／部門主管、班級老師與學生、相本建立／逐位 identity 決策後顯式歸班，以及 owner 進度歸戶（admin） |
+| OrganizationManagement | `/admin/organization` | 園所設定：校／部門主管、班級老師與學生、班級相本建立，以及 owner 進度歸戶（admin） |
 | TermReclassification | `/admin/organization/new-term` | 新學期編班草稿：完整學生／老師目標、差異驗證與確認套用（admin） |
 | SemesterExport | `/admin/semester-export` | 依正式學期校／班快照與穩定學生身分顯示各期 cell 狀態；admin 補渲染與下載 ZIP，主管限 scope 唯讀 |
 | TeacherOverview | `/admin/teacher-overview` | 正式學期班級×期別矩陣；分開顯示建立、照片與文字內容、交件、列印 PDF 與 Excel（admin 全部；主管限 active scope） |
@@ -168,6 +183,12 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 `manifest.webmanifest`、`offline.html`），找不到才 fallback `index.html`。
 全部回 `index.html` 會讓瀏覽器把 HTML 當 JS 執行 → Service Worker 註冊失敗。
 `vite.config.js` 的 `navigateFallback: '/index.html'` 是 workbox 端的對偶設定。
+
+**這條 fallback 讓「資產缺檔」變成無聲失敗**：不存在的 `/icons/x.png` 回的是
+`200 text/html`（index.html）而不是 404，瀏覽器只會安靜地解析失敗。
+manifest 與 `apple-touch-icon` 指向的 `public/icons/*.png` 曾因此缺席而沒人發現；
+它們現在由 `scripts/generate_pwa_icons.mjs` 從 `favicon.svg` 以 chromium 產生
+（node-canvas 畫不出其中的 mask 與 blur）。改動 favicon 後重跑該腳本。
 
 ## 非目標（明確不做）
 

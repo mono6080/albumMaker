@@ -26,7 +26,6 @@ import { isFillableTextLabel } from "../../utils/textLabelRoles";
 import {
   getTextLabelClipGroupProps,
   getTextLabelLineRenderProps,
-  getTextLabelRenderModel,
   getTemplateTextLabelRenderModel,
   measureTextLabelRenderLayout,
 } from "../../utils/textRenderModel.js";
@@ -304,10 +303,6 @@ export function makePhotoControlProps(data, {
 }
 
 // ── 各元素節點渲染 ──────────────────────────────────────────────────────────
-
-export function getTextShadowProps(data, typographyScale = 1) {
-  return getTextLabelRenderModel(data, typographyScale).shadowProps;
-}
 
 export function renderPhotoSlotNode(
   data,

@@ -13,7 +13,7 @@ export function normalizeUiFontScale(value) {
   return Math.min(UI_FONT_SCALE_MAX, Math.max(UI_FONT_SCALE_MIN, rounded));
 }
 
-export function applyUiFontScale(value) {
+function applyUiFontScale(value) {
   const scale = normalizeUiFontScale(value);
   if (typeof document !== "undefined") {
     document.documentElement.style.fontSize = `${BASE_FONT_SIZE_PX * scale}px`;
@@ -22,7 +22,7 @@ export function applyUiFontScale(value) {
   return scale;
 }
 
-export function storeUiFontScale(value) {
+function storeUiFontScale(value) {
   const scale = normalizeUiFontScale(value);
   if (typeof window !== "undefined") {
     try {

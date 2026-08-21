@@ -5,12 +5,8 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from auth import get_current_user  # noqa: F401 — re-export
 from services.project_access_service import (
     assert_class_downloadable as assert_class_downloadable,
-    assert_comment_deletable as assert_comment_deletable,
-    assert_project_completion_revertible as assert_project_completion_revertible,
-    assert_project_content_writable as assert_project_content_writable,
     assert_project_readable as assert_project_readable,
     assert_project_writable as assert_project_writable,
     assert_student_downloadable as assert_student_downloadable,

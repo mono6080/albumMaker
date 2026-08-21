@@ -449,8 +449,8 @@ def detect_background_xref(page) -> int:
 
 def detect_caption_regions(page, scale: float, stickers: list[dict],
                             sticker_visual_bounds: dict[int, tuple[float, float, float, float]]
-                            ) -> list[tuple[float, float, float, float]]:
-    """把疑似對話泡泡文字的 span 依垂直相鄰關係分組，回傳每組的聯集 bbox（pt）。
+                            ) -> list[tuple[float, float, float, float, str]]:
+    """把疑似對話泡泡文字的 span 依垂直相鄰關係分組，回傳每組的聯集 bbox（pt）與文字顏色。
 
     不能用「白色」判斷是不是對話泡泡文案——同一系列範本裡文案顏色其實不固定
     （環保小尖兵是白色，昆蟲世界是橘色，感官世界1月是藍色，寫死顏色會直接

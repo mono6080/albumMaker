@@ -65,6 +65,7 @@ import {
 import { buildClassroomOwnerOptions } from "../utils/classroomAssignments";
 import { showRetryToast } from "../utils/retryToast";
 import { getAssignableAccountLabel, ROLE_LABELS } from "../utils/userRoles";
+import { DEPARTMENTS, DEPARTMENT_LABELS, departmentLabel } from "../constants/departments";
 
 const VIEW_OPTIONS = [
   { value: "active", label: "目前名單", icon: Users },
@@ -74,14 +75,8 @@ const VIEW_OPTIONS = [
 
 const DEPARTMENT_OPTIONS = [
   { value: "all", label: "全部部門" },
-  { value: "infant", label: "嬰幼部" },
-  { value: "academy", label: "學院部" },
+  ...DEPARTMENTS.map(department => ({ value: department.code, label: department.name })),
 ];
-
-const DEPARTMENT_LABELS = {
-  infant: "嬰幼部",
-  academy: "學院部",
-};
 
 const END_REASON_LABELS = {
   departed: "離園",
@@ -92,8 +87,11 @@ const END_REASON_LABELS = {
 
 const SUPERVISOR_SCOPE_SECTIONS = [
   { key: "campus", department: null, label: "全校主管" },
-  { key: "infant", department: "infant", label: "嬰幼部主管" },
-  { key: "academy", department: "academy", label: "學院部主管" },
+  ...DEPARTMENTS.map(department => ({
+    key: department.code,
+    department: department.code,
+    label: `${department.name}主管`,
+  })),
 ];
 
 const SUPERVISOR_END_REASON_LABELS = {
@@ -1605,7 +1603,7 @@ export default function OrganizationManagement() {
                           <p className="mt-0.5 truncate text-xs text-gray-500">
                             {semesterPeriod.semester_label}
                             {" · "}
-                            {semesterPeriod.department === "infant" ? "嬰幼部" : "學院部"}
+                            {departmentLabel(semesterPeriod.department)}
                           </p>
                           {isLocked && semesterPeriod.album_creation_locked_by_name && (
                             <p className="mt-0.5 truncate text-xs text-amber-700">

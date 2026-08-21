@@ -4,7 +4,7 @@ import { CANVAS_SCALE } from "./renderLayoutModel.js";
 import { resolveTemplatePreviewTextVariables } from "./textVariables.js";
 
 export const TEXT_LAYOUT_MEASUREMENT_SCALE = DESIGN_TOKENS.text_layout.measurement_scale;
-export const TEXT_CAPACITY_SAMPLE_CHARACTER = "字";
+const TEXT_CAPACITY_SAMPLE_CHARACTER = "字";
 
 export function getTextLabelRenderModel(data, typographyScale = 1) {
   const safeTypographyScale = Number.isFinite(typographyScale) && typographyScale > 0

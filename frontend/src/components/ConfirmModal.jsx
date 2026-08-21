@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Surface } from "./ui";
 import useDialogA11y from "../hooks/useDialogA11y";
+import { getApiErrorMessage } from "../utils/apiError";
 
 // 自訂確認 Modal，取代原生 window.confirm()
 export default function ConfirmModal({
@@ -29,8 +30,7 @@ export default function ConfirmModal({
     try {
       await onConfirm();
     } catch (error) {
-      const detail = error?.response?.data?.detail;
-      setActionError(typeof detail === "string" ? detail : "操作失敗，請稍後再試");
+      setActionError(getApiErrorMessage(error));
     } finally {
       setIsPending(false);
     }

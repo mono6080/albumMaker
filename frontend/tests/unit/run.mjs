@@ -1,4 +1,5 @@
 import "./api.test.mjs";
+import "./api-error.test.mjs";
 import "./organization-api.test.mjs";
 import "./editor-fonts.test.mjs";
 import "./photos.test.mjs";

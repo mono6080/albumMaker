@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import (
-    Semester,
     Classroom,
     ClassroomMember,
     SemesterPeriod,
@@ -22,6 +21,8 @@ from services.organization_scope_service import (
     apply_project_read_scope,
     apply_term_classroom_report_scope,
     load_reporting_semester_or_404,
+    serialize_reporting_period,
+    serialize_reporting_term,
 )
 from services.output_keys import (
     build_safe_zip_entry_path,
@@ -30,41 +31,15 @@ from services.output_keys import (
     student_pdf_key_for_mode,
 )
 from services.storage_factory import get_storage
+from services.student_identity_anomaly import (
+    classify_project_student_identity_anomalies,
+)
 from services.zip_stream import open_zip_stream
 
 
 MERGED_PDF_LABEL = "全期合併"
-MISSING_ROSTER_CHILD = "missing_roster_child"
-INVALID_ROSTER_CHILD = "invalid_roster_child"
-DUPLICATE_PROJECT_ROSTER_CHILD = "duplicate_project_roster_child"
 MISSING_TERM_STUDENT_SNAPSHOT = "missing_term_student_snapshot"
 DEPARTURE_REASONS = {"departed", "term_departed"}
-
-
-def classify_project_student_identity_anomalies(
-    project: Project,
-) -> dict[int, tuple[str, ...]]:
-    """列出同一相本內不可用於學期匯出的學生身分異常。"""
-    child_id_counts = Counter(
-        student.roster_child_id
-        for student in project.students
-        if student.roster_child_id is not None
-    )
-    anomalies_by_student_id: dict[int, tuple[str, ...]] = {}
-    for student in project.students:
-        anomaly_codes = []
-        if student.roster_child_id is None:
-            anomaly_codes.append(MISSING_ROSTER_CHILD)
-        elif student.roster_child is None:
-            anomaly_codes.append(INVALID_ROSTER_CHILD)
-        if (
-            student.roster_child_id is not None
-            and child_id_counts[student.roster_child_id] > 1
-        ):
-            anomaly_codes.append(DUPLICATE_PROJECT_ROSTER_CHILD)
-        if anomaly_codes:
-            anomalies_by_student_id[student.id] = tuple(anomaly_codes)
-    return anomalies_by_student_id
 
 
 def load_export_periods(
@@ -189,28 +164,6 @@ def _student_skipped_pages(student: ProjectStudent) -> list[int]:
         for page_index, page_data in enumerate(pages_data)
         if isinstance(page_data, dict) and page_data.get("skip")
     ]
-
-
-def _serialize_period(semester_period: SemesterPeriod) -> dict:
-    return {
-        "id": semester_period.template_period_id,
-        "semester_period_id": semester_period.id,
-        "template_period_id": semester_period.template_period_id,
-        "name": semester_period.period_name_snapshot,
-        "department": semester_period.department,
-        "position": semester_period.position,
-    }
-
-
-def _serialize_term(term: Semester) -> dict:
-    return {
-        "id": term.id,
-        "label": term.label,
-        "status": term.status,
-        "is_current": term.status in {"imported", "active"},
-        "starts_on": term.starts_on.isoformat() if term.starts_on else None,
-        "ends_on": term.ends_on.isoformat() if term.ends_on else None,
-    }
 
 
 def _load_scoped_term_classrooms(
@@ -468,8 +421,8 @@ def build_semester_export_preview(
     top_summary["classroom_count"] = len(classroom_groups)
     top_summary["identity_anomaly_count"] = len(unlinked)
     return {
-        "term": _serialize_term(term),
-        "periods": [_serialize_period(period) for period in selected_periods],
+        "term": serialize_reporting_term(term),
+        "periods": [serialize_reporting_period(period) for period in selected_periods],
         "summary": top_summary,
         "classroom_groups": classroom_groups,
         "unlinked": sorted(

@@ -25,13 +25,21 @@ Codex 在此專案的工作指引。本檔只放 **agent 行為規則** 與 **�
 | [docs/dev/storage.md](docs/dev/storage.md) | StorageAdapter、key 格式、R2 設定與維運 | 動檔案 I/O / 上傳 |
 | [docs/dev/testing.md](docs/dev/testing.md) | 測試指令、測試防線、修改後驗證流程 | 每次改完程式 |
 | [docs/dev/deployment.md](docs/dev/deployment.md) | 啟動腳本、Docker/nginx、環境變數表 | 部署、環境設定 |
-| [docs/dev/production-cutover-202607.md](docs/dev/production-cutover-202607.md) | 2026-07 正式園所遷移、Project 203 修復、稽核、補渲染與 rollback runbook | 執行或審查本次正式切換 |
-| [docs/dev/production-r2-snapshot-202607.md](docs/dev/production-r2-snapshot-202607.md) | 本次正式 R2 bytes snapshot、drift audit 與 restore runbook | 執行或審查本次 R2 切換防線 |
+| [docs/dev/production-cutover-202607.md](docs/dev/production-cutover-202607.md) | 2026-07 正式切換做了什麼、結果如何、腳本為何退場（已完成紀錄，不是 runbook） | 想知道那次切換動了什麼、還原得了嗎 |
 | [docs/dev/known-issues.md](docs/dev/known-issues.md) | 已知 drift、開放問題、測試缺口 | 遇到「這是 bug 嗎」先查這裡 |
 | [docs/dev/doc-policy.md](docs/dev/doc-policy.md) | 文件怎麼寫、SSOT 規則、拆分規則 | 改任何文件之前 |
 | [docs/specs/illustrator-style-groups-v1.md](docs/specs/illustrator-style-groups-v1.md) | Illustrator 式群組、隔離編輯與素材文字框輔助功能的實作契約 | 實作或審查群組、雙擊隔離、圖片分析文字框 |
+| [docs/specs/illustrator-style-nested-groups-v2.md](docs/specs/illustrator-style-nested-groups-v2.md) | 現行巢狀群組 graph、scope、transform、素材文字 relation 與相容契約 | 實作或審查 layout groups、群組 traversal、isolation 與 renderer parity |
+| [docs/specs/mobile-template-editor-v1.md](docs/specs/mobile-template-editor-v1.md) | 手機版模板編輯器的 responsive workspace、觸控手勢與驗收契約 | 實作或審查手機畫布、底部面板、多選與行動版操作 |
+| [docs/specs/structural-refactor-v1.md](docs/specs/structural-refactor-v1.md) | 行為保持型結構重構的範圍、並行 ownership、相容契約與驗收標準 | 拆編輯器、前後端服務、測試或工具鏈之前 |
+| [docs/specs/structural-refactor-v1-backend-contracts.md](docs/specs/structural-refactor-v1-backend-contracts.md) | 結構重構期間的後端 transaction、lock、Storage path、fingerprint 與同步型別契約 | 下移後端 route、拆 service、Storage 或 template sync 之前 |
 | [docs/specs/organization-roster-management-v1.md](docs/specs/organization-roster-management-v1.md) | 分校、班級老師編制、目前名單、跨期相本快照與穩定專案權限的實作契約 | 實作或審查園所管理、老師指派、專案轉交與組織權限 |
+| [docs/specs/term-scoped-classroom-v1.md](docs/specs/term-scoped-classroom-v1.md) | 班級改為「學期 × 分校 × 部門 × 班名」、`academic_term_classrooms` 退場與資料搬遷的實作契約 | 動班級身分、名冊／老師編制歸屬、編班或相本權限來源 |
+| [docs/specs/term-scoped-classroom-v1-risks.md](docs/specs/term-scoped-classroom-v1-risks.md) | 該重構的風險登錄、緩解決定、測試計畫與上線前檢查 | 動手做該重構之前、排上線順序之前 |
+| [docs/specs/websystem-roster-sync-v1.md](docs/specs/websystem-roster-sync-v1.md) | 行政系統為組織資料上游、對應鍵、快照取得、同步分類與安全閘的實作契約 | 實作或審查名冊／編制的自動同步、期中異動 |
 | [docs/specs/academic-term-reporting-v1.md](docs/specs/academic-term-reporting-v1.md) | 正式學期、班級期別工作格、老師進度與學期彙整匯出的實作契約 | 實作或審查學期遷移、進度報表、彙整匯出與歷史主管 scope |
+| [docs/specs/student-album-completion-v1.md](docs/specs/student-album-completion-v1.md) | 學生層個別完成、分層內容鎖、全班文字硬鎖與下載閘門的實作契約 | 實作或審查個別完成、完成鎖定、單生/全班下載解鎖 |
+| [docs/specs/period-album-creation-lock-v1.md](docs/specs/period-album-creation-lock-v1.md) | 期別建立相本鎖、carryover 名冊／編制判準、已結束學期的補建入口 | 動「還能不能開新相本」、期別鎖、跨學期補建 |
 | docs/teacher-album-guide.md 等 | 終端使用者教學（老師 / 設計組），由 `scripts/generate_*.mjs` 產出 HTML/PDF | 改使用者教學 |
 
 ## Agent 硬規則（必守）

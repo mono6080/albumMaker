@@ -9,7 +9,6 @@ from database import (
     Semester,
     Classroom,
     ClassroomTeacher,
-    SemesterPeriod,
     ClassPeriodWorkSlot,
     Project,
 )
@@ -18,31 +17,11 @@ from services.organization_scope_service import (
     REPORTING_SEMESTER_STATUSES,
     apply_term_classroom_report_scope,
     load_reporting_semester_or_404,
+    serialize_reporting_period,
+    serialize_reporting_term,
 )
 from services.student_progress import summarize_student_progress
 from services.student_render_service import get_template_page_layouts
-
-
-def _serialize_semester_period(semester_period: SemesterPeriod) -> dict:
-    return {
-        "id": semester_period.template_period_id,
-        "semester_period_id": semester_period.id,
-        "template_period_id": semester_period.template_period_id,
-        "name": semester_period.period_name_snapshot,
-        "department": semester_period.department,
-        "position": semester_period.position,
-    }
-
-
-def _serialize_term(term: Semester) -> dict:
-    return {
-        "id": term.id,
-        "label": term.label,
-        "status": term.status,
-        "is_current": term.status in {"imported", "active"},
-        "starts_on": term.starts_on.isoformat() if term.starts_on else None,
-        "ends_on": term.ends_on.isoformat() if term.ends_on else None,
-    }
 
 
 def list_reporting_semesters(
@@ -87,7 +66,7 @@ def list_reporting_semesters(
             else visible_departments_by_term.get(term.id, set())
         )
         periods = [
-            _serialize_semester_period(period)
+            serialize_reporting_period(period)
             for period in sorted(term.periods, key=lambda row: row.position)
             if visible_departments is None
             or period.department in visible_departments
@@ -95,7 +74,7 @@ def list_reporting_semesters(
         if not periods:
             continue
         terms_payload.append({
-            **_serialize_term(term),
+            **serialize_reporting_term(term),
             "periods": periods,
         })
     return {
@@ -389,8 +368,8 @@ def build_teacher_progress_overview(
         })
 
     return {
-        "term": _serialize_term(term),
-        "periods": [_serialize_semester_period(period) for period in report_periods],
+        "term": serialize_reporting_term(term),
+        "periods": [serialize_reporting_period(period) for period in report_periods],
         "summary": summary,
         "classrooms": classrooms_payload,
     }

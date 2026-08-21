@@ -544,8 +544,12 @@ def test_stale_expected_revision_returns_409_without_any_write():
             ),
         )
         assert_status(stale, 409)
+        # message 是 2026-08 補上的：同一個 code 在 template_asset_service 有中文訊息、
+        # 在這裡沒有，前端因此對同一件事顯示兩種結果（一邊是後端寫的句子，一邊是
+        # 通用 fallback）。這裡刻意用完整比對，改形狀就要在這裡明確承認。
         assert stale.json()["detail"] == {
             "code": "template_revision_changed",
+            "message": "模板已被其他操作更新，請重新整理後再試",
             "expected_revision": 1,
             "actual_revision": 2,
         }

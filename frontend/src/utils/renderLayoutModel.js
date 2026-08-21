@@ -19,7 +19,7 @@ export const CANVAS_SCALE = CANVAS_DISPLAY_WIDTH / CANVAS_REAL_WIDTH;
 export const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_REAL_HEIGHT * CANVAS_SCALE);
 // 避免 530 × ratio 因 IEEE 浮點成為 793.999…，被原生 canvas 截成 793px。
 export const CANVAS_SCENE_PIXEL_RATIO = 1 / CANVAS_SCALE + Number.EPSILON;
-export const STICKER_DEFAULT_MAX_SIDE = 150;
+const STICKER_DEFAULT_MAX_SIDE = 150;
 
 const Z_BASE = { photo: 0, text: 200, sticker: 300 };
 
@@ -87,7 +87,7 @@ export function getDisplayBox(data) {
   };
 }
 
-export function getPhotoSlotModel(data, elemIndex, pageIndex = 0, dimensionMode) {
+function getPhotoSlotModel(data, elemIndex, pageIndex = 0, dimensionMode) {
   const frameRect = getPhotoFrameRect(data, { dimensionMode });
   const frameW = toDisplayCoord(frameRect.width);
   const frameH = toDisplayCoord(frameRect.height);
@@ -130,7 +130,7 @@ export function getPhotoSlotModel(data, elemIndex, pageIndex = 0, dimensionMode)
   };
 }
 
-export function getTextLabelModel(data) {
+function getTextLabelModel(data) {
   return {
     type: "text",
     id: data.id,
