@@ -118,6 +118,15 @@ draw_helpers.py      PIL 低階：get_font / to_srgb / paste_rotated /
   **並行**（每執行緒獨立 session；慢的 R2 storage 往返並行、DB 快照由
   project content lock 自然序列化），常態全 fresh 時 ZIP 幾乎立即開始。
   不分角色（含唯讀）拿到的都是當下內容，不再有「尚未產生」404
+- **學期彙整的補渲染也以指紋判斷**（2026-08-21 補）：
+  `semester_render_service.render_missing_semester_albums` 原本只看
+  storage 有沒有那個 print PDF 的 key，key 在就跳過——所以改內容、換字型或渲染管線
+  改版之後，舊 PDF 還在就不會被重畫，ZIP 照舊出貨。現在改用
+  `completion_render_service.find_stale_students()`（同一套指紋判斷、並行只讀）。
+  **仍未涵蓋的**：匯出預覽的 cell 狀態與 ZIP 下載本身還是只看 key 存在，所以
+  admin 若跳過「補渲染」直接下載，仍可能拿到過期檔。要讓預覽也判斷新鮮度，
+  成本是每位約 4 次 storage 往返（一個學期 827 格 ≈ 3300 次），
+  不能放進互動式頁面載入路徑——需要另設計一個便宜的過期訊號。
 - 前端班級總覽因此**不再於下載前逐位渲染**（`useProjectReviewDownloads`），
   下載按鈕直接觸發；測試中背景渲染由 `tests/conftest.py` autouse fixture 停用，
   觸發契約見 `tests/test_completion_auto_render.py`

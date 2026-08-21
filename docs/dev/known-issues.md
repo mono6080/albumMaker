@@ -101,6 +101,16 @@ Safari 問題」**——如果是應用本身在切換使用者時吃掉太多�
   五種，由 `frontend/tests/unit/api-error.test.mjs` 釘住）；缺的是這 12 個代碼的中文文案，
   那是產品決定，不該由實作者代擬。
 
+- **學期匯出的預覽與下載仍只看 key 存不存在**：補渲染那一步已改成指紋判斷
+  （見 [rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲)），但
+  `semester_export_service._serialize_entry` 的 `has_pdf` 與 `_cell_status` 仍是
+  「storage 有這個 key 就是 ready」，`open_semester_export_zip_stream` 也直接串流舊檔。
+  所以 admin 若跳過「補渲染」直接下載，仍可能拿到過期的 PDF，而 UI 顯示綠色 ready。
+  難處是成本：完整指紋檢查每位約 4 次 storage 往返，2026-08 實測一個學期有 827 個
+  學生格（≈3300 次往返），放進互動式的預覽載入會讓 admin 一開頁就等。
+  要修得先設計一個便宜的過期訊號（例如把 `_RENDER_PIPELINE_VERSION` 與 template
+  revision 這類全域／每本的訊號抽出來單獨比對，不必逐位讀 storage）。
+
 - **行政系統同步寫入的學號沒有正規化**：`student_input_policy.normalize_student_serial`
   是學號的唯一真相來源（去空白、轉大寫），API 端建名冊時走它；
   `scripts/sync_websystem_roster.py` 的 `apply_changes` 沒有，上游給什麼就寫什麼。

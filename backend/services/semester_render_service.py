@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from database import Project, ProjectStudent
+from services.completion_render_service import find_stale_students
 from services.request_limiter import album_render_limiter
 from services.semester_export_service import (
     load_export_projects,
@@ -57,6 +58,7 @@ def render_missing_semester_albums(
 
     render_errors = []
     missing_pairs = []
+    already_rendered = []
     for candidates in candidates_by_child_period.values():
         if len(candidates) > 1:
             project_ids = sorted({project.id for project, _ in candidates})
@@ -73,8 +75,23 @@ def render_missing_semester_albums(
             print_pdf_key
             and print_pdf_key in output_keys_by_project.get(project.id, set())
         ):
+            already_rendered.append((project, student))
             continue
         missing_pairs.append((project, student))
+
+    # 「有檔案」不等於「檔案是對的」。這裡原本只看 key 存不存在就 continue，
+    # 所以換字型、改模板或渲染管線改版之後，舊 PDF 還在就會被跳過，
+    # 而 ZIP 會照舊出貨、cell 仍顯示 ready——匯出的內容靜靜過期，沒有人會發現。
+    # 老師端的下載路由早就有這道保證（ensure_student_render_fresh），
+    # 只有學期彙整這條線沒有。
+    stale_keys = find_stale_students(
+        [(int(project.id), int(student.id)) for project, student in already_rendered]
+    )
+    missing_pairs.extend(
+        (project, student)
+        for project, student in already_rendered
+        if (int(project.id), int(student.id)) in stale_keys
+    )
 
     total_count = len(missing_pairs)
     if progress_callback:
