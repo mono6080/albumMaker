@@ -53,6 +53,11 @@ ROUTE_INVENTORY: dict[str, tuple[RouteSpec, ...]] = {
         ),
         (
             "post",
+            "/{project_id}/students/from-roster",
+            "add_project_students_from_roster",
+        ),
+        (
+            "post",
             "/{project_id}/students/{student_id}/complete",
             "complete_project_student",
         ),

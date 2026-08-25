@@ -13,7 +13,7 @@ python -m pytest -q
 python -m ruff check backend tests
 python -m mypy backend tests
 python scripts/check_banned_patterns.py   # 唯一入口繞道禁令（CI 也會跑）
-python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；98 routes、零債務）
+python scripts/check_backend_route_boundaries.py  # 路由／service 邊界（CI；104 routes、零債務）
 
 # 前端
 cd frontend

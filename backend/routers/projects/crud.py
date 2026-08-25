@@ -29,6 +29,9 @@ from services.project_student_service import (
     set_page_skip as set_page_skip_use_case,
     update_student_album_name as update_student_album_name_use_case,
 )
+from services.organization_service import (
+    add_roster_children_to_project as add_roster_children_to_project_use_case,
+)
 from services.student_transfer_service import transfer_students_between_projects
 from template_periods import department_label
 
@@ -46,6 +49,7 @@ from .schemas import (
     StudentAlbumNameUpdate,
     StudentTransferPayload,
     StudentIdentityResult,
+    RosterChildAdditionPayload,
 )
 
 router = APIRouter()
@@ -302,6 +306,22 @@ def transfer_project_students(
         source_project_id=project_id,
         target_project_id=payload.target_project_id,
         student_ids=payload.student_ids,
+    )
+
+
+@router.post("/{project_id}/students/from-roster")
+def add_project_students_from_roster(
+    project_id: int,
+    payload: RosterChildAdditionPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """把名冊上還沒被這一格任何相本收錄的孩子補進這一本（期中入學用）。"""
+    return add_roster_children_to_project_use_case(
+        db,
+        current_user,
+        project_id,
+        payload.roster_child_ids,
     )
 
 

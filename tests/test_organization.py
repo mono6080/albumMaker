@@ -1063,3 +1063,104 @@ def test_classroom_order_is_stored_and_requires_the_complete_set():
         )
         assert_status(duplicated, 422)
         assert duplicated.json()["detail"]["code"] == "duplicate_classroom_id"
+
+
+def test_mid_term_roster_child_is_added_to_existing_project():
+    """期中入學的孩子補得進已經開好的相本，既有成員快照完全不動。"""
+    with started_client() as client:
+        login(client)
+        template_id = _create_active_template(client)
+        _, classroom_id = _create_campus_and_classroom(client)
+        lead_teacher = _create_teacher(client)
+        _replace_teachers(
+            client,
+            classroom_id,
+            [{"teacher_id": lead_teacher["id"], "duty": "lead"}],
+        )
+        _add_members(client, classroom_id, ["林小美"])
+        project = _create_classroom_project(
+            client,
+            classroom_id,
+            template_id,
+            lead_teacher["id"],
+        )
+        existing_student = project["students"][0]
+
+        # 相本開好之後才入班的孩子
+        late_member = _add_members(client, classroom_id, ["王大明"])[0]
+        response = client.post(
+            f"/api/projects/{project['id']}/students/from-roster",
+            json={"roster_child_ids": [late_member["roster_child_id"]]},
+        )
+        assert_status(response, 200)
+        students = response.json()["students"]
+        assert [student["name"] for student in students] == ["林小美", "王大明"]
+        added = students[-1]
+        assert added["roster_child_id"] == late_member["roster_child_id"]
+        assert added["order_index"] == existing_student["order_index"] + 1
+        assert students[0]["id"] == existing_student["id"]
+        assert students[0]["name"] == existing_student["name"]
+        assert students[0]["roster_child_id"] == existing_student["roster_child_id"]
+
+        db = SessionLocal()
+        try:
+            added_row = db.get(ProjectStudent, added["id"])
+            assert added_row.project_id == project["id"]
+            assert added_row.pages_data_json == "[]"
+            assert added_row.album_name is None
+        finally:
+            db.close()
+
+
+def test_adding_roster_child_rejects_slot_duplicate_and_non_member():
+    """同格收過的孩子與不在本班名單的孩子都補不進來。"""
+    with started_client() as client:
+        login(client)
+        template_id = _create_active_template(client)
+        campus_id, classroom_id = _create_campus_and_classroom(client)
+        lead_teacher = _create_teacher(client)
+        _replace_teachers(
+            client,
+            classroom_id,
+            [{"teacher_id": lead_teacher["id"], "duty": "lead"}],
+        )
+        members = _add_members(client, classroom_id, ["林小美", "王大明"])
+        project = _create_classroom_project(
+            client,
+            classroom_id,
+            template_id,
+            lead_teacher["id"],
+        )
+
+        duplicate_response = client.post(
+            f"/api/projects/{project['id']}/students/from-roster",
+            json={"roster_child_ids": [members[0]["roster_child_id"]]},
+        )
+        assert_status(duplicate_response, 409)
+        assert (
+            duplicate_response.json()["detail"]["code"]
+            == "roster_child_already_in_slot"
+        )
+
+        _, other_classroom_id = _create_campus_and_classroom(
+            client,
+            campus_id=campus_id,
+        )
+        outsider = _add_members(client, other_classroom_id, ["陳小雲"])[0]
+        outsider_response = client.post(
+            f"/api/projects/{project['id']}/students/from-roster",
+            json={"roster_child_ids": [outsider["roster_child_id"]]},
+        )
+        assert_status(outsider_response, 422)
+        assert (
+            outsider_response.json()["detail"]["code"]
+            == "roster_child_not_in_classroom"
+        )
+
+        db = SessionLocal()
+        try:
+            assert db.query(ProjectStudent).filter(
+                ProjectStudent.project_id == project["id"]
+            ).count() == 2
+        finally:
+            db.close()
