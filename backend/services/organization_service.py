@@ -11,6 +11,7 @@ from crud.organization_crud import (
     get_class_roster_member_or_404,
     get_classroom_or_404,
 )
+from crud.project_crud import get_project_or_404
 from crud.template_crud import get_template_or_404
 from crud.user_crud import get_user_or_404
 from database import (
@@ -46,7 +47,10 @@ from services.project_assignment_service import (
     serialize_assignment_history,
     validate_project_owner,
 )
-from services.project_access_service import assert_classroom_project_creatable
+from services.project_access_service import (
+    assert_classroom_project_creatable,
+    assert_project_content_writable,
+)
 from services.project_lifecycle_service import build_project_record
 from services.organization_transaction import (
     organization_mutation,
@@ -2429,6 +2433,147 @@ def create_classroom_project(
                     pages_data_json="[]",
                     roster_child_id=member.roster_child_id,
                 ))
+            db.flush()
+            db.commit()
+            db.refresh(project)
+            return _serialize_project(project)
+
+
+def add_roster_children_to_project(
+    db: Session,
+    current_user: User,
+    project_id: int,
+    roster_child_ids: list[int],
+) -> dict:
+    """把名冊上還沒被這一格任何相本收錄的孩子，補進一本已經存在的相本。
+
+    期中入學的孩子是相本開好之後才進名冊的。成員集合若完全凍結，他就只能自己
+    獨立一本——期末彙整因此多出一本、老師也得重做一次版面。這個窄口補的正是凍結
+    本來要防的「漏算」：孩子仍在同班同期、身分直接取自目前名單、同格沒有別本收
+    過他，凍結要防的三件事一件都不踩。既有成員完全不動，所以這裡只 INSERT，
+    `trg_project_students_freeze_class_backed_identity` 擋的 UPDATE 一律不做。
+
+    期別建立鎖不在這裡判斷：那個鎖的語意是「還能不能開新相本」
+    （見 docs/specs/period-album-creation-lock-v1.md），補人不是開新相本。
+    已標記完成的相本則由 assert_project_content_writable 的內容鎖擋下。
+    """
+    requested_ids = list(dict.fromkeys(roster_child_ids))
+    if not requested_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "no_roster_children", "message": "請至少選擇一位孩子"},
+        )
+    project = get_project_or_404(project_id, db)
+    assert_project_content_writable(project, current_user, db)
+    with organization_acl_lock, lock_project_content_writes([project_id]):
+        with organization_write_transaction(db):
+            project = get_project_or_404(project_id, db)
+            assert_project_content_writable(project, current_user, db)
+            if (
+                project.classroom_id is None
+                or project.class_period_work_slot_id is None
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "project_not_class_backed",
+                        "message": "只有已歸班的相本可以從名冊補人",
+                    },
+                )
+            active_members = (
+                db.query(ClassroomMember)
+                .options(selectinload(ClassroomMember.roster_child))
+                .filter(
+                    ClassroomMember.classroom_id == project.classroom_id,
+                    roster_carryover_condition(),
+                )
+                .order_by(ClassroomMember.started_at, ClassroomMember.id)
+                .all()
+            )
+            member_by_child_id = {
+                int(member.roster_child_id): member for member in active_members
+            }
+            missing_ids = [
+                child_id
+                for child_id in requested_ids
+                if child_id not in member_by_child_id
+            ]
+            if missing_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "roster_child_not_in_classroom",
+                        "roster_child_ids": missing_ids,
+                        "message": "選到的孩子不在這個班級的目前名單",
+                    },
+                )
+            # 同格既有相本收過的孩子不能再收一次，否則期末彙整會把他算成兩次。
+            # 已刪除（deleted_at）的相本不佔名額，與建立相本時同一條判準。
+            slot_taken_child_ids = {
+                int(child_id)
+                for (child_id,) in db.query(ProjectStudent.roster_child_id)
+                .join(Project, ProjectStudent.project_id == Project.id)
+                .filter(
+                    Project.class_period_work_slot_id
+                    == project.class_period_work_slot_id,
+                    Project.deleted_at.is_(None),
+                    ProjectStudent.roster_child_id.isnot(None),
+                )
+                .all()
+            }
+            conflicting_ids = [
+                child_id
+                for child_id in requested_ids
+                if child_id in slot_taken_child_ids
+            ]
+            if conflicting_ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "roster_child_already_in_slot",
+                        "roster_child_ids": conflicting_ids,
+                        "message": "選到的孩子已經編入這個班級期別的相本",
+                    },
+                )
+            existing_students = list(project.students)
+            assert_project_student_capacity(
+                len(existing_students), len(requested_ids)
+            )
+            added_names = [
+                member_by_child_id[child_id].roster_child.name
+                for child_id in requested_ids
+            ]
+            # 同一本裡不允許同名：渲染輸出與匯出檔名都靠姓名認人。
+            duplicate_names = [
+                child_name
+                for child_name, count in Counter(
+                    [student.name for student in existing_students] + added_names
+                ).items()
+                if count > 1
+            ]
+            if duplicate_names:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "duplicate_active_child_name",
+                        "names": duplicate_names,
+                    },
+                )
+            next_order_index = max(
+                (int(student.order_index or 0) for student in existing_students),
+                default=-1,
+            ) + 1
+            for offset, child_id in enumerate(requested_ids):
+                member = member_by_child_id[child_id]
+                db.add(ProjectStudent(
+                    project_id=project.id,
+                    name=member.roster_child.name,
+                    album_name=None,
+                    order_index=next_order_index + offset,
+                    pages_data_json="[]",
+                    roster_child_id=member.roster_child_id,
+                ))
+            project.updated_at = utc_now()
             db.flush()
             db.commit()
             db.refresh(project)

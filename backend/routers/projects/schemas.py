@@ -291,3 +291,8 @@ class StudentTransferPayload(BaseModel):
     """把學生搬到同一個班級期別的另一本相本。"""
     target_project_id: int
     student_ids: list[int]
+
+
+class RosterChildAdditionPayload(BaseModel):
+    """把名冊上尚未被這一格任何相本收錄的孩子補進這一本。"""
+    roster_child_ids: list[int]
