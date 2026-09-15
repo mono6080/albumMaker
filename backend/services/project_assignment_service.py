@@ -13,7 +13,12 @@ from database import (
     utc_now,
 )
 from services.organization_lock import organization_acl_lock
-from services.organization_scope_service import teacher_carryover_condition
+from services.organization_scope_service import (
+    build_organization_read_scope,
+    project_in_supervisor_scope,
+    teacher_carryover_condition,
+)
+from services.project_access_service import project_awaits_supervisor_takeover
 from services.template_sync_locks import lock_project_content_writes
 
 
@@ -105,10 +110,25 @@ def assign_project_owner(
                 ClassroomTeacher.teacher_id == target_owner.id,
                 staffing_condition,
             ).first()
-            if target_owner.role not in {"teacher", "supervisor"} or eligible_teacher is None:
+            # 已結束學期、還沒做完的相本另可交給轄區主管：學期結束後編制凍結、補不進
+            # 新老師，原班老師做不了時只剩主管能接手。與製作權同一條判準。
+            eligible_supervisor = (
+                eligible_teacher is None
+                and project_awaits_supervisor_takeover(project)
+                and project_in_supervisor_scope(
+                    project,
+                    build_organization_read_scope(db, target_owner),
+                )
+            )
+            if target_owner.role not in {"teacher", "supervisor"} or not (
+                eligible_teacher is not None or eligible_supervisor
+            ):
                 raise HTTPException(
                     status_code=422,
-                    detail="進度負責人必須是該班目前老師，或該班上一學期、相本尚未完成時的老師",
+                    detail=(
+                        "進度負責人必須是該班目前老師、該班上一學期且相本尚未完成時的老師，"
+                        "或已結束學期未完成相本的轄區主管"
+                    ),
                 )
             history = record_project_owner_transfer(
                 db,

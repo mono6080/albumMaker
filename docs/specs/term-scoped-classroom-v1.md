@@ -37,6 +37,12 @@ Decision：老師的相本**讀取**權 =「曾被指派到的學期班級」，
 >
 > 同一條規則也套用在**轉交進度負責人**：原本要求接手人在該班有未結束的編制，切換之後
 > 那些未完成的相本就再也換不了人——而原老師離職或請假正是最需要換人的時候。
+>
+> 2026-09-15 再補**主管接手**：已結束學期裡還沒完成的相本，該校／部門的 active 主管也能
+> 製作、也能被轉交為進度負責人。學期結束後編制由 trigger 凍結、補不進新老師，原班老師
+> 做不了時這本就沒有人能完成。目前學期的相本不適用——那是當班老師正在做的，主管只審閱
+> 與退回；相本標記完成後同樣回到鎖定。判準在
+> `project_access_service.project_awaits_supervisor_takeover`，製作權與轉交共用。
 
 ## Problem
 
@@ -124,8 +130,10 @@ AcademicTerm（學期）
 
 - **讀**：`Project → work_slot → classroom`，該學期班級 上使用者有任何一筆
   `ClassroomTeacherAssignment`（不論 `ended_at`）即可讀。
-- **製作**（`can_edit`）：同一個學期班級 上有 `ended_at IS NULL` 的指派。
-- **主管**：不變，仍走 `Project.campus_id_snapshot` × 部門的 scope key。
+- **製作**（`can_edit`）：同一個學期班級 上有 `ended_at IS NULL` 的指派；相本尚未完成時
+  另認因學期輪替而結束的指派（見 [Verdict](#verdict)）。
+- **主管**：仍走 `Project.campus_id_snapshot` × 部門的 scope key 讀取與退回；已結束學期裡
+  尚未完成的相本另可製作與接任進度負責人（見 [Verdict](#verdict)）。
 - `my-classrooms` 與建立相本的閘門：只看目前正式學期（`status IN ('imported','active')`）
   且 `ended_at IS NULL` 的指派。
 

@@ -35,6 +35,11 @@ from tests.helpers import (
     started_client,
     unique_name,
 )
+from tests.test_period_album_creation_lock import (
+    _close_semester_like_term_apply,
+    _create_album,
+    _setup_classroom,
+)
 
 
 def _seed_project(
@@ -1468,3 +1473,136 @@ def test_teacher_removed_from_class_cannot_take_over_even_if_unfinished():
             json={"owner_id": taking_over["id"], "reason": "不該成立"},
         )
         assert_status(rejected, 422)
+
+
+def _seed_closed_term_takeover_case(client, admin):
+    """一本目前學期的未完成相本，加上該校全校主管與別校全校主管各一位。
+
+    學期先不關：測試要先確認目前學期不適用，再呼叫 `_close_semester_like_term_apply`。
+    """
+    setup = _setup_classroom(client)
+    album = _create_album(client, setup)
+    assert_status(album, 201)
+    in_scope, in_scope_password = create_user(client, "supervisor")
+    out_of_scope, out_of_scope_password = create_user(client, "supervisor")
+    db = SessionLocal()
+    try:
+        classroom = db.get(Classroom, setup["classroom_id"])
+        assert classroom is not None
+        other_campus = Campus(name=unique_name("別校"))
+        db.add(other_campus)
+        db.flush()
+        for supervisor, campus_id in (
+            (in_scope, classroom.campus_id),
+            (out_of_scope, other_campus.id),
+        ):
+            db.add(OrganizationSupervisorAssignment(
+                campus_id=campus_id,
+                department=None,
+                supervisor_id=supervisor["id"],
+                supervisor_name_snapshot=supervisor["display_name"],
+                started_by_id=admin["user_id"],
+                started_by_name_snapshot=admin["display_name"],
+            ))
+        db.commit()
+    finally:
+        db.close()
+    return (
+        album.json()["id"],
+        setup["classroom_id"],
+        (in_scope, in_scope_password),
+        (out_of_scope, out_of_scope_password),
+    )
+
+
+def _set_project_completed(project_id: int, completed: bool) -> None:
+    db = SessionLocal()
+    try:
+        project = db.get(Project, project_id)
+        assert project is not None
+        project.completed_at = utc_now() if completed else None
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_supervisor_can_finish_an_unfinished_album_only_after_the_semester_closed():
+    """已結束學期裡還沒做完的相本，轄區主管可以接手製作。
+
+    學期結束後編制由 trigger 凍結、補不進新老師，原班老師做不了時就沒人能做完。
+    目前學期的相本仍只由當班老師製作，主管只審閱與退回；完成後回到鎖定。
+    """
+    with started_client() as client:
+        admin = login(client)
+        project_id, classroom_id, in_scope, out_of_scope = (
+            _seed_closed_term_takeover_case(client, admin)
+        )
+
+        def login_as(account):
+            user, password = account
+            client.cookies.clear()
+            login(client, user["username"], password)
+
+        login_as(in_scope)
+        current_term = client.get(f"/api/projects/{project_id}")
+        assert_status(current_term, 200)
+        assert current_term.json()["permissions"]["can_edit"] is False
+        assert_status(
+            client.patch(
+                f"/api/projects/{project_id}",
+                data={"name": unique_name("目前學期主管不能改")},
+            ),
+            403,
+        )
+
+        _close_semester_like_term_apply(classroom_id)
+
+        closed_term = client.get(f"/api/projects/{project_id}")
+        assert_status(closed_term, 200)
+        assert closed_term.json()["permissions"]["can_edit"] is True
+        assert_status(
+            client.patch(
+                f"/api/projects/{project_id}",
+                data={"name": unique_name("主管接手改名")},
+            ),
+            200,
+        )
+
+        # 別校主管不在 scope：連讀都不行
+        login_as(out_of_scope)
+        assert_status(client.get(f"/api/projects/{project_id}"), 403)
+
+        _set_project_completed(project_id, True)
+        login_as(in_scope)
+        completed = client.get(f"/api/projects/{project_id}")
+        assert_status(completed, 200)
+        assert completed.json()["permissions"]["can_edit"] is False
+
+
+def test_closed_term_unfinished_album_can_be_handed_over_to_a_supervisor_in_scope():
+    """轉交與製作權同一條判準：已結束學期、未完成、轄區主管，三者缺一不可。"""
+    with started_client() as client:
+        admin = login(client)
+        project_id, classroom_id, (in_scope, _), (out_of_scope, _) = (
+            _seed_closed_term_takeover_case(client, admin)
+        )
+
+        def hand_over(user):
+            return client.post(
+                f"/api/projects/{project_id}/assignment",
+                json={"owner_id": user["id"], "reason": "原班老師無法完成"},
+            )
+
+        # 目前學期不適用
+        assert_status(hand_over(in_scope), 422)
+
+        _close_semester_like_term_apply(classroom_id)
+
+        assert_status(hand_over(out_of_scope), 422)
+        _set_project_completed(project_id, True)
+        assert_status(hand_over(in_scope), 422)
+        _set_project_completed(project_id, False)
+
+        handover = hand_over(in_scope)
+        assert_status(handover, 200)
+        assert handover.json()["owner_id"] == in_scope["id"]
