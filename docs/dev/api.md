@@ -30,7 +30,7 @@
 | 看已歸班專案 | 全部 | 全部（唯讀） | 目前任教班級 ∪ 主管 scope | 目前任教班級 ∪ 主管 scope | — |
 | 看待遷移未歸班專案 | ✓ | — | — | — | — |
 | 建立班級相本 | ✓ | — | 當班主教 | 當班主教 | — |
-| 編輯專案內容 | ✓ | — | 目前任教班級 | 目前任教班級 | — |
+| 編輯專案內容 | ✓ | — | 目前任教班級；已結束學期未完成的相本另含校／部門 scope | 目前任教班級；已結束學期未完成的相本另含校／部門 scope | — |
 | 退回全班完成 | ✓ | — | 校／部門 scope | 校／部門 scope | — |
 | 審閱留言 | ✓ | ✓ | 主管 scope；否則唯讀 | 主管 scope；否則唯讀 | — |
 | 完整（列印）畫質 PDF | ✓ | — | — | — | — |
@@ -39,7 +39,7 @@
 | 使用者管理 | ✓ | — | — | — | — |
 | 園所設定／編班／相本遷移與轉交 | ✓ | — | — | — | — |
 | 自己範圍的班級相本（唯讀） | ✓ | — | 目前 ∪ 曾任教班級 ∪ 主管 scope | 目前 ∪ 曾任教班級 ∪ 主管 scope | — |
-| 班級相本製作（`can_edit`） | ✓ | — | 只有目前任教班級 | 只有目前任教班級 | — |
+| 班級相本製作（`can_edit`） | ✓ | — | 目前任教班級（未完成相本含學期輪替結束的編制）；已結束學期未完成的相本另含校／部門 scope | 目前任教班級（未完成相本含學期輪替結束的編制）；已結束學期未完成的相本另含校／部門 scope | — |
 | 登入 | ✓ | ✓ | ✓ | ✓ | 拒絕 |
 
 - 前端旗標集中在 `hooks/usePermissions.js`（`canManageTemplates` /
@@ -54,7 +54,8 @@
 `teacher`／`supervisor` 是可參與園所編制的操作帳號族群，不是互斥職務。一個帳號可在不改
 `User.role` 的情況下同時具有 `ClassroomTeacher` 與
 `OrganizationSupervisorAssignment`：active 任教區間授予該班讀寫與主教建立權，active
-主管區間授予範圍讀取、退回完成與主管報表權。沒有對應 active 指派就沒有該項能力；
+主管區間授予範圍讀取、退回完成與主管報表權，以及已結束學期未完成相本的製作權。沒有對應
+active 指派就沒有該項能力；
 `admin`、`art_team`、`none` 的既有語意不受此規則擴張。
 
 ## 圖片端點認證
@@ -134,7 +135,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 
 名單成員、完整姓名、老師異動與新學期套用不改寫既有 Project 的學生快照或 owner；中央
 相本稱呼是例外，修改會失效相關輸出。現在老師集合會立即決定該班所有相本的**製作權**（`ended_at IS NULL` 的指派，
-未完成的相本另認僅因學期輪替結束的編制）；
+未完成的相本另認僅因學期輪替結束的編制；已結束學期未完成的相本另開放該校／部門主管接手）；
 **讀取**只要在該學期班級有過任何一筆指派即可，所以學期轉換不會讓老師看不到自己去年
 做的相本，而接手同名班的新老師也不會拿到上一屆的相本——班不跨學期，兩者是不同的班。
 見 [term-scoped-classroom-v1](../specs/term-scoped-classroom-v1.md#權限契約)。
@@ -175,7 +176,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/{id}/students/from-roster` | 把名冊上尚未被這一格任何相本收錄的孩子補進這一本（期中入學用；同 `can_edit`，相本已完成時僅 admin）；body 帶 `roster_child_ids`。只 INSERT `ProjectStudent`（`pages_data_json="[]"`、`order_index` 接續），既有成員完全不動。限制：相本須已歸班、孩子須在該班目前名單、同格（含其他相本）未收錄過、不超過單本人數上限、同本不得同名；違反依序回 422/409 附 code。不看期別建立鎖——那個鎖管的是「能不能開新相本」 |
 | POST | `/{id}/students/{sid}/complete` | 標記單一學生完成（同 `can_edit`）；前置條件：該生照片與可填文字全數填滿（與老師進度同一計算，`student_progress.summarize_student_progress`），未滿回 409 `student_content_incomplete` 附計數；冪等；全班皆完成時同 transaction 自動寫入 `project.completed_at` |
 | POST | `/{id}/students/{sid}/reopen` | 退回單一學生完成（僅 `can_reopen`）；全班完成已成立時一併清除 `project.completed_at`，其他學生保留 |
-| POST | `/{id}/assignment` | admin 把進度負責人轉給該班目前老師並寫 from/to/operator 快照與原因；owner 不授權 |
+| POST | `/{id}/assignment` | admin 把進度負責人轉給能製作該相本的人（該班目前老師；未完成相本另認學期輪替結束的編制；已結束學期未完成的相本另可轉給該校／部門主管），不符回 422；寫 from/to/operator 快照與原因；owner 不授權 |
 | GET | `/{id}/assignment-history` | admin 查詢完整負責人轉交時間線 |
 | POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
 | POST | `/{id}/students/{sid}/album-name/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |

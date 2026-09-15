@@ -120,7 +120,8 @@ migration 後不再為班級相本建立新 editor row；舊 row 不刪除。除
 
 `Project.owner_id` 繼續表示唯一的目前主要負責人及報表歸屬；
 `ProjectAssignmentHistory` 繼續記錄每次轉交。owner 不授予讀寫權；admin 只能把班級相本
-轉交給該班目前老師，舊 owner 是否仍有權限完全由其目前班級編制決定。
+轉交給能製作它的人（該班目前老師，例外見下方[專案 object policy](#專案-object-policy)），
+舊 owner 是否仍有權限完全由其目前班級編制決定。
 
 `Project` 另保存 `campus_name_snapshot`、`classroom_name_snapshot`。班級改名、停用或
 新學期重新編班後，舊相本仍以建立當下名稱顯示。已有明確 `classroom_id` 的資料由 schema
@@ -303,10 +304,10 @@ apply 遇 stale 回 409，其他 business error 回 422，兩者都必須零寫�
 | 能力 | 規則 |
 |---|---|
 | 讀取 | admin；班級相本另開放 art_team、該班 active teacher assignment、該校／部門 active supervisor assignment |
-| 編輯 | admin、班級相本的 active teacher assignment，不依 base role |
+| 編輯 | admin、班級相本的 active teacher assignment，不依 base role；未完成的相本另認學期輪替結束的編制，已結束學期未完成的相本另開放該校／部門 active supervisor assignment（見 [term-scoped-classroom-v1](term-scoped-classroom-v1.md#權限契約)） |
 | 退回完成 | admin；班級相本的該校／部門 active supervisor assignment，不依 base role |
 | 新增審閱留言 | admin、art_team；班級相本的 active supervisor assignment，不依 base role |
-| 轉交 owner | admin，且目標須為該班 active teacher assignment |
+| 轉交 owner | admin；目標須為該班 active teacher assignment，或符合上列編輯例外者 |
 
 Project list、archive、detail、學生、照片、留言、預覽、渲染及下載的 direct-id 檢查必須
 使用相同 policy。Project summary、detail 與 `StudentEditorProject` 都回傳後端計算的
@@ -395,7 +396,8 @@ active 班級端點建立，協作權只來自 active 班級老師編制。semes
 2. 以班級目前名單建立兩期相本；owner 是 lead，ProjectStudent 不保存另一份稱呼，所有 active
    class teachers 可編且無 editor row。之後在園所設定修改或清除稱呼，兩期既有相本與後續
    新相本都立即解析為同一中央值，舊輸出失效；相本工作台只讀稱呼，沒有學生或稱呼維護入口。
-3. lead 與 co_teacher 可編；同校全校主管及同校同部門主管可讀／退回但不能編；其他校／
+3. lead 與 co_teacher 可編；同校全校主管及同校同部門主管可讀／退回但不能編（已結束學期
+   未完成的相本例外）；其他校／
    部門主管 403；art_team 只讀；admin 全部可管。
 4. 把班級 lead 從 A 改成 B；B 立即可編全部班級相本，A 失去班級權限，owner 歸戶不自動改。
 5. admin 顯式把既有相本 owner 從 A 轉交 B；history 保留 A→B，但 ACL 集合不因此改變。

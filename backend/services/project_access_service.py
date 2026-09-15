@@ -50,6 +50,23 @@ def _actor_scope(
     return organization_scope
 
 
+def project_awaits_supervisor_takeover(project: Project) -> bool:
+    """已結束學期裡還沒做完的相本：原班老師做不了時，由轄區主管接手。
+
+    學期結束後編制由 trigger 凍結，補不進新老師；原老師離職或請假時，這本相本就再也
+    沒有人能做完。目前學期的相本不適用——那是當班老師正在做的，主管只審閱與退回。
+    相本標記完成後回到鎖定，所以不是永久後門。
+
+    製作權（`get_project_permissions`）與進度負責人轉交（`assign_project_owner`）
+    共用這一條，不得各寫一份。
+    """
+    return (
+        project.completed_at is None
+        and project.classroom is not None
+        and project.classroom.semester.status == "closed"
+    )
+
+
 def get_project_permissions(
     project: Project,
     current_user: User,
@@ -93,6 +110,9 @@ def get_project_permissions(
         and project.completed_at is None
         and project_in_teacher_carryover_scope(project, actor_scope)
     )
+    in_closed_term_takeover = bool(
+        in_supervisor_scope and project_awaits_supervisor_takeover(project)
+    )
 
     return {
         "can_read": bool(
@@ -103,7 +123,11 @@ def get_project_permissions(
             is_admin
             or (
                 is_classroom_project
-                and (in_teacher_scope or in_unfinished_own_classroom)
+                and (
+                    in_teacher_scope
+                    or in_unfinished_own_classroom
+                    or in_closed_term_takeover
+                )
             )
         ),
         "can_reopen": bool(
