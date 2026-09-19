@@ -19,6 +19,7 @@ import "./text-progress.test.mjs";
 import "./roles.test.mjs";
 import "./classroom-assignments.test.mjs";
 import "./roster-member-input.test.mjs";
+import "./album-name.test.mjs";
 
 import { runTests } from "./harness.mjs";
 

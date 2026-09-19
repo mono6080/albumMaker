@@ -48,6 +48,11 @@ import {
   getProjectsOutsideClassrooms,
   getTeacherAssignedClassrooms,
 } from "../utils/classroomAssignments";
+import {
+  buildDefaultCustomName,
+  composeAlbumName,
+  customNameMaxLength,
+} from "../utils/albumName";
 
 const PROJECT_LIST_GUIDE_STEPS = [
   {
@@ -60,7 +65,7 @@ const PROJECT_LIST_GUIDE_STEPS = [
   {
     element: '[data-guide="project-create-form"]',
     title: "選模板與命名",
-    description: "選擇該班部門目前使用中的期別與模板，再填入相本名稱。",
+    description: "選擇該班部門目前使用中的期別與模板，再填入自訂名稱；相本全名會自動接在模板名稱後。",
     side: "bottom",
     align: "start",
   },
@@ -297,7 +302,7 @@ export default function ProjectList() {
     const assignedChildIds = new Set(firstWorkSlot?.assigned_roster_child_ids ?? []);
     setClassProjectDraft({
       classroom,
-      name: "",
+      customName: buildDefaultCustomName(classroom.campus_name, classroom.name),
       workSlotId: firstWorkSlot ? String(firstWorkSlot.id) : "",
       templateId: firstTemplateId ? String(firstTemplateId) : "",
       selectedChildIds: (classroom.members ?? [])
@@ -305,6 +310,13 @@ export default function ProjectList() {
         .map(member => member.roster_child_id),
     });
   }, [availableTemplateById, getCreatableWorkSlots]);
+  // 模板名稱是相本名稱的前綴，老師只填自訂名稱（見 utils/albumName.js）
+  const classProjectTemplateName = classProjectDraft
+    ? availableTemplateById.get(Number(classProjectDraft.templateId))?.name ?? ""
+    : "";
+  const classProjectAlbumName = classProjectDraft
+    ? composeAlbumName(classProjectTemplateName, classProjectDraft.customName)
+    : "";
   const hasTeacherWorkflow = isTeacher || teacherAssignedClassrooms.length > 0;
   // 已結束學期但期別還沒鎖的班會一起回來（補建入口）。跟本學期的班混在一起會讓人
   // 誤以為自己還帶著那一班，所以分區呈現。
@@ -376,7 +388,7 @@ export default function ProjectList() {
 
   const handleCreateClassProject = async (event) => {
     event.preventDefault();
-    const name = classProjectDraft.name.trim();
+    const name = classProjectAlbumName.trim();
     const leadTeacher = classProjectDraft.classroom.current_teachers.find(
       teacher => teacher.duty === "lead",
     );
@@ -670,17 +682,24 @@ export default function ProjectList() {
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
               會以勾選學生形成成員與完整姓名快照；相本稱呼會持續跟隨園所設定。主教是進度負責人，所有目前當班老師都可直接製作本班相本。
             </p>
-            <FormField label="相本名稱">
+            <FormField label="自訂名稱" hint="接在模板名稱後，格式：分校-班級">
               <input
                 autoFocus
-                required
                 className={fieldControlClass}
-                value={classProjectDraft.name}
-                maxLength={100}
-                onChange={event => setClassProjectDraft(current => ({ ...current, name: event.target.value }))}
-                placeholder={`${classProjectDraft.classroom.name} 新一期相本`}
+                value={classProjectDraft.customName}
+                maxLength={customNameMaxLength(classProjectTemplateName)}
+                onChange={event => setClassProjectDraft(current => ({
+                  ...current,
+                  customName: event.target.value,
+                }))}
+                placeholder="例：東區校-十階A"
               />
             </FormField>
+            {classProjectAlbumName && (
+              <p className="break-words text-xs text-gray-500">
+                相本全名：<span className="font-medium text-gray-800">{classProjectAlbumName}</span>
+              </p>
+            )}
             <FormField label="正式學期期別">
               <select
                 required
@@ -839,7 +858,7 @@ export default function ProjectList() {
               <Button
                 type="submit"
                 variant="success"
-                disabled={isCreatingClassProject || !classProjectDraft.name.trim() || !classProjectDraft.workSlotId || !classProjectDraft.templateId}
+                disabled={isCreatingClassProject || !classProjectAlbumName.trim() || !classProjectDraft.workSlotId || !classProjectDraft.templateId}
               >
                 {isCreatingClassProject ? "建立中..." : "建立班級相本"}
               </Button>

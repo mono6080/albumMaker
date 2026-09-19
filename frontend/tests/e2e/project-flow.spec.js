@@ -66,9 +66,13 @@ test("lead teacher creates a class project from the current roster snapshot", as
   const workSlot = await getCreatableWorkSlot(page, classroom.id, templateId);
   await page.getByRole("button", { name: "建立新一期相本" }).click();
   const createProjectDialog = page.getByRole("dialog", { name: `建立新一期相本：${classroom.name}` });
-  await createProjectDialog.getByLabel("相本名稱").fill(projectName);
+  const customNameInput = createProjectDialog.getByLabel("自訂名稱");
+  await expect(customNameInput).toHaveAttribute("placeholder", "例：東區校-十階A");
+  await expect(createProjectDialog.getByText("接在模板名稱後，格式：分校-班級")).toBeVisible();
+  await customNameInput.fill(projectSuffix);
   await createProjectDialog.getByLabel("正式學期期別").selectOption(String(workSlot.id));
   await createProjectDialog.getByLabel("此期模板").selectOption(String(templateId));
+  await expect(createProjectDialog.getByText(`相本全名：${projectName}`)).toBeVisible();
   const createProjectResponse = page.waitForResponse(response => (
     response.request().method() === "POST"
     && new URL(response.url()).pathname === `/api/organization/classrooms/${classroom.id}/projects`

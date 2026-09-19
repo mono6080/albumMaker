@@ -85,6 +85,10 @@
   下載 anchor（`browserFiles`）等唯一入口，由
   `scripts/check_banned_patterns.py`（CI 必跑）擋住重新出現的複本；
   新增合法入口時把檔案加進該腳本的 allowed 清單
+- **相本名稱＝模板名稱＋自訂名稱**：老師端與園所設定端的建立表單只收「自訂名稱」
+  （格式：分校-班級），全名一律由 `utils/albumName.js` 的 `composeAlbumName()` 組，
+  不在各表單自己拼字串；長度上限與後端 `ORGANIZATION_NAME_MAX_LENGTH` 對齊。
+  這個前綴在改走班級×期別流程時漏掉過一次，改建立表單時要一起顧
 - **跨語言鏡像檔要互相指向**：無法共用程式碼的鏡像（如
   `photo_frame_geometry.py` ↔ `photoFrameGeometry.js`、`FONT_MAP` ↔
   `fonts.js`）檔頭必須注明對應檔與釘住它的測試

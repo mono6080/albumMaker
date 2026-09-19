@@ -141,7 +141,9 @@ test("admin manages current roster while period snapshots and owner history stay
   const updatedFirstStudentAlbumName = `星星寶${suffix}`;
   const projectEditedStudentAlbumName = `相本頁園所稱呼${suffix}`;
   const departedFirstStudentAlbumName = `星寶離園${suffix}`;
-  const projectName = `星星班相本 ${suffix}`;
+  const projectCustomName = `星星班相本 ${suffix}`;
+  // 相本名稱 = 模板名稱 + 自訂名稱（建立表單只填後半段）
+  const projectName = `${template.name} ${projectCustomName}`;
   const transferReason = `新學期改由接手老師負責 ${suffix}`;
   const legacyProjectName = `待遷移舊相本 ${suffix}`;
   const legacyStudentName = `舊相本學生${suffix}`;
@@ -345,7 +347,7 @@ test("admin manages current roster while period snapshots and owner history stay
   )).toBeVisible();
 
   await page.getByRole("button", { name: "建立新一期相本" }).click();
-  const projectNameInput = page.getByLabel("相本名稱");
+  const projectNameInput = page.getByLabel("自訂名稱");
   const firstProjectSlotSelect = page.getByLabel("正式學期期別");
   const firstProjectSlotValue = await firstProjectSlotSelect.locator("option")
     .filter({ hasText: template.period_name })
@@ -355,8 +357,9 @@ test("admin manages current roster while period snapshots and owner history stay
   await firstProjectSlotSelect.selectOption(firstProjectSlotValue);
   await page.getByLabel("此期模板").selectOption(String(template.id));
   await page.getByLabel("目前負責老師").selectOption(String(initialOwner.id));
-  await projectNameInput.fill(projectName);
-  await expect(projectNameInput).toHaveValue(projectName);
+  await projectNameInput.fill(projectCustomName);
+  await expect(projectNameInput).toHaveValue(projectCustomName);
+  await expect(page.getByText(`相本全名：${projectName}`)).toBeVisible();
   const createProjectButton = page.getByRole("button", { name: "建立相本", exact: true });
   await expect(createProjectButton).toBeEnabled();
   const createProjectResponse = page.waitForResponse(response => (
@@ -612,7 +615,8 @@ test("class staffing and new-term reclassification preserve old project content 
   const stayStudentName = `留班生${suffix}`;
   const moveStudentName = `轉班生${suffix}`;
   const departedStudentName = `離園生${suffix}`;
-  const projectName = `重新編班前相本 ${suffix}`;
+  const projectCustomName = `重新編班前相本 ${suffix}`;
+  const projectName = `${template.name} ${projectCustomName}`;
   const planLabel = `新學期編班 ${suffix}`;
   const campus = await readJsonResponse(
     await page.request.post("/api/organization/campuses", {
@@ -672,7 +676,7 @@ test("class staffing and new-term reclassification preserve old project content 
 
   await page.getByRole("button", { name: "建立新一期相本" }).click();
   const projectDialog = page.getByRole("dialog", { name: `建立新一期相本：${sourceClassName}` });
-  await projectDialog.getByLabel("相本名稱").fill(projectName);
+  await projectDialog.getByLabel("自訂名稱").fill(projectCustomName);
   const secondProjectSlotSelect = projectDialog.getByLabel("正式學期期別");
   const secondProjectSlotValue = await secondProjectSlotSelect.locator("option")
     .filter({ hasText: template.period_name })

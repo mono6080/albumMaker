@@ -63,6 +63,11 @@ import {
   parseRosterMemberInput,
 } from "../utils/rosterMemberInput";
 import { buildClassroomOwnerOptions } from "../utils/classroomAssignments";
+import {
+  buildDefaultCustomName,
+  composeAlbumName,
+  customNameMaxLength,
+} from "../utils/albumName";
 import { showRetryToast } from "../utils/retryToast";
 import { getAssignableAccountLabel, ROLE_LABELS } from "../utils/userRoles";
 
@@ -305,6 +310,15 @@ export default function OrganizationManagement() {
     !assignedChildIdsInSlot.has(member.roster_child_id)
   ));
   const existingAlbumCountInSlot = selectedProjectWorkSlot?.project_ids?.length ?? 0;
+  // 模板名稱是相本名稱的前綴，建立時只填自訂名稱（見 utils/albumName.js）
+  const selectedProjectTemplateName = formModal?.type === "project"
+    ? availableTemplates.find(template => (
+        String(template.id) === String(formModal.templateId)
+      ))?.name ?? ""
+    : "";
+  const projectAlbumName = formModal?.type === "project"
+    ? composeAlbumName(selectedProjectTemplateName, formModal.customName)
+    : "";
   const teacherOptions = overview?.teacher_options ?? [];
   const supervisorOptions = overview?.supervisor_options ?? [];
   const normalizedSupervisorSearchQuery = supervisorSearchQuery.trim().toLocaleLowerCase("zh-TW");
@@ -652,7 +666,7 @@ export default function OrganizationManagement() {
 
   const handleCreateProjectSubmit = async (event) => {
     event.preventDefault();
-    const name = formModal.name.trim();
+    const name = projectAlbumName.trim();
     if (!name || !formModal.workSlotId || !formModal.templateId || !formModal.ownerId) return;
     const selectedChildIds = formModal.selectedChildIds ?? [];
     // 還有人沒編入卻一個都沒勾，多半是漏選；全部都編入時才是刻意要建空相本
@@ -1240,16 +1254,24 @@ export default function OrganizationManagement() {
                 可以再建一本，收錄尚未編入的孩子。
               </p>
             )}
-            <FormField label="相本名稱">
+            <FormField label="自訂名稱" hint="接在模板名稱後，格式：分校-班級">
               <input
                 autoFocus
-                required
-                value={formModal.name}
-                onChange={event => setFormModal(current => ({ ...current, name: event.target.value }))}
+                value={formModal.customName}
+                maxLength={customNameMaxLength(selectedProjectTemplateName)}
+                onChange={event => setFormModal(current => ({
+                  ...current,
+                  customName: event.target.value,
+                }))}
                 className={fieldControlClass}
-                placeholder="例如：大班 2026 畢業相本"
+                placeholder="例：東區校-十階A"
               />
             </FormField>
+            {projectAlbumName && (
+              <p className="break-words text-xs text-gray-500">
+                相本全名：<span className="font-medium text-gray-800">{projectAlbumName}</span>
+              </p>
+            )}
             <FormField label="正式學期期別">
               <select
                 required
@@ -1395,7 +1417,7 @@ export default function OrganizationManagement() {
                 variant="success"
                 disabled={
                   isSubmitting
-                  || !formModal.name.trim()
+                  || !projectAlbumName.trim()
                   || !formModal.workSlotId
                   || !formModal.templateId
                   || !formModal.ownerId
@@ -1906,7 +1928,10 @@ export default function OrganizationManagement() {
                           const assignedIds = new Set(firstSlot?.assigned_roster_child_ids ?? []);
                           setFormModal({
                             type: "project",
-                            name: "",
+                            customName: buildDefaultCustomName(
+                              selectedCampus?.name,
+                              selectedClassroom.name,
+                            ),
                             workSlotId: String(firstSlot?.id ?? ""),
                             templateId: String(availableTemplates.find(template => (
                               template.period_id === firstSlot?.template_period_id
