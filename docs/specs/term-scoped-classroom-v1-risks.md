@@ -327,6 +327,43 @@ python scripts/verify_render_output_unchanged.py --compare before.json after.jso
 
 ---
 
+## 上線執行紀錄（2026-08-04）
+
+正式站 `5dc5c9c` → `d9fc6ff`。維護視窗共 **11 秒**（08:10:31–08:10:42 UTC）。
+
+| 步驟 | 結果 |
+|------|------|
+| 備份並 verify | `album-maker-backup-20260804T075229Z`，sha256 `19898c1e…`，integrity ok |
+| Migration（啟動時自動） | 新 schema、外鍵 0 違規、筆數與備份一致 |
+| 回填學號 | 466 筆，465 位在籍全部有學號、無重複 |
+| 老師帳號 | 陳紀原、李依諠（隨機密碼，待管理員在 UI 重設為身分證字號） |
+| 編班（基準日 2026-08-04） | 新建 5 班、移除 6 班、379 續讀、86 離園、44 位新生連學號一起編入 |
+| 逐項驗收 | 全部通過；逐筆對回行政系統一致，90 本舊相本一位元未動 |
+| 模板 | 7 個搬入 202608，114 個素材上 R2（失敗 0，重跑冪等），85 個 key 實際存在 |
+| 漂移報告 | **0 筆** |
+
+### 當天踩到的四件事
+
+1. **`run_term_approach.py` 這類驅動腳本需要 `httpx`，正式 image 沒有**（那是測試相依）。
+   在拋棄式容器裡 `pip install httpx` 即可，不要為此改動正式 image。
+2. **`TestClient` 預設走 `http://testserver`，帶不回 `secure` cookie**。正式環境
+   `secure=IS_PRODUCTION`，所以登入會成功但下一個請求回「請先登入」。要用
+   `TestClient(app, base_url="https://testserver")`。
+3. **只複製 `.db` 會漏掉 `-wal`**：把演練庫送上伺服器時，剛匯入的 7 個模板還在 1.6MB 的
+   WAL 裡，搬運腳本回報「來源沒有 template id=26」。`transfer_template.py` 已加防呆擋下。
+4. **臨時管理員刪不掉，這是對的**：它是編班的稽核操作者，而 `ON DELETE SET NULL` 會去改
+   已關閉學期的 `classroom_teachers`，被 `closed term teacher assignments are immutable`
+   trigger 擋下。**不要為了刪帳號繞過那道保護**——改成輪換密碼、遞增 `auth_version`、
+   在 `display_name` 標註用途即可。下次直接用既有的 admin 帳號會更乾淨。
+
+### 尚未執行
+
+- **離峰重渲染約 468 份**（見 R1）。輸出位元不會變，但指紋失效會讓收斂判定過期並重寫
+  R2，所以刻意沒有在上線當下觸發。
+- 通知老師：重新整理頁面、既有編班草稿需重建、11 本相本因姓名更正被退回製作中。
+
+---
+
 ## 上線前檢查清單
 
 1. 名冊姓名更正已在正式站執行完畢，`fix/roster-name-correction` 已合併

@@ -44,6 +44,8 @@ COPY scripts/backup_data.py \
      scripts/backfill_new_student_serials.py \
      scripts/report_websystem_drift.py \
      scripts/sync_websystem_roster.py \
+     scripts/transfer_template.py \
+     scripts/migrate_uploads_to_r2.py \
      /app/scripts/
 # correct_roster_names.py 與 fill_missing_album_names.py 不再納入 image：它們讀
 # `roster_children`，而學期範圍班級重構把那張表改名了，在容器裡只會找不到表。
