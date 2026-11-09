@@ -95,6 +95,8 @@ preview_render_limiter = BusyLimiter("preview_render", "PREVIEW_RENDER_CONCURREN
 album_render_limiter = BusyLimiter("album_render", "ALBUM_RENDER_CONCURRENCY", 1)
 zip_build_limiter = BusyLimiter("zip_build", "ZIP_BUILD_CONCURRENCY", 1)
 photo_upload_limiter = BusyLimiter("photo_upload", "PHOTO_UPLOAD_CONCURRENCY", 2)
+# 縮圖獨立一組槽：瀏覽照片時的 cache miss 不和上傳搶名額
+photo_thumbnail_limiter = BusyLimiter("photo_thumbnail", "PHOTO_THUMBNAIL_CONCURRENCY", 3)
 
 
 def require_photo_upload_slot():
