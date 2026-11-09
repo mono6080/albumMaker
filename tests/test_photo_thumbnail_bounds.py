@@ -8,7 +8,7 @@ import zlib
 import pytest
 from PIL import Image, ImageOps
 
-from services import file_service, project_photo_service
+from services import file_service, project_photo_service, request_limiter
 from services.render_image_loader import OversizedRenderImageError
 
 
@@ -170,6 +170,38 @@ def test_thumbnail_same_key_cache_miss_builds_once(monkeypatch):
     assert project_photo_service._thumbnail_build_lock_users == {}
 
 
+def test_thumbnail_build_is_not_blocked_by_full_upload_limiter(monkeypatch):
+    storage = _MemoryStorage(_jpeg_bytes((800, 600)))
+    monkeypatch.setattr(
+        project_photo_service,
+        "_get_photo_key_or_404",
+        lambda *_args, **_kwargs: "projects/proj1/photos/student1/photo.jpg",
+    )
+    monkeypatch.setattr(project_photo_service, "get_storage", lambda: storage)
+    monkeypatch.setattr(request_limiter.photo_upload_limiter, "timeout", 0.01)
+
+    occupied_slots = 0
+    try:
+        for _ in range(request_limiter.photo_upload_limiter.limit):
+            assert request_limiter.photo_upload_limiter.acquire_slot()
+            occupied_slots += 1
+
+        response = project_photo_service.serve_student_photo_thumbnail(
+            None,
+            None,
+            1,
+            1,
+            0,
+            1,
+            360,
+        )
+    finally:
+        for _ in range(occupied_slots):
+            request_limiter.photo_upload_limiter.release_slot()
+
+    assert response.headers["x-photo-thumbnail"] == "MISS"
+
+
 def test_thumbnail_different_sizes_share_heavy_work_limiter(monkeypatch):
     storage = _MemoryStorage()
     active_builds = 0
@@ -177,7 +209,7 @@ def test_thumbnail_different_sizes_share_heavy_work_limiter(monkeypatch):
     active_guard = threading.Lock()
     limiter_full = threading.Event()
     allow_builds = threading.Event()
-    limiter_limit = project_photo_service.photo_upload_limiter.limit
+    limiter_limit = project_photo_service.photo_thumbnail_limiter.limit
 
     monkeypatch.setattr(
         project_photo_service,

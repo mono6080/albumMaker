@@ -171,6 +171,8 @@ async def preview_project_page(
                 album_name=ALBUM_NAME_PREVIEW_PLACEHOLDER,
             )
 
+        # 之後只用純值：排隊與渲染期間不佔 DB 連線
+        db.close()
         return cache_prefix, payload, render_bytes
 
     cache_prefix, payload, render_bytes = await asyncio.to_thread(build_preview_plan)
@@ -244,6 +246,8 @@ async def preview_student_page(
                 album_name=resolved_album_name,
             )
 
+        # 之後只用純值：排隊與渲染期間不佔 DB 連線
+        db.close()
         return cache_prefix, payload, render_bytes
 
     cache_prefix, payload, render_bytes = await asyncio.to_thread(build_preview_plan)

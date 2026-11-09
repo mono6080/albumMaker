@@ -75,7 +75,8 @@ APP_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build
 | `PREVIEW_RENDER_CONCURRENCY` | `4` | 頁面預覽渲染併發槽（`request_limiter.py`） |
 | `ALBUM_RENDER_CONCURRENCY` | `1`（compose 預設 `2`） | 相冊 PDF 渲染併發槽；docker-compose.yml 帶 `2`，本機開發啟動時自行設定 |
 | `ZIP_BUILD_CONCURRENCY` | `1` | ZIP 打包併發槽 |
-| `PHOTO_UPLOAD_CONCURRENCY` | `2` | 照片上傳處理併發槽 |
+| `PHOTO_UPLOAD_CONCURRENCY` | `2`（compose 預設 `4`） | 照片上傳處理併發槽；主機無 swap，往上調前先確認記憶體餘裕 |
+| `PHOTO_THUMBNAIL_CONCURRENCY` | `3` | 照片縮圖 cache miss 的生成併發槽，與上傳分開計算 |
 | `HEAVY_REQUEST_QUEUE_TIMEOUT_SECONDS` | `10.0` | 重任務排隊逾時秒數，超時回 503（背景 job 走 `acquire_blocking` 不受此限） |
 | `ARCHIVE_PURGE_INTERVAL_SECONDS` | `300` | 服務存活期間掃描並清除已超過復原期限之封存相本的間隔秒數；啟動時也會立即掃描一次 |
 | `RENDER_RECONCILE_ON_STARTUP` | `1` | 啟動後背景收斂掃描：有效完成但輸出過期的學生逐位指紋補渲（[rendering.md](rendering.md#渲染時機完成觸發背景渲染與下載前補渲)）；`0` 停用 |

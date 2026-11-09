@@ -45,7 +45,8 @@ npm run test:bundle-budget   # build 後驗首包嚴格低於重構基準
     轉換前已縮到實際輸出需求；超額非 JPEG 只讀 header 就拒絕，且小 bytes／大像素
     的學生 JPEG 仍會強制正規化到 3600px 長邊
   - `test_photo_thumbnail_bounds.py`：照片縮圖 cache miss 在色彩轉換前 bounded decode；
-    超額非 JPEG 不配置像素、同 key 只生成一次，不同尺寸共用照片重工作槽
+    超額非 JPEG 不配置像素、同 key 只生成一次，不同尺寸共用縮圖工作槽，且上傳槽滿時仍可生成
+  - `test_heavy_request_db_release.py`：縮圖生成與預覽排隊前已歸還 DB 連線
   - `test_contract_pins.py` / `test_font_parity.py`：前後端契約釘——
     design tokens 兩端一致、insets 演算法釘值、字型清單對應
     （防跨語言鏡像靜默漂移，規則見 [conventions.md](conventions.md#跨模組-invariants)）

@@ -30,7 +30,7 @@ from services.project_access_service import (
     student_effectively_completed,
 )
 from services.project_template_revision import lock_project_template_revision
-from services.request_limiter import photo_upload_limiter
+from services.request_limiter import photo_thumbnail_limiter
 from services.storage_factory import get_storage
 from services.student_pages import (
     apply_photo_mapping,
@@ -203,6 +203,8 @@ def _get_photo_key_or_404(
     if not photo_key:
         raise HTTPException(status_code=404, detail="找不到照片")
 
+    # 權限與 key 都已取得：等 R2 與排隊期間不佔 DB 連線，避免連線池被讀圖請求佔滿
+    db.close()
     if not get_storage().exists(photo_key):
         raise HTTPException(status_code=404, detail="找不到照片")
     return photo_key
@@ -677,7 +679,7 @@ def serve_student_photo_thumbnail(
         except FileNotFoundError:
             pass
 
-        with photo_upload_limiter.acquire("照片縮圖處理中，請稍後再試"):
+        with photo_thumbnail_limiter.acquire("照片縮圖處理中，請稍後再試"):
             thumbnail_bytes = build_photo_thumbnail_jpeg(
                 storage,
                 photo_key,
