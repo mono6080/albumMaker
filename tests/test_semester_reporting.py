@@ -248,7 +248,10 @@ def test_teacher_overview_excel_escapes_formula_like_user_text():
         )
         assert_status(period_response, 200)
         period = period_response.json()
-        template_id, _ = create_template_with_page(client, period_id=period["id"])
+        # 相本全名以模板名稱開頭（compose_album_name），要讓相本名稱像公式就得從模板名稱下手
+        template_id, _ = create_template_with_page(
+            client, unique_name("=template"), period_id=period["id"]
+        )
 
         campus_name = unique_name(" +campus")
         campus_response = client.post(

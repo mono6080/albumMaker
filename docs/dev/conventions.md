@@ -88,7 +88,11 @@
 - **相本名稱＝模板名稱＋自訂名稱**：老師端與園所設定端的建立表單只收「自訂名稱」
   （格式：分校-班級），全名一律由 `utils/albumName.js` 的 `composeAlbumName()` 組，
   不在各表單自己拼字串；長度上限與後端 `ORGANIZATION_NAME_MAX_LENGTH` 對齊。
-  這個前綴在改走班級×期別流程時漏掉過一次，改建立表單時要一起顧
+  這個前綴在改走班級×期別流程時漏掉過一次，改建立表單時要一起顧。
+  後端 `organization_service.compose_album_name()` 在建立時以同一套規則再組一次
+  （缺前綴補上、重複前綴只留一份），因為停在舊版畫面的瀏覽器會送出沒有前綴的名稱；
+  兩邊是跨語言鏡像，由 `tests/test_album_name_prefix.py` 與
+  `frontend/tests/unit/album-name.test.mjs` 釘住
 - **跨語言鏡像檔要互相指向**：無法共用程式碼的鏡像（如
   `photo_frame_geometry.py` ↔ `photoFrameGeometry.js`、`FONT_MAP` ↔
   `fonts.js`）檔頭必須注明對應檔與釘住它的測試

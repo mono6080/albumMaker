@@ -5,11 +5,20 @@
 // 與後端 ORGANIZATION_NAME_MAX_LENGTH 對齊：組好的全名超過就會被擋下來。
 export const ALBUM_NAME_MAX_LENGTH = 100;
 
-/** 組出相本全名；沒選模板時就只有自訂名稱，沒填自訂名稱時就只有模板名稱。 */
+/**
+ * 組出相本全名；沒選模板時就只有自訂名稱，沒填自訂名稱時就只有模板名稱。
+ * 老師在自訂名稱又打了一次模板名稱時只留一份。
+ * 後端 services/organization_service.py 的 compose_album_name 是同一套規則的鏡像
+ * （伺服器建立時會再組一次），由 tests/test_album_name_prefix.py 與
+ * tests/unit/album-name.test.mjs 釘住。
+ */
 export function composeAlbumName(templateName, customName) {
   const template = (templateName ?? "").trim();
-  const custom = (customName ?? "").trim();
+  let custom = (customName ?? "").trim();
   if (!template) return custom;
+  while (custom === template || custom.startsWith(`${template} `)) {
+    custom = custom.slice(template.length).trim();
+  }
   return custom ? `${template} ${custom}` : template;
 }
 

@@ -25,6 +25,24 @@ test("還沒選模板時只剩自訂名稱，不會留下多餘空白", () => {
   assert.equal(composeAlbumName(undefined, " 東區校-十階A "), "東區校-十階A");
 });
 
+test("自訂名稱又打了一次模板名稱時只留一份", () => {
+  const templateName = "2026-10 7階 交通工具停看聽";
+  assert.equal(
+    composeAlbumName(templateName, `${templateName} 安平校-七階A`),
+    `${templateName} 安平校-七階A`,
+  );
+  assert.equal(
+    composeAlbumName(templateName, `${templateName} ${templateName} 安平校-七階A`),
+    `${templateName} 安平校-七階A`,
+  );
+  assert.equal(composeAlbumName(templateName, templateName), templateName);
+  // 只是開頭字樣相同、不是完整模板名稱時不能誤刪
+  assert.equal(
+    composeAlbumName("2026-08~10 9階 我的身體 副本", "2026-08~10 9階 我的身體 安平校-九階C"),
+    "2026-08~10 9階 我的身體 副本 2026-08~10 9階 我的身體 安平校-九階C",
+  );
+});
+
 test("自訂名稱預設就是分校-班級", () => {
   assert.equal(buildDefaultCustomName("東區校", "十階A"), "東區校-十階A");
   assert.equal(buildDefaultCustomName(undefined, "十階A"), "十階A");
