@@ -92,6 +92,22 @@ def _normalize_organization_name(raw_name: str, label: str) -> str:
     return name
 
 
+def compose_album_name(template_name: str, submitted_name: str) -> str:
+    """相本全名＝模板名稱＋自訂名稱；送來的名稱開頭已有（甚至重複）模板名稱時只留一份。
+
+    前端 `frontend/src/utils/albumName.js` 的 composeAlbumName 是同一套規則的鏡像，
+    由 tests/test_album_name_prefix.py 與 frontend/tests/unit/album-name.test.mjs 釘住。
+    在伺服器端再組一次，是因為停在舊版畫面的瀏覽器會送出沒有前綴的名稱。
+    """
+    template = template_name.strip()
+    custom = submitted_name.strip()
+    if not template:
+        return custom
+    while custom == template or custom.startswith(template + " "):
+        custom = custom[len(template):].strip()
+    return f"{template} {custom}" if custom else template
+
+
 def _validate_department(department: str) -> str:
     if department not in VALID_TEMPLATE_DEPARTMENTS:
         raise HTTPException(status_code=422, detail="無效的部門")
@@ -2151,12 +2167,15 @@ def create_classroom_project(
     owner_id: int | None,
     roster_child_ids: list[int] | None = None,
 ) -> dict:
-    project_name = _normalize_organization_name(name, "相本")
+    _normalize_organization_name(name, "相本")
     with organization_acl_lock, lock_template_write(template_id):
         with organization_write_transaction(db):
             classroom = get_classroom_or_404(classroom_id, db)
             creator = get_user_or_404(current_user.id, db)
             template = get_template_or_404(template_id, db)
+            project_name = _normalize_organization_name(
+                compose_album_name(template.name, name), "相本"
+            )
             assert_classroom_project_creatable(db, creator, classroom_id)
             work_slot = (
                 db.query(ClassPeriodWorkSlot)

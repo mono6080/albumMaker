@@ -39,6 +39,11 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // 新版 SW 下載完立刻接手，下次重新整理就是新版。沒有這兩項時新版會停在 waiting，
+        // 只有按更新橫幅或關掉所有分頁才換；老師關掉橫幅後一直按 F5 都還是舊版
+        // （2026-11 有電腦停在 9/19 之前的版本，建出沒有模板前綴的相本名稱）。
+        skipWaiting: true,
+        clientsClaim: true,
         // API 請求全走網路，不快取
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],

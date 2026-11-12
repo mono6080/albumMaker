@@ -169,6 +169,11 @@ utils/       純函式工具（photoUtils / editorLayoutModel / layoutGroup* / �
 全部回 `index.html` 會讓瀏覽器把 HTML 當 JS 執行 → Service Worker 註冊失敗。
 `vite.config.js` 的 `navigateFallback: '/index.html'` 是 workbox 端的對偶設定。
 
+新版 SW 以 `skipWaiting` + `clientsClaim` 在安裝後立即接手，下次重新整理就載入新版；
+`PwaUpdateBanner` 只負責提示目前分頁重新載入。沒有這兩項時新版停在 waiting，
+F5 仍由舊 SW 的 precache 回舊 `index.html`，只有按橫幅或關掉所有分頁才換——
+2026-11 曾有辦公室電腦因此停在數個月前的前端。
+
 ## 非目標（明確不做）
 
 - **多租戶 / SaaS**：無 tenant / 園所隔離欄位
