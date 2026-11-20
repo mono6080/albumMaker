@@ -71,4 +71,46 @@ test.describe("mobile student edit layout", () => {
     expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth + 2);
     expect(overflow.bodyWidth).toBeLessThanOrEqual(overflow.viewportWidth + 2);
   });
+  test("deleting a page requires a reason and restoring clears it", async ({ page }) => {
+    const layout = await loadFixtureLayout();
+    await loginViaApi(page);
+    const { templateId } = await createTemplateWithLayout(page, `E2E 刪頁模板 ${Date.now()}`, layout);
+    const project = await createProject(page, `E2E 刪頁專案 ${Date.now()}`, templateId, ["SkipAlice"]);
+    const detail = await fetchProjectDetail(page, project.id);
+    const student = detail.students.find(item => item.name === "SkipAlice");
+    const pageZero = async () => (await fetchProjectDetail(page, project.id))
+      .students.find(item => item.id === student.id)?.pages_data?.[0] ?? {};
+
+    await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+    await page.getByRole("button", { name: "預覽" }).tap();
+    await page.getByRole("button", { name: "刪除此頁" }).tap();
+
+    const dialog = page.getByRole("dialog", { name: "刪除第 1 頁" });
+    await expect(dialog).toBeVisible();
+    const confirmButton = dialog.getByRole("button", { name: "確認刪除" });
+    await expect(confirmButton).toBeDisabled();
+    // 只有空白不算填寫
+    await dialog.getByLabel("刪除原因（必填）").fill("   ");
+    await expect(confirmButton).toBeDisabled();
+    await dialog.getByLabel("刪除原因（必填）").fill("該期請假未到校");
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(2);
+    await confirmButton.tap();
+
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByText("原因：該期請假未到校")).toBeVisible();
+    await expect.poll(pageZero).toMatchObject({ skip: true, skip_reason: "該期請假未到校" });
+
+    // 重新載入後原因仍顯示
+    await page.reload();
+    await page.getByRole("button", { name: "預覽" }).tap();
+    await expect(page.getByText("原因：該期請假未到校")).toBeVisible();
+
+    await page.getByRole("button", { name: "還原此頁" }).tap();
+    await expect(page.getByRole("button", { name: "刪除此頁" })).toBeVisible();
+    await expect.poll(async () => {
+      const entry = await pageZero();
+      return { skip: entry.skip, hasReason: "skip_reason" in entry };
+    }).toEqual({ skip: false, hasReason: false });
+  });
 });

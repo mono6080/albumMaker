@@ -61,10 +61,11 @@ export const transferStudents = (projectId, targetProjectId, studentIds) =>
 // ── 本期學生快照 ──────────────────────────────────────────────────────────────
 
 /** 設定或取消學生某頁的跳過旗標 */
-export const setStudentPageSkip = (projectId, expectedTemplateRevision, studentId, pageIndex, skip) =>
+// 刪頁（skip=true）必帶 reason；還原時後端一併清除原因
+export const setStudentPageSkip = (projectId, expectedTemplateRevision, studentId, pageIndex, skip, reason = null) =>
   apiClient.patch(
     `/projects/${projectId}/students/${studentId}/pages/${pageIndex}/skip`,
-    { skip },
+    { skip, reason },
     { params: { expected_template_revision: expectedTemplateRevision } },
   );
 

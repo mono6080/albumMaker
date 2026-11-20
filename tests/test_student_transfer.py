@@ -261,7 +261,7 @@ def test_transferred_student_keeps_skip_settings(tmp_path, monkeypatch):
                 source_id,
                 f"/api/projects/{source_id}/students/{moving['id']}/pages/0/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(skip, 200)
 

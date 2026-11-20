@@ -90,7 +90,7 @@ def test_stale_project_content_mutations_leave_db_and_storage_unchanged(monkeypa
                     f"/api/projects/{project_id}/students/{student_id}/pages/0/skip",
                     stale_revision,
                 ),
-                json={"skip": True},
+                json={"skip": True, "reason": "請假未到校"},
             ),
             client.put(
                 _stale_url(

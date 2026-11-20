@@ -44,7 +44,8 @@ export default function StudentEdit() {
   // per-page 預覽時間戳：只有該頁資料變動時才更新，避免切頁重新渲染
   const [pageTimestamps, setPageTimestamps] = useState({});
   const [mobileTab, setMobileTab] = useState("photo"); // "photo" | "text" | "preview"
-  const [skippedPages, setSkippedPages] = useState(new Set()); // 被刪除（跳過）的頁面索引
+  // 被刪除（跳過）的頁面：頁面索引 → 刪頁原因（Map 保留 .has 介面給 PhotoManager）
+  const [skippedPages, setSkippedPages] = useState(new Map());
 
   // ── 自動儲存對應文字（防抖 500ms） ────────────────────────────────────────
 
@@ -110,14 +111,14 @@ export default function StudentEdit() {
 
       // 初始化對應文字狀態：只保留可填文字，固定文字永遠使用模板內容。
       const initialTexts = {};
-      const initialSkipped = new Set();
+      const initialSkipped = new Map();
       (foundStudent?.pages_data || []).forEach(pageData => {
         const pageLayout = templateResponse.data.pages[pageData.page_index]?.layout;
         initialTexts[pageData.page_index] = filterFillableLabelTexts(
           pageLayout?.text_labels || [],
           pageData.label_texts || {}
         );
-        if (pageData.skip) initialSkipped.add(pageData.page_index);
+        if (pageData.skip) initialSkipped.set(pageData.page_index, pageData.skip_reason || "");
       });
       setLabelTexts(initialTexts);
       setSkippedPages(initialSkipped);
@@ -159,26 +160,29 @@ export default function StudentEdit() {
 
   // ── 頁面刪除 / 還原 ───────────────────────────────────────────────────────
 
-  const handlePageSkip = async (pageIndex, skip) => {
+  // 回傳是否成功，讓刪頁原因表單決定要不要關閉
+  const handlePageSkip = async (pageIndex, skip, reason = null) => {
     try {
-      await setStudentPageSkip(projectId, project.template_revision, studentId, pageIndex, skip);
+      await setStudentPageSkip(projectId, project.template_revision, studentId, pageIndex, skip, reason);
       setSkippedPages(prev => {
-        const next = new Set(prev);
-        if (skip) next.add(pageIndex); else next.delete(pageIndex);
+        const next = new Map(prev);
+        if (skip) next.set(pageIndex, reason); else next.delete(pageIndex);
         return next;
       });
       if (skip && activePage === pageIndex) {
         // 跳到下一個未刪除頁；若沒有則往前找
         const templatePageCount = template?.pages.length ?? 0;
         for (let i = pageIndex + 1; i < templatePageCount; i++) {
-          if (!skippedPages.has(i) && i !== pageIndex) { setActivePage(i); return; }
+          if (!skippedPages.has(i) && i !== pageIndex) { setActivePage(i); return true; }
         }
         for (let i = pageIndex - 1; i >= 0; i--) {
-          if (!skippedPages.has(i)) { setActivePage(i); return; }
+          if (!skippedPages.has(i)) { setActivePage(i); return true; }
         }
       }
+      return true;
     } catch (error) {
       handleApiError(error, "操作失敗");
+      return false;
     }
   };
 
@@ -196,7 +200,7 @@ export default function StudentEdit() {
       {
         element: '[data-guide="student-preview-panel"]',
         title: "頁面預覽",
-        description: "顯示目前頁面的合成預覽，可重新整理；頁尾可刪除此頁或還原。",
+        description: "顯示目前頁面的合成預覽，可重新整理；頁尾可刪除此頁（需填寫原因）或還原。",
         side: "right",
         align: "center",
         onBeforeStep: () => { setMobileTab("preview"); },
@@ -345,6 +349,7 @@ export default function StudentEdit() {
             timestampSeed={previewTimestampSeed}
             templateRevision={project.template_revision}
             isCurrentPageSkipped={isCurrentPageSkipped}
+            currentPageSkipReason={skippedPages.get(activePage) || ""}
             onPageSkip={handlePageSkip}
             onRefresh={refreshPreview}
             isLocked={isContentLocked}

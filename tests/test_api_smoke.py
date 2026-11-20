@@ -190,12 +190,21 @@ def test_template_project_student_and_text_contracts():
         )
         assert_status(update_album_name, 200)
 
-        skip_response = client.patch(
-            revisioned_project_url(
-                client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/skip"
-            ),
-            json={"skip": True},
+        skip_url = revisioned_project_url(
+            client, project_id, f"/api/projects/{project_id}/students/{student_id}/pages/0/skip"
         )
+        # 刪頁必填原因：缺漏或只有空白都擋下
+        for missing_reason_payload in ({"skip": True}, {"skip": True, "reason": "   "}):
+            assert_status(client.patch(skip_url, json=missing_reason_payload), 422)
+        # 還原後原因一併清除，再刪一次以新原因為準
+        assert_status(client.patch(skip_url, json={"skip": True, "reason": "舊原因"}), 200)
+        assert_status(client.patch(skip_url, json={"skip": False}), 200)
+        restored_detail = client.get(f"/api/projects/{project_id}")
+        restored_student = next(
+            student for student in restored_detail.json()["students"] if student["id"] == student_id
+        )
+        assert "skip_reason" not in restored_student["pages_data"][0]
+        skip_response = client.patch(skip_url, json={"skip": True, "reason": "  請假未到校  "})
         assert_status(skip_response, 200)
         assert skip_response.json() == {"ok": True}
 
@@ -238,6 +247,7 @@ def test_template_project_student_and_text_contracts():
         assert updated_student["name"] == "Alice"
         assert updated_student["album_name"] == "Alice Chen"
         assert updated_student["pages_data"][0]["skip"] is True
+        assert updated_student["pages_data"][0]["skip_reason"] == "請假未到校"
         assert updated_student["pages_data"][0]["label_texts"] == {"1": "Batch label text"}
 
 

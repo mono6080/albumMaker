@@ -230,7 +230,7 @@ Excel 與同一 builder 共用資料，固定三張表：摘要、班級期別�
 [known-issues.md](../dev/known-issues.md#開放設計問題)。
 
 前端不得再以 first appearance 推測缺期。ZIP manifest 必列缺檔、重複、身分
-異常與老師刪頁。補渲染是全程序 singleton；第二個 running request 回 503
+異常與老師刪頁（每本相本少幾頁、頁碼與刪頁原因）。補渲染是全程序 singleton；第二個 running request 回 503
 `semester_render_job_running`，完成或失敗後才可再啟動。
 
 ## Frontend Contract
@@ -242,6 +242,8 @@ filter signature、AbortController 與 sequence，舊回應不得覆蓋目前畫
   照片／文字、交件鎖定與負責人，不顯示 PDF 狀態。
 - 學期匯出：依校別／班級 accordion 顯示孩子×期別；明確顯示未入園、離園、
   無相本、重複、未產生與已產生。
+- 學期匯出另列「缺頁相本」清單（範圍同校班篩選與搜尋）：孩子、期別／相本、少幾頁、
+  頁碼與原因；老師刪頁時必須填寫原因。
 - 下載時若選取孩子含未產生 PDF，先自動啟動補渲染（同一 singleton job，
   範圍限這些孩子），job 結束非 failed 即自動開始下載；部分失敗照樣下載，
   缺漏由 ZIP 匯出說明列出。

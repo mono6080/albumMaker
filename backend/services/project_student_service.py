@@ -328,9 +328,10 @@ def set_page_skip(
     student_id: int,
     page_index: int,
     skip: bool,
+    reason: str | None,
     expected_template_revision: int,
 ) -> dict:
-    """T→P→S 契約下更新學生頁面 skip。"""
+    """T→P→S 契約下更新學生頁面 skip；刪頁同時記下原因，還原時一併清除。"""
     project = get_project_or_404(project_id, db)
     assert_project_content_writable(project, current_user)
     with lock_project_template_revision(db, project, expected_template_revision):
@@ -339,7 +340,12 @@ def set_page_skip(
         assert_student_content_writable(project, student, current_user)
 
         def _mutate(pages_data) -> None:
-            ensure_page_entry(pages_data, page_index)["skip"] = skip
+            page_entry = ensure_page_entry(pages_data, page_index)
+            page_entry["skip"] = skip
+            if skip:
+                page_entry["skip_reason"] = reason
+            else:
+                page_entry.pop("skip_reason", None)
 
         mutate_student_pages(
             db,

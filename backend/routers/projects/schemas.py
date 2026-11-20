@@ -4,9 +4,12 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from services.photo_transform_policy import PHOTO_SCALE_MAX
+
+# 刪頁原因長度上限（前端輸入框同步此值）
+PAGE_SKIP_REASON_MAX_LENGTH = 100
 
 
 class ProjectPermissions(BaseModel):
@@ -264,8 +267,16 @@ class BatchPhotoUploadResult(BaseModel):
 
 
 class PageSkipPayload(BaseModel):
-    """設定頁面跳過旗標的 payload"""
+    """設定頁面跳過旗標的 payload；刪頁（skip=true）必填原因，供學期匯出列出缺頁理由"""
     skip: bool
+    reason: Optional[str] = Field(default=None, max_length=PAGE_SKIP_REASON_MAX_LENGTH)
+
+    @model_validator(mode="after")
+    def _require_reason_when_skipping(self):
+        self.reason = (self.reason or "").strip() or None
+        if self.skip and not self.reason:
+            raise ValueError("刪除頁面必須填寫原因")
+        return self
 
 
 class OkResult(BaseModel):
