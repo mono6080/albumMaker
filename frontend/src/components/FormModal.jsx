@@ -1,6 +1,9 @@
 // 表單用 Modal：背板＋Esc 關閉、標題列含關閉鈕
 // 呼叫端自行保留表單 state（關閉不清空，誤觸不會遺失輸入）
+// 以 portal 掛到 body：呼叫端可能在 sticky 等會形成堆疊層的容器內，
+// 不掛出去的話 fixed + z-50 只在該容器內生效，會被後面的欄位蓋住
 
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { IconButton, Surface } from "./ui";
 import useDialogA11y from "../hooks/useDialogA11y";
@@ -15,7 +18,7 @@ export default function FormModal({
   const dialogRef = useDialogA11y({ isOpen, onClose });
 
   if (!isOpen) return null;
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       onClick={onClose}
@@ -39,6 +42,7 @@ export default function FormModal({
         </div>
         {children}
       </Surface>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -114,3 +114,44 @@ test.describe("mobile student edit layout", () => {
     }).toEqual({ skip: false, hasReason: false });
   });
 });
+
+
+test("desktop page-skip reason dialog sits above the sticky editor columns", async ({ page }) => {
+  // 桌機三欄：預覽欄是 sticky（自成堆疊層），對話框不能被照片欄／文字欄蓋住
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const layout = layoutWithTwoPhotoSlots(await loadFixtureLayout());
+  await loginViaApi(page);
+  const { templateId } = await createTemplateWithLayout(page, `E2E 桌機刪頁模板 ${Date.now()}`, layout);
+  const project = await createProject(page, `E2E 桌機刪頁專案 ${Date.now()}`, templateId, ["DeskAlice"]);
+  const detail = await fetchProjectDetail(page, project.id);
+  const student = detail.students.find(item => item.name === "DeskAlice");
+
+  await page.goto(`/projects/${project.id}/students/${student.id}/edit`);
+  await page.getByRole("button", { name: "刪除此頁" }).click();
+  const dialog = page.getByRole("dialog", { name: "刪除第 1 頁" });
+  await expect(dialog).toBeVisible();
+
+  // 對話框四角與中心、標題、確認鈕都必須是最上層（點得到的是對話框本身）
+  const coveredPoints = await dialog.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const inset = 6;
+    const points = [
+      [rect.left + inset, rect.top + inset],
+      [rect.right - inset, rect.top + inset],
+      [rect.left + inset, rect.bottom - inset],
+      [rect.right - inset, rect.bottom - inset],
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+    ];
+    element.querySelectorAll("h2, button").forEach(child => {
+      const childRect = child.getBoundingClientRect();
+      points.push([childRect.left + childRect.width / 2, childRect.top + childRect.height / 2]);
+    });
+    return points.filter(([x, y]) => !element.contains(document.elementFromPoint(x, y)));
+  });
+  expect(coveredPoints).toEqual([]);
+
+  await dialog.getByLabel("刪除原因（必填）").fill("照片不足");
+  await dialog.getByRole("button", { name: "確認刪除" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("原因：照片不足")).toBeVisible();
+});
