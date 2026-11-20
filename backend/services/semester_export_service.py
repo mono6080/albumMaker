@@ -177,7 +177,8 @@ def student_pdf_key(student: ProjectStudent, output_mode: str) -> str | None:
     return student_pdf_key_for_mode(student.output_filename, output_mode)
 
 
-def _student_skipped_pages(student: ProjectStudent) -> list[int]:
+def _student_skipped_pages(student: ProjectStudent) -> list[dict]:
+    """老師刪除的頁（1-based 頁碼）與刪頁原因；舊資料沒有原因時 reason 為 None。"""
     try:
         pages_data = json.loads(student.pages_data_json or "[]")
     except ValueError:
@@ -185,10 +186,22 @@ def _student_skipped_pages(student: ProjectStudent) -> list[int]:
     if not isinstance(pages_data, list):
         return []
     return [
-        page_index + 1
+        {"page": page_index + 1, "reason": page_data.get("skip_reason") or None}
         for page_index, page_data in enumerate(pages_data)
         if isinstance(page_data, dict) and page_data.get("skip")
     ]
+
+
+def _format_skipped_pages(skipped_pages: list[dict]) -> str:
+    """同一原因的頁併在一起：「第 3、5 頁（請假）；第 7 頁（未填原因）」。"""
+    pages_by_reason: dict[str, list[int]] = {}
+    for skipped_page in skipped_pages:
+        reason = skipped_page["reason"] or "未填原因"
+        pages_by_reason.setdefault(reason, []).append(skipped_page["page"])
+    return "；".join(
+        f"第 {'、'.join(str(page) for page in pages)} 頁（{reason}）"
+        for reason, pages in pages_by_reason.items()
+    )
 
 
 def _serialize_period(semester_period: SemesterPeriod) -> dict:
@@ -759,8 +772,8 @@ def _build_export_manifest(
     skipped_notes = [
         f"- {child['name']}：{period_names[cell['template_period_id']]}"
         f"（{entry['campus_name']}／{entry['classroom_name']}／"
-        f"{entry['project_name']}）老師刪除了第 "
-        f"{'、'.join(str(page) for page in entry['skipped_pages'])} 頁"
+        f"{entry['project_name']}）少 {len(entry['skipped_pages'])} 頁："
+        f"{_format_skipped_pages(entry['skipped_pages'])}"
         for classroom_group in preview["classroom_groups"]
         for child in classroom_group["children"]
         for cell in child["cells"]

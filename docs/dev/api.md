@@ -181,7 +181,7 @@ HttpOnly Cookie，因此不需要為了圖片顯示而公開幼兒照片。
 | POST | `/{id}/students/album-names/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
 | POST | `/{id}/students/{sid}/album-name/auto-fill` | 未歸班 legacy 相本相容端點；已歸班回 409 `roster_album_name_authority` |
 | PUT | `/{id}/students/{sid}/album-name` | 未歸班 legacy 相本可更新 `ProjectStudent.album_name`；已歸班回 409，必須改園所名冊中央值 |
-| PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標 |
+| PATCH | `/{id}/students/{sid}/pages/{page}/skip` | 頁面跳過旗標；body `{skip, reason}`，`skip=true` 必填 `reason`（去空白後非空、≤100 字，否則 422），存入頁面條目 `skip_reason`，還原時清除 |
 | POST | `/{id}/students/{sid}/pages/{page}/photos/{slot}` | 上傳單張照片 |
 | POST | `/{id}/photos/shared/pages/{page}/slots/{slot}` | 共用照片套用全班；`student_ids`（JSON 陣列 form 欄位）可選，只套用到指定學生 |
 | POST | `/{id}/photos/batch/pages/{page}/slots/{slot}` | 依 mapping 批次分配 |
@@ -250,12 +250,12 @@ provisional child link 仍讀 legacy `ProjectStudent.album_name`。來源、回�
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/semesters` | 回可報表的 `imported\|active\|closed` 學期與 ordered 期別；非 admin 只回主管 snapshot scope 內實際可見的部門期別 |
-| GET | `/semester-export?semester_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked` |
+| GET | `/semester-export?semester_id=…&period_ids=…` | 依學期校／班與最終學生名單快照分組，回 `classroom_groups[].children[].cells[]`；cell 狀態為 ready / not_rendered / no_album / duplicate / departed / not_enrolled，身分或學期歸班異常另列 `unlinked`；每個 entry 帶 `skipped_pages: [{page, reason}]`（1-based 頁碼，舊資料無原因時 `reason=null`） |
 | POST | `/semester-export/render-missing` | body 必帶 `semester_id`、`period_ids`，可選 `roster_child_ids`；啟動全程序唯一補渲染 job，已有 job 在跑回 503 |
 | GET | `/semester-export/render-missing/{job_id}` | 補渲染 job 進度：`status`（running/done/failed）、`done`/`total`、`rendered`、`errors` |
 | GET | `/teacher-progress?semester_id=…` | 班級 × 期別工作格總覽；建立、照片／文字內容、交件鎖定三軸分開（不考慮列印 PDF），協同老師不重複產生工作 |
 | GET | `/teacher-overview/export?semester_id=…` | 與畫面同源的摘要／班級期別／學生明細 Excel；可用 department、campus_id、classroom_id 篩選 |
-| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&sheet_layout=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，`roster_child_ids` 選填；`sheet_layout` 為 `spread`（預設，雙頁 A3）或 `single`（單頁 A4），套用到整包每一份 PDF |
+| GET | `/semester-export/download?semester_id=…&period_ids=…&mode=…&sheet_layout=…&roster_child_ids=…` | 依 `校別/班級/孩子/期別_孩子.pdf` 串流 ZIP；duplicate 不匯出並寫入說明，老師刪頁依相本列出少幾頁、頁碼與原因，`roster_child_ids` 選填；`sheet_layout` 為 `spread`（預設，雙頁 A3）或 `single`（單頁 A4），套用到整包每一份 PDF |
 
 主管呼叫 `/semester-export` 時，`period_ids` 必須全部屬於該學期且位於其主管 snapshot scope
 實際可見的部門；不存在、跨學期或超出部門 scope 一律回 404，不回傳部分期別 metadata。

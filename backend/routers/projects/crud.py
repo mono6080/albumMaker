@@ -482,7 +482,7 @@ def set_page_skip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """設定或取消學生某頁的跳過旗標（渲染時略過此頁）。"""
+    """設定或取消學生某頁的跳過旗標（渲染時略過此頁）；刪頁必填原因。"""
     return set_page_skip_use_case(
         db,
         current_user,
@@ -490,5 +490,6 @@ def set_page_skip(
         student_id,
         page_index,
         payload.skip,
+        payload.reason,
         expected_template_revision,
     )

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 
 import { Badge, Button, Surface } from "./ui";
+import { formatSkippedPages } from "../utils/skippedPages";
 
 function groupCampusId(group) {
   return group.campus_id ?? group.classroom?.campus_id;
@@ -55,9 +56,9 @@ function EntryLink({ entry }) {
       {(entry.skipped_pages ?? []).length > 0 && (
         <span
           className="mt-1 inline-block rounded bg-orange-50 px-1 py-0.5 text-[10px] text-orange-700"
-          title={`老師刪除了第 ${entry.skipped_pages.join("、")} 頁`}
+          title={`老師刪除了${formatSkippedPages(entry.skipped_pages)}`}
         >
-          缺頁 {entry.skipped_pages.join("、")}
+          缺 {entry.skipped_pages.length} 頁：{entry.skipped_pages.map(({ page }) => page).join("、")}
         </span>
       )}
     </div>

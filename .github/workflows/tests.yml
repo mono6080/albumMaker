@@ -49,7 +49,8 @@ jobs:
     # 與瀏覽器無關的檢查只跑一次。render parity 會自己啟動 chromium
     # （scripts/check_text_raster_parity.mjs），所以這個 job 要裝 chromium。
     name: Frontend
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已換成 26.04，目前的 Playwright 不支援在上面裝瀏覽器；升級 Playwright 前先固定 24.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -115,7 +116,8 @@ jobs:
     # 的資料——organization-management 的兩條在 webkit 因此從 30 秒漲到 3 分鐘而逾時。
     # 拆成 matrix 之後兩邊各有乾淨的資料庫，牆鐘時間也砍半。
     name: E2E (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已換成 26.04，目前的 Playwright 不支援在上面裝瀏覽器；升級 Playwright 前先固定 24.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

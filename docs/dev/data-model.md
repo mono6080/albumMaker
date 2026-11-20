@@ -69,7 +69,7 @@ Project (id, name, template_id FK, department, template_period_id FK,
 ProjectStudent (id, project_id FK, name, album_name nullable, order_index, pages_data_json TEXT,
          output_filename, roster_child_id FK→Student nullable,
          created_at, updated_at)
-  └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）
+  └─ pages_data_json 內含 photos / label_texts / skip（skip=true 渲染略過該頁）/ skip_reason（老師刪頁原因，只在 skip=true 時存在）
 
 Student (id, name〔正規化後、不設 UNIQUE〕, album_name nullable,
          student_serial nullable〔行政系統學號〕, created_at)

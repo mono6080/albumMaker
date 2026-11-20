@@ -29,6 +29,8 @@ import SemesterSummaryBar from "../components/SemesterSummaryBar";
 import SemesterRenderErrorsBanner from "../components/SemesterRenderErrorsBanner";
 import SemesterUnlinkedSection from "../components/SemesterUnlinkedSection";
 import SemesterChildrenTable from "../components/SemesterChildrenTable";
+import SemesterSkippedPagesSection from "../components/SemesterSkippedPagesSection";
+import { collectSkippedPageRows } from "../utils/skippedPages";
 import { Badge, Button, PageHeader, Surface } from "../components/ui";
 
 const CLASSROOM_GROUPS_PER_PAGE = 8;
@@ -313,6 +315,10 @@ export default function SemesterExport() {
   const exportStats = useMemo(() => (
     computeExportStats(searchedGroups, identityAnomalies.length)
   ), [identityAnomalies.length, searchedGroups]);
+  // 缺頁清單跟著校班篩選與搜尋，與下方表格同一範圍
+  const skippedPageRows = useMemo(() => (
+    collectSkippedPageRows(searchedGroups, periods)
+  ), [periods, searchedGroups]);
 
   const selectionScopeSignature = `${serverQuerySignature}:${department}:${campusId}:${selectedClassroomId}`;
   activeScopeSignature.current = selectionScopeSignature;
@@ -741,6 +747,10 @@ export default function SemesterExport() {
 
           {identityAnomalies.length > 0 && (
             <SemesterUnlinkedSection sectionRef={anomalySectionRef} unlinked={identityAnomalies} />
+          )}
+
+          {skippedPageRows.length > 0 && (
+            <SemesterSkippedPagesSection rows={skippedPageRows} />
           )}
 
           <SemesterChildrenTable

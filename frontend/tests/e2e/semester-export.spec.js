@@ -276,3 +276,40 @@ test("supervisor semester view is read-only", async ({ page }) => {
   await expect(page.getByLabel(/選取 .* 的孩子/)).toHaveCount(0);
   await expect(page.getByRole("radio", { name: /雙頁 A3|單頁 A4/ })).toHaveCount(0);
 });
+
+
+test("skipped pages list shows each album's missing page count and reasons", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockBase(page);
+  const payload = previewPayload();
+  // 測試歷史生九月那本：第 3、5 頁同一原因，第 7 頁舊資料沒有原因
+  payload.classroom_groups[0].children[0].cells[0].entries[0].skipped_pages = [
+    { page: 3, reason: "該期請假未到校" },
+    { page: 5, reason: "該期請假未到校" },
+    { page: 7, reason: null },
+  ];
+  await page.route("**/api/roster/semester-export?**", route => route.fulfill({ json: payload }));
+
+  await page.goto("/admin/semester-export");
+  const toggle = page.getByRole("button", { name: /缺頁相本（1 本，共少 3 頁）/ });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  const list = page.locator("#semester-skipped-pages");
+  await expect(list.getByText("測試歷史生", { exact: true })).toBeVisible();
+  await expect(list.getByText("名稱完全不像班級的相本")).toBeVisible();
+  await expect(list.getByText("少 3 頁", { exact: true })).toBeVisible();
+  await expect(list.getByText(/第 3、5 頁：.*該期請假未到校/)).toBeVisible();
+  await expect(list.getByText(/第 7 頁：.*未填原因/)).toBeVisible();
+
+  // 缺頁清單在手機寬度不撐出橫向捲動
+  const widths = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth }));
+  expect(widths.document).toBeLessThanOrEqual(widths.viewport + 2);
+
+  // 表格內的 badge 也顯示頁數
+  await page.getByRole("button", { name: /和平校／向日葵班/ }).click();
+  await expect(page.getByText("缺 3 頁：3、5、7", { exact: true })).toBeVisible();
+
+  // 搜尋到沒有缺頁的孩子時清單隱藏
+  await page.getByRole("searchbox", { name: /搜尋孩子/ }).fill("十月新生");
+  await expect(page.getByRole("button", { name: /缺頁相本/ })).toHaveCount(0);
+});

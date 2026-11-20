@@ -298,7 +298,7 @@ def test_student_page_mutations_reject_negative_and_out_of_range_indices_without
                 project_id,
                 f"/api/projects/{project_id}/students/{student_id}/pages/99/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(out_of_range_skip, 422)
 

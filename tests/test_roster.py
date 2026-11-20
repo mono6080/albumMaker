@@ -1159,7 +1159,7 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
                 project_id,
                 f"/api/projects/{project_id}/students/{students[student_name]}/pages/0/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(skip, 403)
 
@@ -1212,7 +1212,7 @@ def test_project_completion_locks_content_and_supervisor_reopens(monkeypatch, tm
                 f"/api/projects/{project_id}/students/"
                 f"{students[student_name]}/pages/0/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(skip_after_reopen, 200)
 
@@ -1328,7 +1328,7 @@ def test_student_completion_locks_downloads_and_reopen_levels(monkeypatch, tmp_p
                 project_id,
                 f"/api/projects/{project_id}/students/{student_a}/pages/0/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(skip_a, 409)
         assert skip_a.json()["detail"]["code"] == "student_completed_locked"
@@ -1680,7 +1680,7 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
                 project_a,
                 f"/api/projects/{project_a}/students/{students_a['王小明']}/pages/0/skip",
             ),
-            json={"skip": True},
+            json={"skip": True, "reason": "請假未到校"},
         )
         assert_status(skip_response, 200)
         semester_id = reporting_semester_id(
@@ -1713,9 +1713,9 @@ def test_semester_export_zip_structure(monkeypatch, tmp_path):
         assert not any("/李小華/" in name for name in entry_names)
         assert "【班級對照】" in manifest
         assert "李小華" in manifest and "尚未產生 PDF" in manifest
-        # 缺頁備註：王小明期1 老師刪除了第 1 頁
+        # 缺頁備註：王小明期1 老師刪除了第 1 頁，附頁數與原因
         assert "缺頁備註" in manifest
-        assert "老師刪除了第 1 頁" in manifest
+        assert "少 1 頁：第 1 頁（請假未到校）" in manifest
 
         # roster_child_ids 篩選：只勾李小華 → ZIP 不含王小明
         hua_child_id = roster_child_id_of(students_a["李小華"])

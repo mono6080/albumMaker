@@ -443,7 +443,7 @@ const GUIDE_MARKERS = {
   studentEdit: [
     { n: 1, selector: '[data-guide="scope-switcher"]', text: "用「上一位／下一位」或下拉切換學生；按「全班」可回到全班共用內容。" },
     { n: 2, selector: '[data-guide="student-page-nav"]', text: "頁碼導航。一頁做完換下一頁。" },
-    { n: 3, selector: '[data-guide="student-preview-panel"]', text: "頁面預覽。頁尾可「刪除此頁」，刪錯了也能還原。" },
+    { n: 3, selector: '[data-guide="student-preview-panel"]', text: "頁面預覽。頁尾可「刪除此頁」（需填寫原因），刪錯了也能還原。" },
     { n: 4, selector: '[data-guide="student-photo-manager"]', text: "照片管理。點空格上傳；已有照片可調整裁切、更換、刪除或拖曳交換。" },
     { n: 5, selector: '[data-guide="student-photo-scope"]', text: "「本頁／整本」檢視切換。切到整本可一次看所有頁的照片格。" },
     { n: 6, selector: '[data-guide="student-multi-upload"]', text: "多選上傳。一次選多張照片，自動填入剩餘空格。" },
@@ -595,7 +595,7 @@ async function buildPdf(screenshots) {
       <li>照片管理右上可切「本頁／整本」：整本檢視能一次上傳整本照片、跨頁調換。</li>
       <li>「多選上傳」一次選多張，自動填入剩餘空格。</li>
       <li>只想改這位學生的文字時，在個別文字覆寫；按恢復預設可回到全班文字。</li>
-      <li>這位學生不需要某一頁時，在預覽區頁尾點「刪除此頁」，之後也能還原。</li>
+      <li>這位學生不需要某一頁時，在預覽區頁尾點「刪除此頁」並填寫原因（學期匯出會列出缺頁與原因），之後也能還原。</li>
       <li>做完按右上角的「班級總覽」回工作台。下載都在班級總覽，個別編輯頁沒有下載按鈕。</li>
     </ol>
     ${stepFigure(screenshots.studentEdit, "步驟 5：個別學生編輯頁。")}
